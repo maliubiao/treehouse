@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import os
 import sys
-import requests
 import json
 import time
 import subprocess
@@ -10,16 +9,17 @@ from urllib.parse import urlparse
 from pathlib import Path
 import tempfile
 import re
-from openai import OpenAI
 import platform
 import difflib
 import datetime
+import requests
+from openai import OpenAI
 from pygments import highlight
 from pygments.lexers import DiffLexer
 from pygments.formatters import TerminalFormatter
 
 MAX_FILE_SIZE = 32000
-MAX_PROMPT_SIZE = 10240
+MAX_PROMPT_SIZE = 163839
 
 
 def parse_arguments():
@@ -254,7 +254,7 @@ def query_gpt_api(
         stream = client.chat.completions.create(
             model=model,
             messages=history,
-            temperature=0.0,
+            temperature=0.6,
             max_tokens=8192,
             top_p=0.8,
             stream=True,
@@ -473,6 +473,7 @@ USER_PROMPT_CONTEXT = {
 
 def process_text_with_file_path(text):
     """处理包含@...的文本，支持@cmd命令、@path文件路径、@http网址和prompts目录下的模板文件"""
+    current_length = len(text)  # 初始化当前文本长度
 
     # 定义命令映射表
     cmd_map = {
@@ -491,60 +492,74 @@ def process_text_with_file_path(text):
     # 使用正则表达式查找所有@开头的命令或路径
     matches = re.findall(r"@([^\s]+)", text)
 
+    truncated_suffix = "\n[输入太长内容已自动截断]"
     for match in matches:
+        # 检查是否已超过最大限制
+        if current_length >= MAX_PROMPT_SIZE:
+            break  # 提前终止处理流程
+
+        # 构造匹配键（带@符号）
         if text.endswith(match):
             match_key = f"@{match}"
         else:
             match_key = f"@{match} "
-        # 如果match在context里，将context设为true
-        if match in USER_PROMPT_CONTEXT:
-            USER_PROMPT_CONTEXT[match] = True
+
+        # 计算匹配键的长度用于后续替换
+        match_key_length = len(match_key)
+
         try:
-
-            # 处理命令
+            replacement = ""
+            # 处理命令类型匹配
             if match in cmd_map:
-                result = cmd_map[match]()
-                text = text.replace(match_key, result)
-                continue
+                replacement = cmd_map[match]()
 
-            # 尝试展开相对路径
-            expanded_path = os.path.abspath(os.path.expanduser(match))
+            # 处理prompts目录文件
+            elif os.path.exists(os.path.join("prompts", match)):
+                with open(os.path.join("prompts", match), "r", encoding="utf-8") as f:
+                    content = f.read()
+                    replacement = f"\n{content.format(**env_vars)}\n"
 
-            # 优先检查prompts目录下的文件
-            prompts_path = os.path.join(os.path.dirname(__file__), "prompts", match)
-            if os.path.exists(prompts_path):
-                with open(prompts_path, "r", encoding="utf-8") as f:
-                    content = f.read(MAX_PROMPT_SIZE)  # 最多读取10k
-                    # 替换模板中的环境变量
-                    content = content.format(**env_vars)
-                text = text.replace(match_key, f"\n{content}\n")
-                continue
-
-            if os.path.exists(expanded_path):
+            # 处理本地文件路径
+            elif os.path.exists(os.path.expanduser(match)):
+                expanded_path = os.path.abspath(os.path.expanduser(match))
                 with open(expanded_path, "r", encoding="utf-8") as f:
-                    content = f.read(MAX_FILE_SIZE)  # 最多读取32k
-                text = text.replace(
-                    match_key,
-                    f"\n\n文件 {expanded_path} 内容:\n```\n{content}\n```\n\n",
-                )
-                continue
+                    # 计算可读取的最大长度
+                    content = f.read()
+                    replacement = f"\n\n[file name]: {expanded_path}\n[file content begin]\n{content}"
+                    replacement += "\n[file content end]\n\n"
 
-            # 处理URL
-            if match.startswith("http") or match.startswith("read"):
-                # 如果match以read开头，则去掉read前缀
-                if match.startswith("read"):
-                    match = match[4:]
-                    USER_PROMPT_CONTEXT["read"] = True
-                markdown_content = fetch_url_content(match, USER_PROMPT_CONTEXT["read"])
-                text = text.replace(
-                    match_key,
-                    f"\n\n参考URL: {match} \n内容(已经转换成markdown):\n{markdown_content}\n\n",
-                )
-                continue
+            # 处理URL请求
+            elif match.startswith(("http", "read")):
+                url = match[4:] if match.startswith("read") else match
+                markdown_content = fetch_url_content(url, is_news=match.startswith("read"))
+                replacement = f"\n\n[reference url, content converted to markdown]: {url} \n[markdown content begin]\n{markdown_content}\n[markdown content end]\n\n"
+
+            # 计算替换后的长度变化
+            new_segment_length = len(replacement)
+            old_segment_length = match_key_length
+
+            # 预检查长度是否超限
+            if current_length - old_segment_length + new_segment_length > MAX_PROMPT_SIZE:
+                allowable_length = MAX_PROMPT_SIZE - (current_length - old_segment_length)
+                replacement = replacement[:allowable_length-len(truncated_suffix)] + truncated_suffix
+
+            # 执行替换并更新当前长度
+            text = text.replace(match_key, replacement, 1)  # 只替换第一个匹配项
+            current_length = current_length - old_segment_length + len(replacement)
+
+            # 最终长度检查
+            if current_length > MAX_PROMPT_SIZE:
+                text = text[:MAX_PROMPT_SIZE]
+                break
 
         except Exception as e:
             print(f"处理 {match} 时出错: {str(e)}")
             sys.exit(1)
+
+    # 最终长度校验（防止累积误差）
+    if len(text) > MAX_PROMPT_SIZE:
+        suffix_len = len(truncated_suffix)
+        text = text[:MAX_PROMPT_SIZE-suffix_len] + truncated_suffix
 
     return text
 

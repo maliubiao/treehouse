@@ -10,6 +10,7 @@ dependencies = [
     "markitdown>=0.0.1a3",
     "openai>=1.61.0",
     "pygments>=2.19.1",
+    "pylint>=3.3.4",
     "pysocks>=1.7.1",
     "requests>=2.32.3",
     "socksio>=1.0.0",
