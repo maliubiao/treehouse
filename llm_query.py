@@ -400,8 +400,12 @@ def process_text_with_tree(text):
         text = f"{text}\n{dir_context}"
     return text
 
-
 def get_clipboard_content():
+    text = get_clipboard_content_real()
+    text = f"\n[clipboard content start]\n{text}\n[clipboard content end]\n"
+    return text
+
+def get_clipboard_content_real():
     """获取系统剪贴板内容，支持Linux、Mac、Windows"""
     try:
         # 判断操作系统
@@ -473,6 +477,7 @@ USER_PROMPT_CONTEXT = {
 
 def process_text_with_file_path(text):
     """处理包含@...的文本，支持@cmd命令、@path文件路径、@http网址和prompts目录下的模板文件"""
+
     current_length = len(text)  # 初始化当前文本长度
 
     # 定义命令映射表
