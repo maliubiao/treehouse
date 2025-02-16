@@ -39,12 +39,4 @@ repos:
         ]
         require_serial: true
 
-  - repo: local
-    hooks:
-      - id: gpt-commit-msg
-        name: Generate commit message with GPT
-        entry: bash -c "git diff --staged > git-diff-summary.txt && askgpt @git-diff-summary.txt"
-        language: system
-        stages: [commit-msg]
-        verbose: true
-        pass_filenames: false
+
