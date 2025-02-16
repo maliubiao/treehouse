@@ -1,0 +1,50 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+        name: black (local env)
+        entry: black
+        language: system
+        types: [python]
+        args: [--line-length=120]
+        require_serial: true
+
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.0
+    hooks:
+      - id: isort
+        name: isort (local env)
+        entry: isort
+        language: system
+        types: [python]
+        args: ["--profile", "black"]
+        require_serial: true
+
+  - repo: https://github.com/pycqa/pylint
+    rev: v3.3.4
+    hooks:
+      - id: pylint
+        name: pylint (local env)
+        entry: pylint
+        language: system
+        types: [python]
+        files: \.py$
+        args: [
+          "--fail-under=9.5",
+          "--max-line-length=120",
+          "--score=yes",
+          "--ignore=.venv",
+          "--disable=missing-module-docstring,missing-class-docstring,missing-function-docstring"
+        ]
+        require_serial: true
+
+  - repo: local
+    hooks:
+      - id: gpt-commit-msg
+        name: Generate commit message with GPT
+        entry: bash -c "git diff --staged > git-diff-summary.txt && askgpt @git-diff-summary.txt"
+        language: system
+        stages: [commit-msg]
+        verbose: true
+        pass_filenames: false

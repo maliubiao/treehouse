@@ -1,5 +1,5 @@
 [project]
-name = "groq"
+name = "terminal-llm"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -21,4 +21,18 @@ dependencies = [
     "tree-sitter-python>=0.23.6",
     "tree-sitter>=0.24.0",
     "watchdog>=6.0.0",
+    "pywin32; sys_platform == 'win32'",
+    "pre-commit>=4.1.0",
+    "black>=25.1.0",
+    "isort>=6.0.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 120
+
+[tool.isort]
+profile = "black"

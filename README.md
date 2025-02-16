@@ -1,6 +1,8 @@
 
 # terminal LLM
 
+[English users please view README.en.md](README.en.md)
+
 一个基于openai兼容接口的终端辅助工具，提供便捷的命令行交互和上下文感知功能, 目标是命令行版本的cursor, windsurf, 推荐使用deepseek R1。
 
 ## 使用场景
@@ -55,6 +57,8 @@ recentconversation
 #新会话，打开新的terminal就默认是新会话，或者手工重置
 newconversation
 
+#git add后，可以对stage的修改生成commmit message, powershell暂时不支持
+commitgpt
 ```
 
 ## 功能特性
@@ -87,6 +91,8 @@ cd terminal-llm
 
 2. **设置虚拟环境**
 ```bash
+#windows上安装uv, powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+#mac or linux上安装uv, curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync #uv python list; uv python install 某个版本的python, 3.12及以上
 source .venv/bin/activate
 ```
@@ -99,6 +105,14 @@ export GPT_KEY="your-api-key"
 export GPT_MODEL="your-model"
 export GPT_BASE_URL="https://api.example.com/v1"  # OpenAI兼容API地址
 source $GPT_PATH/env.sh #zsh, bash支持@后补全
+```
+
+4. **在windows powershell上使用**  
+需要特别指出powershell的@有特殊含义，不能直接补全，需要用\\@才能补全，比直接@增加一个字符  
+```powershell
+#PS C:\Users\user> $PROFILE  这个变量会返回当前的配置文件，在配置文件后把env.ps1加入进去
+[Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+. \your\path\to\env.ps1
 ```
 
 ### R1 api提供商
@@ -157,7 +171,9 @@ askgpt "如何实现快速排序算法？"
     "14b": {
         "key": "ollama",
         "base_url": "http://192.168.40.116:11434/v1",
-        "model_name": "r1-qwen-14b:latest"
+        "model_name": "r1-qwen-14b:latest",
+        "max_tokens": 131072 //不同模型的max_tokens差别很大，有的只能到8192, 甚至更小只有4k, 写大了会报错
+
     }
 
 }
@@ -232,7 +248,6 @@ groq/
 1. **依赖工具**：
    - 安装[glow](https://github.com/charmbracelet/glow)用于Markdown渲染
    - 安装`tree`命令查看目录结构
-   - Windows用户需要安装pywin32
 
 2. **代理配置**：
    自动检测`http_proxy`/`https_proxy`环境变量

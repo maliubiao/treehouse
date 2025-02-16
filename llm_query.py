@@ -1,25 +1,40 @@
 #!/usr/bin/env python
-import os
-import sys
-import json
-import time
-import subprocess
+"""
+LLM 查询工具模块
+
+该模块提供与OpenAI兼容 API交互的功能，支持代码分析、多轮对话、剪贴板集成等功能。
+包含代理配置检测、代码分块处理、对话历史管理等功能。
+"""
+
 import argparse
-from urllib.parse import urlparse
-from pathlib import Path
-import tempfile
-import re
-import platform
-import difflib
 import datetime
+import difflib
+import json
+import os
+import platform
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from urllib.parse import urlparse
+
 import requests
 from openai import OpenAI
 from pygments import highlight
-from pygments.lexers import DiffLexer
-from pygments.formatters import TerminalFormatter
+from pygments.formatters.terminal import TerminalFormatter
+from pygments.lexers.diff import DiffLexer
+
+# Windows平台相关导入
+if sys.platform == "win32":
+    try:
+        import win32clipboard
+    except ImportError:
+        win32clipboard = None
 
 MAX_FILE_SIZE = 32000
-MAX_PROMPT_SIZE = 163839
+MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
 
 
 def parse_arguments():
@@ -44,9 +59,7 @@ def parse_arguments():
     )
     parser.add_argument(
         "--obsidian-doc",
-        default=os.environ.get(
-            "GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")
-        ),
+        default=os.environ.get("GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")),
         help="Obsidian文档备份目录路径",
     )
     return parser.parse_args()
@@ -62,7 +75,8 @@ def sanitize_proxy_url(url):
                 netloc += f":{parsed.port}"
             return parsed._replace(netloc=netloc).geturl()
         return url
-    except Exception:
+    except ValueError as e:
+        print(f"解析代理URL失败: {e}")
         return url
 
 
@@ -77,8 +91,8 @@ def detect_proxies():
     ]
 
     # 修改代理检测顺序，先处理具体协议再处理all_proxy
-    for protocol, vars in reversed(proxy_vars):
-        for var in vars:
+    for protocol, proxy_vars in reversed(proxy_vars):
+        for var in proxy_vars:
             if var in os.environ and os.environ[var]:
                 url = os.environ[var]
                 if protocol == "all":
@@ -110,14 +124,14 @@ def _ensure_index():
     """确保索引文件存在，不存在则创建空索引"""
     if not INDEX_PATH.exists():
         INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(INDEX_PATH, "w") as f:
+        with open(INDEX_PATH, "w", encoding="utf8") as f:
             json.dump({}, f)
 
 
 def _update_index(uuid, file_path):
     """更新索引文件"""
     _ensure_index()
-    with open(INDEX_PATH, "r+") as f:
+    with open(INDEX_PATH, "r+", encoding="utf8") as f:
         index = json.load(f)
         index[uuid] = str(file_path)
         f.seek(0)
@@ -145,7 +159,7 @@ def _build_index():
                 full_path = Path(root) / filename
                 index[uuid] = str(full_path)
 
-    with open(INDEX_PATH, "w") as f:
+    with open(INDEX_PATH, "w", encoding="utf8") as f:
         json.dump(index, f, indent=4)
 
     return index
@@ -155,7 +169,7 @@ def get_conversation(uuid):
     """获取对话记录"""
     try:
         # 先尝试读取索引
-        with open(INDEX_PATH, "r") as f:
+        with open(INDEX_PATH, "r", encoding="utf8") as f:
             index = json.load(f)
             if uuid in index:
                 path = Path(index[uuid])
@@ -189,7 +203,7 @@ def new_conversation(uuid):
     base_dir.mkdir(parents=True, exist_ok=True)
 
     # 写入初始数据并更新索引
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf8") as f:
         json.dump([], f, indent=4)
 
     _update_index(uuid, file_path)
@@ -203,7 +217,7 @@ def load_conversation_history(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return []
-    except Exception as e:
+    except (IOError, json.JSONDecodeError) as e:
         print(f"加载对话历史失败: {e}")
         return []
 
@@ -213,7 +227,7 @@ def save_conversation_history(file_path, history):
     try:
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
-    except Exception as e:
+    except IOError as e:
         print(f"保存对话历史失败: {e}")
 
 
@@ -221,9 +235,7 @@ def query_gpt_api(
     api_key,
     prompt,
     model="gpt-4",
-    proxies=None,
-    base_url=None,
-    conversation_file="conversation_history.json",
+    **kwargs,
 ):
     """支持多轮对话的OpenAI API流式查询
 
@@ -231,6 +243,10 @@ def query_gpt_api(
         conversation_file (str): 对话历史存储文件路径
         其他参数同上
     """
+    # proxies = kwargs.get('proxies')
+    base_url = kwargs.get("base_url")
+    conversation_file = kwargs.get("conversation_file", "conversation_history.json")
+
     cid = os.environ.get("GPT_UUID_CONVERSATION")
     if cid:
         try:
@@ -254,8 +270,8 @@ def query_gpt_api(
         stream = client.chat.completions.create(
             model=model,
             messages=history,
-            temperature=0.6,
-            max_tokens=8192,
+            temperature=0.0,
+            max_tokens=MAX_PROMPT_SIZE,
             top_p=0.8,
             stream=True,
         )
@@ -265,10 +281,7 @@ def query_gpt_api(
         # 处理流式响应
         for chunk in stream:
             # 处理推理内容（仅打印不保存）
-            if (
-                hasattr(chunk.choices[0].delta, "reasoning_content")
-                and chunk.choices[0].delta.reasoning_content
-            ):
+            if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
                 print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                 reasoning += chunk.choices[0].delta.reasoning_content
             # 处理正式回复内容
@@ -285,7 +298,7 @@ def query_gpt_api(
 
         # 存储思维过程
         if reasoning:
-            content = reasoning + "\n" + content
+            content = f"<think>\n{reasoning}\n</think>\n{content}"
 
         return {"choices": [{"message": {"content": content}}]}
 
@@ -293,12 +306,18 @@ def query_gpt_api(
         print(f"OpenAI API请求失败: {e}")
         sys.exit(1)
 
+
 def _check_tool_installed(tool_name, install_url=None, install_commands=None):
     """检查指定工具是否已安装"""
-    result = subprocess.run(
-        ["which", tool_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    if result.returncode != 0:
+    try:
+        if sys.platform == "win32":
+            # Windows系统使用where命令
+            subprocess.run(["where", tool_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        else:
+            # 非Windows系统使用which命令
+            subprocess.run(["which", tool_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return True
+    except subprocess.CalledProcessError:
         print(f"错误：{tool_name} 未安装")
         if install_url:
             print(f"请访问 {install_url} 安装{tool_name}")
@@ -307,7 +326,6 @@ def _check_tool_installed(tool_name, install_url=None, install_commands=None):
             for cmd in install_commands:
                 print(f"  {cmd}")
         return False
-    return True
 
 
 def check_deps_installed():
@@ -318,17 +336,11 @@ def check_deps_installed():
     if not _check_tool_installed(
         "glow",
         install_url="https://github.com/charmbracelet/glow",
-        install_commands=["brew install glow"],
-    ):
-        all_installed = False
-
-    # 检查tree
-    if not _check_tool_installed(
-        "tree",
         install_commands=[
-            "macOS: brew install tree",
-            "Ubuntu/Debian: sudo apt install tree",
-            "CentOS/Fedora: sudo yum install tree",
+            "brew install glow  # macOS",
+            "choco install glow  # Windows Chocolatey",
+            "scoop install glow  # Windows Scoop",
+            "winget install charmbracelet.glow  # Windows Winget",
         ],
     ):
         all_installed = False
@@ -336,7 +348,7 @@ def check_deps_installed():
     # 检查剪贴板工具
     if sys.platform == "win32":
         try:
-            import win32clipboard
+            import win32clipboard as _
         except ImportError:
             print("错误：需要安装pywin32来访问Windows剪贴板")
             print("请执行：pip install pywin32")
@@ -361,49 +373,63 @@ def check_deps_installed():
     return all_installed
 
 
+def get_directory_context_wrapper(max_depth=1):
+    text = get_directory_context(max_depth)
+    return f"\n[directory tree start]\n{text}\n[directory tree end]\n"
+
+
 def get_directory_context(max_depth=1):
     """获取当前目录上下文信息（支持动态层级控制）"""
     try:
         current_dir = os.getcwd()
-        cmd = ["tree", '-I ".*"']
-        if max_depth is not None:
-            cmd.extend(["-L", str(max_depth)])
+
+        # Windows系统处理
+        if sys.platform == "win32":
+            if max_depth == 1:
+                # 当max_depth为1时使用dir命令
+                dir_result = subprocess.run(["dir"], stdout=subprocess.PIPE, text=True, shell=True, check=True)
+                msg = dir_result.stdout or "无法获取目录信息"
+                return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
+            else:
+                # 其他情况使用tree命令
+                cmd = ["tree"]
+                if max_depth is not None:
+                    cmd.extend(["/A", "/F"])
+        else:
+            # 非Windows系统使用Linux/macOS的tree命令
+            cmd = ["tree", "-I", ".*"]
+            if max_depth is not None:
+                cmd.extend(["-L", str(max_depth)])
 
         result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True, shell=(sys.platform == "win32")
         )
 
         if result.returncode == 0:
             output = result.stdout
-            # 仅在无层级限制时检查输出长度
-            if max_depth is None and len(output.encode()) > 2048:
-                return get_directory_context(max_depth=1)  # 递归调用回退到一层
             return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{output}"
 
-        # 当tree命令失败时使用ls
-        ls_result = subprocess.run(["ls", "-l"], stdout=subprocess.PIPE, text=True)
-        msg = ls_result.stdout or "无法获取目录信息"
+        # 当tree命令失败时使用替代命令
+        if sys.platform == "win32":
+            # Windows使用dir命令
+            dir_result = subprocess.run(["dir"], stdout=subprocess.PIPE, check=True, text=True, shell=True)
+            msg = dir_result.stdout or "无法获取目录信息"
+        else:
+            # 非Windows使用ls命令
+            ls_result = subprocess.run(["ls", "-l"], stdout=subprocess.PIPE, text=True, check=True)
+            msg = ls_result.stdout or "无法获取目录信息"
+
         return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
 
     except Exception as e:
         return f"获取目录上下文时出错: {str(e)}"
 
 
-def process_text_with_tree(text):
-    """处理包含@tree的文本，获取目录上下文并附加"""
-    if "@tree" in text:
-        # 移除@tree标记
-        text = text.replace("@tree", "")
-        # 获取目录上下文
-        dir_context = get_directory_context()
-        # 将目录上下文附加到文本后
-        text = f"{text}\n{dir_context}"
-    return text
-
 def get_clipboard_content():
     text = get_clipboard_content_real()
     text = f"\n[clipboard content start]\n{text}\n[clipboard content end]\n"
     return text
+
 
 def get_clipboard_content_real():
     """获取系统剪贴板内容，支持Linux、Mac、Windows"""
@@ -411,42 +437,41 @@ def get_clipboard_content_real():
         # 判断操作系统
         if sys.platform == "win32":
             # Windows系统
-            import win32clipboard
-
+            win32clipboard = __import__("win32clipboard")
             win32clipboard.OpenClipboard()
             data = win32clipboard.GetClipboardData()
             win32clipboard.CloseClipboard()
             return data
         elif sys.platform == "darwin":
             # Mac系统
-            process = subprocess.Popen(["pbpaste"], stdout=subprocess.PIPE)
-            stdout, _ = process.communicate()
-            return stdout.decode("utf-8")
+            with subprocess.Popen(["pbpaste"], stdout=subprocess.PIPE) as process:
+                stdout, _ = process.communicate()
+                return stdout.decode("utf-8")
         else:
             # Linux系统
             # 尝试xclip
             try:
-                process = subprocess.Popen(
+                with subprocess.Popen(
                     ["xclip", "-selection", "clipboard", "-o"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                )
-                stdout, _ = process.communicate()
-                if process.returncode == 0:
-                    return stdout.decode("utf-8")
+                ) as process:
+                    stdout, _ = process.communicate()
+                    if process.returncode == 0:
+                        return stdout.decode("utf-8")
             except FileNotFoundError:
                 pass
 
             # 尝试xsel
             try:
-                process = subprocess.Popen(
+                with subprocess.Popen(
                     ["xsel", "--clipboard", "--output"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                )
-                stdout, _ = process.communicate()
-                if process.returncode == 0:
-                    return stdout.decode("utf-8")
+                ) as process:
+                    stdout, _ = process.communicate()
+                    if process.returncode == 0:
+                        return stdout.decode("utf-8")
             except FileNotFoundError:
                 pass
 
@@ -469,90 +494,109 @@ def fetch_url_content(url, is_news=False):
         return f"获取URL内容失败: {str(e)}"
 
 
-USER_PROMPT_CONTEXT = {
-    "edit": False,
-    "read": False,
-}
+def _handle_command(match, cmd_map):
+    """处理命令类型匹配"""
+    return cmd_map[match]()
+
+
+def _handle_shell_command(match):
+    """处理shell命令"""
+    with open(os.path.join("prompts", match), "r", encoding="utf-8") as f:
+        content = f.read()
+    try:
+        process = subprocess.Popen(content, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        stdout, stderr = process.communicate()
+        output = f"\n\n[shell command]: {content}\n"
+        # if stdout:
+        output += f"[stdout begin]\n{stdout}\n[stdout end]\n"
+        if stderr:
+            output += f"[stderr begin]\n{stderr}\n[stderr end]\n"
+        return output
+    except Exception as e:
+        return f"\n\n[shell command error]: {str(e)}\n"
+
+
+def _handle_prompt_file(match, env_vars):
+    """处理prompts目录文件"""
+    with open(os.path.join("prompts", match), "r", encoding="utf-8") as f:
+        content = f.read()
+        return f"\n{content.format(**env_vars)}\n"
+
+
+def _handle_local_file(match):
+    """处理本地文件路径"""
+    expanded_path = os.path.abspath(os.path.expanduser(match))
+    with open(expanded_path, "r", encoding="utf-8") as f:
+        content = f.read()
+        replacement = f"\n\n[file name]: {expanded_path}\n[file content begin]\n{content}"
+        replacement += "\n[file content end]\n\n"
+        return replacement
+
+
+def _handle_url(match):
+    """处理URL请求"""
+    url = match[4:] if match.startswith("read") else match
+    markdown_content = fetch_url_content(url, is_news=match.startswith("read"))
+    return (
+        "\n\n[reference url, content converted to markdown]: {url} \n"
+        "[markdown content begin]\n"
+        "{markdown_content}\n"
+        "[markdown content end]\n\n"
+    ).format(url=url, markdown_content=markdown_content)
 
 
 def process_text_with_file_path(text):
     """处理包含@...的文本，支持@cmd命令、@path文件路径、@http网址和prompts目录下的模板文件"""
-
-    current_length = len(text)  # 初始化当前文本长度
-
-    # 定义命令映射表
+    current_length = len(text)
     cmd_map = {
         "clipboard": get_clipboard_content,
-        "tree": get_directory_context,
-        "treefull": lambda: get_directory_context(max_depth=None),
+        "tree": get_directory_context_wrapper,
+        "treefull": lambda: get_directory_context_wrapper(max_depth=None),
     }
-
-    # 定义环境变量
     env_vars = {
         "os": sys.platform,
         "os_version": platform.version(),
         "current_path": os.getcwd(),
     }
-
-    # 使用正则表达式查找所有@开头的命令或路径
-    matches = re.findall(r"@([^\s]+)", text)
-
+    matches = re.findall(r"(\\?@[^\s]+)", text)
     truncated_suffix = "\n[输入太长内容已自动截断]"
+
     for match in matches:
-        # 检查是否已超过最大限制
         if current_length >= MAX_PROMPT_SIZE:
-            break  # 提前终止处理流程
+            break
 
-        # 构造匹配键（带@符号）
         if text.endswith(match):
-            match_key = f"@{match}"
+            match_key = f"{match}"
         else:
-            match_key = f"@{match} "
+            match_key = f"{match} "
 
-        # 计算匹配键的长度用于后续替换
         match_key_length = len(match_key)
-
+        match = match.strip("\\@")
         try:
             replacement = ""
-            # 处理命令类型匹配
             if match in cmd_map:
-                replacement = cmd_map[match]()
-
-            # 处理prompts目录文件
+                replacement = _handle_command(match, cmd_map)
+            elif match.endswith("="):
+                replacement = _handle_shell_command(match[:-1])
             elif os.path.exists(os.path.join("prompts", match)):
-                with open(os.path.join("prompts", match), "r", encoding="utf-8") as f:
-                    content = f.read()
-                    replacement = f"\n{content.format(**env_vars)}\n"
-
-            # 处理本地文件路径
+                replacement = _handle_prompt_file(match, env_vars)
             elif os.path.exists(os.path.expanduser(match)):
-                expanded_path = os.path.abspath(os.path.expanduser(match))
-                with open(expanded_path, "r", encoding="utf-8") as f:
-                    # 计算可读取的最大长度
-                    content = f.read()
-                    replacement = f"\n\n[file name]: {expanded_path}\n[file content begin]\n{content}"
-                    replacement += "\n[file content end]\n\n"
-
-            # 处理URL请求
+                replacement = _handle_local_file(match)
             elif match.startswith(("http", "read")):
-                url = match[4:] if match.startswith("read") else match
-                markdown_content = fetch_url_content(url, is_news=match.startswith("read"))
-                replacement = f"\n\n[reference url, content converted to markdown]: {url} \n[markdown content begin]\n{markdown_content}\n[markdown content end]\n\n"
+                replacement = _handle_url(match)
+            else:
+                continue
 
-            # 计算替换后的长度变化
             new_segment_length = len(replacement)
             old_segment_length = match_key_length
 
-            # 预检查长度是否超限
             if current_length - old_segment_length + new_segment_length > MAX_PROMPT_SIZE:
                 allowable_length = MAX_PROMPT_SIZE - (current_length - old_segment_length)
-                replacement = replacement[:allowable_length-len(truncated_suffix)] + truncated_suffix
+                replacement = replacement[: allowable_length - len(truncated_suffix)] + truncated_suffix
 
-            # 执行替换并更新当前长度
-            text = text.replace(match_key, replacement, 1)  # 只替换第一个匹配项
+            text = text.replace(match_key, replacement, 1)
             current_length = current_length - old_segment_length + len(replacement)
 
-            # 最终长度检查
             if current_length > MAX_PROMPT_SIZE:
                 text = text[:MAX_PROMPT_SIZE]
                 break
@@ -561,10 +605,9 @@ def process_text_with_file_path(text):
             print(f"处理 {match} 时出错: {str(e)}")
             sys.exit(1)
 
-    # 最终长度校验（防止累积误差）
     if len(text) > MAX_PROMPT_SIZE:
         suffix_len = len(truncated_suffix)
-        text = text[:MAX_PROMPT_SIZE-suffix_len] + truncated_suffix
+        text = text[: MAX_PROMPT_SIZE - suffix_len] + truncated_suffix
 
     return text
 
@@ -573,73 +616,71 @@ def process_text_with_file_path(text):
 shadowroot = Path(os.path.expanduser("~/.shadowroot"))
 
 
-def extract_and_diff_files(content):
-    """从内容中提取文件并生成diff"""
-    # 提取文件内容并保存
-    # 创建shadowroot目录
-    # 备份response.md内容
-
+def _save_response_content(content):
+    """保存原始响应内容到response.md"""
     response_path = shadowroot / Path("response.md")
     with open(response_path, "w+", encoding="utf-8") as dst:
         dst.write(content)
-    matches = re.findall(r"@([^\n]+)\n(.*)?\n@\1", content, re.S)
-    if not matches:
-        return
+    return response_path
 
-    # print(f"已备份response.md到: {response_path}")
-    # 用于存储diff内容
-    diff_content = ""
 
-    for filename, file_content in matches:
-        # 处理文件路径
-        file_path = Path(filename)
-        old_file_path = file_path
-        # 如果是绝对路径，转换为相对路径
-        if file_path.is_absolute():
-            parts = file_path.parts[1:]
-            file_path = Path(*parts)
-        # 组合到shadowroot目录
-        shadow_file_path = shadowroot / file_path
-        # 创建父目录
-        shadow_file_path.parent.mkdir(parents=True, exist_ok=True)
-        # 写入文件内容
-        with open(shadow_file_path, "w", encoding="utf-8") as f:
-            f.write(file_content)
-        print(f"已保存文件到: {shadow_file_path}")
+def _extract_file_matches(content):
+    """从内容中提取文件匹配项"""
+    return re.findall(r"\[modified file\]: (.*?)\n\[source code start\]\n(.*?)\n\[source code end\]", content, re.S)
 
-        # 生成unified diff
-        if old_file_path.exists():
-            with open(old_file_path, "r", encoding="utf-8") as orig_file:
-                original_content = orig_file.read()
-                diff = difflib.unified_diff(
-                    original_content.splitlines(),
-                    file_content.splitlines(),
-                    fromfile=str(old_file_path),
-                    tofile=str(shadow_file_path),
-                    lineterm="",
-                )
-                diff_content += "\n".join(diff) + "\n\n"
 
-    # 将diff写入文件
+def _process_file_path(file_path):
+    """处理文件路径，将绝对路径转换为相对路径"""
+    if file_path.is_absolute():
+        parts = file_path.parts[1:]
+        return Path(*parts)
+    return file_path
+
+
+def _save_file_to_shadowroot(shadow_file_path, file_content):
+    """将文件内容保存到shadowroot目录"""
+    shadow_file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(shadow_file_path, "w", encoding="utf-8") as f:
+        f.write(file_content)
+    print(f"已保存文件到: {shadow_file_path}")
+
+
+def _generate_unified_diff(old_file_path, shadow_file_path, file_content):
+    """生成unified diff"""
+    with open(old_file_path, "r", encoding="utf-8") as orig_file:
+        original_content = orig_file.read()
+        return difflib.unified_diff(
+            original_content.splitlines(),
+            file_content.splitlines(),
+            fromfile=str(old_file_path),
+            tofile=str(shadow_file_path),
+            lineterm="",
+        )
+
+
+def _save_diff_content(diff_content):
+    """将diff内容保存到文件"""
     if diff_content:
         diff_file = shadowroot / "changes.diff"
         with open(diff_file, "w", encoding="utf-8") as f:
             f.write(diff_content)
         print(f"已生成diff文件: {diff_file}")
-    # 检查是否存在diff文件
-    diff_file = shadowroot / "changes.diff"
+        return diff_file
+    return None
+
+
+def _display_and_apply_diff(diff_file):
+    """显示并应用diff"""
     if diff_file.exists():
-        # 使用pygments高亮显示diff内容
         with open(diff_file, "r", encoding="utf-8") as f:
             diff_text = f.read()
             highlighted_diff = highlight(diff_text, DiffLexer(), TerminalFormatter())
             print("\n高亮显示的diff内容：")
             print(highlighted_diff)
-        # 询问用户是否应用diff
+
         print(f"\n申请变更文件，是否应用 {diff_file}？")
         apply = input("输入 y 应用，其他键跳过: ").lower()
         if apply == "y":
-            # 应用diff
             try:
                 subprocess.run(["patch", "-p0", "-i", str(diff_file)], check=True)
                 print("已成功应用变更")
@@ -647,44 +688,49 @@ def extract_and_diff_files(content):
                 print(f"应用变更失败: {e}")
 
 
-def process_response(
-    response_data, file_path, save=True, obsidian_doc=None, ask_param=None
-):
+def extract_and_diff_files(content):
+    """从内容中提取文件并生成diff"""
+    _save_response_content(content)
+    matches = _extract_file_matches(content)
+    if not matches:
+        return
+
+    diff_content = ""
+    for filename, file_content in matches:
+        file_path = Path(filename)
+        old_file_path = file_path
+        file_path = _process_file_path(file_path)
+        shadow_file_path = shadowroot / file_path
+
+        _save_file_to_shadowroot(shadow_file_path, file_content)
+
+        if old_file_path.exists():
+            diff = _generate_unified_diff(old_file_path, shadow_file_path, file_content)
+            diff_content += "\n".join(diff) + "\n\n"
+
+    diff_file = _save_diff_content(diff_content)
+    if diff_file:
+        _display_and_apply_diff(diff_file)
+
+
+def process_response(response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
     """处理API响应并保存结果"""
     if not response_data["choices"]:
         raise ValueError("API返回空响应")
 
     content = response_data["choices"][0]["message"]["content"]
 
-    # 获取文件扩展名
-    ext = Path(file_path).suffix[1:] if Path(file_path).suffix else "txt"
-
     # 处理文件路径
     file_path = Path(file_path)
-    if file_path.is_absolute():
-        parts = file_path.parts[1:]
-        relative_path = Path(*parts)
-    else:
-        relative_path = file_path
+    if save and file_path:
+        with open(file_path, "w+", encoding="utf8") as f:
+            # 删除<think>...</think>内容
+            cleaned_content = re.sub(r"<think>\n.*?\n</think>", "", content, flags=re.DOTALL)
+            f.write(cleaned_content)
 
-    if save:
-        # 创建保存目录
-        base_dir = Path(os.getenv("GROQ_DOC", os.getcwd()))
-        save_dir = base_dir / "groq_responses" / relative_path.parent
-        os.makedirs(save_dir, exist_ok=True)
-
-        base_name = os.path.basename(file_path).split(".")[0]
-        save_path = save_dir / f"response-{base_name}-{ext}.md"
-
-        with open(save_path, "w", encoding="utf-8") as f:
-            f.write(content)
-    else:
-        # 使用临时文件
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", encoding="utf-8", delete=False
-        ) as tmp_file:
-            tmp_file.write(content)
-            save_path = tmp_file.name
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", encoding="utf-8", delete=False) as tmp_file:
+        tmp_file.write(content)
+        save_path = tmp_file.name
 
     # 处理Obsidian文档存储
     if obsidian_doc:
@@ -723,7 +769,6 @@ def process_response(
             os.unlink(save_path)
     except subprocess.CalledProcessError as e:
         print(f"glow运行失败: {e}")
-        sys.exit(1)
 
     extract_and_diff_files(content)
 
@@ -765,7 +810,7 @@ def main():
     proxies, proxy_sources = detect_proxies()
     if proxies:
         print("⚡ 检测到代理配置：")
-        max_len = max(len(p) for p in proxies.keys())
+        max_len = max(len(p) for p in proxies)
         for protocol in sorted(proxies.keys()):
             source_var = proxy_sources.get(protocol, "unknown")
             sanitized = sanitize_proxy_url(proxies[protocol])
@@ -790,8 +835,8 @@ def main():
         )
         process_response(
             response_data,
-            "",
-            save=False,
+            os.path.join(os.path.dirname(__file__), ".lastgptanswer"),
+            save=True,
             obsidian_doc=args.obsidian_doc,
             ask_param=ask_param,
         )
@@ -812,9 +857,7 @@ def main():
                 # 在提示词中添加当前分块信息
                 pager = f"这是代码的第 {i}/{total_chunks} 部分：\n\n"
                 print(pager)
-                chunk_prompt = prompt_template.format(
-                    path=args.file, pager=pager, code=chunk
-                )
+                chunk_prompt = prompt_template.format(path=args.file, pager=pager, code=chunk)
                 response_data = query_gpt_api(
                     api_key,
                     chunk_prompt,
@@ -823,15 +866,11 @@ def main():
                     base_url=base_url,
                 )
                 response_pager = f"\n这是回答的第 {i}/{total_chunks} 部分：\n\n"
-                responses.append(
-                    response_pager + response_data["choices"][0]["message"]["content"]
-                )
+                responses.append(response_pager + response_data["choices"][0]["message"]["content"])
             final_content = "\n\n".join(responses)
             response_data = {"choices": [{"message": {"content": final_content}}]}
         else:
-            full_prompt = prompt_template.format(
-                path=args.file, pager="", code=code_content
-            )
+            full_prompt = prompt_template.format(path=args.file, pager="", code=code_content)
             response_data = query_gpt_api(
                 api_key,
                 full_prompt,
@@ -841,7 +880,8 @@ def main():
             )
         process_response(
             response_data,
-            args.file,
+            "",
+            save=False,
             obsidian_doc=args.obsidian_doc,
             ask_param=ask_param,
         )

@@ -17,6 +17,7 @@ export GPT_DOC="$GPT_PATH/obsidian"
 export PATH="$GPT_PATH/bin:$PATH"
 export GPT_PROMPTS_DIR="$GPT_PATH/prompts"
 export GPT_LOGS_DIR="$GPT_PATH/logs"
+export GPT_MAX_TOKEN=16384
 
 #DEBUG=1
 #对话的uuid
@@ -163,8 +164,8 @@ function usegpt() {
     }
 
     # 使用python3一次性解析并提取所有配置项
-    local key base_url model
-    read key base_url model <<< $(python3 -c "import json, sys; config=json.load(open('$config_file')).get('$model_name', {}); print(config.get('key', ''), config.get('base_url', ''), config.get('model_name', ''))" 2>/dev/null)
+    local key base_url model max_tokens
+    read key base_url model max_tokens <<< $(python3 -c "import json, sys; config=json.load(open('$config_file')).get('$model_name', {}); print(config.get('key', ''), config.get('base_url', ''), config.get('model_name', ''), config.get('max_tokens', ''))" 2>/dev/null)
 
     # 检查是否成功获取配置
     if [[ -z "$key" || -z "$base_url" || -z "$model" ]]; then
@@ -176,6 +177,7 @@ function usegpt() {
     export GPT_KEY="$key"
     export GPT_BASE_URL="$base_url"
     export GPT_MODEL="$model"
+    [[ -n "$max_tokens" ]] && export GPT_MAX_TOKEN="$max_tokens"
 
     # 如果VERBOSE参数不存在，则输出成功日志
     if [[ -z "$no_verbose" ]]; then
@@ -183,6 +185,7 @@ function usegpt() {
         echo "  GPT_KEY: ${key:0:4}****"
         echo "  GPT_BASE_URL: $base_url"
         echo "  GPT_MODEL: $model"
+        [[ -n "$max_tokens" ]] && echo "  GPT_MAX_TOKEN: $max_tokens"
     fi
 }
 
@@ -244,8 +247,18 @@ function explaingpt() {
     $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --file "$file" --prompt-file "$prompt_file"
 }
 
-
-
+function commitgpt() {
+    newconversation
+    askgpt @git-commit-message @git-stage= @git-diff-summary.txt; rm git-diff-summary.txt
+    # 打开编辑器让用户确认提交信息
+    if [[ -f "$GPT_PATH/.lastgptanswer" ]]; then
+        ${EDITOR:-vim} "$GPT_PATH/.lastgptanswer"
+        git commit -F "$GPT_PATH/.lastgptanswer" && rm "$GPT_PATH/.lastgptanswer"
+    else
+        echo "错误：未找到提交信息文件 $GPT_PATH/.lastgptanswer"
+        return 1
+    fi
+}
 
 function askgpt() {
     local question="$@"
