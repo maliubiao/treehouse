@@ -39,4 +39,14 @@ repos:
         ]
         require_serial: true
 
-
+  - repo: local
+    hooks:
+      - id: powershell-formatter
+        name: PowerShell Formatter
+        entry: pwsh ./Format-Script.ps1
+        language: system
+        types: [powershell]
+        files: \.ps1$
+        args: []
+        require_serial: true
+        verbose: true

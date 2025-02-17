@@ -1,4 +1,4 @@
-﻿# env.ps1
+# env.ps1
 # 获取Python可执行文件路径
 
 # 设置 GPT_PATH
@@ -18,7 +18,8 @@ function global:Get-PythonPath {
     # 检查虚拟环境中的Python路径
     $venvPythonPath = if ($IsWindows) {
         Join-Path $env:GPT_PATH ".venv" | Join-Path -ChildPath "Scripts" | Join-Path -ChildPath "python.exe"
-    } else {
+    }
+    else {
         Join-Path $env:GPT_PATH ".venv" | Join-Path -ChildPath "bin" | Join-Path -ChildPath "python"
     }
 
@@ -140,7 +141,7 @@ for idx, (_, date, time, uuid, preview, _) in enumerate(files):
     $choice = [int]$choice
 
     if ($choice -match '^\d+$' -and $choice -ge 1 -and $choice -le $itemCount) {
-        $selected = $selection[$choice-1] -split "\t"
+        $selected = $selection[$choice - 1] -split "\t"
         if ($env:DEBUG -eq "1") {
             Write-Host "[DEBUG] 用户选择: $choice"
             Write-Host "[DEBUG] 解析后的选择项:"
@@ -177,6 +178,39 @@ function global:listgpt {
         }
     }
 }
+
+function global:commitgpt {
+    # 开始新会话
+    newconversation
+    
+    # 生成提交信息
+    askgpt \@git-commit-message \@git-stage= \@git-diff-summary.txt
+    
+    # 删除临时文件
+    Remove-Item -Path git-diff-summary.txt -ErrorAction SilentlyContinue
+    
+    # 检查并编辑提交信息
+    $commitFile = Join-Path -Path $env:GPT_PATH -ChildPath ".lastgptanswer"
+    if (Test-Path $commitFile) {
+        # 默认使用 VS Code 打开文件
+        $editor = $env:EDITOR
+        if (-not $editor) {
+            $editor = "code"
+        }
+        Start-Process -FilePath $editor -ArgumentList $commitFile -Wait
+        
+        # 执行git提交
+        git commit -F $commitFile
+        
+        # 删除临时文件
+        Remove-Item -Path $commitFile
+    }
+    else {
+        Write-Error "错误：未找到提交信息文件 $commitFile"
+        return 1
+    }
+}
+
 
 function global:usegpt {
     if (-not $args[0]) {
@@ -276,11 +310,13 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
                 $file = Split-Path $searchPath -Leaf
                 $files = Get-ChildItem -Path $dir -File -Filter "$file*" -ErrorAction SilentlyContinue |
                     ForEach-Object { $prefix + (Join-Path (Split-Path $search) $_.Name) }
-            } else {
+            }
+            else {
                 $files = Get-ChildItem -Path . -File -Filter "$search*" -ErrorAction SilentlyContinue |
                     ForEach-Object { $prefix + $_.Name }
             }
-        } catch {}
+        }
+        catch {}
 
         if ($env:DEBUG) {
             Write-Host "  找到文件系统匹配项: $($files -join ', ')"
@@ -360,7 +396,8 @@ if (-not $env:GPT_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
         $config = Get-Content (Join-Path $env:GPT_PATH "model.json") | ConvertFrom-Json
         $defaultProvider = if ($config.PSObject.Properties["default"]) {
             "default"
-        } else {
+        }
+        else {
             ($config.PSObject.Properties.Name | Select-Object -First 1)
         }
         if ($defaultProvider) {
