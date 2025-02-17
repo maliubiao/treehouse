@@ -400,26 +400,29 @@ def get_directory_context(max_depth=1):
             cmd = ["tree", "-I", ".*"]
             if max_depth is not None:
                 cmd.extend(["-L", str(max_depth)])
-
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True, shell=(sys.platform == "win32")
-        )
-
-        if result.returncode == 0:
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+                text=True,
+                shell=(sys.platform == "win32"),
+            )
             output = result.stdout
             return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{output}"
+        except subprocess.CalledProcessError:
+            # 当tree命令失败时使用替代命令
+            if sys.platform == "win32":
+                # Windows使用dir命令
+                dir_result = subprocess.run(["dir"], stdout=subprocess.PIPE, check=True, text=True, shell=True)
+                msg = dir_result.stdout or "无法获取目录信息"
+            else:
+                # 非Windows使用ls命令
+                ls_result = subprocess.run(["ls", "-l"], stdout=subprocess.PIPE, text=True, check=True)
+                msg = ls_result.stdout or "无法获取目录信息"
 
-        # 当tree命令失败时使用替代命令
-        if sys.platform == "win32":
-            # Windows使用dir命令
-            dir_result = subprocess.run(["dir"], stdout=subprocess.PIPE, check=True, text=True, shell=True)
-            msg = dir_result.stdout or "无法获取目录信息"
-        else:
-            # 非Windows使用ls命令
-            ls_result = subprocess.run(["ls", "-l"], stdout=subprocess.PIPE, text=True, check=True)
-            msg = ls_result.stdout or "无法获取目录信息"
-
-        return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
+            return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
 
     except Exception as e:
         return f"获取目录上下文时出错: {str(e)}"

@@ -1,1 +1,1 @@
-<think>请输出完整的修改后文件源代码，输出格式为 [modified file]: path\n[source code start]\n源代码\n[source code end]</think>
+<think>请输出完整的修改后文件源代码，输出中不可以省略[modified file], 输出格式为 [modified file]: path\n[source code start]\n源代码\n[source code end]</think>
