@@ -11,15 +11,16 @@
 要格式化的文件或目录路径（支持通配符和多个参数）  
 
 .EXAMPLE  
-./Format-Script.ps1 -Path ./test.ps1          # 格式化单个文件  
-./Format-Script.ps1 -Path ./scripts *.ps1     # 批量处理多个路径  
+./Format-Script.ps1 ./test.ps1            # 格式化单个文件  
+./Format-Script.ps1 ./scripts *.ps1       # 批量处理多个路径  
+./Format-Script.ps1                       # 格式化当前目录所有ps1文件  
 #>  
 
 [CmdletBinding(SupportsShouldProcess)]  
 param(  
-    [Parameter(Mandatory, Position = 0, ValueFromPipeline, ValueFromRemainingArguments)]  # 关键修改：支持剩余参数  
+    [Parameter(Position = 0, ValueFromPipeline, ValueFromRemainingArguments)]  # 移除 Mandatory 属性
     [Alias("FilePath")]  
-    [string[]]$Path  
+    [string[]]$Path = @(Get-Location)  # 默认处理当前目录
 )  
 
 begin {  
@@ -112,4 +113,4 @@ process {
             }  
         }  
     }  
-}  
+}

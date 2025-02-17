@@ -648,17 +648,15 @@ def _save_file_to_shadowroot(shadow_file_path, file_content):
     print(f"已保存文件到: {shadow_file_path}")
 
 
-def _generate_unified_diff(old_file_path, shadow_file_path, file_content):
+def _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content):
     """生成unified diff"""
-    with open(old_file_path, "r", encoding="utf-8") as orig_file:
-        original_content = orig_file.read()
-        return difflib.unified_diff(
-            original_content.splitlines(),
-            file_content.splitlines(),
-            fromfile=str(old_file_path),
-            tofile=str(shadow_file_path),
-            lineterm="",
-        )
+    return difflib.unified_diff(
+        original_content.splitlines(),
+        file_content.splitlines(),
+        fromfile=str(old_file_path),
+        tofile=str(shadow_file_path),
+        lineterm="",
+    )
 
 
 def _save_diff_content(diff_content):
@@ -706,10 +704,12 @@ def extract_and_diff_files(content):
         shadow_file_path = shadowroot / file_path
 
         _save_file_to_shadowroot(shadow_file_path, file_content)
-
+        original_content = ""
         if old_file_path.exists():
-            diff = _generate_unified_diff(old_file_path, shadow_file_path, file_content)
-            diff_content += "\n".join(diff) + "\n\n"
+            with open(old_file_path, "r", encoding="utf8") as f:
+                original_content = f.read()
+        diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
+        diff_content += "\n".join(diff) + "\n\n"
 
     diff_file = _save_diff_content(diff_content)
     if diff_file:
