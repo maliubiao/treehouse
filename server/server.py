@@ -239,6 +239,9 @@ class ConvertHandler(web.RequestHandler):
 
             try:
                 logger.info("📤 发送提取请求到浏览器，请求ID: %s", request_id)
+                # 添加连接状态检查
+                if client.ws_connection is None or client.ws_connection.is_closing():
+                    raise web.HTTPError(503, reason="WebSocket connection closed")
                 await client.write_message(json.dumps({"type": "extract", "url": url, "requestId": request_id}))
 
                 html = await gen.with_timeout(ioloop.IOLoop.current().time() + 60, fut)
@@ -270,12 +273,16 @@ class ConvertHandler(web.RequestHandler):
                 logger.error("⏰ 请求超时，请求ID: %s", request_id)
                 self.set_status(504)
                 self.write({"error": "Request timeout"})
+            except websocket.WebSocketClosedError:
+                logger.error("WebSocket连接已关闭")
+                self.set_status(503)
+                self.write({"error": "WebSocket connection closed"})
             finally:
                 pending_requests.pop(request_id, None)
-
         except web.MissingArgumentError:
             self.set_status(400)
             self.write({"error": "Missing url parameter"})
+
         except (OSError, IOError, ValueError) as e:
             logger.error("处理请求出错: %s", str(e))
             self.set_status(500)

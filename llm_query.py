@@ -629,7 +629,7 @@ def _save_response_content(content):
 
 def _extract_file_matches(content):
     """从内容中提取文件匹配项"""
-    return re.findall(r"\[modified file\]: (.*?)\n\[source code start\]\n(.*?)\n\[source code end\]", content, re.S)
+    return re.findall(r"\[modified file\]: (.*?)\n\[source code start\] *?\n(.*?)\n\[source code end\]", content, re.S)
 
 
 def _process_file_path(file_path):
