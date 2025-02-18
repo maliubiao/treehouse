@@ -1,7 +1,9 @@
 import argparse
+import datetime
 import json
 import logging
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -10,6 +12,12 @@ import uuid
 from markitdown import MarkItDown
 from tornado import gen, ioloop, web, websocket
 from tornado.httpclient import AsyncHTTPClient
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
 
 # 调试模式配置
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
@@ -20,6 +28,23 @@ logger = logging.getLogger(__name__)
 
 connected_clients = {}
 pending_requests = {}
+
+
+def init_cache_db():
+    """初始化SQLite缓存数据库"""
+    with sqlite3.connect("url_cache.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS url_cache (
+                url TEXT PRIMARY KEY,
+                markdown_content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """
+        )
+        conn.commit()
+        logger.info("✅ 初始化URL缓存数据库完成")
 
 
 # 跨平台文件锁
@@ -38,8 +63,6 @@ class ProcessLock:
             self.fd = self.file.fileno()
             if os.name == "nt":  # Windows
                 logger.info("🪟 检测到Windows系统，使用msvcrt锁定")
-                import msvcrt
-
                 try:
                     msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
                     logger.info("✅ 成功获取Windows进程锁")
@@ -49,8 +72,6 @@ class ProcessLock:
                     return False
             else:  # Unix/Linux/Mac
                 logger.info("🐧 检测到Unix/Linux/Mac系统，使用fcntl锁定")
-                import fcntl
-
                 try:
                     fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     logger.info("✅ 成功获取Unix进程锁")
@@ -69,13 +90,10 @@ class ProcessLock:
                 if self.fd:
                     if os.name == "nt":
                         logger.info("🪟 释放Windows进程锁")
-                        import msvcrt
 
                         msvcrt.locking(self.fd.fileno(), msvcrt.LK_UNLCK, 1)
                     else:
                         logger.info("🐧 释放Unix进程锁")
-                        import fcntl
-
                         fcntl.flock(self.fd, fcntl.LOCK_UN)
                     self.file.close()
                     os.unlink(self.lock_file)
@@ -197,6 +215,17 @@ class ConvertHandler(web.RequestHandler):
             logger.info("🌐 收到转换请求，URL: %s", url)
             logger.info("📰 新闻模式: %s", is_news)
 
+            # 检查缓存
+            try:
+                with sqlite3.connect("url_cache.db") as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT markdown_content FROM url_cache WHERE url = ?", (url,))
+                    if row := cursor.fetchone():
+                        logger.info("💾 命中缓存，直接返回结果")
+                        return self.write(row[0])
+            except sqlite3.Error as e:
+                logger.error("🚨 缓存查询失败: %s", str(e))
+
             if not connected_clients:
                 logger.error("🚫 没有连接的浏览器客户端")
                 self.set_status(503)
@@ -217,6 +246,24 @@ class ConvertHandler(web.RequestHandler):
 
                 html = await self._process_html(html, is_news)
                 markdown = await self._convert_to_markdown(html)
+
+                # 写入缓存
+                try:
+                    with sqlite3.connect("url_cache.db") as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """
+                            INSERT OR REPLACE INTO url_cache
+                            (url, markdown_content, created_at)
+                            VALUES (?, ?, ?)
+                        """,
+                            (url, markdown, datetime.datetime.now().isoformat()),
+                        )
+                        conn.commit()
+                        logger.info("💾 缓存写入成功")
+                except sqlite3.Error as e:
+                    logger.error("🚨 缓存写入失败: %s", str(e))
+
                 self.write(markdown)
 
             except gen.TimeoutError:
@@ -258,6 +305,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
+        init_cache_db()  # 初始化缓存数据库
         app = make_app()
         # 使用参数中的地址和端口
         app.listen(parsed_args.port, address=parsed_args.addr)
