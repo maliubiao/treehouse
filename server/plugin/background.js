@@ -5,6 +5,7 @@ let ws = null,
 let currentTabId = null;
 let requestId = null;
 let isTabCreatedByUs = false; // 新增标志位，标记是否是我们创建的标签页
+let selectors = null; // 新增选择器变量
 
 async function connectWebSocket(serverUrl) {
   if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -25,10 +26,12 @@ async function connectWebSocket(serverUrl) {
         currentTabId = existingTab.id;
         isTabCreatedByUs = false;
         if (DEBUG) console.debug(`🔍 找到已存在的标签页，ID: ${currentTabId}`);
+        selectors = data.selectors; // 保存选择器
         await injectScript(currentTabId);
       } else {
         currentTabId = await createTab(data.url);
         isTabCreatedByUs = true;
+        selectors = data.selectors; // 保存选择器
       }
       requestId = data.requestId;
     }
@@ -51,6 +54,11 @@ async function injectScript(tabId) {
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ["extract.js"],
+    });
+    // 注入后立即发送选择器数据
+    await chrome.tabs.sendMessage(tabId, {
+      action: "setSelectors",
+      selectors: selectors,
     });
   } catch (error) {
     console.error("脚本注入失败:", error);
@@ -94,6 +102,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     }
     currentTabId = null;
     isTabCreatedByUs = false;
+    selectors = null; // 清除选择器
   }
 });
 

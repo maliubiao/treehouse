@@ -5,7 +5,6 @@ document.getElementById("injectBtn").addEventListener("click", async () => {
       target: { tabId: tab.id },
       files: ["selector.js"],
     });
-    alert("选择器注入成功！");
   } catch (error) {
     console.error("注入失败:", error);
     alert("选择器注入失败，请重试");

@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import fnmatch
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import tempfile
 import threading
 import uuid
 
+import yaml
 from markitdown import MarkItDown
 from tornado import gen, ioloop, web, websocket
 from tornado.httpclient import AsyncHTTPClient
@@ -18,16 +20,34 @@ if os.name == "nt":
 else:
     import fcntl
 
-
 # 调试模式配置
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-
+CACHE_DEFAULT_SECONDS = 60
 # 配置日志
 logging.basicConfig(level=logging.DEBUG if DEBUG else logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 connected_clients = {}
 pending_requests = {}
+main_config = {"filter": []}
+
+
+def load_config():
+    """加载并编译选择器配置"""
+    try:
+        with open("config.yaml", "r") as f:
+            config = yaml.safe_load(f) or []
+            for entry in config:
+                main_config["filter"].append(
+                    {
+                        "pattern": entry["url"],
+                        "selectors": entry.get("selectors", []),
+                        "cache_seconds": entry.get("cache_seconds", 600),
+                    }
+                )
+            logger.info("✅ 成功加载 %d 条selector配置", len(main_config["filter"]))
+    except Exception as e:
+        logger.error("🚨 加载selectors.yaml失败: %s", str(e))
 
 
 def init_cache_db():
@@ -90,7 +110,6 @@ class ProcessLock:
                 if self.fd:
                     if os.name == "nt":
                         logger.info("🪟 释放Windows进程锁")
-
                         msvcrt.locking(self.fd.fileno(), msvcrt.LK_UNLCK, 1)
                     else:
                         logger.info("🐧 释放Unix进程锁")
@@ -105,7 +124,7 @@ class ProcessLock:
 
 class BrowserWebSocketHandler(websocket.WebSocketHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, *kwargs)
         self.client_id = None
         logger.info("🛠 初始化WebSocket处理器")
 
@@ -213,16 +232,31 @@ class ConvertHandler(web.RequestHandler):
             url = self.get_query_argument("url")
             is_news = self.get_query_argument("is_news", "false").lower() == "true"
             logger.info("🌐 收到转换请求，URL: %s", url)
-            logger.info("📰 新闻模式: %s", is_news)
+
+            # 新增选择器匹配逻辑
+            matched_selectors = []
+            cache_seconds = CACHE_DEFAULT_SECONDS  # 默认缓存时间
+            for entry in main_config["filter"]:
+                if fnmatch.fnmatch(url, entry["pattern"]):  # 使用glob模式匹配URL
+                    matched_selectors = entry["selectors"]
+                    cache_seconds = entry.get("cache_seconds", CACHE_DEFAULT_SECONDS)  # 获取配置的缓存时间
+                    logger.info("🔍 URL匹配到glob: %s, 缓存时间: %d秒", entry["pattern"], cache_seconds)
+                    break
 
             # 检查缓存
             try:
                 with sqlite3.connect("url_cache.db") as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT markdown_content FROM url_cache WHERE url = ?", (url,))
+                    cursor.execute("SELECT markdown_content, created_at FROM url_cache WHERE url = ?", (url,))
                     if row := cursor.fetchone():
-                        logger.info("💾 命中缓存，直接返回结果")
-                        return self.write(row[0])
+                        content, created_at = row
+                        # 计算缓存是否过期
+                        created_time = datetime.datetime.fromisoformat(created_at)
+                        time_diff = (datetime.datetime.now() - created_time).total_seconds()
+                        if time_diff <= cache_seconds:
+                            logger.info("💾 命中有效缓存，直接返回结果")
+                            return self.write(content)
+                        logger.info("⏳ 缓存已过期，时间差: %.1f秒 > %d秒", time_diff, cache_seconds)
             except sqlite3.Error as e:
                 logger.error("🚨 缓存查询失败: %s", str(e))
 
@@ -242,7 +276,16 @@ class ConvertHandler(web.RequestHandler):
                 # 添加连接状态检查
                 if client.ws_connection is None or client.ws_connection.is_closing():
                     raise web.HTTPError(503, reason="WebSocket connection closed")
-                await client.write_message(json.dumps({"type": "extract", "url": url, "requestId": request_id}))
+                await client.write_message(
+                    json.dumps(
+                        {
+                            "type": "extract",
+                            "url": url,
+                            "requestId": request_id,
+                            "selectors": matched_selectors,  # 新增选择器字段
+                        }
+                    )
+                )
 
                 html = await gen.with_timeout(ioloop.IOLoop.current().time() + 60, fut)
                 logger.info("📥 收到HTML响应，长度: %s 字符", len(html))
@@ -312,6 +355,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
+        load_config()
         init_cache_db()  # 初始化缓存数据库
         app = make_app()
         # 使用参数中的地址和端口

@@ -1,0 +1,6 @@
+
+- url: https://www.guancha.cn/*/*.shtml
+  selectors:
+    - "div.content > div > ul"
+
+
