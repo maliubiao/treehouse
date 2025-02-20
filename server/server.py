@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 connected_clients = {}
 pending_requests = {}
 main_config = {"filter": []}
-config_file_path = os.path.join(os.path.basename(__file__), "config.yaml")
+config_file_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 
 
 def load_config():
