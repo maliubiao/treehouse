@@ -57,7 +57,22 @@
         if (DEBUG) console.debug("🎯 使用选择器过滤内容");
         const selectedElements = [];
         selectors.forEach((selector) => {
-          const elements = doc.querySelectorAll(selector);
+          const elements = selector.startsWith("//")
+            ? (() => {
+                const result = document.evaluate(
+                  selector,
+                  doc,
+                  null,
+                  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                  null,
+                );
+                const elements = [];
+                for (let i = 0; i < result.snapshotLength; i++) {
+                  elements.push(result.snapshotItem(i));
+                }
+                return elements;
+              })()
+            : doc.querySelectorAll(selector);
           if (elements.length > 0) {
             elements.forEach((element) => {
               // 检查当前元素是否是已添加元素的子元素
