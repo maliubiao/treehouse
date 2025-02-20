@@ -201,14 +201,19 @@ cd node; npm install; npm start
 
 **网页转换服务的元素过滤器**   
 网页上可能有非常多杂七杂八的东西，比如外链，浪费上下文，而且许多api限制8k上下文, 放不进去   
-这时就需要自己定义css selectors来告诉转换服务，哪里是需要关注的    
-网页转换服务自带一个元素过滤器, 在server/config.yaml配置   
+这时就需要自己定义css 或者 xpath selectors来告诉转换服务，哪里是需要关注的    
+xpath selector功能更为强大，在处理混淆后的网页结构时有很好的效果   
+网页转换服务自带一个元素过滤器, 在server/config.yaml配置    
 ```yaml
 #支持glob, . * 这样的匹配网址方式
 - url: https://www.guancha.cn/*/*.shtml
   cache_seconds: 600 #对结果缓存10分钟，可许会再次查询，提出不同角度的问题  
   selectors:
-    - "div.content > div > ul" #只关注网页正文
+    - "div.content > div > ul" #只关注网页正文,
+
+- url: https://x.com/*/status/*
+  selectors:
+    - "//article/ancestor::div[4]" #xpath, 必须以//开头，这个表示article的第四层父元素div
 ```
 
 **插件的配置**  
