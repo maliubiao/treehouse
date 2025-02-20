@@ -240,9 +240,30 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
         }
       });
 
-      // 选择时更新输入框
+      // 选择时更新输入框并添加闪烁效果
       select.addEventListener("change", () => {
         panel.querySelector("#cssQueryInput").value = select.value;
+
+        // 创建闪烁图层
+        const highlight = document.createElement("div");
+        highlight.style.position = "absolute";
+        highlight.style.backgroundColor = "rgba(0, 0, 255, 0.2)";
+        highlight.style.pointerEvents = "none";
+
+        // 获取元素位置
+        const rect = el.getBoundingClientRect();
+        highlight.style.width = `${rect.width}px`;
+        highlight.style.height = `${rect.height}px`;
+        highlight.style.left = `${rect.left + window.scrollX}px`;
+        highlight.style.top = `${rect.top + window.scrollY}px`;
+
+        // 添加到页面
+        document.body.appendChild(highlight);
+
+        // 2秒后移除
+        setTimeout(() => {
+          highlight.remove();
+        }, 2000);
       });
 
       container.appendChild(select);
