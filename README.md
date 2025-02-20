@@ -192,13 +192,28 @@ askgpt "如何实现快速排序算法？"
 # 启动转换服务器（默认端口8000), 用https://github.com/microsoft/markitdown实现
 # 支持--addr, --port, 需要在插件option里也改
 python server/server.py
-
 # 调用转换接口（需配合浏览器扩展使用），server/plugin加载到浏览器
 curl "http://localhost:8000/convert?url=当前页面URL"
 
 # Firefox Readability新闻提取, 前面的server在收到is_news=True参数时，会查询这个, 端口3000, package.json中可改    
 cd node; npm install; npm start
 ```
+
+**网页转换服务的元素过滤器**   
+网页上可能有非常多杂七杂八的东西，比如外链，浪费上下文，而且许多api限制8k上下文, 放不进去   
+这时就需要自己定义css selectors来告诉转换服务，哪里是需要关注的    
+网页转换服务自带一个元素过滤器, 在server/config.yaml配置   
+```yaml
+#支持glob, . * 这样的匹配网址方式
+- url: https://www.guancha.cn/*/*.shtml
+  cache_seconds: 600 #对结果缓存10分钟，可许会再次查询，提出不同角度的问题  
+  selectors:
+    - "div.content > div > ul" #只关注网页正文
+```
+
+**插件的配置**  
+点击插件的图标，有弹出选项，可在当前页面加载一个元素选择器，它可以帮助你定位想要的内容的css selector, 复制到config.yaml去    
+如果你会用dev tools的inspector，可以使用它的copy selector    
 
 
 ### 提示词模板

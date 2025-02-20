@@ -1,5 +1,6 @@
 
 - url: https://www.guancha.cn/*/*.shtml
+  cache_seconds: 600
   selectors:
     - "div.content > div > ul"
 

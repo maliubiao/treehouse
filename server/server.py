@@ -30,12 +30,13 @@ logger = logging.getLogger(__name__)
 connected_clients = {}
 pending_requests = {}
 main_config = {"filter": []}
+config_file_path = os.path.join(os.path.basename(__file__), "config.yaml")
 
 
 def load_config():
     """加载并编译选择器配置"""
     try:
-        with open("config.yaml", "r") as f:
+        with open(config_file_path, "r") as f:
             config = yaml.safe_load(f) or []
             for entry in config:
                 main_config["filter"].append(
