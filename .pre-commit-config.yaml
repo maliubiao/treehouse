@@ -50,3 +50,14 @@ repos:
         args: []
         require_serial: true
         verbose: true
+
+  - repo: local
+    hooks:
+      - id: prettier
+        name: Prettier (local)
+        entry: npx prettier --write
+        language: system
+        types: [javascript]        # 匹配 JS 文件类型
+        files: \.js$               # 或使用正则明确匹配 .js 文件
+        args: [--log-level=warn]   # 可选：减少日志噪音
+        require_serial: true

@@ -12,9 +12,12 @@
   "host_permissions": [
     "<all_urls>"
   ],
-   "options_ui": {
-        "page": "options.html",
-        "open_in_tab": false
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
   },
   "background": {
     "service_worker": "background.js"
@@ -22,7 +25,9 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "extract.js"
+        "extract.js",
+        "selector.js",
+        "popup.js"
       ],
       "matches": [
         "<all_urls>"
