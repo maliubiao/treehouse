@@ -260,6 +260,12 @@ function commitgpt() {
     fi
 }
 
+function naskgpt() {
+    newconversation
+    askgpt $@
+}
+
+
 function askgpt() {
     local question="$@"
 
