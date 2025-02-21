@@ -206,7 +206,7 @@ class BrowserWebSocketHandler(websocket.WebSocketHandler):
 
     def _find_existing_config(self, url):
         logger.debug("🔍 在main_config中查找URL: %s", url)
-        result = next((item for item in main_config[FILTER_KEY] if item["url"] == url), None)
+        result = next((item for item in main_config[FILTER_KEY] if item["pattern"] == url), None)
         logger.debug("🔍 查找结果: %s", result)
         return result
 

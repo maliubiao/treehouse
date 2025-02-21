@@ -1,15 +1,17 @@
 filters:
 - cache_seconds: 600
+  pattern: https://www.guancha.cn/*/*.shtml
   selectors:
   - div.content > div > ul
-  pattern: https://www.guancha.cn/*/*.shtml
-- selectors:
+- pattern: https://blog.csdn.net/*/article/details/*
+  selectors:
   - main > div.blog-content-box
-  pattern: https://blog.csdn.net/*/article/details/*
-- selectors:
+- pattern: https://x.com/*/status/*
+  selectors:
   - //article/ancestor::div[4]
-  pattern: https://x.com/*/status/*
 - pattern: https://tree-sitter.github.io/tree-sitter/*
   selectors:
   - div.page
-  pattern: https://tree-sitter.github.io/tree-sitter/*
+- pattern: https://aider.chat/docs/*
+  selectors:
+  - div.main-content-wrap

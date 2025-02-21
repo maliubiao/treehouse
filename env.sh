@@ -363,6 +363,7 @@ if [[ -n "$ZSH_VERSION" ]]; then
     }
 
     compdef _at_complete askgpt
+    compdef _at_complete naskgpt
 
     function _usegpt_complete() {
         local config_file="${1:-$GPT_PATH/model.json}"
@@ -428,6 +429,7 @@ if [[ -n "$BASH_VERSION" ]]; then
     }
 
     complete -F _askgpt_bash_complete askgpt
+    complete -F _askgpt_bash_complete naskgpt
 
     _usegpt_bash_complete() {
         local cur prev config_file
