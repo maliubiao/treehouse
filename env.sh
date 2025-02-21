@@ -250,9 +250,31 @@ function explaingpt() {
 function commitgpt() {
     newconversation
     askgpt @git-commit-message @git-stage= @git-diff-summary.txt; rm git-diff-summary.txt
-    # 打开编辑器让用户确认提交信息
+    
+    # 检查结果文件是否存在且内容有效
     if [[ -f "$GPT_PATH/.lastgptanswer" ]]; then
+        # 读取文件内容并去除空白字符
+        content=$(cat "$GPT_PATH/.lastgptanswer" | tr -d '[:space:]')
+        
+        # 检查内容是否为空
+        if [[ -z "$content" ]]; then
+            echo "错误：GPT返回的提交信息为空"
+            rm "$GPT_PATH/.lastgptanswer"
+            return 1
+        fi
+        
+        # 打开编辑器让用户确认提交信息
         ${EDITOR:-vim} "$GPT_PATH/.lastgptanswer"
+        
+        # 再次检查编辑后的内容是否为空
+        edited_content=$(cat "$GPT_PATH/.lastgptanswer" | tr -d '[:space:]')
+        if [[ -z "$edited_content" ]]; then
+            echo "错误：编辑后的提交信息为空"
+            rm "$GPT_PATH/.lastgptanswer"
+            return 1
+        fi
+        
+        # 执行提交
         git commit -F "$GPT_PATH/.lastgptanswer" && rm "$GPT_PATH/.lastgptanswer"
     else
         echo "错误：未找到提交信息文件 $GPT_PATH/.lastgptanswer"
@@ -261,8 +283,18 @@ function commitgpt() {
 }
 
 function naskgpt() {
+    # 保存当前会话
+    local original_session=$GPT_SESSION_ID
+    
+    # 创建新会话
     newconversation
+    
+    # 执行提问
     askgpt $@
+    
+    # 恢复原会话
+    export GPT_SESSION_ID=$original_session
+    echo "已恢复原会话: $original_session"
 }
 
 

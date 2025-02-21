@@ -59,6 +59,9 @@ newconversation
 
 #git add后，可以对stage的修改生成commmit message, powershell暂时不支持
 commitgpt
+
+#不在上下文中提问, 临时发起一个, 不干扰原来的会话
+naskgpt hello
 ```
 
 ## 功能特性
