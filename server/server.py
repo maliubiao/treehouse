@@ -299,7 +299,7 @@ class ConvertHandler(web.RequestHandler):
             # 新增选择器匹配逻辑
             matched_selectors = []
             cache_seconds = CACHE_DEFAULT_SECONDS  # 默认缓存时间
-            for entry in main_config["filter"]:
+            for entry in main_config[FILTER_KEY]:
                 if fnmatch.fnmatch(url, entry["pattern"]):  # 使用glob模式匹配URL
                     matched_selectors = entry["selectors"]
                     cache_seconds = entry.get("cache_seconds", CACHE_DEFAULT_SECONDS)  # 获取配置的缓存时间
