@@ -211,16 +211,12 @@ class BrowserWebSocketHandler(websocket.WebSocketHandler):
         return result
 
     def _update_existing_config(self, existing_config, selector, url):
-        logger.debug("🔄 更新配置: %s, 选择器: %s", existing_config, selector)
-        if selector in existing_config[FILTER_KEY]:
-            logger.info("⏭️ 选择器已存在，跳过更新: %s", selector)
-        else:
-            existing_config[FILTER_KEY].append(selector)
-            logger.info("🔄 更新现有selector配置: %s -> %s", url, selector)
-        logger.debug("🔄 更新后配置: %s", existing_config)
+        existing_config["pattern"] = url
+        existing_config["selectors"] = [selector]
+        logger.info("🔄 更新现有selector配置: %s -> %s", url, selector)
 
     def _add_new_config(self, url, selector):
-        new_config = {"url": url, "selectors": [selector]}
+        new_config = {"pattern": url, "selectors": [selector]}
         logger.debug("🆕 添加新配置: %s", new_config)
         main_config[FILTER_KEY].append(new_config)
         logger.info("✅ 添加新selector配置: %s -> %s", url, selector)

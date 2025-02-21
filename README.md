@@ -208,12 +208,12 @@ xpath selector功能更为强大，在处理混淆后的网页结构时有很好
 ```yaml
 #支持glob, . * 这样的匹配网址方式
 filters:
-    - url: https://www.guancha.cn/*/*.shtml
+    - pattern: https://www.guancha.cn/*/*.shtml
       cache_seconds: 600 #对结果缓存10分钟，可许会再次查询，提出不同角度的问题  
       selectors:
         - "div.content > div > ul" #只关注网页正文,
 
-    - url: https://x.com/*/status/*
+    - pattern: https://x.com/*/status/*
       selectors:
         - "//article/ancestor::div[4]" #xpath, 必须以//开头，这个表示article的第四层父元素div
 ```

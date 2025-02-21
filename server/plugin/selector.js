@@ -19,6 +19,8 @@
     startBtn: isChinese ? "🎯 开始" : "🎯 Start",
     clearBtn: isChinese ? "🗑️ 清除" : "🗑️ Clear",
     inputPlaceholder: isChinese ? "CSS 选择器" : "CSS Selector",
+    startSelecting: isChinese ? "开始选择" : "Start Selecting",
+    stopSelecting: isChinese ? "停止选择" : "Stop Selecting",
   };
   // 创建控制面板
   const panel = document.createElement("div");
@@ -392,7 +394,8 @@
   const startSelecting = () => {
     state.isSelecting = true;
     state.fixedElement = null;
-    panel.querySelector(`#${prefix}toggleBtn`).textContent = "Stop Selecting";
+    panel.querySelector(`#${prefix}toggleBtn`).textContent =
+      texts.stopSelecting;
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("click", handleElementClick, {
       capture: true,
@@ -404,7 +407,8 @@
     state.isSelecting = false;
     document.removeEventListener("mousemove", handleMouseMove);
     document.removeEventListener("click", handleElementClick, true);
-    panel.querySelector(`#${prefix}toggleBtn`).textContent = "Start Selecting";
+    panel.querySelector(`#${prefix}toggleBtn`).textContent =
+      texts.startSelecting;
 
     dynamicHighlights.forEach((h) => h.remove());
     dynamicHighlights = [];
