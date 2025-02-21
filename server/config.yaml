@@ -1,16 +1,14 @@
-
-- url: https://www.guancha.cn/*/*.shtml
-  cache_seconds: 600
+filters:
+- cache_seconds: 600
   selectors:
-    - "div.content > div > ul"
-
-
-- url: https://blog.csdn.net/*/article/details/*
-  selectors:
-    - "main > div.blog-content-box"
-
-
-- url: https://x.com/*/status/*
-  selectors:
-    - "//article/ancestor::div[4]"
-
+  - div.content > div > ul
+  url: https://www.guancha.cn/*/*.shtml
+- selectors:
+  - main > div.blog-content-box
+  url: https://blog.csdn.net/*/article/details/*
+- selectors:
+  - //article/ancestor::div[4]
+  url: https://x.com/*/status/*
+- selectors:
+  - div.page
+  url: https://tree-sitter.github.io/tree-sitter/*

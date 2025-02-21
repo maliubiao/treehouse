@@ -85,7 +85,7 @@ async function createTab(url) {
   return tab.id;
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "htmlContent" && sender.tab.id === currentTabId) {
     if (DEBUG)
       console.debug(`📤 发送HTML内容，长度: ${message.content.length} 字符`);
@@ -103,7 +103,20 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     currentTabId = null;
     isTabCreatedByUs = false;
     selectors = null; // 清除选择器
+    sendResponse({ status: "success" }); // 添加响应
+  } else if (message.type == "selectorConfig") {
+    // 处理selector配置消息
+    if (DEBUG) console.debug(`📤 发送selector配置: ${message.selector}`);
+    ws.send(
+      JSON.stringify({
+        type: "selectorConfig",
+        url: message.url,
+        selector: message.selector,
+      }),
+    );
+    sendResponse({ status: "success" }); // 确保调用sendResponse
   }
+  return true; // 保持消息通道开放
 });
 
 // 初始化连接

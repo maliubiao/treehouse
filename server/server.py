@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 
 connected_clients = {}
 pending_requests = {}
-main_config = {"filter": []}
+FILTER_KEY = "filters"
+main_config = {FILTER_KEY: []}
 config_file_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 
 
@@ -37,18 +38,21 @@ def load_config():
     """加载并编译选择器配置"""
     try:
         with open(config_file_path, "r") as f:
-            config = yaml.safe_load(f) or []
-            for entry in config:
-                main_config["filter"].append(
-                    {
-                        "pattern": entry["url"],
-                        "selectors": entry.get("selectors", []),
-                        "cache_seconds": entry.get("cache_seconds", 600),
-                    }
-                )
-            logger.info("✅ 成功加载 %d 条selector配置", len(main_config["filter"]))
+            main_config.update(yaml.safe_load(f))
+            logger.info("✅ 成功加载 %d 条selector配置", len(main_config["filters"]))
     except Exception as e:
         logger.error("🚨 加载selectors.yaml失败: %s", str(e))
+
+
+def save_config():
+    """将当前配置写入配置文件"""
+    try:
+        # 写入配置文件
+        with open(config_file_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(main_config, f, allow_unicode=True)
+        logger.info("💾 配置已成功写入磁盘")
+    except Exception as e:
+        logger.error("🚨 写入配置文件失败: %s", str(e))
 
 
 def init_cache_db():
@@ -149,16 +153,78 @@ class BrowserWebSocketHandler(websocket.WebSocketHandler):
 
     async def _process_message(self, message):
         try:
+            logger.debug("📨 原始消息: %s", message)
             data = json.loads(message)
+            logger.debug("📝 解析后数据: %s", data)
             logger.info("📝 解析消息类型: %s", data.get("type"))
+
             if data.get("type") == "htmlResponse":
-                request_id = data.get("requestId")
-                logger.info("🆔 处理请求ID: %s", request_id)
-                if request_id in pending_requests:
-                    pending_requests[request_id].set_result(data["content"])
-                    logger.info("✅ 请求 %s 已设置结果", request_id)
+                logger.debug("🔄 处理htmlResponse消息")
+                await self._handle_html_response(data)
+            elif data.get("type") == "selectorConfig":
+                logger.debug("🔄 处理selectorConfig消息")
+                print(data)
+                await self._handle_selector_config(data)
+
         except (json.JSONDecodeError, KeyError) as e:
-            logger.error("🚨 处理消息出错: %s", str(e))
+            logger.error("🚨 处理消息出错: %s", str(e), exc_info=True)
+
+    async def _handle_html_response(self, data):
+        logger.debug("📥 处理htmlResponse数据: %s", data)
+        request_id = data.get("requestId")
+        logger.info("🆔 处理请求ID: %s", request_id)
+        if request_id in pending_requests:
+            logger.debug("📦 找到pending_requests中的请求: %s", request_id)
+            pending_requests[request_id].set_result(data["content"])
+            logger.info("✅ 请求 %s 已设置结果", request_id)
+        else:
+            logger.warning("⚠️ 未找到pending_requests中的请求: %s", request_id)
+
+    async def _handle_selector_config(self, data):
+        logger.debug("📥 处理selectorConfig数据: %s", data)
+        logger.info("⚙️ 收到selector配置")
+        url = data.get("url")
+        selector = data.get("selector")
+        logger.debug("🔗 URL: %s, 选择器: %s", url, selector)
+
+        if not url or not selector:
+            logger.warning("⚠️ 无效的selector配置: 缺少url或selector")
+            return
+
+        existing_config = self._find_existing_config(url)
+        logger.debug("🔍 查找现有配置结果: %s", existing_config)
+
+        if existing_config:
+            logger.debug("🔄 更新现有配置")
+            self._update_existing_config(existing_config, selector, url)
+        else:
+            logger.debug("🆕 添加新配置")
+            self._add_new_config(url, selector)
+
+        save_config()
+        logger.debug("💾 配置已保存")
+
+    def _find_existing_config(self, url):
+        logger.debug("🔍 在main_config中查找URL: %s", url)
+        result = next((item for item in main_config[FILTER_KEY] if item["url"] == url), None)
+        logger.debug("🔍 查找结果: %s", result)
+        return result
+
+    def _update_existing_config(self, existing_config, selector, url):
+        logger.debug("🔄 更新配置: %s, 选择器: %s", existing_config, selector)
+        if selector in existing_config[FILTER_KEY]:
+            logger.info("⏭️ 选择器已存在，跳过更新: %s", selector)
+        else:
+            existing_config[FILTER_KEY].append(selector)
+            logger.info("🔄 更新现有selector配置: %s -> %s", url, selector)
+        logger.debug("🔄 更新后配置: %s", existing_config)
+
+    def _add_new_config(self, url, selector):
+        new_config = {"url": url, "selectors": [selector]}
+        logger.debug("🆕 添加新配置: %s", new_config)
+        main_config[FILTER_KEY].append(new_config)
+        logger.info("✅ 添加新selector配置: %s -> %s", url, selector)
+        logger.debug("🆕 添加后main_config: %s", main_config[FILTER_KEY])
 
     def data_received(self, chunk):
         pass

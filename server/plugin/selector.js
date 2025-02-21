@@ -10,74 +10,124 @@
     window.matchMedia &&
     window.matchMedia("(prefers-color-scheme: dark)").matches;
 
+  // 检测系统语言
+  const isChinese = navigator.language.startsWith("zh");
+
+  // 多语言文本
+  const texts = {
+    title: isChinese ? "元素选择器 v3.1" : "Element Inspector v3.1",
+    startBtn: isChinese ? "🎯 开始" : "🎯 Start",
+    clearBtn: isChinese ? "🗑️ 清除" : "🗑️ Clear",
+    inputPlaceholder: isChinese ? "CSS 选择器" : "CSS Selector",
+  };
   // 创建控制面板
   const panel = document.createElement("div");
   panel.id = "element-selector-panel";
-  panel.style.cssText = `                                                   
-        position: fixed;                                                      
-        bottom: 20px;                                                         
-        right: 20px;                                                          
-        background: ${isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)"};                                         
-        color: ${isDarkMode ? "white" : "#333"};                                                         
-        padding: 15px;                                                        
-        border-radius: 8px;                                                   
-        font-family: Arial, sans-serif;                                       
-        z-index: 100000;                                                      
-        min-width: 320px;                                                     
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);                               
-    `;
-  panel.innerHTML = `                                                       
-        <div style="margin-bottom: 12px; font-weight: bold; color: #00ff9d;"> 
-            Element Inspector v3.1                                            
-        </div>                                                                
-        <div style="margin-bottom: 10px; display: flex; gap: 8px; flex-wrap:  
-wrap;">                                                                         
-            <button id="toggleBtn" class="tool-btn">🎯 Start</button>         
-                                                           
-            <button id="clearBtn" class="tool-btn">🗑️ Clear</button>         
-        </div>                                                                
-        <div id="elementPath" class="path-container"></div>                   
-        <div style="display: flex; gap: 8px; margin-top: 10px;">
-            <input id="cssQueryInput" style="flex:1; padding:6px; background:${isDarkMode ? "#333" : "#f0f0f0"}; 
-color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeholder="CSS Selector">
-            <button id="testQueryBtn" class="tool-btn">🔍</button>
-        </div>
-    `;
-  document.body.appendChild(panel);
 
-  // 样式和高亮元素
-  const style = document.createElement("style");
-  style.textContent = `
-        .highlight-layer {
-            position: absolute;
-            pointer-events: none;
-            box-sizing: border-box;
-            z-index: 99999;
-            opacity: 0.7;
-            transition: all 0.15s;
-        }
-        .fixed-highlight {
-            box-shadow: 0 0 6px rgba(255,255,255,0.5);
-        }
-        .path-part {
-            display: inline-block;
-            margin-right: 4px;
-            transition: color 0.2s;
-            cursor: pointer;
-            padding: 2px 4px;
-            border-radius: 3px;
-        }
-        .path-part:hover {
-            background: ${isDarkMode ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)"};
-        }
-        .validation-success {
-            outline: 2px solid #00ff00 !important;
-        }
-        .validation-error {
-            outline: 2px solid #ff0000 !important;
-        }
-    `;
-  document.head.appendChild(style);
+  // 使用特定前缀隔离样式
+  const prefix = "element-selector-";
+  const panelStyles = `
+    .${prefix}panel {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: ${isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)"};
+      color: ${isDarkMode ? "white" : "#333"};
+      padding: 15px;
+      border-radius: 8px;
+      font-family: Arial, sans-serif;
+      z-index: 100000;
+      min-width: 320px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .${prefix}panel-title {
+      margin-bottom: 12px;
+      font-weight: bold;
+      color: #00ff9d;
+    }
+    .${prefix}button-group {
+      margin-bottom: 10px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .${prefix}input-group {
+      margin-top: 10px;
+    }
+    .${prefix}url-input {
+      width: 100%;
+      padding: 6px;
+      background: ${isDarkMode ? "#333" : "#f0f0f0"};
+      color: ${isDarkMode ? "white" : "#333"};
+      border: none;
+      border-radius: 4px;
+    }
+    .${prefix}css-input {
+      flex: 1;
+      padding: 6px;
+      background: ${isDarkMode ? "#333" : "#f0f0f0"};
+      color: ${isDarkMode ? "white" : "#333"};
+      border: none;
+      border-radius: 4px;
+    }
+    .${prefix}highlight-layer {
+      position: absolute;
+      pointer-events: none;
+      box-sizing: border-box;
+      z-index: 99999;
+      opacity: 0.7;
+      transition: all 0.15s;
+    }
+    .${prefix}fixed-highlight {
+      box-shadow: 0 0 6px rgba(255,255,255,0.5);
+    }
+    .${prefix}path-part {
+      display: inline-block;
+      margin-right: 4px;
+      transition: color 0.2s;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+    .${prefix}path-part:hover {
+      background: ${isDarkMode ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)"};
+    }
+    .${prefix}validation-success {
+      outline: 2px solid #00ff00 !important;
+    }
+    .${prefix}validation-error {
+      outline: 2px solid #ff0000 !important;
+    }
+  `;
+
+  // 添加样式到文档
+  const styleSheet = document.createElement("style");
+  styleSheet.type = "text/css";
+  styleSheet.innerText = panelStyles;
+  document.head.appendChild(styleSheet);
+
+  // 设置面板类名
+  panel.className = `${prefix}panel`;
+
+  // 构建面板内容
+  panel.innerHTML = `
+    <div class="${prefix}panel-title">${texts.title}</div>
+    <div class="${prefix}button-group">
+      <button id="${prefix}toggleBtn" class="${prefix}tool-btn">${texts.startBtn}</button>
+      <button id="${prefix}clearBtn" class="${prefix}tool-btn">${texts.clearBtn}</button>
+    </div>
+    <div id="${prefix}elementPath" class="${prefix}path-container"></div>
+    <div class="${prefix}input-group">
+      <div style="margin-bottom: 8px;">
+        <input id="${prefix}urlInput" class="${prefix}url-input" placeholder="当前网址" value="${window.location.href}">
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <input id="${prefix}cssQueryInput" class="${prefix}css-input" placeholder="匹配模式">
+        <button id="${prefix}saveQueryBtn" class="${prefix}tool-btn" style="background: #4CAF50;">💾保存配置</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(panel);
 
   let dynamicHighlights = [];
   let fixedHighlights = [];
@@ -215,7 +265,7 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
     elements.forEach((el, index) => {
       const level = elements.length - index - 1; // 将level倒过来，父元素level高
       const select = document.createElement("select");
-      select.className = "path-part";
+      select.className = `${prefix}path-part`; // 添加前缀
       select.style.color = getColorForLevel(level);
       select.dataset.element = index; // 使用正序index
 
@@ -242,7 +292,7 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
 
       // 选择时更新输入框并添加闪烁效果
       select.addEventListener("change", () => {
-        panel.querySelector("#cssQueryInput").value = select.value;
+        panel.querySelector(`#${prefix}cssQueryInput`).value = select.value;
 
         // 创建闪烁图层
         const highlight = document.createElement("div");
@@ -278,7 +328,7 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
   const createHighlight = (el, level, isFixed) => {
     const rect = el.getBoundingClientRect();
     const highlight = document.createElement("div");
-    highlight.className = `highlight-layer${isFixed ? " fixed-highlight" : ""}`;
+    highlight.className = `${prefix}highlight-layer${isFixed ? ` ${prefix}fixed-highlight` : ""}`; // 添加前缀
     highlight.style.cssText = `
             border: 2px solid ${getColorForLevel(level)};
             z-index: ${99999 - level};
@@ -303,7 +353,7 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
     });
 
     // 更新路径显示
-    const pathContainer = panel.querySelector("#elementPath");
+    const pathContainer = panel.querySelector(`#${prefix}elementPath`);
     pathContainer.innerHTML = "";
     pathContainer.appendChild(formatPathWithColors(elements));
   };
@@ -332,7 +382,9 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
     e.stopImmediatePropagation();
     state.fixedElement = e.target;
     createFixedHighlights(e.target);
-    panel.querySelector("#cssQueryInput").value = generateCssQuery(e.target);
+    panel.querySelector(`#${prefix}cssQueryInput`).value = generateCssQuery(
+      e.target,
+    );
     stopSelecting();
   };
 
@@ -340,7 +392,7 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
   const startSelecting = () => {
     state.isSelecting = true;
     state.fixedElement = null;
-    panel.querySelector("#toggleBtn").textContent = "Stop Selecting";
+    panel.querySelector(`#${prefix}toggleBtn`).textContent = "Stop Selecting";
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("click", handleElementClick, {
       capture: true,
@@ -352,24 +404,121 @@ color:${isDarkMode ? "white" : "#333"}; border:none; border-radius:4px;" placeho
     state.isSelecting = false;
     document.removeEventListener("mousemove", handleMouseMove);
     document.removeEventListener("click", handleElementClick, true);
-    panel.querySelector("#toggleBtn").textContent = "Start Selecting";
+    panel.querySelector(`#${prefix}toggleBtn`).textContent = "Start Selecting";
 
     dynamicHighlights.forEach((h) => h.remove());
     dynamicHighlights = [];
   };
 
   // 按钮事件
-  panel.querySelector("#toggleBtn").addEventListener("click", () => {
+  panel.querySelector(`#${prefix}toggleBtn`).addEventListener("click", () => {
     state.isSelecting ? stopSelecting() : startSelecting();
   });
 
-  panel.querySelector("#clearBtn").addEventListener("click", () => {
+  panel.querySelector(`#${prefix}clearBtn`).addEventListener("click", () => {
     state.fixedElement = null;
     fixedHighlights.forEach((h) => h.remove());
     fixedHighlights = [];
-    panel.querySelector("#elementPath").textContent = "";
-    panel.querySelector("#cssQueryInput").value = "";
+    panel.querySelector(`#${prefix}elementPath`).textContent = "";
+    panel.querySelector(`#${prefix}cssQueryInput`).value = "";
   });
+
+  panel
+    .querySelector(`#${prefix}saveQueryBtn`)
+    .addEventListener("click", () => {
+      const saveBtn = panel.querySelector(`#${prefix}saveQueryBtn`);
+      const url = window.location.href;
+      const cssQuery = panel
+        .querySelector(`#${prefix}cssQueryInput`)
+        .value.trim();
+
+      // 验证URL模式，支持完整的GLOB模式匹配
+      const urlPattern = panel.querySelector(`#${prefix}urlInput`).value;
+      if (!urlPattern) {
+        panel.querySelector(`#${prefix}urlInput`).style.border =
+          "1px solid red";
+        setTimeout(() => {
+          panel.querySelector(`#${prefix}urlInput`).style.border = "none";
+        }, 1000);
+        return;
+      }
+
+      // 将GLOB模式转换为正则表达式
+      // 1. 转义特殊字符
+      let regexPattern = urlPattern
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&") // 转义正则特殊字符
+        .replace(/\*/g, ".*") // 将*替换为任意字符
+        .replace(/\?/g, ".") // 将?替换为单个字符
+        .replace(/\//g, "\\/") // 转义路径分隔符
+        .replace(/^\^+|\$+$/g, ""); // 去除多余的开始和结束锚点
+      // 添加标准化的开始和结束锚点
+      regexPattern = `^${regexPattern}$`;
+
+      try {
+        const regex = new RegExp(regexPattern);
+        if (!regex.test(url)) {
+          panel.querySelector(`#${prefix}urlInput`).style.border =
+            "1px solid red";
+          setTimeout(() => {
+            panel.querySelector(`#${prefix}urlInput`).style.border = "none";
+          }, 1000);
+          return;
+        }
+      } catch (error) {
+        console.error("无效的URL模式:", error);
+        panel.querySelector(`#${prefix}urlInput`).style.border =
+          "1px solid red";
+        setTimeout(() => {
+          panel.querySelector(`#${prefix}urlInput`).style.border = "none";
+        }, 1000);
+        return;
+      }
+
+      // 验证CSS选择器
+      try {
+        const elements = document.querySelectorAll(cssQuery);
+        if (elements.length === 0) {
+          throw new Error("No matching elements");
+        }
+      } catch (error) {
+        panel.querySelector(`#${prefix}cssQueryInput`).style.border =
+          "1px solid red";
+        setTimeout(() => {
+          panel.querySelector(`#${prefix}cssQueryInput`).style.border = "none";
+        }, 1000);
+        return;
+      }
+
+      // 保存配置
+      chrome.runtime.sendMessage(
+        {
+          type: "selectorConfig",
+          url: urlPattern,
+          selector: cssQuery,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error("保存失败:", chrome.runtime.lastError);
+            // 保存失败时按钮变红
+            saveBtn.style.backgroundColor = "#ff4444";
+            saveBtn.textContent = "❌ 保存失败";
+            setTimeout(() => {
+              saveBtn.style.backgroundColor = "";
+              saveBtn.textContent = "💾 保存配置";
+            }, 2000);
+          } else {
+            console.log("保存成功");
+            // 保存成功时按钮变绿
+            saveBtn.style.backgroundColor = "#4CAF50";
+            saveBtn.textContent = "✅ 保存成功";
+            setTimeout(() => {
+              saveBtn.style.backgroundColor = "";
+              saveBtn.textContent = "💾 保存配置";
+            }, 2000);
+          }
+        },
+      );
+    });
 
   // ESC退出
   document.addEventListener("keydown", (e) => {
