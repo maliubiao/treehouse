@@ -119,7 +119,8 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 ```
 
 ### R1 api提供商
-[硅基流动](https://cloud.siliconflow.cn/i/BofVjNGq) 提供高性能API服务，注册即送2000万token，运行在华为昇腾全国产化平台上，安全可靠。  
+[字节火山方舟](https://www.volcengine.com/experience/ark?utm_term=202502dsinvite&ac=DSASUQY5&rc=FNTDEYLA) 目前api响应最快，资费最低，半价，注册就送3000万token    
+[硅基流动](https://cloud.siliconflow.cn/i/BofVjNGq) 提供高性能API服务，但是厂小资源有限，容易堵，注册送2000万token，运行在华为昇腾全国产化平台上，安全可靠。  
 附教程，[硅基云API使用教程](https://docs.siliconflow.cn/usercases/use-siliconcloud-in-chatbox)  
 
 

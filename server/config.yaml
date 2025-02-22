@@ -15,3 +15,6 @@ filters:
 - pattern: https://aider.chat/docs/*
   selectors:
   - div.main-content-wrap
+- pattern: https://tree-sitter.github.io/*
+  selectors:
+  - div.page
