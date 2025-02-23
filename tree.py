@@ -21,6 +21,123 @@ SUPPORTED_LANGUAGES = {
     ".go": "go",
 }
 
+# 各语言的查询语句映射
+LANGUAGE_QUERIES = {
+    "c": """
+    [
+        (declaration
+            (storage_class_specifier) @storage_class
+            type: _ @return_type
+            declarator: (function_declarator
+                declarator: (identifier) @symbol_name
+                parameters: (parameter_list) @params
+            )
+        ) @func_decl
+        (#eq? @storage_class "extern")
+        
+        (function_definition
+            type: _ @return_type
+            declarator: (function_declarator
+                declarator: (identifier) @symbol_name
+                parameters: (parameter_list) @params
+            )
+            body: (compound_statement) @body
+        )
+        (preproc_def
+            name: (identifier) @symbol_name
+            value: (_) @macro_value
+        )
+    ]
+    (
+        (call_expression
+            function: (identifier) @called_function
+        ) @call
+        (#contains? @body @call)
+    )
+    """,
+    "python": """
+    [
+        (function_definition
+            name: (identifier) @symbol_name
+            parameters: (parameters) @params
+            return_type: (_)? @return_type
+            body: (block) @body
+        )
+        (class_definition
+            name: (identifier) @symbol_name
+            body: (block) @body
+        )
+    ]
+    (
+        (call
+            function: (identifier) @called_function
+        ) @call
+        (#contains? @body @call)
+    )
+    """,
+    "javascript": """
+    [
+        (function_declaration
+            name: (identifier) @symbol_name
+            parameters: (formal_parameters) @params
+            body: (statement_block) @body
+        )
+        (method_definition
+            name: (property_identifier) @symbol_name
+            parameters: (formal_parameters) @params
+            body: (statement_block) @body
+        )
+    ]
+    (
+        (call_expression
+            function: (identifier) @called_function
+        ) @call
+        (#contains? @body @call)
+    )
+    """,
+    "java": """
+    [
+        (method_declaration
+            name: (identifier) @symbol_name
+            parameters: (formal_parameters) @params
+            body: (block) @body
+        )
+        (class_declaration
+            name: (identifier) @symbol_name
+            body: (class_body) @body
+        )
+    ]
+    (
+        (method_invocation
+            name: (identifier) @called_function
+        ) @call
+        (#contains? @body @call)
+    )
+    """,
+    "go": """
+    [
+        (function_declaration
+            name: (identifier) @symbol_name
+            parameters: (parameter_list) @params
+            result: (_)? @return_type
+            body: (block) @body
+        )
+        (method_declaration
+            name: (field_identifier) @symbol_name
+            parameters: (parameter_list) @params
+            result: (_)? @return_type
+            body: (block) @body
+        )
+    ]
+    (
+        (call_expression
+            function: (identifier) @called_function
+        ) @call
+        (#contains? @body @call)
+    )
+    """,
+}
+
 
 class ParserLoader:
     def __init__(self):
@@ -62,39 +179,11 @@ class ParserLoader:
         lang = Language(language())
         lang_parser = Parser(lang)
 
-        # 定义查询语句（针对C语言）
-        query_source = """
-        [
-            (declaration
-                (storage_class_specifier) @storage_class
-                type: _ @return_type
-                declarator: (function_declarator
-                    declarator: (identifier) @symbol_name
-                    parameters: (parameter_list) @params
-                )
-            ) @func_decl
-            (#eq? @storage_class "extern")
-            
-            (function_definition
-                type: _ @return_type
-                declarator: (function_declarator
-                    declarator: (identifier) @symbol_name
-                    parameters: (parameter_list) @params
-                )
-                body: (compound_statement) @body
-            )
-            (preproc_def
-                name: (identifier) @symbol_name
-                value: (_) @macro_value
-            )
-        ]
-        (
-            (call_expression
-                function: (identifier) @called_function
-            ) @call
-            (#contains? @body @call)
-        )
-        """
+        # 根据语言类型获取对应的查询语句
+        query_source = LANGUAGE_QUERIES.get(lang_name)
+        if not query_source:
+            raise ValueError(f"不支持的语言类型: {lang_name}")
+
         query = Query(lang, query_source)
 
         self._parsers[lang_name] = lang_parser
@@ -523,30 +612,52 @@ def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connec
     matches = query.matches(tree.root_node)
     symbols = process_matches(matches, code)
 
-    # 将符号信息插入数据库
-    for file_path, symbol_dict in symbols.items():
-        # 获取完整文件路径
-        full_path = str(project_dir / file_path)
+    # 获取完整文件路径
+    full_path = str(project_dir / file_path)
 
-        # 准备批量插入数据
-        insert_data = []
-        for symbol_name, symbol_info in symbol_dict.items():
-            insert_data.append(
-                (
-                    symbol_name,
-                    full_path,
-                    symbol_info["type"],
-                    symbol_info["signature"],
-                    symbol_info["body"],
-                    symbol_info["full_definition"],
-                    json.dumps(symbol_info["calls"]),
-                )
+    # 准备批量插入数据
+    insert_data = []
+    existing_symbols = set()
+
+    # 先批量查询已存在的符号
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, file_path, signature FROM symbols WHERE file_path = ?", (full_path,))
+    for row in cursor.fetchall():
+        existing_symbols.add((row[0], row[1], row[2]))  # (name, file_path, signature)
+
+    for symbol_name, symbol_info in symbols.items():
+        if not symbol_info.get("body"):
+            continue
+
+        # 检查符号是否已经存在
+        symbol_key = (symbol_name, full_path, symbol_info["signature"])
+        if symbol_key in existing_symbols:
+            continue
+
+        insert_data.append(
+            (
+                None,  # id 由数据库自动生成
+                symbol_name,
+                full_path,  # 使用传入的文件路径
+                symbol_info["type"],
+                symbol_info["signature"],
+                symbol_info["body"],
+                symbol_info["full_definition"],
+                json.dumps(symbol_info["calls"]),
             )
+        )
 
-        # 批量插入数据库
-        if insert_data:
-            conn.executemany("INSERT OR REPLACE INTO symbols VALUES (?, ?, ?, ?, ?, ?, ?)", insert_data)
-            conn.commit()
+    # 批量插入数据库
+    if insert_data:
+        conn.executemany(
+            """
+            INSERT INTO symbols 
+            (id, name, file_path, type, signature, body, full_definition, calls)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            insert_data,
+        )
+        conn.commit()
 
 
 def scan_project_files(project_path: str, conn: sqlite3.Connection, include_suffixes: List[str] = None):
@@ -565,6 +676,7 @@ def scan_project_files(project_path: str, conn: sqlite3.Connection, include_suff
         if not suffix.startswith("."):
             suffix = f".{suffix}"
         for file_path in project_dir.rglob(f"*{suffix}"):
+            print(file_path)
             process_source_file(file_path, project_dir, conn)
 
 
