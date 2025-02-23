@@ -447,6 +447,7 @@ class ClipboardMonitor:
         last_content = ""
         initial_content = None  # 用于存储第一次获取的内容
         first_run = True  # 标记是否是第一次运行
+        ignore_initial = True  # 标记是否继续忽略初始内容
         self._debug_print("开始执行剪贴板监控线程")
         while not self.should_stop:
             try:
@@ -458,19 +459,26 @@ class ClipboardMonitor:
                     initial_content = current_content
                     first_run = False
                     self._debug_print("忽略初始剪贴板内容")
-                elif current_content and current_content != last_content and current_content != initial_content:
-                    # 只有当内容不为空、与上次不同且不等于初始内容时才保存
-                    with self.lock:
-                        print(f"获得片断: ${current_content}")
-                        self.collected_contents.append(current_content)
-                        self._debug_print(
-                            f"已捕获第 {len(self.collected_contents)} 段内容，内容长度: {len(current_content)}"
-                        )
+                elif current_content and current_content != last_content:
+                    # 当内容不为空且与上次不同时
+                    if ignore_initial and current_content != initial_content:
+                        # 如果还在忽略初始内容阶段，且当前内容不等于初始内容
+                        ignore_initial = False  # 停止忽略初始内容
+                        self._debug_print("检测到内容变化，停止忽略初始内容")
+
+                    if not ignore_initial or current_content != initial_content:
+                        # 如果已经停止忽略初始内容，或者当前内容不等于初始内容
+                        with self.lock:
+                            print(f"获得片断: ${current_content}")
+                            self.collected_contents.append(current_content)
+                            self._debug_print(
+                                f"已捕获第 {len(self.collected_contents)} 段内容，内容长度: {len(current_content)}"
+                            )
                     last_content = current_content
                 else:
-                    self._debug_print("内容未变化/为空/与初始内容相同，跳过保存")
+                    self._debug_print("内容未变化/为空，跳过保存")
 
-                time.sleep(1)
+                time.sleep(0.5)
 
             except Exception as e:
                 self._debug_print(f"剪贴板监控出错: {str(e)}")
@@ -486,7 +494,7 @@ class ClipboardMonitor:
         self.monitor_thread.daemon = True
         self.monitor_thread.start()
         self._debug_print(f"剪贴板监控线程已启动，线程ID: {self.monitor_thread.ident}")
-        print("开始监听剪贴板，按回车键结束...")
+        print("开始监听剪贴板，新复制**新**内容，按回车键结束...")
 
     def stop_monitoring(self):
         """停止剪贴板监控"""
