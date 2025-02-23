@@ -656,7 +656,7 @@ def process_text_with_file_path(text):
     current_length = len(text)
     cmd_map = {
         "clipboard": get_clipboard_content,
-        "clipboardlisten": monitor_clipboard,
+        "listen": monitor_clipboard,
         "tree": get_directory_context_wrapper,
         "treefull": lambda: get_directory_context_wrapper(max_depth=None),
     }
