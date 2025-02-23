@@ -25,6 +25,8 @@ dependencies = [
     "pre-commit>=4.1.0",
     "black>=25.1.0",
     "isort>=6.0.0",
+    "uvicorn>=0.34.0",
+    "fastapi>=0.115.8",
 ]
 
 [tool.black]

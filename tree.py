@@ -1,7 +1,14 @@
+import asyncio
 import importlib
 import json
+import sqlite3
 from pathlib import Path
+from typing import Dict, List, Optional
 
+import requests
+import uvicorn
+from fastapi import FastAPI
+from pydantic import BaseModel
 from tree_sitter import Language, Parser, Query
 
 # 文件后缀到语言名称的映射
@@ -53,7 +60,7 @@ class ParserLoader:
 
         language = self._get_language(lang_name)
         lang = Language(language())
-        parser = Parser(lang)
+        lang_parser = Parser(lang)
 
         # 定义查询语句（针对C语言）
         query_source = """
@@ -90,16 +97,18 @@ class ParserLoader:
         """
         query = Query(lang, query_source)
 
-        self._parsers[lang_name] = parser
+        self._parsers[lang_name] = lang_parser
         self._queries[lang_name] = query
-        return parser, query
+        return lang_parser, query
 
 
-def parse_code_file(file_path, parser):
+def parse_code_file(file_path, lang_parser):
     """解析代码文件"""
     with open(file_path, "r", encoding="utf-8") as f:
         code = f.read()
-    tree = parser.parse(bytes(code, "utf-8"))
+    # with open("a.dot", "w+") as f:
+    #     parser.print_dot_graphs(f)
+    tree = lang_parser.parse(bytes(code, "utf-8"))
     return tree, code
 
 
@@ -217,16 +226,16 @@ def print_main_call_chain(symbols):
     find_symbol_call_chain(symbols, "main")
 
 
-def main():
+def demo_main():
     """主函数，用于演示功能"""
     # 初始化解析器加载器
     parser_loader = ParserLoader()
 
     # 获取解析器和查询对象
-    parser, query = parser_loader.get_parser("test.c")
+    lang_parser, query = parser_loader.get_parser("test.c")
 
     # 解析代码文件
-    tree, code = parse_code_file("test.c", parser)
+    tree, code = parse_code_file("test.c", lang_parser)
 
     # 执行查询并处理结果
     matches = query.matches(tree.root_node)
@@ -240,5 +249,362 @@ def main():
     print_main_call_chain(symbols)
 
 
+app = FastAPI()
+
+# 全局数据库连接
+global_db_conn = None
+
+
+def get_db_connection():
+    """获取全局数据库连接"""
+    global global_db_conn
+    if global_db_conn is None:
+        global_db_conn = init_symbol_database()
+    return global_db_conn
+
+
+class SymbolInfo(BaseModel):
+    """符号信息模型"""
+
+    name: str
+    file_path: str
+    type: str
+    signature: str
+    body: str
+    full_definition: str
+    calls: List[str]
+
+
+def init_symbol_database(db_path: str = "symbols.db"):
+    """初始化符号数据库"""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS symbols (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            type TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            body TEXT NOT NULL,
+            full_definition TEXT NOT NULL,
+            calls TEXT
+        )
+    """
+    )
+    conn.commit()
+    return conn
+
+
+def insert_symbol(conn, symbol_info: Dict):
+    """插入符号信息到数据库"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO symbols (name, file_path, type, signature, body, full_definition, calls)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            symbol_info["name"],
+            symbol_info["file_path"],
+            symbol_info["type"],
+            symbol_info["signature"],
+            symbol_info["body"],
+            symbol_info["full_definition"],
+            json.dumps(symbol_info.get("calls", [])),
+        ),
+    )
+    conn.commit()
+
+
+def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
+    """根据前缀搜索符号"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT name, file_path FROM symbols
+        WHERE name LIKE ? || '%'
+        LIMIT ?
+    """,
+        (prefix, limit),
+    )
+    return [{"name": row[0], "file_path": row[1]} for row in cursor.fetchall()]
+
+
+def get_symbol_info(conn, symbol_name: str) -> Optional[SymbolInfo]:
+    """获取符号的完整信息"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
+        WHERE name = ?
+    """,
+        (symbol_name,),
+    )
+    row = cursor.fetchone()
+    if row:
+        return SymbolInfo(
+            name=row[0],
+            file_path=row[1],
+            type=row[2],
+            signature=row[3],
+            body=row[4],
+            full_definition=row[5],
+            calls=json.loads(row[6]) if row[6] else [],
+        )
+    return None
+
+
+@app.get("/symbols/search")
+async def search_symbols_api(prefix: str, limit: int = 10):
+    """符号搜索API
+    Args:
+        prefix: 搜索前缀，至少1个字符
+        limit: 返回结果数量限制，默认10
+    """
+    conn = get_db_connection()
+    if len(prefix) < 1:
+        return {"error": "Prefix must be at least 1 character"}
+    results = search_symbols(conn, prefix, limit)
+    return {"results": results}
+
+
+@app.get("/symbols/{symbol_name}")
+async def get_symbol_info_api(symbol_name: str):
+    """获取符号信息API"""
+    conn = get_db_connection()
+    symbol_info = get_symbol_info(conn, symbol_name)
+    if symbol_info:
+        return symbol_info
+    return {"error": "Symbol not found"}
+
+
+def test_fastapi_endpoints():
+    """测试FastAPI提供的两个外部接口"""
+
+    # 使用全局数据库连接
+    test_conn = get_db_connection()
+
+    # 准备测试数据
+    test_symbols = [
+        {
+            "name": "test_function",
+            "file_path": "/path/to/file",
+            "type": "function",
+            "signature": "def test_function()",
+            "body": "pass",
+            "full_definition": "def test_function(): pass",
+            "calls": [],
+        },
+        {
+            "name": "another_function",
+            "file_path": "/another/path",
+            "type": "function",
+            "signature": "def another_function()",
+            "body": "pass",
+            "full_definition": "def another_function(): pass",
+            "calls": [],
+        },
+        {
+            "name": "test_variable",
+            "file_path": "/path/to/file",
+            "type": "variable",
+            "signature": "test_variable = 1",
+            "body": "",
+            "full_definition": "test_variable = 1",
+            "calls": [],
+        },
+    ]
+
+    # 插入测试数据
+    for symbol in test_symbols:
+        insert_symbol(test_conn, symbol)
+
+    # 设置请求超时时间
+    timeout = (5, 5)  # 连接超时和读取超时均为5秒
+
+    # 测试搜索接口
+    # 情况1：正常搜索，有多个结果
+    response = requests.get("http://localhost:8000/symbols/search?prefix=test&limit=10", timeout=timeout)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["results"]) == 2  # 应该匹配到test_function和test_variable
+    assert any(result["name"] == "test_function" for result in data["results"])
+    assert any(result["name"] == "test_variable" for result in data["results"])
+
+    # 情况2：搜索无结果
+    response = requests.get("http://localhost:8000/symbols/search?prefix=nonexistent&limit=10", timeout=timeout)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["results"]) == 0
+
+    # 情况3：搜索限制结果数量
+    response = requests.get("http://localhost:8000/symbols/search?prefix=test&limit=1", timeout=timeout)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["results"]) == 1
+
+    # 测试获取符号信息接口
+    # 情况1：正常获取符号信息
+    response = requests.get("http://localhost:8000/symbols/test_function", timeout=timeout)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "test_function"
+    assert data["type"] == "function"
+    assert data["signature"] == "def test_function()"
+
+    # 情况2：获取不存在的符号信息
+    response = requests.get("http://localhost:8000/symbols/nonexistent", timeout=timeout)
+    assert response.status_code == 200
+    data = response.json()
+    assert data == {"error": "Symbol not found"}
+
+    # 清理测试数据
+    test_conn.execute("DELETE FROM symbols")
+    test_conn.commit()
+
+
+def test_symbols_api():
+    """测试符号相关API"""
+    # 使用全局数据库连接
+    test_conn = get_db_connection()
+
+    # 准备测试数据
+    test_symbol = {
+        "name": "test_function",
+        "file_path": "/path/to/file",
+        "type": "function",
+        "signature": "def test_function()",
+        "body": "pass",
+        "full_definition": "def test_function(): pass",
+        "calls": [],
+    }
+    insert_symbol(test_conn, test_symbol)
+
+    # 创建新的事件循环
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        # 测试搜索接口
+        # 正常情况
+        response = loop.run_until_complete(search_symbols_api("test", 10))
+        assert len(response["results"]) == 1
+        assert response["results"][0]["name"] == "test_function"
+
+        # 测试无结果情况
+        response = loop.run_until_complete(search_symbols_api("nonexistent", 10))
+        assert len(response["results"]) == 0
+
+        # 测试获取符号信息接口
+        # 正常情况
+        response = loop.run_until_complete(get_symbol_info_api("test_function"))
+        assert response.name == "test_function"
+        assert response.type == "function"
+
+        # 测试符号不存在情况
+        response = loop.run_until_complete(get_symbol_info_api("nonexistent"))
+        assert response == {"error": "Symbol not found"}
+
+    finally:
+        # 关闭事件循环
+        loop.close()
+        # 删除测试符号
+        test_conn.execute("DELETE FROM symbols WHERE name = ?", ("test_function",))
+        test_conn.commit()
+
+
+def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connection):
+    """处理单个源代码文件，提取符号并插入数据库"""
+    # 解析代码文件并构建符号表
+    parser, query = ParserLoader().get_parser(str(file_path))
+    tree, code = parse_code_file(file_path, parser)
+    matches = query.matches(tree.root_node)
+    symbols = process_matches(matches, code)
+
+    # 将符号信息插入数据库
+    for file_path, symbol_dict in symbols.items():
+        # 获取完整文件路径
+        full_path = str(project_dir / file_path)
+
+        # 准备批量插入数据
+        insert_data = []
+        for symbol_name, symbol_info in symbol_dict.items():
+            insert_data.append(
+                (
+                    symbol_name,
+                    full_path,
+                    symbol_info["type"],
+                    symbol_info["signature"],
+                    symbol_info["body"],
+                    symbol_info["full_definition"],
+                    json.dumps(symbol_info["calls"]),
+                )
+            )
+
+        # 批量插入数据库
+        if insert_data:
+            conn.executemany("INSERT OR REPLACE INTO symbols VALUES (?, ?, ?, ?, ?, ?, ?)", insert_data)
+            conn.commit()
+
+
+def scan_project_files(project_path: str, conn: sqlite3.Connection, include_suffixes: List[str] = None):
+    """扫描项目路径下的所有源代码文件并处理
+    Args:
+        project_path: 项目路径
+        conn: 数据库连接
+        include_suffixes: 要包含的文件后缀列表，如果为None则包含所有支持的后缀
+    """
+    project_dir = Path(project_path)
+    # 如果没有指定包含的后缀，则使用所有支持的后缀
+    suffixes = include_suffixes if include_suffixes else SUPPORTED_LANGUAGES.keys()
+
+    for suffix in suffixes:
+        # 确保后缀以点开头
+        if not suffix.startswith("."):
+            suffix = f".{suffix}"
+        for file_path in project_dir.rglob(f"*{suffix}"):
+            process_source_file(file_path, project_dir, conn)
+
+
+def main(host: str = "127.0.0.1", port: int = 8000, project_path: str = ".", include_suffixes: List[str] = None):
+    """启动FastAPI服务并初始化符号表
+    Args:
+        host: 服务器地址
+        port: 服务器端口
+        project_path: 项目路径
+        include_suffixes: 要包含的文件后缀列表
+    """
+    # 初始化数据库连接
+    conn = init_symbol_database()
+
+    try:
+        # 扫描并处理项目文件
+        scan_project_files(project_path, conn, include_suffixes)
+
+        # 启动FastAPI服务
+        uvicorn.run(app, host=host, port=port)
+    finally:
+        # 关闭数据库连接
+        conn.close()
+
+
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="代码分析工具")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP服务器绑定地址")
+    parser.add_argument("--port", type=int, default=8000, help="HTTP服务器绑定端口")
+    parser.add_argument("--project", type=str, default=".", help="项目根目录路径")
+    parser.add_argument("--demo", action="store_true", help="运行演示模式")
+    parser.add_argument("--include", type=str, nargs="+", help="要包含的文件后缀列表（可指定多个，如 .c .h）")
+
+    args = parser.parse_args()
+
+    if args.demo:
+        demo_main()
+        test_symbols_api()
+        # test_fastapi_endpoints()
+    else:
+        main(host=args.host, port=args.port, project_path=args.project, include_suffixes=args.include)
