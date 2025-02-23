@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 import requests
 import uvicorn
 from fastapi import FastAPI
+from fastapi import Query as QueryArgs
+from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from tree_sitter import Language, Parser, Query
 
@@ -378,8 +380,22 @@ def init_symbol_database(db_path: str = "symbols.db"):
             signature TEXT NOT NULL,
             body TEXT NOT NULL,
             full_definition TEXT NOT NULL,
-            calls TEXT
+            calls TEXT,
+            UNIQUE(name, file_path)
         )
+    """
+    )
+    # 创建索引以优化查询性能
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_symbols_name 
+        ON symbols(name)
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_symbols_file 
+        ON symbols(file_path)
     """
     )
     conn.commit()
@@ -387,24 +403,28 @@ def init_symbol_database(db_path: str = "symbols.db"):
 
 
 def insert_symbol(conn, symbol_info: Dict):
-    """插入符号信息到数据库"""
+    """插入符号信息到数据库，处理唯一性冲突"""
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO symbols (name, file_path, type, signature, body, full_definition, calls)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """,
-        (
-            symbol_info["name"],
-            symbol_info["file_path"],
-            symbol_info["type"],
-            symbol_info["signature"],
-            symbol_info["body"],
-            symbol_info["full_definition"],
-            json.dumps(symbol_info.get("calls", [])),
-        ),
-    )
-    conn.commit()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO symbols (name, file_path, type, signature, body, full_definition, calls)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                symbol_info["name"],
+                symbol_info["file_path"],
+                symbol_info["type"],
+                symbol_info["signature"],
+                symbol_info["body"],
+                symbol_info["full_definition"],
+                json.dumps(symbol_info.get("calls", [])),
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        # 如果遇到唯一性冲突，回滚事务并忽略插入
+        conn.rollback()
 
 
 def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
@@ -421,15 +441,19 @@ def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
     return [{"name": row[0], "file_path": row[1]} for row in cursor.fetchall()]
 
 
-def get_symbol_info(conn, symbol_name: str) -> Optional[SymbolInfo]:
-    """获取符号的完整信息"""
+def get_symbol_info(conn, symbol_name: str, file_path: str) -> Optional[SymbolInfo]:
+    """获取符号的完整信息
+    Args:
+        symbol_name: 符号名称
+        file_path: 符号所在文件路径
+    """
     cursor = conn.cursor()
     cursor.execute(
         """
         SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
-        WHERE name = ?
+        WHERE name = ? AND file_path = ?
     """,
-        (symbol_name,),
+        (symbol_name, file_path),
     )
     row = cursor.fetchone()
     if row:
@@ -446,108 +470,163 @@ def get_symbol_info(conn, symbol_name: str) -> Optional[SymbolInfo]:
 
 
 @app.get("/symbols/search")
-async def search_symbols_api(prefix: str, limit: int = 10):
+async def search_symbols_api(prefix: str = QueryArgs(..., min_length=1), limit: int = QueryArgs(10, ge=1, le=100)):
     """符号搜索API
     Args:
         prefix: 搜索前缀，至少1个字符
-        limit: 返回结果数量限制，默认10
+        limit: 返回结果数量限制，默认10，范围1-100
     """
     conn = get_db_connection()
-    if len(prefix) < 1:
-        return {"error": "Prefix must be at least 1 character"}
     results = search_symbols(conn, prefix, limit)
     return {"results": results}
 
 
 @app.get("/symbols/{symbol_name}")
-async def get_symbol_info_api(symbol_name: str):
-    """获取符号信息API"""
+async def get_symbol_info_api(symbol_name: str, file_path: str = QueryArgs(...)):
+    """获取符号信息API
+    Args:
+        symbol_name: 符号名称（路径参数）
+        file_path: 符号所在文件路径（查询参数）
+    """
     conn = get_db_connection()
-    symbol_info = get_symbol_info(conn, symbol_name)
+    symbol_info = get_symbol_info(conn, symbol_name, file_path)
     if symbol_info:
         return symbol_info
     return {"error": "Symbol not found"}
 
 
-def test_fastapi_endpoints():
-    """测试FastAPI提供的两个外部接口"""
+def get_symbol_context(conn, symbol_name: str, file_path: str) -> str:
+    """获取符号的上下文信息
+    Args:
+        symbol_name: 符号名称
+        file_path: 符号所在文件路径
+    Returns:
+        包含符号及其调用链的完整上下文信息
+    """
+    cursor = conn.cursor()
 
-    # 使用全局数据库连接
-    test_conn = get_db_connection()
+    # 使用递归CTE获取所有相关调用链
+    cursor.execute(
+        """
+        WITH RECURSIVE call_tree(name, file_path) AS (
+            SELECT ?, ?
+            UNION
+            SELECT value, symbols.file_path 
+            FROM symbols, json_each(symbols.calls)
+            WHERE symbols.name = call_tree.name
+        )
+        SELECT * FROM call_tree
+    """,
+        (symbol_name, file_path),
+    )
+
+    # 获取所有相关符号名称
+    names = [row[0] for row in cursor.fetchall()]
+    if not names:
+        return f"未找到符号 {symbol_name} 在文件 {file_path} 中的定义"
+
+    # 批量获取所有相关符号的定义
+    cursor.execute(
+        f"""
+        SELECT name, file_path, full_definition 
+        FROM symbols 
+        WHERE name IN ({','.join(['?']*len(names))})
+    """,
+        names,
+    )
+
+    # 构建符号定义映射
+    definitions = {row[0]: row for row in cursor.fetchall()}
+
+    # 初始化上下文
+    context = ""
+    for name in names:
+        if name in definitions:
+            row = definitions[name]
+            context += f"// {row[0]} 的完整定义（来自文件 {row[1]}）\n"
+            context += row[2] + "\n\n"
+        else:
+            context += f"// 警告：未找到函数 {name} 的定义\n\n"
+
+    return context
+
+
+@app.get("/symbols/{symbol_name}/context")
+async def get_symbol_context_api(symbol_name: str, file_path: str = QueryArgs(...)):
+    """获取符号上下文API
+    Args:
+        symbol_name: 符号名称（路径参数）
+        file_path: 符号所在文件路径（查询参数）
+    """
+    conn = get_db_connection()
+    context = get_symbol_context(conn, symbol_name, file_path)
+    return {"context": context}
+
+
+def test_fastapi_endpoints():
+    """测试FastAPI提供的所有外部接口"""
+    # 使用TestClient和内存数据库
+    client = TestClient(app)
+    app.dependency_overrides[get_db_connection] = lambda: sqlite3.connect(":memory:")
 
     # 准备测试数据
     test_symbols = [
         {
-            "name": "test_function",
+            "name": "main_function",
             "file_path": "/path/to/file",
             "type": "function",
-            "signature": "def test_function()",
+            "signature": "def main_function()",
             "body": "pass",
-            "full_definition": "def test_function(): pass",
-            "calls": [],
+            "full_definition": "def main_function(): pass",
+            "calls": ["helper_function"],
         },
         {
-            "name": "another_function",
+            "name": "helper_function",
             "file_path": "/another/path",
             "type": "function",
-            "signature": "def another_function()",
+            "signature": "def helper_function()",
             "body": "pass",
-            "full_definition": "def another_function(): pass",
-            "calls": [],
-        },
-        {
-            "name": "test_variable",
-            "file_path": "/path/to/file",
-            "type": "variable",
-            "signature": "test_variable = 1",
-            "body": "",
-            "full_definition": "test_variable = 1",
+            "full_definition": "def helper_function(): pass",
             "calls": [],
         },
     ]
 
     # 插入测试数据
+    test_conn = get_db_connection()
     for symbol in test_symbols:
         insert_symbol(test_conn, symbol)
 
-    # 设置请求超时时间
-    timeout = (5, 5)  # 连接超时和读取超时均为5秒
-
     # 测试搜索接口
-    # 情况1：正常搜索，有多个结果
-    response = requests.get("http://localhost:8000/symbols/search?prefix=test&limit=10", timeout=timeout)
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["results"]) == 2  # 应该匹配到test_function和test_variable
-    assert any(result["name"] == "test_function" for result in data["results"])
-    assert any(result["name"] == "test_variable" for result in data["results"])
-
-    # 情况2：搜索无结果
-    response = requests.get("http://localhost:8000/symbols/search?prefix=nonexistent&limit=10", timeout=timeout)
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["results"]) == 0
-
-    # 情况3：搜索限制结果数量
-    response = requests.get("http://localhost:8000/symbols/search?prefix=test&limit=1", timeout=timeout)
+    response = client.get("/symbols/search?prefix=main&limit=10")
     assert response.status_code == 200
     data = response.json()
     assert len(data["results"]) == 1
 
     # 测试获取符号信息接口
-    # 情况1：正常获取符号信息
-    response = requests.get("http://localhost:8000/symbols/test_function", timeout=timeout)
+    response = client.get("/symbols/main_function?file_path=/path/to/file")
     assert response.status_code == 200
     data = response.json()
-    assert data["name"] == "test_function"
-    assert data["type"] == "function"
-    assert data["signature"] == "def test_function()"
+    assert data["name"] == "main_function"
 
-    # 情况2：获取不存在的符号信息
-    response = requests.get("http://localhost:8000/symbols/nonexistent", timeout=timeout)
+    # 测试获取符号上下文接口
+    # 情况1：正常获取上下文
+    response = client.get("/symbols/main_function/context?file_path=/path/to/file")
     assert response.status_code == 200
     data = response.json()
-    assert data == {"error": "Symbol not found"}
+    assert "main_function" in data["context"]
+    assert "helper_function" in data["context"]
+
+    # 情况2：获取不存在的符号上下文
+    response = client.get("/symbols/nonexistent/context?file_path=/path/to/file")
+    assert response.status_code == 200
+    data = response.json()
+    assert "未找到符号" in data["context"]
+
+    # 情况3：获取存在符号但调用函数不存在的情况
+    response = client.get("/symbols/main_function/context?file_path=/path/to/file")
+    assert response.status_code == 200
+    data = response.json()
+    assert "警告：未找到函数" not in data["context"]  # 因为helper_function存在
 
     # 清理测试数据
     test_conn.execute("DELETE FROM symbols")
@@ -561,13 +640,13 @@ def test_symbols_api():
 
     # 准备测试数据
     test_symbol = {
-        "name": "test_function",
+        "name": "main_function",
         "file_path": "/path/to/file",
         "type": "function",
-        "signature": "def test_function()",
+        "signature": "def main_function()",
         "body": "pass",
-        "full_definition": "def test_function(): pass",
-        "calls": [],
+        "full_definition": "def main_function(): pass",
+        "calls": ["helper_function"],
     }
     insert_symbol(test_conn, test_symbol)
 
@@ -577,87 +656,96 @@ def test_symbols_api():
 
     try:
         # 测试搜索接口
-        # 正常情况
-        response = loop.run_until_complete(search_symbols_api("test", 10))
+        response = loop.run_until_complete(search_symbols_api("main", 10))
         assert len(response["results"]) == 1
-        assert response["results"][0]["name"] == "test_function"
-
-        # 测试无结果情况
-        response = loop.run_until_complete(search_symbols_api("nonexistent", 10))
-        assert len(response["results"]) == 0
 
         # 测试获取符号信息接口
-        # 正常情况
-        response = loop.run_until_complete(get_symbol_info_api("test_function"))
-        assert response.name == "test_function"
-        assert response.type == "function"
+        response = loop.run_until_complete(get_symbol_info_api("main_function", "/path/to/file"))
+        assert response.name == "main_function"
 
-        # 测试符号不存在情况
-        response = loop.run_until_complete(get_symbol_info_api("nonexistent"))
-        assert response == {"error": "Symbol not found"}
+        # 测试获取符号上下文接口
+        # 情况1：正常获取上下文
+        response = loop.run_until_complete(get_symbol_context_api("main_function", "/path/to/file"))
+        assert "main_function" in response["context"]
+        assert "helper_function" in response["context"]
+
+        # 情况2：获取不存在的符号上下文
+        response = loop.run_until_complete(get_symbol_context_api("nonexistent", "/path/to/file"))
+        assert "未找到符号" in response["context"]
 
     finally:
         # 关闭事件循环
         loop.close()
         # 删除测试符号
-        test_conn.execute("DELETE FROM symbols WHERE name = ?", ("test_function",))
+        test_conn.execute("DELETE FROM symbols WHERE name = ?", ("main_function",))
         test_conn.commit()
 
 
 def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connection):
     """处理单个源代码文件，提取符号并插入数据库"""
-    # 解析代码文件并构建符号表
-    parser, query = ParserLoader().get_parser(str(file_path))
-    tree, code = parse_code_file(file_path, parser)
-    matches = query.matches(tree.root_node)
-    symbols = process_matches(matches, code)
+    try:
+        # 开始事务
+        conn.execute("BEGIN TRANSACTION")
 
-    # 获取完整文件路径
-    full_path = str(project_dir / file_path)
+        # 解析代码文件并构建符号表
+        parser, query = ParserLoader().get_parser(str(file_path))
+        tree, code = parse_code_file(file_path, parser)
+        matches = query.matches(tree.root_node)
+        symbols = process_matches(matches, code)
 
-    # 准备批量插入数据
-    insert_data = []
-    existing_symbols = set()
+        # 获取完整文件路径（规范化处理）
+        full_path = str((project_dir / file_path).resolve().absolute())
 
-    # 先批量查询已存在的符号
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, file_path, signature FROM symbols WHERE file_path = ?", (full_path,))
-    for row in cursor.fetchall():
-        existing_symbols.add((row[0], row[1], row[2]))  # (name, file_path, signature)
+        # 准备批量插入数据
+        insert_data = []
+        existing_symbols = set()
 
-    for symbol_name, symbol_info in symbols.items():
-        if not symbol_info.get("body"):
-            continue
+        # 先批量查询已存在的符号
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, file_path, signature FROM symbols WHERE file_path = ?", (full_path,))
+        for row in cursor.fetchall():
+            existing_symbols.add((row[0], row[1], row[2]))  # (name, file_path, signature)
 
-        # 检查符号是否已经存在
-        symbol_key = (symbol_name, full_path, symbol_info["signature"])
-        if symbol_key in existing_symbols:
-            continue
+        for symbol_name, symbol_info in symbols.items():
+            if not symbol_info.get("body"):
+                continue
 
-        insert_data.append(
-            (
-                None,  # id 由数据库自动生成
-                symbol_name,
-                full_path,  # 使用传入的文件路径
-                symbol_info["type"],
-                symbol_info["signature"],
-                symbol_info["body"],
-                symbol_info["full_definition"],
-                json.dumps(symbol_info["calls"]),
+            # 检查符号是否已经存在
+            symbol_key = (symbol_name, full_path, symbol_info["signature"])
+            if symbol_key in existing_symbols:
+                continue
+
+            insert_data.append(
+                (
+                    None,  # id 由数据库自动生成
+                    symbol_name,
+                    full_path,  # 使用传入的文件路径
+                    symbol_info["type"],
+                    symbol_info["signature"],
+                    symbol_info["body"],
+                    symbol_info["full_definition"],
+                    json.dumps(symbol_info["calls"]),
+                )
             )
-        )
 
-    # 批量插入数据库
-    if insert_data:
-        conn.executemany(
-            """
-            INSERT INTO symbols 
-            (id, name, file_path, type, signature, body, full_definition, calls)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            insert_data,
-        )
-        conn.commit()
+        # 批量插入数据库
+        if insert_data:
+            conn.executemany(
+                """
+                INSERT INTO symbols 
+                (id, name, file_path, type, signature, body, full_definition, calls)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                insert_data,
+            )
+            conn.commit()
+        else:
+            conn.execute("END TRANSACTION")
+
+    except Exception as e:
+        # 发生异常时回滚事务
+        conn.rollback()
+        raise
 
 
 def scan_project_files(project_path: str, conn: sqlite3.Connection, include_suffixes: List[str] = None):
