@@ -16,7 +16,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import traceback
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -25,13 +27,6 @@ from openai import OpenAI
 from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
-
-# Windows平台相关导入
-if sys.platform == "win32":
-    try:
-        import win32clipboard
-    except ImportError:
-        win32clipboard = None
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
@@ -390,11 +385,10 @@ def get_directory_context(max_depth=1):
                 dir_result = subprocess.run(["dir"], stdout=subprocess.PIPE, text=True, shell=True, check=True)
                 msg = dir_result.stdout or "无法获取目录信息"
                 return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
-            else:
-                # 其他情况使用tree命令
-                cmd = ["tree"]
-                if max_depth is not None:
-                    cmd.extend(["/A", "/F"])
+            # 其他情况使用tree命令
+            cmd = ["tree"]
+            if max_depth is not None:
+                cmd.extend(["/A", "/F"])
         else:
             # 非Windows系统使用Linux/macOS的tree命令
             cmd = ["tree", "-I", ".*"]
@@ -429,57 +423,171 @@ def get_directory_context(max_depth=1):
 
 
 def get_clipboard_content():
-    text = get_clipboard_content_real()
+    text = get_clipboard_content_string()
     text = f"\n[clipboard content start]\n{text}\n[clipboard content end]\n"
     return text
 
 
-def get_clipboard_content_real():
-    """获取系统剪贴板内容，支持Linux、Mac、Windows"""
+class ClipboardMonitor:
+    def __init__(self, debug=False):
+        self.collected_contents = []
+        self.should_stop = False
+        self.lock = threading.Lock()
+        self.monitor_thread = None
+        self.debug = debug
+        self._debug_print("ClipboardMonitor 初始化完成")
+
+    def _debug_print(self, message):
+        """调试信息输出函数"""
+        if self.debug:
+            print(f"[DEBUG] {message}")
+
+    def _monitor_clipboard(self):
+        """后台线程执行的剪贴板监控逻辑"""
+        last_content = ""
+        initial_content = None  # 用于存储第一次获取的内容
+        first_run = True  # 标记是否是第一次运行
+        self._debug_print("开始执行剪贴板监控线程")
+        while not self.should_stop:
+            try:
+                self._debug_print("尝试获取剪贴板内容...")
+                current_content = get_clipboard_content_string()
+
+                if first_run:
+                    # 第一次运行，记录初始内容并跳过
+                    initial_content = current_content
+                    first_run = False
+                    self._debug_print("忽略初始剪贴板内容")
+                elif current_content and current_content != last_content and current_content != initial_content:
+                    # 只有当内容不为空、与上次不同且不等于初始内容时才保存
+                    with self.lock:
+                        print(f"获得片断: ${current_content}")
+                        self.collected_contents.append(current_content)
+                        self._debug_print(
+                            f"已捕获第 {len(self.collected_contents)} 段内容，内容长度: {len(current_content)}"
+                        )
+                    last_content = current_content
+                else:
+                    self._debug_print("内容未变化/为空/与初始内容相同，跳过保存")
+
+                time.sleep(1)
+
+            except Exception as e:
+                self._debug_print(f"剪贴板监控出错: {str(e)}")
+                self._debug_print("异常堆栈信息：")
+                traceback.print_exc()
+                break
+
+    def start_monitoring(self):
+        """启动剪贴板监控"""
+        self._debug_print("准备启动剪贴板监控...")
+        self.should_stop = False
+        self.monitor_thread = threading.Thread(target=self._monitor_clipboard)
+        self.monitor_thread.daemon = True
+        self.monitor_thread.start()
+        self._debug_print(f"剪贴板监控线程已启动，线程ID: {self.monitor_thread.ident}")
+        print("开始监听剪贴板，按回车键结束...")
+
+    def stop_monitoring(self):
+        """停止剪贴板监控"""
+        self._debug_print("准备停止剪贴板监控...")
+        self.should_stop = True
+
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self._debug_print("等待监控线程结束...")
+            self.monitor_thread.join(timeout=1)
+            if self.monitor_thread.is_alive():
+                self._debug_print("警告：剪贴板监控线程未正常退出")
+            else:
+                self._debug_print("监控线程已正常退出")
+
+    def get_results(self):
+        """获取监控结果"""
+        self._debug_print("获取监控结果...")
+        with self.lock:
+            if self.collected_contents:
+                result = ""
+                for content in self.collected_contents:
+                    result += f"\n[clipboard content start]\n{content}\n[clipboard content end]\n"
+                self._debug_print(f"返回 {len(self.collected_contents)} 段内容")
+                return result
+            else:
+                self._debug_print("未捕获到任何内容")
+                return "未捕获到任何剪贴板内容"
+
+
+def monitor_clipboard(debug=False):
+    """主函数：启动剪贴板监控并等待用户输入"""
+    monitor = ClipboardMonitor(debug=debug)
+    monitor.start_monitoring()
+    result = ""
     try:
-        # 判断操作系统
+        print("等待用户复制...")
         if sys.platform == "win32":
-            # Windows系统
+            import msvcrt
+
+            while not monitor.should_stop:
+                if msvcrt.kbhit():
+                    if msvcrt.getch() == b"\r":
+                        print("检测到回车键")
+                        break
+                time.sleep(0.1)
+        else:
+            import select
+
+            while not monitor.should_stop:
+                if select.select([sys.stdin], [], [], 0)[0]:
+                    if sys.stdin.read(1) == "\n":
+                        print("检测到回车键")
+                        break
+                time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        print("\n用户中断操作")
+    finally:
+        monitor.stop_monitoring()
+        result = monitor.get_results()
+    print("已停止监听", result)
+    return result
+
+
+def get_clipboard_content_string():
+    """获取剪贴板内容的封装函数，统一返回字符串内容"""
+    try:
+        if sys.platform == "win32":
             win32clipboard = __import__("win32clipboard")
             win32clipboard.OpenClipboard()
             data = win32clipboard.GetClipboardData()
             win32clipboard.CloseClipboard()
             return data
-        elif sys.platform == "darwin":
-            # Mac系统
-            with subprocess.Popen(["pbpaste"], stdout=subprocess.PIPE) as process:
-                stdout, _ = process.communicate()
-                return stdout.decode("utf-8")
+        if sys.platform == "darwin":
+            result = subprocess.run(["pbpaste"], stdout=subprocess.PIPE, text=True, check=True)
+            return result.stdout
         else:
-            # Linux系统
-            # 尝试xclip
             try:
-                with subprocess.Popen(
+                result = subprocess.run(
                     ["xclip", "-selection", "clipboard", "-o"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                ) as process:
-                    stdout, _ = process.communicate()
-                    if process.returncode == 0:
-                        return stdout.decode("utf-8")
+                    text=True,
+                    check=True,
+                )
+                return result.stdout
             except FileNotFoundError:
-                pass
-
-            # 尝试xsel
-            try:
-                with subprocess.Popen(
-                    ["xsel", "--clipboard", "--output"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                ) as process:
-                    stdout, _ = process.communicate()
-                    if process.returncode == 0:
-                        return stdout.decode("utf-8")
-            except FileNotFoundError:
-                pass
-
-            return "无法获取剪贴板内容：未找到xclip或xsel"
+                try:
+                    result = subprocess.run(
+                        ["xsel", "--clipboard", "--output"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        check=True,
+                    )
+                    return result.stdout
+                except FileNotFoundError:
+                    print("未找到 xclip 或 xsel")
+                    return "无法获取剪贴板内容：未找到xclip或xsel"
     except Exception as e:
+        print(f"获取剪贴板内容时出错: {str(e)}")
         return f"获取剪贴板内容时出错: {str(e)}"
 
 
@@ -540,12 +648,7 @@ def _handle_url(match):
     """处理URL请求"""
     url = match[4:] if match.startswith("read") else match
     markdown_content = fetch_url_content(url, is_news=match.startswith("read"))
-    return (
-        "\n\n[reference url, content converted to markdown]: {url} \n"
-        "[markdown content begin]\n"
-        "{markdown_content}\n"
-        "[markdown content end]\n\n"
-    ).format(url=url, markdown_content=markdown_content)
+    return f"\n\n[reference url, content converted to markdown]: {url} \n[markdown content begin]\n{markdown_content}\n[markdown content end]\n\n"
 
 
 def process_text_with_file_path(text):
@@ -553,6 +656,7 @@ def process_text_with_file_path(text):
     current_length = len(text)
     cmd_map = {
         "clipboard": get_clipboard_content,
+        "clipboardlisten": monitor_clipboard,
         "tree": get_directory_context_wrapper,
         "treefull": lambda: get_directory_context_wrapper(max_depth=None),
     }
