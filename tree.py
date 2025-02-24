@@ -1,7 +1,11 @@
 import asyncio
 import importlib
 import json
+import os
 import sqlite3
+import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -11,6 +15,7 @@ from fastapi import FastAPI
 from fastapi import Query as QueryArgs
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Parser, Query
 
 # 文件后缀到语言名称的映射
@@ -218,6 +223,7 @@ def process_matches(matches, code):
         _, captures = match
         if not captures:
             continue
+        print({k: [n.text.decode("utf-8") for n in v] for k, v in captures.items()})
 
         if "symbol_name" in captures:
             symbol_node = captures["symbol_name"][0]
@@ -495,29 +501,42 @@ async def get_symbol_info_api(symbol_name: str, file_path: str = QueryArgs(...))
     return {"error": "Symbol not found"}
 
 
-def get_symbol_context(conn, symbol_name: str, file_path: str) -> str:
-    """获取符号的上下文信息
+def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 3) -> str:
+    """获取符号的调用树上下文（带深度限制）
+
     Args:
         symbol_name: 符号名称
         file_path: 符号所在文件路径
+        max_depth: 调用树最大深度 (0=仅自身，1=直接调用，2=二级调用...)
     Returns:
         包含符号及其调用链的完整上下文信息
     """
+    if max_depth < 0:
+        raise ValueError("深度值不能为负数")
+
     cursor = conn.cursor()
 
-    # 使用递归CTE获取所有相关调用链
+    # 使用递归CTE获取调用树，带深度控制
     cursor.execute(
         """
-        WITH RECURSIVE call_tree(name, file_path) AS (
-            SELECT ?, ?
-            UNION
-            SELECT value, symbols.file_path 
-            FROM symbols, json_each(symbols.calls)
-            WHERE symbols.name = call_tree.name
+        WITH RECURSIVE call_tree(name, file_path, depth) AS (
+            SELECT s.name, s.file_path, 0
+            FROM symbols s
+            WHERE s.name = ? AND s.file_path = ?
+            
+            UNION ALL
+            
+            SELECT json_each.value, s.file_path, ct.depth + 1
+            FROM call_tree ct
+            JOIN symbols s ON ct.name = s.name AND ct.file_path = s.file_path
+            JOIN json_each(s.calls)
+            WHERE ct.depth < ?
         )
-        SELECT * FROM call_tree
-    """,
-        (symbol_name, file_path),
+        SELECT DISTINCT name, file_path 
+        FROM call_tree
+        WHERE depth <= ?
+        """,
+        (symbol_name, file_path, max_depth - 1, max_depth),
     )
 
     # 获取所有相关符号名称
@@ -531,7 +550,7 @@ def get_symbol_context(conn, symbol_name: str, file_path: str) -> str:
         SELECT name, file_path, full_definition 
         FROM symbols 
         WHERE name IN ({','.join(['?']*len(names))})
-    """,
+        """,
         names,
     )
 
@@ -561,6 +580,47 @@ async def get_symbol_context_api(symbol_name: str, file_path: str = QueryArgs(..
     conn = get_db_connection()
     context = get_symbol_context(conn, symbol_name, file_path)
     return {"context": context}
+
+
+@app.get("/symbols/path/{path_pattern}")
+async def get_symbols_by_path_api(path_pattern: str):
+    """根据路径模式查询符号API
+    Args:
+        path_pattern: 路径匹配模式（支持模糊匹配）
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 使用LIKE进行路径模糊匹配
+    cursor.execute(
+        """
+        SELECT DISTINCT file_path 
+        FROM symbols 
+        WHERE file_path LIKE ?
+        """,
+        (f"%{path_pattern}%",),
+    )
+
+    # 获取所有匹配的路径
+    matched_paths = [row[0] for row in cursor.fetchall()]
+    if not matched_paths:
+        return {"results": []}
+
+    # 查询每个路径下的所有符号
+    results = []
+    for path in matched_paths:
+        cursor.execute(
+            """
+            SELECT name, type, signature 
+            FROM symbols 
+            WHERE file_path = ?
+            """,
+            (path,),
+        )
+        symbols = [{"name": row[0], "type": row[1], "signature": row[2]} for row in cursor.fetchall()]
+        results.append({"path": path, "symbols": symbols})
+
+    return {"results": results}
 
 
 def test_fastapi_endpoints():
@@ -639,16 +699,30 @@ def test_symbols_api():
     test_conn = get_db_connection()
 
     # 准备测试数据
-    test_symbol = {
-        "name": "main_function",
-        "file_path": "/path/to/file",
-        "type": "function",
-        "signature": "def main_function()",
-        "body": "pass",
-        "full_definition": "def main_function(): pass",
-        "calls": ["helper_function"],
-    }
-    insert_symbol(test_conn, test_symbol)
+    test_symbols = [
+        {
+            "name": "main_function",
+            "file_path": "/path/to/file",
+            "type": "function",
+            "signature": "def main_function()",
+            "body": "pass",
+            "full_definition": "def main_function(): pass",
+            "calls": ["helper_function", "undefined_function"],  # 增加未定义的函数
+        },
+        {
+            "name": "helper_function",
+            "file_path": "/path/to/file",
+            "type": "function",
+            "signature": "def helper_function()",
+            "body": "pass",
+            "full_definition": "def helper_function(): pass",
+            "calls": [],
+        },
+    ]
+
+    # 插入测试数据
+    for symbol in test_symbols:
+        insert_symbol(test_conn, symbol)
 
     # 创建新的事件循环
     loop = asyncio.new_event_loop()
@@ -668,6 +742,7 @@ def test_symbols_api():
         response = loop.run_until_complete(get_symbol_context_api("main_function", "/path/to/file"))
         assert "main_function" in response["context"]
         assert "helper_function" in response["context"]
+        assert "警告：未找到函数 undefined_function" in response["context"]  # 检查未定义函数的警告
 
         # 情况2：获取不存在的符号上下文
         response = loop.run_until_complete(get_symbol_context_api("nonexistent", "/path/to/file"))
@@ -677,8 +752,115 @@ def test_symbols_api():
         # 关闭事件循环
         loop.close()
         # 删除测试符号
-        test_conn.execute("DELETE FROM symbols WHERE name = ?", ("main_function",))
+        test_conn.execute("DELETE FROM symbols WHERE file_path = ?", ("/path/to/file",))
         test_conn.commit()
+
+
+def debug_process_source_file(file_path: Path, project_dir: Path):
+    """调试版本的源代码处理函数，直接打印符号信息而不写入数据库"""
+    try:
+        # 解析代码文件并构建符号表
+        parser, query = ParserLoader().get_parser(str(file_path))
+        tree, code = parse_code_file(file_path, parser)
+        matches = query.matches(tree.root_node)
+        symbols = process_matches(matches, code)
+
+        # 获取完整文件路径（规范化处理）
+        full_path = str((project_dir / file_path).resolve().absolute())
+
+        print(f"\n处理文件: {full_path}")
+        print("=" * 50)
+
+        for symbol_name, symbol_info in symbols.items():
+            if not symbol_info.get("body"):
+                continue
+
+            print(f"\n符号名称: {symbol_name}")
+            print(f"类型: {symbol_info['type']}")
+            print(f"签名: {symbol_info['signature']}")
+            print(f"完整定义:\n{symbol_info['full_definition']}")
+            print(f"调用关系: {symbol_info['calls']}")
+            print("-" * 50)
+
+        print("\n处理完成，共找到 {} 个符号".format(len(symbols)))
+
+    except Exception as e:
+        print(f"处理文件时发生错误: {str(e)}")
+        raise
+
+
+def format_c_code_in_directory(directory: Path):
+    """使用 clang-format 对指定目录下的所有 C 语言代码进行原位格式化，并利用多线程并行处理
+
+    Args:
+        directory: 要格式化的目录路径
+    """
+
+    # 支持的 C 语言文件扩展名
+    c_extensions = [".c", ".h"]
+
+    # 获取系统CPU核心数
+    cpu_count = os.cpu_count() or 1
+
+    # 记录已格式化文件的点号文件路径
+    formatted_file_path = directory / ".formatted_files"
+
+    # 读取已格式化的文件列表
+    formatted_files = set()
+    if formatted_file_path.exists():
+        with open(formatted_file_path, "r") as f:
+            formatted_files = set(f.read().splitlines())
+
+    # 收集所有需要格式化的文件路径
+    files_to_format = [
+        str(file_path)
+        for file_path in directory.rglob("*")
+        if file_path.suffix.lower() in c_extensions and str(file_path) not in formatted_files
+    ]
+
+    def format_file(file_path):
+        """格式化单个文件的内部函数"""
+        start_time = time.time()
+        try:
+            subprocess.run(["clang-format", "-i", file_path], check=True)
+            formatted_files.add(file_path)
+            return file_path, True, time.time() - start_time, None
+        except subprocess.CalledProcessError as e:
+            return file_path, False, time.time() - start_time, str(e)
+
+    # 创建线程池
+    with ThreadPoolExecutor(max_workers=cpu_count) as executor:
+        try:
+            # 使用 tqdm 显示进度条
+            with tqdm(total=len(files_to_format), desc="格式化进度", unit="文件") as pbar:
+                futures = {executor.submit(format_file, file_path): file_path for file_path in files_to_format}
+
+                for future in as_completed(futures):
+                    file_path, success, duration, error = future.result()
+                    pbar.set_postfix_str(f"正在处理: {os.path.basename(file_path)}")
+                    if success:
+                        pbar.write(f"✓ 成功格式化: {file_path} (耗时: {duration:.2f}s)")
+                    else:
+                        pbar.write(f"✗ 格式化失败: {file_path} (错误: {error})")
+                    pbar.update(1)
+
+            # 将已格式化的文件列表写入点号文件
+            with open(formatted_file_path, "w") as f:
+                f.write("\n".join(formatted_files))
+
+            # 打印已跳过格式化的文件
+            skipped_files = [
+                str(file_path)
+                for file_path in directory.rglob("*")
+                if file_path.suffix.lower() in c_extensions and str(file_path) in formatted_files
+            ]
+            if skipped_files:
+                print("\n以下文件已经格式化过，本次跳过：")
+                for file in skipped_files:
+                    print(f"  {file}")
+
+        except FileNotFoundError:
+            print("未找到 clang-format 命令，请确保已安装 clang-format")
 
 
 def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connection):
@@ -799,6 +981,8 @@ if __name__ == "__main__":
     parser.add_argument("--project", type=str, default=".", help="项目根目录路径")
     parser.add_argument("--demo", action="store_true", help="运行演示模式")
     parser.add_argument("--include", type=str, nargs="+", help="要包含的文件后缀列表（可指定多个，如 .c .h）")
+    parser.add_argument("--debug-file", type=str, help="单文件调试模式，指定要调试的文件路径")
+    parser.add_argument("--format-dir", type=str, help="指定要格式化的目录路径")
 
     args = parser.parse_args()
 
@@ -806,5 +990,9 @@ if __name__ == "__main__":
         demo_main()
         test_symbols_api()
         # test_fastapi_endpoints()
+    elif args.debug_file:
+        debug_process_source_file(Path(args.debug_file), Path(args.project))
+    elif args.format_dir:
+        format_c_code_in_directory(Path(args.format_dir))
     else:
         main(host=args.host, port=args.port, project_path=args.project, include_suffixes=args.include)
