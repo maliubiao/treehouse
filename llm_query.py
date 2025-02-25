@@ -369,7 +369,7 @@ def check_deps_installed():
     return all_installed
 
 
-def get_directory_context_wrapper(max_depth=1):
+def get_directory_context_wrapper(_, max_depth=1):
     text = get_directory_context(max_depth)
     return f"\n[directory tree start]\n{text}\n[directory tree end]\n"
 
@@ -423,7 +423,7 @@ def get_directory_context(max_depth=1):
         return f"获取目录上下文时出错: {str(e)}"
 
 
-def get_clipboard_content():
+def get_clipboard_content(_):
     text = get_clipboard_content_string()
     text = f"\n[clipboard content start]\n{text}\n[clipboard content end]\n"
     return text
@@ -525,7 +525,7 @@ class ClipboardMonitor:
                 return "未捕获到任何剪贴板内容"
 
 
-def monitor_clipboard(debug=False):
+def monitor_clipboard(_, debug=False):
     """主函数：启动剪贴板监控并等待用户输入"""
     monitor = ClipboardMonitor(debug=debug)
     monitor.start_monitoring()
@@ -616,7 +616,16 @@ def fetch_url_content(url, is_news=False):
 
 def _handle_command(match, cmd_map):
     """处理命令类型匹配"""
-    return cmd_map[match]()
+    # 查找第一个冒号的位置
+    colon_index = match.find(":")
+    if colon_index != -1:
+        # 如果找到冒号，将字符串分成两部分
+        key = match[:colon_index]
+        value = match[colon_index + 1 :]
+        return cmd_map[key](value)
+    else:
+        # 如果没有冒号，直接处理整个字符串
+        return cmd_map[match](match)
 
 
 def _handle_shell_command(match):
@@ -660,13 +669,54 @@ def _handle_url(match):
     return f"\n\n[reference url, content converted to markdown]: {url} \n[markdown content begin]\n{markdown_content}\n[markdown content end]\n\n"
 
 
-def read_last_query(text):
+def read_last_query(_):
     """读取最后一次查询的内容"""
     try:
         with open(LAST_QUERY_FILE, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return ""
+
+
+def query_symbol(symbol_name):
+    """查询符号定义信息"""
+
+    try:
+        # 从环境变量获取API地址
+        api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050/symbols")
+        url = f"{api_url}/{symbol_name}/context?max_depth=5"
+
+        # 发送HTTP请求，禁用所有代理
+        proxies = {"http": None, "https": None, "http_proxy": None, "https_proxy": None, "all_proxy": None}
+        # 同时清除环境变量中的代理设置
+        os.environ.pop("http_proxy", None)
+        os.environ.pop("https_proxy", None)
+        os.environ.pop("all_proxy", None)
+
+        response = requests.get(url, proxies=proxies, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        # 构建上下文
+        context = "\n[symbol context start]\n"
+        context += f"符号名称: {data['symbol_name']}\n"
+
+        # 处理每个定义
+        for definition in data["definitions"]:
+            context += "\n[function definition start]\n"
+            context += f"函数名: {definition['name']}\n"
+            context += f"文件路径: {definition['file_path']}\n"
+            context += f"完整定义:\n{definition['full_definition']}\n"
+            context += "[function definition end]\n"
+
+        context += "[symbol context end]\n"
+        return context
+
+    except requests.exceptions.RequestException as e:
+        return f"\n[error] 符号查询失败: {str(e)}\n"
+    except KeyError as e:
+        return f"\n[error] 无效的API响应格式: {str(e)}\n"
+    except Exception as e:
+        return f"\n[error] 符号查询时发生错误: {str(e)}\n"
 
 
 def process_text_with_file_path(text):
@@ -676,8 +726,9 @@ def process_text_with_file_path(text):
         "clipboard": get_clipboard_content,
         "listen": monitor_clipboard,
         "tree": get_directory_context_wrapper,
-        "treefull": lambda: get_directory_context_wrapper(max_depth=None),
-        "last": lambda: read_last_query(text),
+        "treefull": get_directory_context_wrapper,
+        "last": lambda _: read_last_query(text),
+        "symbol": query_symbol,
     }
     env_vars = {
         "os": sys.platform,
@@ -700,7 +751,7 @@ def process_text_with_file_path(text):
         match = match.strip("\\@")
         try:
             replacement = ""
-            if match in cmd_map:
+            if any(match.startswith(cmd) for cmd in cmd_map):
                 replacement = _handle_command(match, cmd_map)
             elif match.endswith("="):
                 replacement = _handle_shell_command(match[:-1])

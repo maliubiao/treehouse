@@ -347,7 +347,7 @@ if [[ -n "$ZSH_VERSION" ]]; then
             # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，最后普通文件补全
             [[ $DEBUG -eq 1 ]] && echo "Debug: 开始生成补全建议" >&2
             _alternative \
-                'special:特殊选项:(clipboard tree treefull read listen)' \
+                'special:特殊选项:(clipboard tree treefull read listen symbol:)' \
                 'prompts:提示词文件:(${prompt_files[@]})' \
                 'files:文件名:_files'
 
@@ -396,7 +396,7 @@ if [[ -n "$BASH_VERSION" ]]; then
             local search_prefix="${cur#@}"
 
             # 特殊项
-            special_items=(clipboard tree treefull read listen)
+            special_items=(clipboard tree treefull read listen symbol:)
 
             # 提示词文件
             prompt_files=()

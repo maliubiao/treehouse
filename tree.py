@@ -951,7 +951,7 @@ def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connec
         if insert_data:
             conn.executemany(
                 """
-                INSERT INTO symbols 
+                INSERT OR REPLACE INTO symbols 
                 (id, name, file_path, type, signature, body, full_definition, calls)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -1057,6 +1057,11 @@ def scan_project_files(project_paths: List[str], conn: sqlite3.Connection, inclu
     # 处理文件
     for project_path in project_paths:
         project_dir = Path(project_path)
+        # 检查路径是否存在，如果不存在则跳过
+        if not project_dir.exists():
+            print(f"警告：项目路径 {project_path} 不存在，跳过处理")
+            continue
+
         # 获取所有需要处理的文件
         files_to_process = []
         for suffix in suffixes:
@@ -1068,14 +1073,15 @@ def scan_project_files(project_paths: List[str], conn: sqlite3.Connection, inclu
             process_source_file(file_path, project_dir, conn, all_existing_symbols)
 
 
-def build_index(project_paths: List[str] = ["."], include_suffixes: List[str] = None):
+def build_index(project_paths: List[str] = ["."], include_suffixes: List[str] = None, db_path: str = "symbols.db"):
     """构建符号索引
     Args:
         project_paths: 项目路径列表
         include_suffixes: 要包含的文件后缀列表
+        db_path: 符号数据库文件路径，默认为当前目录下的symbols.db
     """
     # 初始化数据库连接
-    conn = init_symbol_database()
+    conn = init_symbol_database(db_path)
 
     try:
         # 扫描并处理项目文件
@@ -1087,7 +1093,11 @@ def build_index(project_paths: List[str] = ["."], include_suffixes: List[str] = 
 
 
 def main(
-    host: str = "127.0.0.1", port: int = 8000, project_paths: List[str] = ["."], include_suffixes: List[str] = None
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    project_paths: List[str] = ["."],
+    include_suffixes: List[str] = None,
+    db_path: str = "symbols.db",
 ):
     """启动FastAPI服务
     Args:
@@ -1095,9 +1105,10 @@ def main(
         port: 服务器端口
         project_paths: 项目路径列表
         include_suffixes: 要包含的文件后缀列表
+        db_path: 符号数据库文件路径，默认为当前目录下的symbols.db
     """
     # 初始化数据库连接
-    build_index(project_paths, include_suffixes)
+    build_index(project_paths, include_suffixes, db_path)
     # 启动FastAPI服务
     uvicorn.run(app, host=host, port=port)
 
@@ -1114,6 +1125,7 @@ if __name__ == "__main__":
     parser.add_argument("--debug-file", type=str, help="单文件调试模式，指定要调试的文件路径")
     parser.add_argument("--format-dir", type=str, help="指定要格式化的目录路径")
     parser.add_argument("--build-index", action="store_true", help="构建符号索引")
+    parser.add_argument("--db-path", type=str, default="symbols.db", help="符号数据库文件路径")
 
     args = parser.parse_args()
 
@@ -1125,6 +1137,12 @@ if __name__ == "__main__":
     elif args.format_dir:
         format_c_code_in_directory(Path(args.format_dir))
     elif args.build_index:
-        build_index(project_paths=args.project, include_suffixes=args.include)
+        build_index(project_paths=args.project, include_suffixes=args.include, db_path=args.db_path)
     else:
-        main(host=args.host, port=args.port, project_paths=args.project, include_suffixes=args.include)
+        main(
+            host=args.host,
+            port=args.port,
+            project_paths=args.project,
+            include_suffixes=args.include,
+            db_path=args.db_path,
+        )

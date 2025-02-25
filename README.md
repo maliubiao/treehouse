@@ -68,6 +68,11 @@ askgpt @listen 用户这些评论反映了什么样的趋势
 
 #把前面发的prompt再引用一次，网络故障或者改提问需要这个
 askgpt @last
+
+#符号上下文查询,　会列出这个符号调用的多级其它符号，　跨文件，构成一个完整的上下文，供gpt理解， 
+#这需要用本项目tree.py建一个index server，暂时支持c语言，其它语言开发中, 进展下边有说
+#可以说以后不再需要源代码解析类的文章了    
+askgpt @symbol:show_tty_driver
 ```
 
 
@@ -233,6 +238,40 @@ filters:
 点击插件的图标，有弹出选项，可在当前页面加载一个元素选择器，它可以帮助你定位想要的内容的css selector, 复制到config.yaml去    
 如果你会用dev tools的inspector，可以使用它的copy selector    
 
+
+### 符号查询
+
+tree.py是一个tree-sitter实现的抽象语法树解析库，会生成一个sqlite做源代码索引，这个示例中我就索引了内核gcc　-E预处理过的源代码　　
+在环境中指定api server的位置，`GPT_SYMBOL_API_URL` 大概长这样`http://127.0.0.1:9050/symbols`　　
+
+```bash
+#一个典型的输出
+(terminal-llm) ➜  terminal-llm git:(main) ✗ python tree.py --project /Volumes/外置2T/android-kernel-preprocess/aosp/ --port 9050
+
+数据库当前状态：
+  总符号数: 246373
+  总文件数: 2711
+  索引数量: 3
+    索引名: idx_symbols_file, 唯一性: 否
+    索引名: idx_symbols_name, 唯一性: 否
+    索引名: sqlite_autoindex_symbols_1, 唯一性: 是
+符号缓存加载完成                                  
+处理项目 /Volumes/外置2T/android-kernel-preprocess/aosp/:  26%|███████████████████████████████████▋                                                                                                   | 723/2731 [00:04<00:12, 161.06文件/s]
+文件 /Volumes/外置2T/android-kernel-preprocess/aosp/fs/proc/proc_tty.c.pre.c 处理完成：
+  总符号数: 4687
+  已存在符号数: 1
+  重复符号数: 2974
+  新增符号数: 1
+  过滤符号数: 2974
+处理项目 /Volumes/外置2T/android-kernel-preprocess/aosp/: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2731/2731 [00:17<00:00, 152.64文件/s]
+符号索引构建完成
+INFO:     Started server process [74500]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:9050 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57943 - "GET /symbols/show_tty_driver/context?max_depth=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57957 - "GET /symbols/show_tty_driver/context?max_depth=5 HTTP/1.1" 200 OK
+```
 
 ### 提示词模板
 
