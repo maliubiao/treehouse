@@ -73,6 +73,13 @@ askgpt @last
 #这需要用本项目tree.py建一个index server，暂时支持c语言，其它语言开发中, 进展下边有说   
 #可以说以后不再需要源代码解析类的文章了    
 askgpt @symbol:show_tty_driver
+
+#聊天机器人, 满足闲聊的需要 
+#新会话
+chatbot
+
+#接着聊, 注意这个受newconversation的影响
+chatagain
 ```
 
 
