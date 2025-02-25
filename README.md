@@ -69,8 +69,8 @@ askgpt @listen 用户这些评论反映了什么样的趋势
 #把前面发的prompt再引用一次，网络故障或者改提问需要这个
 askgpt @last
 
-#符号上下文查询,　会列出这个符号调用的多级其它符号，　跨文件，构成一个完整的上下文，供gpt理解， 
-#这需要用本项目tree.py建一个index server，暂时支持c语言，其它语言开发中, 进展下边有说
+#符号上下文查询,　会列出这个符号调用的多级其它符号，　跨文件，构成一个完整的上下文，供gpt理解   
+#这需要用本项目tree.py建一个index server，暂时支持c语言，其它语言开发中, 进展下边有说   
 #可以说以后不再需要源代码解析类的文章了    
 askgpt @symbol:show_tty_driver
 ```
@@ -241,8 +241,8 @@ filters:
 
 ### 符号查询
 
-tree.py是一个tree-sitter实现的抽象语法树解析库，会生成一个sqlite做源代码索引，这个示例中我就索引了内核gcc　-E预处理过的源代码　　
-在环境中指定api server的位置，`GPT_SYMBOL_API_URL` 大概长这样`http://127.0.0.1:9050/symbols`　　
+tree.py是一个tree-sitter实现的抽象语法树解析库，会生成一个sqlite做源代码索引，这个示例中我就索引了内核gcc　-E预处理过的源代码  
+在环境中指定api server的位置，`GPT_SYMBOL_API_URL` 大概长这样`http://127.0.0.1:9050/symbols`  
 
 ```bash
 #一个典型的输出
