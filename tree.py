@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import importlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import time
@@ -10,7 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi import Query as QueryArgs
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -387,6 +389,8 @@ def init_symbol_database(db_path: str = "symbols.db"):
     """初始化符号数据库"""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+
+    # 创建符号表
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS symbols (
@@ -402,6 +406,20 @@ def init_symbol_database(db_path: str = "symbols.db"):
         )
     """
     )
+
+    # 创建文件元数据表
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT NOT NULL UNIQUE,
+            last_modified REAL NOT NULL,  
+            file_hash TEXT NOT NULL,      
+            total_symbols INTEGER DEFAULT 0 
+        )
+    """
+    )
+
     # 创建索引以优化查询性能
     cursor.execute(
         """
@@ -415,14 +433,50 @@ def init_symbol_database(db_path: str = "symbols.db"):
         ON symbols(file_path)
     """
     )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_file_metadata_path 
+        ON file_metadata(file_path)
+    """
+    )
+
     conn.commit()
     return conn
+
+
+def validate_input(value: str, max_length: int = 255) -> str:
+    """验证输入参数，防止SQL注入
+    Args:
+        value: 要验证的字符串
+        max_length: 最大长度限制
+    Returns:
+        经过验证和清理的字符串
+    Raises:
+        ValueError: 如果输入不合法
+    """
+    if not value or len(value) > max_length:
+        raise ValueError(f"输入值长度必须在1到{max_length}之间")
+    # 过滤特殊字符
+    if re.search(r"[;'\"]", value):
+        raise ValueError("输入包含非法字符")
+    return value.strip()
 
 
 def insert_symbol(conn, symbol_info: Dict):
     """插入符号信息到数据库，处理唯一性冲突"""
     cursor = conn.cursor()
     try:
+        # 验证输入
+        for field in ["name", "file_path", "type", "signature", "body", "full_definition"]:
+            validate_input(str(symbol_info[field]))
+
+        # 验证calls字段
+        calls = symbol_info.get("calls", [])
+        if not isinstance(calls, list):
+            raise ValueError("calls字段必须是列表")
+        for call in calls:
+            validate_input(str(call))
+
         cursor.execute(
             """
             INSERT INTO symbols (name, file_path, type, signature, body, full_definition, calls)
@@ -435,17 +489,24 @@ def insert_symbol(conn, symbol_info: Dict):
                 symbol_info["signature"],
                 symbol_info["body"],
                 symbol_info["full_definition"],
-                json.dumps(symbol_info.get("calls", [])),
+                json.dumps(calls),
             ),
         )
         conn.commit()
     except sqlite3.IntegrityError:
-        # 如果遇到唯一性冲突，回滚事务并忽略插入
         conn.rollback()
+    except ValueError as e:
+        conn.rollback()
+        raise ValueError(f"输入数据验证失败: {str(e)}")
 
 
 def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
     """根据前缀搜索符号"""
+    # 验证输入
+    validate_input(prefix)
+    if not 1 <= limit <= 100:
+        raise ValueError("limit参数必须在1到100之间")
+
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -458,20 +519,31 @@ def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
     return [{"name": row[0], "file_path": row[1]} for row in cursor.fetchall()]
 
 
-def get_symbol_info(conn, symbol_name: str, file_path: str) -> Optional[SymbolInfo]:
-    """获取符号的完整信息
-    Args:
-        symbol_name: 符号名称
-        file_path: 符号所在文件路径
-    """
+def get_symbol_info(conn, symbol_name: str, file_path: Optional[str] = None) -> Optional[SymbolInfo]:
+    """获取符号的完整信息"""
+    # 验证输入
+    validate_input(symbol_name)
+
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
-        WHERE name = ? AND file_path = ?
-    """,
-        (symbol_name, file_path),
-    )
+    if file_path:
+        # 如果有文件路径，使用模糊匹配
+        cursor.execute(
+            """
+            SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
+            WHERE name = ? AND file_path LIKE ?
+            """,
+            (symbol_name, f"%{file_path}%"),
+        )
+    else:
+        # 如果没有文件路径，只匹配符号名
+        cursor.execute(
+            """
+            SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
+            WHERE name = ?
+            """,
+            (symbol_name,),
+        )
+
     row = cursor.fetchone()
     if row:
         return SymbolInfo(
@@ -488,88 +560,103 @@ def get_symbol_info(conn, symbol_name: str, file_path: str) -> Optional[SymbolIn
 
 @app.get("/symbols/search")
 async def search_symbols_api(prefix: str = QueryArgs(..., min_length=1), limit: int = QueryArgs(10, ge=1, le=100)):
-    """符号搜索API
-    Args:
-        prefix: 搜索前缀，至少1个字符
-        limit: 返回结果数量限制，默认10，范围1-100
-    """
-    conn = get_db_connection()
-    results = search_symbols(conn, prefix, limit)
-    return {"results": results}
+    """符号搜索API"""
+    try:
+        validate_input(prefix)
+        conn = get_db_connection()
+        results = search_symbols(conn, prefix, limit)
+        return {"results": results}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/symbols/{symbol_name}")
-async def get_symbol_info_api(symbol_name: str, file_path: str = QueryArgs(...)):
-    """获取符号信息API
-    Args:
-        symbol_name: 符号名称（路径参数）
-        file_path: 符号所在文件路径（查询参数）
-    """
-    conn = get_db_connection()
-    symbol_info = get_symbol_info(conn, symbol_name, file_path)
-    if symbol_info:
-        return symbol_info
-    return {"error": "Symbol not found"}
+async def get_symbol_info_api(symbol_name: str, file_path: Optional[str] = QueryArgs(None)):
+    """获取符号信息API"""
+    try:
+        validate_input(symbol_name)
+        conn = get_db_connection()
+        symbol_info = get_symbol_info(conn, symbol_name, file_path)
+        if symbol_info:
+            return symbol_info
+        return {"error": "Symbol not found"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 3) -> dict:
-    """获取符号的调用树上下文（带深度限制）
-
-    Args:
-        symbol_name: 符号名称
-        file_path: 符号所在文件路径
-        max_depth: 调用树最大深度 (0=仅自身，1=直接调用，2=二级调用...)
-    Returns:
-        包含符号及其调用链的上下文信息的字典
-    """
-    if max_depth < 0:
-        raise ValueError("深度值不能为负数")
+def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, max_depth: int = 3) -> dict:
+    """获取符号的调用树上下文（带深度限制）"""
+    # 验证输入
+    validate_input(symbol_name)
+    if max_depth < 0 or max_depth > 10:
+        raise ValueError("深度值必须在0到10之间")
 
     cursor = conn.cursor()
-
-    # 使用递归CTE获取调用树，带深度控制
-    cursor.execute(
-        """
-        WITH RECURSIVE call_tree(name, file_path, depth) AS (
-            SELECT s.name, s.file_path, 0
-            FROM symbols s
-            WHERE s.name = ? AND s.file_path = ?
-            
-            UNION ALL
-            
-            SELECT json_each.value, s.file_path, ct.depth + 1
-            FROM call_tree ct
-            JOIN symbols s ON ct.name = s.name AND ct.file_path = s.file_path
-            JOIN json_each(s.calls)
-            WHERE ct.depth < ?
+    if file_path:
+        # 如果有文件路径，使用模糊匹配
+        cursor.execute(
+            """
+            WITH RECURSIVE call_tree(name, file_path, depth) AS (
+                SELECT s.name, s.file_path, 0
+                FROM symbols s
+                WHERE s.name = ? AND s.file_path LIKE ?
+                
+                UNION ALL
+                
+                SELECT json_each.value, s.file_path, ct.depth + 1
+                FROM call_tree ct
+                JOIN symbols s ON ct.name = s.name AND ct.file_path = s.file_path
+                JOIN json_each(s.calls)
+                WHERE ct.depth < ?
+            )
+            SELECT DISTINCT name, file_path 
+            FROM call_tree
+            WHERE depth <= ?
+            """,
+            (symbol_name, f"%{file_path}%", max_depth - 1, max_depth),
         )
-        SELECT DISTINCT name, file_path 
-        FROM call_tree
-        WHERE depth <= ?
-        """,
-        (symbol_name, file_path, max_depth - 1, max_depth),
-    )
+    else:
+        # 如果没有文件路径，只匹配符号名
+        cursor.execute(
+            """
+            WITH RECURSIVE call_tree(name, file_path, depth) AS (
+                SELECT s.name, s.file_path, 0
+                FROM symbols s
+                WHERE s.name = ?
+                
+                UNION ALL
+                
+                SELECT json_each.value, s.file_path, ct.depth + 1
+                FROM call_tree ct
+                JOIN symbols s ON ct.name = s.name AND ct.file_path = s.file_path
+                JOIN json_each(s.calls)
+                WHERE ct.depth < ?
+            )
+            SELECT DISTINCT name, file_path 
+            FROM call_tree
+            WHERE depth <= ?
+            """,
+            (symbol_name, max_depth - 1, max_depth),
+        )
 
-    # 获取所有相关符号名称
     names = [row[0] for row in cursor.fetchall()]
     if not names:
-        return {"error": f"未找到符号 {symbol_name} 在文件 {file_path} 中的定义"}
+        return {"error": f"未找到符号 {symbol_name} 的定义"}
 
-    # 确保包含原始符号
     if symbol_name not in names:
         names.insert(0, symbol_name)
 
-    # 批量获取所有相关符号的定义
+    # 使用参数化查询防止SQL注入
+    placeholders = ",".join(["?"] * len(names))
     cursor.execute(
         f"""
         SELECT name, file_path, full_definition 
         FROM symbols 
-        WHERE name IN ({','.join(['?']*len(names))})
+        WHERE name IN ({placeholders})
         """,
         names,
     )
 
-    # 构建符号定义列表
     definitions = []
     for row in cursor.fetchall():
         definitions.append({"name": row[0], "file_path": row[1], "full_definition": row[2]})
@@ -578,15 +665,20 @@ def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 
 
 
 @app.get("/symbols/{symbol_name}/context")
-async def get_symbol_context_api(symbol_name: str, file_path: str = QueryArgs(...)):
+async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = QueryArgs(None), max_depth: int = 3):
     """获取符号上下文API
     Args:
-        symbol_name: 符号名称（路径参数）
-        file_path: 符号所在文件路径（查询参数）
+        symbol_name: 要查询的符号名称
+        file_path: 符号所在文件路径（可选）
+        max_depth: 最大调用深度，默认为3
     """
-    conn = get_db_connection()
-    context = get_symbol_context(conn, symbol_name, file_path)
-    return context
+    try:
+        validate_input(symbol_name)
+        conn = get_db_connection()
+        context = get_symbol_context(conn, symbol_name, file_path, max_depth)
+        return context
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def test_symbols_api():
@@ -758,54 +850,104 @@ def format_c_code_in_directory(directory: Path):
             print("未找到 clang-format 命令，请确保已安装 clang-format")
 
 
-def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connection):
+def parse_source_file(file_path: Path, parser, query):
+    """解析源代码文件并返回符号表"""
+    tree, code = parse_code_file(file_path, parser)
+    matches = query.matches(tree.root_node)
+    return process_matches(matches, code)
+
+
+def check_symbol_duplicate(symbol_name: str, symbol_info: dict, all_existing_symbols: dict) -> bool:
+    """检查符号是否已经存在"""
+    if symbol_name not in all_existing_symbols:
+        return False
+
+    for existing_symbol in all_existing_symbols[symbol_name]:
+        if existing_symbol[1] == symbol_info["signature"] and existing_symbol[2] == symbol_info["full_definition"]:
+            return True
+    return False
+
+
+def prepare_insert_data(symbols: dict, all_existing_symbols: dict, full_path: str) -> tuple:
+    """准备要插入数据库的数据"""
+    insert_data = []
+    duplicate_count = 0
+    existing_symbol_names = set()
+
+    for symbol_name, symbol_info in symbols.items():
+        if not symbol_info.get("body"):
+            continue
+
+        if check_symbol_duplicate(symbol_name, symbol_info, all_existing_symbols):
+            duplicate_count += 1
+            continue
+
+        existing_symbol_names.add(symbol_name)
+        insert_data.append(
+            (
+                None,  # id 由数据库自动生成
+                symbol_name,
+                full_path,
+                symbol_info["type"],
+                symbol_info["signature"],
+                symbol_info["body"],
+                symbol_info["full_definition"],
+                json.dumps(symbol_info["calls"]),
+            )
+        )
+
+    return insert_data, duplicate_count, existing_symbol_names
+
+
+def calculate_file_hash(file_path: Path) -> str:
+    """计算文件的 MD5 哈希值
+    Args:
+        file_path: 文件路径
+    Returns:
+        文件的 MD5 哈希字符串
+    """
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
+
+
+def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connection, all_existing_symbols: dict):
     """处理单个源代码文件，提取符号并插入数据库"""
     try:
+        # 获取完整文件路径
+        full_path = str((project_dir / file_path).resolve().absolute())
+
+        # 计算文件哈希和最后修改时间
+        file_hash = calculate_file_hash(file_path)
+        last_modified = file_path.stat().st_mtime
+
+        # 检查文件元数据是否已存在
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT file_hash, last_modified, total_symbols FROM file_metadata WHERE file_path = ?", (full_path,)
+        )
+        file_metadata = cursor.fetchone()
+
+        # 如果文件未修改，直接返回
+        if file_metadata and file_metadata[0] == file_hash and file_metadata[1] == last_modified:
+            # print(f"\n文件 {file_path} 未修改，跳过处理")
+            return
+
         # 开始事务
         conn.execute("BEGIN TRANSACTION")
 
-        # 解析代码文件并构建符号表
+        # 解析文件
         parser, query = ParserLoader().get_parser(str(file_path))
-        tree, code = parse_code_file(file_path, parser)
-        matches = query.matches(tree.root_node)
-        symbols = process_matches(matches, code)
+        symbols = parse_source_file(file_path, parser, query)
 
-        # 获取完整文件路径（规范化处理）
-        full_path = str((project_dir / file_path).resolve().absolute())
+        # 准备数据
+        insert_data, duplicate_count, existing_symbol_names = prepare_insert_data(
+            symbols, all_existing_symbols, full_path
+        )
 
-        # 准备批量插入数据
-        insert_data = []
-        existing_symbols = set()
-
-        # 先批量查询已存在的符号
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, file_path, signature FROM symbols WHERE file_path = ?", (full_path,))
-        for row in cursor.fetchall():
-            existing_symbols.add((row[0], row[1], row[2]))  # (name, file_path, signature)
-
-        for symbol_name, symbol_info in symbols.items():
-            if not symbol_info.get("body"):
-                continue
-
-            # 检查符号是否已经存在
-            symbol_key = (symbol_name, full_path, symbol_info["signature"])
-            if symbol_key in existing_symbols:
-                continue
-
-            insert_data.append(
-                (
-                    None,  # id 由数据库自动生成
-                    symbol_name,
-                    full_path,  # 使用传入的文件路径
-                    symbol_info["type"],
-                    symbol_info["signature"],
-                    symbol_info["body"],
-                    symbol_info["full_definition"],
-                    json.dumps(symbol_info["calls"]),
-                )
-            )
-
-        # 批量插入数据库
+        # 插入或更新符号数据
         if insert_data:
             conn.executemany(
                 """
@@ -815,42 +957,121 @@ def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connec
                 """,
                 insert_data,
             )
-            conn.commit()
-        else:
-            conn.execute("END TRANSACTION")
+            # 更新过滤表，将新插入的符号加入 all_existing_symbols
+            for data in insert_data:
+                symbol_name = data[1]
+                if symbol_name not in all_existing_symbols:
+                    all_existing_symbols[symbol_name] = []
+                all_existing_symbols[symbol_name].append(
+                    (full_path, data[4], data[6])  # file_path  # signature  # full_definition
+                )
+
+        # 更新文件元数据
+        total_symbols = len(symbols)
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO file_metadata 
+            (file_path, last_modified, file_hash, total_symbols)
+            VALUES (?, ?, ?, ?)
+            """,
+            (full_path, last_modified, file_hash, total_symbols),
+        )
+
+        conn.commit()
+
+        # 输出统计信息
+        print(f"\n文件 {file_path} 处理完成：")
+        print(f"  总符号数: {total_symbols}")
+        print(f"  已存在符号数: {len(existing_symbol_names)}")
+        print(f"  重复符号数: {duplicate_count}")
+        print(f"  新增符号数: {len(insert_data)}")
+        print(f"  过滤符号数: {duplicate_count + (total_symbols - len(symbols))}")
 
     except Exception as e:
-        # 发生异常时回滚事务
         conn.rollback()
         raise
 
 
-def scan_project_files(project_path: str, conn: sqlite3.Connection, include_suffixes: List[str] = None):
-    """扫描项目路径下的所有源代码文件并处理
-    Args:
-        project_path: 项目路径
-        conn: 数据库连接
-        include_suffixes: 要包含的文件后缀列表，如果为None则包含所有支持的后缀
-    """
-    project_dir = Path(project_path)
-    # 如果没有指定包含的后缀，则使用所有支持的后缀
+def get_database_stats(conn: sqlite3.Connection) -> tuple:
+    """获取数据库统计信息"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM symbols")
+    total_symbols = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(DISTINCT file_path) FROM symbols")
+    total_files = cursor.fetchone()[0]
+
+    cursor.execute("PRAGMA index_list('symbols')")
+    indexes = cursor.fetchall()
+
+    return total_symbols, total_files, indexes
+
+
+def get_existing_symbols(conn: sqlite3.Connection) -> dict:
+    """获取所有已存在的符号"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, file_path, signature, full_definition FROM symbols")
+    all_existing_symbols = {}
+    total_rows = cursor.rowcount
+    processed = 0
+    spinner = ["-", "\\", "|", "/"]
+    idx = 0
+
+    for row in cursor.fetchall():
+        if row[0] not in all_existing_symbols:
+            all_existing_symbols[row[0]] = []
+        all_existing_symbols[row[0]].append((row[1], row[2], row[3]))
+
+        # 更新进度显示
+        processed += 1
+        idx = (idx + 1) % len(spinner)
+        print(f"\r加载符号中... {spinner[idx]} 已处理 {processed}/{total_rows}", end="", flush=True)
+
+    # 清除进度显示行
+    print("\r" + " " * 50 + "\r", end="", flush=True)
+    print("符号缓存加载完成")
+    return all_existing_symbols
+
+
+def scan_project_files(project_paths: List[str], conn: sqlite3.Connection, include_suffixes: List[str] = None):
+    """扫描多个项目路径下的所有源代码文件并处理"""
+    # 检查路径是否存在
+    non_existent_paths = [path for path in project_paths if not Path(path).exists()]
+    if non_existent_paths:
+        raise ValueError(f"以下路径不存在: {', '.join(non_existent_paths)}")
+
     suffixes = include_suffixes if include_suffixes else SUPPORTED_LANGUAGES.keys()
 
-    for suffix in suffixes:
-        # 确保后缀以点开头
-        if not suffix.startswith("."):
-            suffix = f".{suffix}"
-        for file_path in project_dir.rglob(f"*{suffix}"):
-            print(file_path)
-            process_source_file(file_path, project_dir, conn)
+    # 获取数据库统计信息
+    total_symbols, total_files, indexes = get_database_stats(conn)
+    print("\n数据库当前状态：")
+    print(f"  总符号数: {total_symbols}")
+    print(f"  总文件数: {total_files}")
+    print(f"  索引数量: {len(indexes)}")
+    for idx in indexes:
+        print(f"    索引名: {idx[1]}, 唯一性: {'是' if idx[2] else '否'}")
+
+    # 获取已存在符号
+    all_existing_symbols = get_existing_symbols(conn)
+
+    # 处理文件
+    for project_path in project_paths:
+        project_dir = Path(project_path)
+        # 获取所有需要处理的文件
+        files_to_process = []
+        for suffix in suffixes:
+            if not suffix.startswith("."):
+                suffix = f".{suffix}"
+            files_to_process.extend(list(project_dir.rglob(f"*{suffix}")))
+
+        for file_path in tqdm(files_to_process, desc=f"处理项目 {project_path}", unit="文件"):
+            process_source_file(file_path, project_dir, conn, all_existing_symbols)
 
 
-def main(host: str = "127.0.0.1", port: int = 8000, project_path: str = ".", include_suffixes: List[str] = None):
-    """启动FastAPI服务并初始化符号表
+def build_index(project_paths: List[str] = ["."], include_suffixes: List[str] = None):
+    """构建符号索引
     Args:
-        host: 服务器地址
-        port: 服务器端口
-        project_path: 项目路径
+        project_paths: 项目路径列表
         include_suffixes: 要包含的文件后缀列表
     """
     # 初始化数据库连接
@@ -858,13 +1079,27 @@ def main(host: str = "127.0.0.1", port: int = 8000, project_path: str = ".", inc
 
     try:
         # 扫描并处理项目文件
-        scan_project_files(project_path, conn, include_suffixes)
-
-        # 启动FastAPI服务
-        uvicorn.run(app, host=host, port=port)
+        scan_project_files(project_paths, conn, include_suffixes)
+        print("符号索引构建完成")
     finally:
         # 关闭数据库连接
         conn.close()
+
+
+def main(
+    host: str = "127.0.0.1", port: int = 8000, project_paths: List[str] = ["."], include_suffixes: List[str] = None
+):
+    """启动FastAPI服务
+    Args:
+        host: 服务器地址
+        port: 服务器端口
+        project_paths: 项目路径列表
+        include_suffixes: 要包含的文件后缀列表
+    """
+    # 初始化数据库连接
+    build_index(project_paths, include_suffixes)
+    # 启动FastAPI服务
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
@@ -873,11 +1108,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="代码分析工具")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP服务器绑定地址")
     parser.add_argument("--port", type=int, default=8000, help="HTTP服务器绑定端口")
-    parser.add_argument("--project", type=str, default=".", help="项目根目录路径")
+    parser.add_argument("--project", type=str, nargs="+", default=["."], help="项目根目录路径（可指定多个）")
     parser.add_argument("--demo", action="store_true", help="运行演示模式")
     parser.add_argument("--include", type=str, nargs="+", help="要包含的文件后缀列表（可指定多个，如 .c .h）")
     parser.add_argument("--debug-file", type=str, help="单文件调试模式，指定要调试的文件路径")
     parser.add_argument("--format-dir", type=str, help="指定要格式化的目录路径")
+    parser.add_argument("--build-index", action="store_true", help="构建符号索引")
 
     args = parser.parse_args()
 
@@ -885,8 +1121,10 @@ if __name__ == "__main__":
         demo_main()
         test_symbols_api()
     elif args.debug_file:
-        debug_process_source_file(Path(args.debug_file), Path(args.project))
+        debug_process_source_file(Path(args.debug_file), Path(args.project[0]))
     elif args.format_dir:
         format_c_code_in_directory(Path(args.format_dir))
+    elif args.build_index:
+        build_index(project_paths=args.project, include_suffixes=args.include)
     else:
-        main(host=args.host, port=args.port, project_path=args.project, include_suffixes=args.include)
+        main(host=args.host, port=args.port, project_paths=args.project, include_suffixes=args.include)
