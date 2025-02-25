@@ -295,14 +295,12 @@ function chat() {
     _check_gpt_env || return 1
         
     # 根据参数决定是否创建新会话
-    local new_session_flag=""
     if [[ "$1" == "new" ]]; then
-        new_session_flag="--new-session"
         export GPT_UUID_CONVERSATION=$(uuidgen)
     fi
     
     # 启动聊天机器人
-    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --chatbot $new_session_flag
+    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --chatbot 
 }
 
 # 为保持兼容性，保留原有函数名
