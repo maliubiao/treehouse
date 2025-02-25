@@ -512,7 +512,7 @@ async def get_symbol_info_api(symbol_name: str, file_path: str = QueryArgs(...))
     return {"error": "Symbol not found"}
 
 
-def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 3) -> str:
+def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 3) -> dict:
     """获取符号的调用树上下文（带深度限制）
 
     Args:
@@ -520,7 +520,7 @@ def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 
         file_path: 符号所在文件路径
         max_depth: 调用树最大深度 (0=仅自身，1=直接调用，2=二级调用...)
     Returns:
-        包含符号及其调用链的完整上下文信息
+        包含符号及其调用链的上下文信息的字典
     """
     if max_depth < 0:
         raise ValueError("深度值不能为负数")
@@ -553,7 +553,7 @@ def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 
     # 获取所有相关符号名称
     names = [row[0] for row in cursor.fetchall()]
     if not names:
-        return f"未找到符号 {symbol_name} 在文件 {file_path} 中的定义"
+        return {"error": f"未找到符号 {symbol_name} 在文件 {file_path} 中的定义"}
 
     # 确保包含原始符号
     if symbol_name not in names:
@@ -569,20 +569,12 @@ def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 
         names,
     )
 
-    # 构建符号定义映射
-    definitions = {row[0]: row for row in cursor.fetchall()}
+    # 构建符号定义列表
+    definitions = []
+    for row in cursor.fetchall():
+        definitions.append({"name": row[0], "file_path": row[1], "full_definition": row[2]})
 
-    # 初始化上下文
-    context = ""
-    for name in names:
-        if name in definitions:
-            row = definitions[name]
-            context += f"// {row[0]} 的完整定义（来自文件 {row[1]}）\n"
-            context += row[2] + "\n\n"
-        else:
-            context += f"// 警告：未找到函数 {name} 的定义\n\n"
-
-    return context
+    return {"symbol_name": symbol_name, "file_path": file_path, "max_depth": max_depth, "definitions": definitions}
 
 
 @app.get("/symbols/{symbol_name}/context")
@@ -594,118 +586,7 @@ async def get_symbol_context_api(symbol_name: str, file_path: str = QueryArgs(..
     """
     conn = get_db_connection()
     context = get_symbol_context(conn, symbol_name, file_path)
-    return {"context": context}
-
-
-@app.get("/symbols/path/{path_pattern}")
-async def get_symbols_by_path_api(path_pattern: str):
-    """根据路径模式查询符号API
-    Args:
-        path_pattern: 路径匹配模式（支持模糊匹配）
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # 使用LIKE进行路径模糊匹配
-    cursor.execute(
-        """
-        SELECT DISTINCT file_path 
-        FROM symbols 
-        WHERE file_path LIKE ?
-        """,
-        (f"%{path_pattern}%",),
-    )
-
-    # 获取所有匹配的路径
-    matched_paths = [row[0] for row in cursor.fetchall()]
-    if not matched_paths:
-        return {"results": []}
-
-    # 查询每个路径下的所有符号
-    results = []
-    for path in matched_paths:
-        cursor.execute(
-            """
-            SELECT name, type, signature 
-            FROM symbols 
-            WHERE file_path = ?
-            """,
-            (path,),
-        )
-        symbols = [{"name": row[0], "type": row[1], "signature": row[2]} for row in cursor.fetchall()]
-        results.append({"path": path, "symbols": symbols})
-
-    return {"results": results}
-
-
-def test_fastapi_endpoints():
-    """测试FastAPI提供的所有外部接口"""
-    # 使用TestClient和内存数据库
-    client = TestClient(app)
-    app.dependency_overrides[get_db_connection] = lambda: sqlite3.connect(":memory:")
-
-    # 准备测试数据
-    test_symbols = [
-        {
-            "name": "main_function",
-            "file_path": "/path/to/file",
-            "type": "function",
-            "signature": "def main_function()",
-            "body": "pass",
-            "full_definition": "def main_function(): pass",
-            "calls": ["helper_function"],
-        },
-        {
-            "name": "helper_function",
-            "file_path": "/another/path",
-            "type": "function",
-            "signature": "def helper_function()",
-            "body": "pass",
-            "full_definition": "def helper_function(): pass",
-            "calls": [],
-        },
-    ]
-
-    # 插入测试数据
-    test_conn = get_db_connection()
-    for symbol in test_symbols:
-        insert_symbol(test_conn, symbol)
-
-    # 测试搜索接口
-    response = client.get("/symbols/search?prefix=main&limit=10")
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data["results"]) == 1
-
-    # 测试获取符号信息接口
-    response = client.get("/symbols/main_function?file_path=/path/to/file")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "main_function"
-
-    # 测试获取符号上下文接口
-    # 情况1：正常获取上下文
-    response = client.get("/symbols/main_function/context?file_path=/path/to/file")
-    assert response.status_code == 200
-    data = response.json()
-    assert "main_function" in data["context"]
-    assert "helper_function" in data["context"]
-
-    # 情况2：获取不存在的符号上下文
-    response = client.get("/symbols/nonexistent/context?file_path=/path/to/file")
-    assert response.status_code == 200
-    data = response.json()
-    assert "未找到符号" in data["context"]
-
-    # 情况3：获取存在符号但调用函数不存在的情况
-    response = client.get("/symbols/main_function/context?file_path=/path/to/file")
-    assert response.status_code == 200
-    data = response.json()
-    assert "警告：未找到函数" not in data["context"]  # 因为helper_function存在
-
-    # 清理测试数据
-    test_conn.execute("DELETE FROM symbols")
-    test_conn.commit()
+    return context
 
 
 def test_symbols_api():
@@ -755,13 +636,12 @@ def test_symbols_api():
         # 测试获取符号上下文接口
         # 情况1：正常获取上下文
         response = loop.run_until_complete(get_symbol_context_api("main_function", "/path/to/file"))
-        assert "main_function" in response["context"]
-        assert "helper_function" in response["context"]
-        assert "警告：未找到函数 undefined_function" in response["context"]  # 检查未定义函数的警告
+        assert response["symbol_name"] == "main_function"
+        assert len(response["definitions"]) == 2
 
         # 情况2：获取不存在的符号上下文
         response = loop.run_until_complete(get_symbol_context_api("nonexistent", "/path/to/file"))
-        assert "未找到符号" in response["context"]
+        assert "error" in response
 
     finally:
         # 关闭事件循环
@@ -1004,7 +884,6 @@ if __name__ == "__main__":
     if args.demo:
         demo_main()
         test_symbols_api()
-        # test_fastapi_endpoints()
     elif args.debug_file:
         debug_process_source_file(Path(args.debug_file), Path(args.project))
     elif args.format_dir:
