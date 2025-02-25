@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import requests
 import uvicorn
 from fastapi import FastAPI
 from fastapi import Query as QueryArgs
@@ -40,7 +39,6 @@ LANGUAGE_QUERIES = {
                 parameters: (parameter_list) @params
             )
         ) @func_decl
-        (#eq? @storage_class "extern")
         
         (function_definition
             type: _ @return_type
@@ -50,6 +48,16 @@ LANGUAGE_QUERIES = {
             )
             body: (compound_statement) @body
         )
+        (function_definition
+            type: _ @return_type
+            declarator: (pointer_declarator
+              declarator: (function_declarator
+                  declarator: (identifier) @symbol_name
+                  parameters: (parameter_list) @params
+              )
+            )
+            body: (compound_statement) @body
+        )  
         (preproc_def
             name: (identifier) @symbol_name
             value: (_) @macro_value
@@ -58,8 +66,8 @@ LANGUAGE_QUERIES = {
     (
         (call_expression
             function: (identifier) @called_function
+            (#not-match? @called_function "^(__builtin_|typeof$)")
         ) @call
-        (#contains? @body @call)
     )
     """,
     "python": """
@@ -202,9 +210,12 @@ def parse_code_file(file_path, lang_parser):
     """解析代码文件"""
     with open(file_path, "r", encoding="utf-8") as f:
         code = f.read()
-    # with open("a.dot", "w+") as f:
-    #     parser.print_dot_graphs(f)
     tree = lang_parser.parse(bytes(code, "utf-8"))
+    # 打印调试信息
+    # print("解析树结构：")
+    # print(tree.root_node)
+    # print("\n代码内容：")
+    # print(code)
     return tree, code
 
 
@@ -223,7 +234,7 @@ def process_matches(matches, code):
         _, captures = match
         if not captures:
             continue
-        print({k: [n.text.decode("utf-8") for n in v] for k, v in captures.items()})
+        # print({k: [n.text.decode("utf-8") for n in v] for k, v in captures.items()})
 
         if "symbol_name" in captures:
             symbol_node = captures["symbol_name"][0]
@@ -543,6 +554,10 @@ def get_symbol_context(conn, symbol_name: str, file_path: str, max_depth: int = 
     names = [row[0] for row in cursor.fetchall()]
     if not names:
         return f"未找到符号 {symbol_name} 在文件 {file_path} 中的定义"
+
+    # 确保包含原始符号
+    if symbol_name not in names:
+        names.insert(0, symbol_name)
 
     # 批量获取所有相关符号的定义
     cursor.execute(
