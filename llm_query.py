@@ -71,11 +71,6 @@ def parse_arguments():
         default=os.environ.get("GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")),
         help="Obsidian文档备份目录路径",
     )
-    parser.add_argument(
-        "--new-session",
-        action="store_true",
-        help="在聊天机器人模式下启动新会话",
-    )
     return parser.parse_args()
 
 
@@ -298,7 +293,7 @@ def query_gpt_api(
             # 处理推理内容（仅打印不保存）
             if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
                 if console:
-                    console.print(chunk.choices[0].delta.reasoning_content, end="")
+                    console.print(chunk.choices[0].delta.reasoning_content, end="", style="#00ff00")
                 else:
                     print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                 reasoning += chunk.choices[0].delta.reasoning_content
@@ -1064,7 +1059,7 @@ class HackerStyle(PygmentsStyle):
     }
 
 
-def chatbot_ui(new_session=False):
+def chatbot_ui():
     """实现一个终端聊天机器人UI，支持流式响应和Markdown渲染"""
 
     # 定义更丰富的颜色方案，增加神秘感
@@ -1090,9 +1085,8 @@ def chatbot_ui(new_session=False):
 
     @bindings.add("escape")
     @bindings.add("c-c")
-    @bindings.add("c-d")
     def _(event):
-        """按ESC、Ctrl+C或Ctrl+D退出"""
+        """按ESC、Ctrl+C, 或者什么都不输入按Enter退出"""
         event.app.exit()
 
     @bindings.add("c-l")
@@ -1100,7 +1094,7 @@ def chatbot_ui(new_session=False):
         """Ctrl+L清屏"""
         event.app.renderer.clear()
 
-    print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC、Ctrl+C或Ctrl+D退出。")
+    print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC退出")
     console = Console()
 
     def stream_response(prompt):
@@ -1124,7 +1118,7 @@ def chatbot_ui(new_session=False):
                 key_bindings=bindings,
                 completer=None,
                 complete_while_typing=False,
-                bottom_toolbar=lambda: "[#00ff00]状态: 就绪 [Ctrl+L 清屏][/#00ff00]",
+                bottom_toolbar=lambda: "状态: 就绪 [Ctrl+L 清屏]",
                 lexer=PygmentsLexer(MarkdownLexer),
             )
 
@@ -1222,7 +1216,7 @@ def main():
     if args.ask:
         handle_ask_mode(args, os.getenv("GPT_KEY"), proxies)
     elif args.chatbot:
-        chatbot_ui(args.new_session)
+        chatbot_ui()
     else:
         handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)
 
