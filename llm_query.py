@@ -24,9 +24,21 @@ from urllib.parse import urlparse
 
 import requests
 from openai import OpenAI
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit.styles import Style
 from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
+from pygments.lexers.markup import MarkdownLexer
+from pygments.style import Style as PygmentsStyle
+from pygments.token import Token
+
+# 初始化Markdown渲染器
+from rich.console import Console
+from rich.markdown import Markdown
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
@@ -36,12 +48,13 @@ LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 def parse_arguments():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description="使用Groq API分析源代码",
+        description="终端智能AI辅助工具",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--file", help="要分析的源代码文件路径")
     group.add_argument("--ask", help="直接提供提示词内容，与--file互斥")
+    group.add_argument("--chatbot", action="store_true", help="进入聊天机器人UI模式，与--file和--ask互斥")
     parser.add_argument(
         "--prompt-file",
         default=os.path.expanduser("~/.llm/source-query.txt"),
@@ -57,6 +70,11 @@ def parse_arguments():
         "--obsidian-doc",
         default=os.environ.get("GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")),
         help="Obsidian文档备份目录路径",
+    )
+    parser.add_argument(
+        "--new-session",
+        action="store_true",
+        help="在聊天机器人模式下启动新会话",
     )
     return parser.parse_args()
 
@@ -242,6 +260,7 @@ def query_gpt_api(
     # proxies = kwargs.get('proxies')
     base_url = kwargs.get("base_url")
     conversation_file = kwargs.get("conversation_file", "conversation_history.json")
+    console = kwargs.get("console")
 
     cid = os.environ.get("GPT_UUID_CONVERSATION")
     if cid:
@@ -266,7 +285,7 @@ def query_gpt_api(
         stream = client.chat.completions.create(
             model=model,
             messages=history,
-            temperature=0.0,
+            temperature=kwargs.get("temperature", 0.0),
             max_tokens=MAX_PROMPT_SIZE,
             top_p=0.8,
             stream=True,
@@ -278,13 +297,24 @@ def query_gpt_api(
         for chunk in stream:
             # 处理推理内容（仅打印不保存）
             if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
-                print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
+                if console:
+                    console.print(chunk.choices[0].delta.reasoning_content, end="")
+                else:
+                    print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
                 reasoning += chunk.choices[0].delta.reasoning_content
+
             # 处理正式回复内容
             if chunk.choices[0].delta.content:
-                print(chunk.choices[0].delta.content, end="", flush=True)
+                if console:
+                    console.print(chunk.choices[0].delta.content, end="")
+                else:
+                    print(chunk.choices[0].delta.content, end="", flush=True)
                 content += chunk.choices[0].delta.content
-        print()  # 换行
+
+        if console:
+            console.print()  # 换行
+        else:
+            print()  # 换行
 
         # 将助理回复添加到历史（仅保存正式内容）
         history.append({"role": "assistant", "content": content})
@@ -952,13 +982,8 @@ def process_response(response_data, file_path, save=True, obsidian_doc=None, ask
     extract_and_diff_files(content)
 
 
-def main():
-    args = parse_arguments()
-
-    # 如果目录不存在则创建
-    shadowroot.mkdir(parents=True, exist_ok=True)
-    # 集中检查环境变量
-
+def validate_environment():
+    """验证必要的环境变量"""
     api_key = os.getenv("GPT_KEY")
     if not api_key:
         print("错误：未设置GPT_KEY环境变量")
@@ -968,6 +993,7 @@ def main():
     if not base_url:
         print("错误：未设置GPT_BASE_URL环境变量")
         sys.exit(1)
+
     try:
         parsed_url = urlparse(base_url)
         if not all([parsed_url.scheme, parsed_url.netloc]):
@@ -977,7 +1003,10 @@ def main():
         print(f"错误：解析GPT_BASE_URL失败: {e}")
         sys.exit(1)
 
-    if not args.ask:  # 仅在未使用--ask参数时检查文件
+
+def validate_files(args):
+    """验证输入文件是否存在"""
+    if not args.ask and not args.chatbot:  # 仅在未使用--ask参数时检查文件
         if not os.path.isfile(args.file):
             print(f"错误：源代码文件不存在 {args.file}")
             sys.exit(1)
@@ -986,7 +1015,9 @@ def main():
             print(f"错误：提示词文件不存在 {args.prompt_file}")
             sys.exit(1)
 
-    proxies, proxy_sources = detect_proxies()
+
+def print_proxy_info(proxies, proxy_sources):
+    """打印代理配置信息"""
     if proxies:
         print("⚡ 检测到代理配置：")
         max_len = max(len(p) for p in proxies)
@@ -998,76 +1029,202 @@ def main():
     else:
         print("ℹ️ 未检测到代理配置")
 
-    if args.ask:
-        ask_param = args.ask
-    else:
-        ask_param = args.file
-    if args.ask:
-        text = process_text_with_file_path(args.ask)
-        print(text)
-        response_data = query_gpt_api(
-            api_key,
-            text,
-            proxies=proxies,
-            model=os.environ["GPT_MODEL"],
-            base_url=base_url,
-        )
-        process_response(
-            response_data,
-            os.path.join(os.path.dirname(__file__), ".lastgptanswer"),
-            save=True,
-            obsidian_doc=args.obsidian_doc,
-            ask_param=ask_param,
-        )
-        return
 
+def handle_ask_mode(args, api_key, proxies):
+    """处理--ask模式"""
+    base_url = os.getenv("GPT_BASE_URL")
+    text = process_text_with_file_path(args.ask)
+    print(text)
+    response_data = query_gpt_api(
+        api_key,
+        text,
+        proxies=proxies,
+        model=os.environ["GPT_MODEL"],
+        base_url=base_url,
+    )
+    process_response(
+        response_data,
+        os.path.join(os.path.dirname(__file__), ".lastgptanswer"),
+        save=True,
+        obsidian_doc=args.obsidian_doc,
+        ask_param=args.ask,
+    )
+
+
+# 定义UI样式
+class HackerStyle(PygmentsStyle):
+    styles = {
+        Token.Menu.Completions.Completion.Current: "bg:#00ff00 #000000",
+        Token.Menu.Completions.Completion: "bg:#008800 #ffffff",
+        Token.Scrollbar.Button: "bg:#003300",
+        Token.Scrollbar: "bg:#00ff00",
+        Token.Markdown.Heading: "#00ff00 bold",
+        Token.Markdown.Code: "#00ff00",
+        Token.Markdown.List: "#00ff00",
+    }
+
+
+def chatbot_ui(new_session=False):
+    """实现一个终端聊天机器人UI，支持流式响应和Markdown渲染"""
+
+    # 定义更丰富的颜色方案，增加神秘感
+    style = Style.from_dict(
+        {
+            "prompt": "#00ff00",  # 绿色提示符
+            "input": "#00ff00 bold",  # 绿色加粗输入
+            "output": "#00ff00",  # 绿色输出
+            "status": "#00ff00 reverse",  # 绿色反色状态栏
+            "markdown.heading": "#00ff00 bold",  # 绿色加粗标题
+            "markdown.code": "#00ff00",  # 绿色代码块
+            "markdown.list": "#00ff00",  # 绿色列表
+            "gpt.response": "#00ff88",  # 新增：浅绿色GPT响应
+            "gpt.prefix": "#00ff00 bold",  # 新增：绿色加粗GPT前缀
+        }
+    )
+
+    # 创建PromptSession
+    session = PromptSession(style=style)
+
+    # 定义快捷键绑定
+    bindings = KeyBindings()
+
+    @bindings.add("escape")
+    @bindings.add("c-c")
+    @bindings.add("c-d")
+    def _(event):
+        """按ESC、Ctrl+C或Ctrl+D退出"""
+        event.app.exit()
+
+    @bindings.add("c-l")
+    def _(event):
+        """Ctrl+L清屏"""
+        event.app.renderer.clear()
+
+    print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC、Ctrl+C或Ctrl+D退出。")
+    console = Console()
+
+    def stream_response(prompt):
+        """流式获取GPT响应并实时渲染Markdown"""
+        # 使用query_gpt_api进行流式响应
+        return query_gpt_api(
+            api_key=os.getenv("GPT_KEY"),
+            prompt=prompt,
+            model=os.environ["GPT_MODEL"],
+            base_url=os.getenv("GPT_BASE_URL"),
+            stream=True,
+            console=console,
+            temperature=0.6,
+        )
+
+    while True:
+        try:
+            # 获取用户输入
+            text = session.prompt(
+                "> ",  # 绿色提示符
+                key_bindings=bindings,
+                completer=None,
+                complete_while_typing=False,
+                bottom_toolbar=lambda: "[#00ff00]状态: 就绪 [Ctrl+L 清屏][/#00ff00]",
+                lexer=PygmentsLexer(MarkdownLexer),
+            )
+
+            # 检查退出条件
+            if text and text.lower() == "q":
+                print("已退出聊天。")
+                break
+
+            if text and not text.strip():
+                continue
+
+            if not text:
+                break
+
+            # 调用流式GPT API获取响应
+            console.print("BOT:")  # 绿色GPT前缀
+            stream_response(text)
+        except KeyboardInterrupt:
+            print("\n已退出聊天。")
+            break
+        except Exception as e:
+            print(f"\n发生错误: {str(e)}\n")
+
+
+def handle_code_analysis(args, api_key, proxies):
+    """处理代码分析模式"""
     try:
         with open(args.prompt_file, "r", encoding="utf-8") as f:
             prompt_template = f.read().strip()
         with open(args.file, "r", encoding="utf-8") as f:
             code_content = f.read()
 
-        # 如果代码超过分块大小，则分割处理
         if len(code_content) > args.chunk_size:
-            code_chunks = split_code(code_content, args.chunk_size)
-            responses = []
-            total_chunks = len(code_chunks)
-            for i, chunk in enumerate(code_chunks, 1):
-                # 在提示词中添加当前分块信息
-                pager = f"这是代码的第 {i}/{total_chunks} 部分：\n\n"
-                print(pager)
-                chunk_prompt = prompt_template.format(path=args.file, pager=pager, code=chunk)
-                response_data = query_gpt_api(
-                    api_key,
-                    chunk_prompt,
-                    proxies=proxies,
-                    model=os.environ["GPT_MODEL"],
-                    base_url=base_url,
-                )
-                response_pager = f"\n这是回答的第 {i}/{total_chunks} 部分：\n\n"
-                responses.append(response_pager + response_data["choices"][0]["message"]["content"])
-            final_content = "\n\n".join(responses)
-            response_data = {"choices": [{"message": {"content": final_content}}]}
+            response_data = handle_large_code(args, code_content, prompt_template, api_key, proxies)
         else:
-            full_prompt = prompt_template.format(path=args.file, pager="", code=code_content)
-            response_data = query_gpt_api(
-                api_key,
-                full_prompt,
-                proxies=proxies,
-                model=os.environ["GPT_MODEL"],
-                base_url=base_url,
-            )
+            response_data = handle_small_code(args, code_content, prompt_template, api_key, proxies)
+
         process_response(
             response_data,
             "",
             save=False,
             obsidian_doc=args.obsidian_doc,
-            ask_param=ask_param,
+            ask_param=args.file,
         )
 
     except Exception as e:
         print(f"运行时错误: {e}")
         sys.exit(1)
+
+
+def handle_large_code(args, code_content, prompt_template, api_key, proxies):
+    """处理大文件分块分析"""
+    code_chunks = split_code(code_content, args.chunk_size)
+    responses = []
+    total_chunks = len(code_chunks)
+    base_url = os.getenv("GPT_BASE_URL")
+    for i, chunk in enumerate(code_chunks, 1):
+        pager = f"这是代码的第 {i}/{total_chunks} 部分：\n\n"
+        print(pager)
+        chunk_prompt = prompt_template.format(path=args.file, pager=pager, code=chunk)
+        response_data = query_gpt_api(
+            api_key,
+            chunk_prompt,
+            proxies=proxies,
+            model=os.environ["GPT_MODEL"],
+            base_url=base_url,
+        )
+        response_pager = f"\n这是回答的第 {i}/{total_chunks} 部分：\n\n"
+        responses.append(response_pager + response_data["choices"][0]["message"]["content"])
+    return {"choices": [{"message": {"content": "\n\n".join(responses)}}]}
+
+
+def handle_small_code(args, code_content, prompt_template, api_key, proxies):
+    """处理小文件分析"""
+    full_prompt = prompt_template.format(path=args.file, pager="", code=code_content)
+    base_url = os.getenv("GPT_BASE_URL")
+    return query_gpt_api(
+        api_key,
+        full_prompt,
+        proxies=proxies,
+        model=os.environ["GPT_MODEL"],
+        base_url=base_url,
+    )
+
+
+def main():
+    args = parse_arguments()
+    shadowroot.mkdir(parents=True, exist_ok=True)
+
+    validate_environment()
+    validate_files(args)
+    proxies, proxy_sources = detect_proxies()
+    print_proxy_info(proxies, proxy_sources)
+
+    if args.ask:
+        handle_ask_mode(args, os.getenv("GPT_KEY"), proxies)
+    elif args.chatbot:
+        chatbot_ui(args.new_session)
+    else:
+        handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)
 
 
 if __name__ == "__main__":

@@ -282,6 +282,33 @@ function commitgpt() {
     fi
 }
 
+# 检查环境变量的公共函数
+_check_gpt_env() {
+    if [[ -z "$GPT_KEY" || -z "$GPT_MODEL" || -z "$GPT_BASE_URL" ]]; then
+        echo "错误：请先配置GPT_KEY、GPT_MODEL和GPT_BASE_URL环境变量"
+        return 1
+    fi
+}
+
+function chat() {
+    # 检查环境变量
+    _check_gpt_env || return 1
+        
+    # 根据参数决定是否创建新会话
+    local new_session_flag=""
+    if [[ "$1" == "new" ]]; then
+        new_session_flag="--new-session"
+        export GPT_UUID_CONVERSATION=$(uuidgen)
+    fi
+    
+    # 启动聊天机器人
+    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --chatbot $new_session_flag
+}
+
+# 为保持兼容性，保留原有函数名
+function chatbot() { chat "new"; }
+function chatagain() { chat; }
+
 function naskgpt() {
     # 保存当前会话
     local original_session=$GPT_SESSION_ID
