@@ -136,7 +136,8 @@ def full_sync():
     # 第三步：回传索引文件
     if changed and not args.dry_run:
         print("\n回传合并后的索引文件...")
-        run_rsync(f"{TEMP_DIR}/", args.remote, dry_run=args.dry_run)
+        # 直接使用本地的索引文件覆盖远程的索引文件
+        run_rsync(f"{args.local.rstrip('/')}/*{INDEX_SUFFIX}", args.remote, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

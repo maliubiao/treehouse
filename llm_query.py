@@ -30,6 +30,7 @@ from pygments.lexers.diff import DiffLexer
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
+LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 
 
 def parse_arguments():
@@ -659,6 +660,15 @@ def _handle_url(match):
     return f"\n\n[reference url, content converted to markdown]: {url} \n[markdown content begin]\n{markdown_content}\n[markdown content end]\n\n"
 
 
+def read_last_query(text):
+    """读取最后一次查询的内容"""
+    try:
+        with open(LAST_QUERY_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
+
 def process_text_with_file_path(text):
     """处理包含@...的文本，支持@cmd命令、@path文件路径、@http网址和prompts目录下的模板文件"""
     current_length = len(text)
@@ -667,6 +677,7 @@ def process_text_with_file_path(text):
         "listen": monitor_clipboard,
         "tree": get_directory_context_wrapper,
         "treefull": lambda: get_directory_context_wrapper(max_depth=None),
+        "last": lambda: read_last_query(text),
     }
     env_vars = {
         "os": sys.platform,
@@ -724,6 +735,8 @@ def process_text_with_file_path(text):
         suffix_len = len(truncated_suffix)
         text = text[: MAX_PROMPT_SIZE - suffix_len] + truncated_suffix
 
+    with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
+        f.write(text)
     return text
 
 
