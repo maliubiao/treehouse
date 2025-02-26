@@ -7,14 +7,16 @@ import re
 import sqlite3
 import subprocess
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
+from multiprocessing import Pool
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi import Query as QueryArgs
-from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Parser, Query
@@ -75,11 +77,13 @@ LANGUAGE_QUERIES = {
     "python": """
     [
         (function_definition
+            (async) @async_keyword
             name: (identifier) @symbol_name
             parameters: (parameters) @params
             return_type: (_)? @return_type
             body: (block) @body
         )
+        
         (class_definition
             name: (identifier) @symbol_name
             body: (block) @body
@@ -385,9 +389,14 @@ class SymbolInfo(BaseModel):
     calls: List[str]
 
 
-def init_symbol_database(db_path: str = "symbols.db"):
-    """初始化符号数据库"""
-    conn = sqlite3.connect(db_path)
+def init_symbol_database(db_path: Union[str, sqlite3.Connection] = "symbols.db"):
+    """初始化符号数据库
+    支持传入数据库路径或已存在的数据库连接对象
+    """
+    if isinstance(db_path, sqlite3.Connection):
+        conn = db_path
+    else:
+        conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     # 创建符号表
@@ -401,6 +410,7 @@ def init_symbol_database(db_path: str = "symbols.db"):
             signature TEXT NOT NULL,
             body TEXT NOT NULL,
             full_definition TEXT NOT NULL,
+            full_definition_hash INTEGER NOT NULL,
             calls TEXT,
             UNIQUE(name, file_path)
         )
@@ -444,26 +454,22 @@ def init_symbol_database(db_path: str = "symbols.db"):
     return conn
 
 
+def calculate_crc32_hash(text: str) -> int:
+    """计算字符串的CRC32哈希值"""
+    return zlib.crc32(text.encode("utf-8"))
+
+
 def validate_input(value: str, max_length: int = 255) -> str:
-    """验证输入参数，防止SQL注入
-    Args:
-        value: 要验证的字符串
-        max_length: 最大长度限制
-    Returns:
-        经过验证和清理的字符串
-    Raises:
-        ValueError: 如果输入不合法
-    """
+    """验证输入参数，防止SQL注入"""
     if not value or len(value) > max_length:
         raise ValueError(f"输入值长度必须在1到{max_length}之间")
-    # 过滤特殊字符
     if re.search(r"[;'\"]", value):
         raise ValueError("输入包含非法字符")
     return value.strip()
 
 
 def insert_symbol(conn, symbol_info: Dict):
-    """插入符号信息到数据库，处理唯一性冲突"""
+    """插入符号信息到数据库，处理唯一性冲突，并更新前缀搜索树"""
     cursor = conn.cursor()
     try:
         # 验证输入
@@ -477,10 +483,14 @@ def insert_symbol(conn, symbol_info: Dict):
         for call in calls:
             validate_input(str(call))
 
+        # 计算完整定义的哈希值
+        full_definition_hash = calculate_crc32_hash(symbol_info["full_definition"])
+
+        # 插入符号数据
         cursor.execute(
             """
-            INSERT INTO symbols (name, file_path, type, signature, body, full_definition, calls)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO symbols (name, file_path, type, signature, body, full_definition, full_definition_hash, calls)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 symbol_info["name"],
@@ -489,9 +499,21 @@ def insert_symbol(conn, symbol_info: Dict):
                 symbol_info["signature"],
                 symbol_info["body"],
                 symbol_info["full_definition"],
+                full_definition_hash,
                 json.dumps(calls),
             ),
         )
+
+        # 将符号插入到前缀树中
+        symbol_name = symbol_info["name"]
+        trie_info = {
+            "name": symbol_name,
+            "file_path": symbol_info["file_path"],
+            "signature": symbol_info["signature"],
+            "full_definition_hash": full_definition_hash,
+        }
+        app.state.symbol_trie.insert(symbol_name, trie_info)
+
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
@@ -502,7 +524,6 @@ def insert_symbol(conn, symbol_info: Dict):
 
 def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
     """根据前缀搜索符号"""
-    # 验证输入
     validate_input(prefix)
     if not 1 <= limit <= 100:
         raise ValueError("limit参数必须在1到100之间")
@@ -521,12 +542,10 @@ def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
 
 def get_symbol_info(conn, symbol_name: str, file_path: Optional[str] = None) -> Optional[SymbolInfo]:
     """获取符号的完整信息"""
-    # 验证输入
     validate_input(symbol_name)
 
     cursor = conn.cursor()
     if file_path:
-        # 如果有文件路径，使用模糊匹配
         cursor.execute(
             """
             SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
@@ -535,7 +554,6 @@ def get_symbol_info(conn, symbol_name: str, file_path: Optional[str] = None) -> 
             (symbol_name, f"%{file_path}%"),
         )
     else:
-        # 如果没有文件路径，只匹配符号名
         cursor.execute(
             """
             SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
@@ -586,14 +604,12 @@ async def get_symbol_info_api(symbol_name: str, file_path: Optional[str] = Query
 
 def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, max_depth: int = 3) -> dict:
     """获取符号的调用树上下文（带深度限制）"""
-    # 验证输入
     validate_input(symbol_name)
     if max_depth < 0 or max_depth > 10:
         raise ValueError("深度值必须在0到10之间")
 
     cursor = conn.cursor()
     if file_path:
-        # 如果有文件路径，使用模糊匹配
         cursor.execute(
             """
             WITH RECURSIVE call_tree(name, file_path, depth) AS (
@@ -616,7 +632,6 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
             (symbol_name, f"%{file_path}%", max_depth - 1, max_depth),
         )
     else:
-        # 如果没有文件路径，只匹配符号名
         cursor.execute(
             """
             WITH RECURSIVE call_tree(name, file_path, depth) AS (
@@ -639,22 +654,37 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
             (symbol_name, max_depth - 1, max_depth),
         )
 
-    names = [row[0] for row in cursor.fetchall()]
-    if not names:
+    # 获取所有结果并处理重复符号
+    rows = cursor.fetchall()
+    if not rows:
         return {"error": f"未找到符号 {symbol_name} 的定义"}
 
-    if symbol_name not in names:
-        names.insert(0, symbol_name)
+    # 创建一个字典来存储符号及其文件路径
+    symbol_dict = {}
+    for name, path in rows:
+        if name not in symbol_dict:
+            symbol_dict[name] = path
+        else:
+            # 如果当前符号已经存在，且当前路径与目标文件更匹配，则更新
+            if file_path and path.endswith(file_path):
+                symbol_dict[name] = path
 
-    # 使用参数化查询防止SQL注入
-    placeholders = ",".join(["?"] * len(names))
+    # 确保目标符号在结果中
+    if symbol_name not in symbol_dict:
+        symbol_dict[symbol_name] = file_path if file_path else rows[0][1]
+
+    # 按优先级排序：目标符号在前，其他符号按字母顺序
+    sorted_symbols = sorted(symbol_dict.keys(), key=lambda x: (x != symbol_name, x))
+
+    # 查询符号定义
+    placeholders = ",".join(["?"] * len(sorted_symbols))
     cursor.execute(
         f"""
         SELECT name, file_path, full_definition 
         FROM symbols 
         WHERE name IN ({placeholders})
         """,
-        names,
+        sorted_symbols,
     )
 
     definitions = []
@@ -666,12 +696,7 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
 
 @app.get("/symbols/{symbol_name}/context")
 async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = QueryArgs(None), max_depth: int = 3):
-    """获取符号上下文API
-    Args:
-        symbol_name: 要查询的符号名称
-        file_path: 符号所在文件路径（可选）
-        max_depth: 最大调用深度，默认为3
-    """
+    """获取符号上下文API"""
     try:
         validate_input(symbol_name)
         conn = get_db_connection()
@@ -681,10 +706,34 @@ async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = Qu
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/symbols/complete")
+async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
+    trie = app.state.symbol_trie
+    # 确保max_results是整数类型
+    max_results = int(max_results)
+    # 限制结果范围在1到50之间
+    max_results = max(1, min(50, max_results))
+    results = trie.search_prefix(prefix)[:max_results]
+    return {"completions": results}
+
+
+import pdb
+
+
+@app.get("/symbols/fuzzy")
+async def fuzzy_search(pattern: str = QueryArgs(..., min_length=1), max_distance: int = QueryArgs(1, ge=0, le=3)):
+    trie = app.state.symbol_trie
+    pdb.set_trace()
+    results = trie.fuzzy_search(pattern, max_distance)
+    return {"results": results[:50]}  # 限制最大返回数量
+
+
 def test_symbols_api():
     """测试符号相关API"""
-    # 使用全局数据库连接
-    test_conn = get_db_connection()
+    globals()["global_db_conn"] = sqlite3.connect(":memory:")
+    # 初始化内存数据库
+    test_conn = globals()["global_db_conn"]
+    init_symbol_database(test_conn)
 
     # 准备测试数据
     test_symbols = [
@@ -706,8 +755,27 @@ def test_symbols_api():
             "full_definition": "def helper_function(): pass",
             "calls": [],
         },
+        {
+            "name": "calculate_sum",
+            "file_path": "/path/to/file",
+            "type": "function",
+            "signature": "def calculate_sum(a, b)",
+            "body": "return a + b",
+            "full_definition": "def calculate_sum(a, b): return a + b",
+            "calls": [],
+        },
+        {
+            "name": "compute_average",
+            "file_path": "/path/to/file",
+            "type": "function",
+            "signature": "def compute_average(values)",
+            "body": "return sum(values) / len(values)",
+            "full_definition": "def compute_average(values): return sum(values) / len(values)",
+            "calls": [],
+        },
     ]
-
+    trie = SymbolTrie.from_symbols({})
+    app.state.symbol_trie = trie
     # 插入测试数据
     for symbol in test_symbols:
         insert_symbol(test_conn, symbol)
@@ -734,6 +802,32 @@ def test_symbols_api():
         # 情况2：获取不存在的符号上下文
         response = loop.run_until_complete(get_symbol_context_api("nonexistent", "/path/to/file"))
         assert "error" in response
+
+        # 测试前缀搜索接口
+        # 情况1：正常前缀搜索
+        response = loop.run_until_complete(symbol_completion("calc"))
+        assert len(response["completions"]) == 1
+        assert response["completions"][0]["name"] == "calculate_sum"
+
+        # 情况2：无匹配结果的前缀搜索
+        response = loop.run_until_complete(symbol_completion("xyz"))
+        assert len(response["completions"]) == 0
+
+        # 测试模糊搜索接口
+        # 情况1：正常模糊搜索
+        response = loop.run_until_complete(fuzzy_search("calulate*", max_distance=1))
+        assert len(response["results"]) == 1
+        assert response["results"][0]["name"] == "calculate_sum"
+        assert response["results"][0]["distance"] <= 1
+
+        # 情况2：带通配符的模糊搜索
+        response = loop.run_until_complete(fuzzy_search("comp*age", max_distance=0))
+        assert len(response["results"]) == 1
+        assert response["results"][0]["name"] == "compute_average"
+
+        # 情况3：无匹配结果的模糊搜索
+        response = loop.run_until_complete(fuzzy_search("unknown*", max_distance=2))
+        assert len(response["results"]) == 0
 
     finally:
         # 关闭事件循环
@@ -861,9 +955,9 @@ def check_symbol_duplicate(symbol_name: str, symbol_info: dict, all_existing_sym
     """检查符号是否已经存在"""
     if symbol_name not in all_existing_symbols:
         return False
-
     for existing_symbol in all_existing_symbols[symbol_name]:
-        if existing_symbol[1] == symbol_info["signature"] and existing_symbol[2] == symbol_info["full_definition"]:
+        # and existing_symbol[2] == calculate_crc32_hash(symbol_info["full_definition"])
+        if existing_symbol[1] == symbol_info["signature"]:
             return True
     return False
 
@@ -892,11 +986,12 @@ def prepare_insert_data(symbols: dict, all_existing_symbols: dict, full_path: st
                 symbol_info["signature"],
                 symbol_info["body"],
                 symbol_info["full_definition"],
+                calculate_crc32_hash(symbol_info["full_definition"]),
                 json.dumps(symbol_info["calls"]),
             )
         )
 
-    return insert_data, duplicate_count, existing_symbol_names
+    return insert_data, duplicate_count
 
 
 def calculate_file_hash(file_path: Path) -> str:
@@ -911,85 +1006,6 @@ def calculate_file_hash(file_path: Path) -> str:
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
-
-
-def process_source_file(file_path: Path, project_dir: Path, conn: sqlite3.Connection, all_existing_symbols: dict):
-    """处理单个源代码文件，提取符号并插入数据库"""
-    try:
-        # 获取完整文件路径
-        full_path = str((project_dir / file_path).resolve().absolute())
-
-        # 计算文件哈希和最后修改时间
-        file_hash = calculate_file_hash(file_path)
-        last_modified = file_path.stat().st_mtime
-
-        # 检查文件元数据是否已存在
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT file_hash, last_modified, total_symbols FROM file_metadata WHERE file_path = ?", (full_path,)
-        )
-        file_metadata = cursor.fetchone()
-
-        # 如果文件未修改，直接返回
-        if file_metadata and file_metadata[0] == file_hash and file_metadata[1] == last_modified:
-            # print(f"\n文件 {file_path} 未修改，跳过处理")
-            return
-
-        # 开始事务
-        conn.execute("BEGIN TRANSACTION")
-
-        # 解析文件
-        parser, query = ParserLoader().get_parser(str(file_path))
-        symbols = parse_source_file(file_path, parser, query)
-
-        # 准备数据
-        insert_data, duplicate_count, existing_symbol_names = prepare_insert_data(
-            symbols, all_existing_symbols, full_path
-        )
-
-        # 插入或更新符号数据
-        if insert_data:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO symbols 
-                (id, name, file_path, type, signature, body, full_definition, calls)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                insert_data,
-            )
-            # 更新过滤表，将新插入的符号加入 all_existing_symbols
-            for data in insert_data:
-                symbol_name = data[1]
-                if symbol_name not in all_existing_symbols:
-                    all_existing_symbols[symbol_name] = []
-                all_existing_symbols[symbol_name].append(
-                    (full_path, data[4], data[6])  # file_path  # signature  # full_definition
-                )
-
-        # 更新文件元数据
-        total_symbols = len(symbols)
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO file_metadata 
-            (file_path, last_modified, file_hash, total_symbols)
-            VALUES (?, ?, ?, ?)
-            """,
-            (full_path, last_modified, file_hash, total_symbols),
-        )
-
-        conn.commit()
-
-        # 输出统计信息
-        print(f"\n文件 {file_path} 处理完成：")
-        print(f"  总符号数: {total_symbols}")
-        print(f"  已存在符号数: {len(existing_symbol_names)}")
-        print(f"  重复符号数: {duplicate_count}")
-        print(f"  新增符号数: {len(insert_data)}")
-        print(f"  过滤符号数: {duplicate_count + (total_symbols - len(symbols))}")
-
-    except Exception as e:
-        conn.rollback()
-        raise
 
 
 def get_database_stats(conn: sqlite3.Connection) -> tuple:
@@ -1007,10 +1023,127 @@ def get_database_stats(conn: sqlite3.Connection) -> tuple:
     return total_symbols, total_files, indexes
 
 
+class TrieNode:
+    """前缀树节点"""
+
+    __slots__ = ["children", "is_end", "symbols"]
+
+    def __init__(self):
+        self.children = {}  # 字符到子节点的映射
+        self.is_end = False  # 是否单词结尾
+        self.symbols = []  # 存储符号详细信息（支持同名不同定义的符号）
+
+
+class SymbolTrie:
+    def __init__(self, case_sensitive=False):
+        self.root = TrieNode()
+        self.case_sensitive = case_sensitive
+        self._size = 0  # 记录唯一符号数量
+
+    def _normalize(self, word):
+        """统一大小写处理"""
+        return word if self.case_sensitive else word.lower()
+
+    def insert(self, symbol_name, symbol_info):
+        """插入符号到前缀树"""
+        node = self.root
+        word = self._normalize(symbol_name)
+
+        for char in word:
+            if char not in node.children:
+                node.children[char] = TrieNode()
+            node = node.children[char]
+
+        # 避免重复添加相同定义的符号
+        if not any(s["full_definition_hash"] == symbol_info["full_definition_hash"] for s in node.symbols):
+            node.symbols.append(symbol_info)
+            if not node.is_end:  # 新增唯一符号计数
+                self._size += 1
+            node.is_end = True
+
+    def search_prefix(self, prefix):
+        """前缀搜索"""
+        node = self.root
+        prefix = self._normalize(prefix)
+
+        # 定位到前缀末尾节点
+        for char in prefix:
+            if char not in node.children:
+                return []
+            node = node.children[char]
+
+        # 收集所有子节点符号
+        results = []
+        self._dfs_collect(node, prefix, results)
+        return results
+
+    def _dfs_collect(self, node, current_prefix, results):
+        """深度优先收集符号"""
+        if node.is_end:
+            for symbol in node.symbols:
+                results.append({"name": current_prefix, "details": symbol})
+
+        for char, child in node.children.items():
+            self._dfs_collect(child, current_prefix + char, results)
+
+    def fuzzy_search(self, pattern, max_distance=2):
+        """模糊搜索（支持通配符和编辑距离）"""
+        pattern = self._normalize(pattern)
+        results = []
+
+        # 使用动态规划计算编辑距离
+        def dfs(node, current_word, remaining_pattern, dp_prev, path):
+            # 计算当前行的编辑距离
+            current_dp = [0] * (len(remaining_pattern) + 1)
+            current_dp[0] = dp_prev[0] + 1
+
+            for j in range(1, len(remaining_pattern) + 1):
+                if remaining_pattern[j - 1] == "*":  # 通配符匹配
+                    current_dp[j] = dp_prev[j - 1]
+                elif remaining_pattern[j - 1] == "?":  # 单字符通配
+                    current_dp[j] = min(dp_prev[j - 1], current_dp[j - 1] + 1, dp_prev[j] + 1)
+                else:
+                    cost = 0 if path[-1] == remaining_pattern[j - 1] else 1
+                    current_dp[j] = min(dp_prev[j - 1] + cost, current_dp[j - 1] + 1, dp_prev[j] + 1)
+
+            # 检查是否满足条件
+            if len(remaining_pattern) == 0:
+                if current_dp[-1] <= max_distance and node.is_end:
+                    for symbol in node.symbols:
+                        results.append({"name": current_word, "distance": current_dp[-1], "details": symbol})
+                return
+
+            # 继续搜索子节点
+            for char, child in node.children.items():
+                dfs(child, current_word + char, remaining_pattern[1:], current_dp, path + char)
+
+        # 初始化动态规划表
+        initial_dp = [i for i in range(len(pattern) + 1)]
+        for char, child in self.root.children.items():
+            dfs(child, char, pattern, initial_dp, char)
+        return sorted(results, key=lambda x: x["distance"])
+
+    @property
+    def size(self):
+        """返回唯一符号数量"""
+        return self._size
+
+    @classmethod
+    def from_symbols(cls, symbols_dict, case_sensitive=False):
+        """从现有符号字典构建前缀树"""
+        trie = cls(case_sensitive)
+        for symbol_name, entries in symbols_dict.items():
+            for entry in entries:
+                trie.insert(
+                    symbol_name, {"file_path": entry[0], "signature": entry[1], "full_definition_hash": entry[2]}
+                )
+        return trie
+
+
 def get_existing_symbols(conn: sqlite3.Connection) -> dict:
     """获取所有已存在的符号"""
     cursor = conn.cursor()
-    cursor.execute("SELECT name, file_path, signature, full_definition FROM symbols")
+    cursor.execute("SELECT name, file_path, signature, full_definition_hash FROM symbols")
     all_existing_symbols = {}
     total_rows = cursor.rowcount
     processed = 0
@@ -1020,8 +1153,7 @@ def get_existing_symbols(conn: sqlite3.Connection) -> dict:
     for row in cursor.fetchall():
         if row[0] not in all_existing_symbols:
             all_existing_symbols[row[0]] = []
-        all_existing_symbols[row[0]].append((row[1], row[2], row[3]))
-
+        all_existing_symbols[row[0]].append((row[1], row[2], row[3]))  # 存储哈希值而不是完整定义
         # 更新进度显示
         processed += 1
         idx = (idx + 1) % len(spinner)
@@ -1033,8 +1165,170 @@ def get_existing_symbols(conn: sqlite3.Connection) -> dict:
     return all_existing_symbols
 
 
-def scan_project_files(project_paths: List[str], conn: sqlite3.Connection, include_suffixes: List[str] = None):
-    """扫描多个项目路径下的所有源代码文件并处理"""
+def parse_worker_wrapper(file_path, project_dir):
+    """工作进程的包装函数"""
+    try:
+        start_time = time.time() * 1000
+        parser1, query = ParserLoader().get_parser(str(file_path))
+        symbols = parse_source_file(file_path, parser1, query)
+        parse_time = time.time() * 1000 - start_time
+        print(f"文件 {file_path} 解析完成，耗时 {parse_time:.2f} 毫秒")
+        return (file_path, symbols)
+    except Exception as e:
+        print(f"解析失败 {file_path}: {str(e)}")
+        return None, None
+
+
+def check_file_needs_processing(conn: sqlite3.Connection, full_path: str) -> bool:
+    """快速检查文件是否需要处理"""
+    start_time = time.time() * 1000
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_hash, last_modified FROM file_metadata WHERE file_path = ?", (full_path,))
+    file_metadata = cursor.fetchone()
+
+    if file_metadata:
+        file_hash = calculate_file_hash(Path(full_path))
+        last_modified = Path(full_path).stat().st_mtime
+        if file_metadata[0] == file_hash and file_metadata[1] == last_modified:
+            check_time = time.time() * 1000 - start_time
+            print(f"文件 {full_path} 未修改，跳过处理，检查耗时 {check_time:.2f} 毫秒")
+            return False
+    check_time = time.time() * 1000 - start_time
+    print(f"文件 {full_path} 需要处理，检查耗时 {check_time:.2f} 毫秒")
+    return True
+
+
+def debug_duplicate_symbol(symbol_name, all_existing_symbols, conn, data):
+    """调试重复符号的辅助函数"""
+    print(f"发现重复符号 {symbol_name}，详细信息如下：")
+    # 打印内存中的符号信息
+    for idx, existing in enumerate(all_existing_symbols[symbol_name]):
+        print(f"  内存中第 {idx+1} 个实例：")
+        print(f"    文件路径: {existing[0]}")
+        print(f"    签名: {existing[1]}")
+        print(f"    完整定义哈希: {existing[2]}")
+
+    # 从数据库查询该符号的所有记录
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM symbols WHERE name = ?", (symbol_name,))
+    db_records = cursor.fetchall()
+    t = None
+    # 打印数据库中的符号信息并进行内容对比
+    for idx, record in enumerate(db_records):
+        print(f"  数据库中第 {idx+1} 个实例：")
+        print(f"    文件路径: {record[2]}")
+        print(f"    签名: {record[4]}")
+        print(f"    完整定义哈希: {record[7]}")
+        t = record[6]
+        print(f"    完整定义内容: {record[6]}")
+    t2 = data[6]
+    # 使用difflib生成unified diff格式的差异对比
+    from difflib import unified_diff
+
+    diff = unified_diff(t.splitlines(), t2.splitlines(), fromfile="数据库中的定义", tofile="内存中的定义", lineterm="")
+    print("符号定义差异对比：")
+    for line in diff:
+        print(line)
+    import pdb
+
+    pdb.set_trace()
+
+
+def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: dict, all_existing_symbols: dict):
+    """单线程数据库写入"""
+    try:
+        start_time = time.time() * 1000
+        full_path = str(file_path.resolve().absolute())
+        file_hash = calculate_file_hash(file_path)
+        last_modified = file_path.stat().st_mtime
+
+        # 开始事务
+        conn.execute("BEGIN TRANSACTION")
+
+        # 准备数据
+        prepare_start = time.time() * 1000
+        insert_data, duplicate_count = prepare_insert_data(symbols, all_existing_symbols, full_path)
+        prepare_time = time.time() * 1000 - prepare_start
+
+        # 插入或更新符号数据
+        insert_start = time.time() * 1000
+        if insert_data:
+            # 先进行过滤
+            filtered_data = []
+            for data in insert_data:
+                symbol_name = data[1]
+                if symbol_name not in all_existing_symbols:
+                    all_existing_symbols[symbol_name] = []
+                # 检查哈希值是否已经存在，避免重复添加
+                if not any(existing[2] == data[7] for existing in all_existing_symbols[symbol_name]):
+                    filtered_data.append(data)
+                    all_existing_symbols[symbol_name].append((full_path, data[4], data[7]))
+                    # 调试重复符号（需要时取消注释）
+                    # if "get_proc_task" in symbol_name and len(all_existing_symbols[symbol_name]) > 1:
+                    #     debug_duplicate_symbol(symbol_name, all_existing_symbols, conn, data)
+
+                    # 更新前缀树
+                    symbol_info = {
+                        "name": data[1],
+                        "file_path": data[2],
+                        "signature": data[4],
+                        "full_definition_hash": data[7],
+                    }
+                    app.state.symbol_trie.insert(symbol_name, symbol_info)
+
+            # 插入过滤后的数据
+            if filtered_data:
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO symbols 
+                    (id, name, file_path, type, signature, body, full_definition, full_definition_hash, calls)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8])
+                        for data in filtered_data
+                    ],
+                )
+        insert_time = time.time() * 1000 - insert_start
+
+        # 更新文件元数据
+        meta_start = time.time() * 1000
+        total_symbols = len(symbols)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO file_metadata 
+            (file_path, last_modified, file_hash, total_symbols)
+            VALUES (?, ?, ?, ?)
+            """,
+            (full_path, last_modified, file_hash, total_symbols),
+        )
+        meta_time = time.time() * 1000 - meta_start
+
+        conn.commit()
+
+        # 输出统计信息
+        total_time = time.time() * 1000 - start_time
+        print(f"\n文件 {file_path} 处理完成：")
+        print(f"  总符号数: {total_symbols}")
+        print(f"  重复符号数: {duplicate_count}")
+        print(f"  新增符号数: {len(insert_data)}")
+        print(f"  过滤符号数: {duplicate_count + (total_symbols - len(symbols))}")
+        print(f"  性能数据（单位：毫秒）：")
+        print(f"    数据准备: {prepare_time:.2f}")
+        print(f"    数据插入: {insert_time:.2f}")
+        print(f"    元数据更新: {meta_time:.2f}")
+        print(f"    总耗时: {total_time:.2f}")
+
+    except Exception as e:
+        conn.rollback()
+        raise
+
+
+def scan_project_files_optimized(
+    project_paths: List[str], conn: sqlite3.Connection, include_suffixes: List[str] = None
+):
+    """优化后的项目文件扫描"""
     # 检查路径是否存在
     non_existent_paths = [path for path in project_paths if not Path(path).exists()]
     if non_existent_paths:
@@ -1053,39 +1347,53 @@ def scan_project_files(project_paths: List[str], conn: sqlite3.Connection, inclu
 
     # 获取已存在符号
     all_existing_symbols = get_existing_symbols(conn)
+    trie = SymbolTrie.from_symbols(all_existing_symbols)
+    app.state.symbol_trie = trie
 
-    # 处理文件
+    # 获取需要处理的文件列表
+    tasks = []
     for project_path in project_paths:
         project_dir = Path(project_path)
-        # 检查路径是否存在，如果不存在则跳过
         if not project_dir.exists():
             print(f"警告：项目路径 {project_path} 不存在，跳过处理")
             continue
 
-        # 获取所有需要处理的文件
-        files_to_process = []
-        for suffix in suffixes:
-            if not suffix.startswith("."):
-                suffix = f".{suffix}"
-            files_to_process.extend(list(project_dir.rglob(f"*{suffix}")))
+        for file_path in project_dir.rglob("*"):
+            if file_path.suffix.lower() not in suffixes:
+                continue
 
-        for file_path in tqdm(files_to_process, desc=f"处理项目 {project_path}", unit="文件"):
-            process_source_file(file_path, project_dir, conn, all_existing_symbols)
+            full_path = str((project_dir / file_path).resolve().absolute())
+            need_process = check_file_needs_processing(conn, full_path)
+            if need_process:
+                tasks.append(file_path)
+
+    # 使用多进程池处理解析任务
+    with Pool(processes=os.cpu_count()) as pool:
+        batch_size = 32
+        for i in range(0, len(tasks), batch_size):
+            results = []
+            batch = tasks[i : i + batch_size]
+            for result in pool.imap_unordered(partial(parse_worker_wrapper, project_dir=project_dir), batch):
+                if result:
+                    results.append(result)
+            print(f"已完成批次 {i//batch_size + 1}/{(len(tasks)//batch_size)+1}")
+            # 单线程处理数据库写入
+            for file_path, symbols in results:
+                if not file_path:
+                    continue
+                process_symbols_to_db(
+                    conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
+                )
 
 
 def build_index(project_paths: List[str] = ["."], include_suffixes: List[str] = None, db_path: str = "symbols.db"):
-    """构建符号索引
-    Args:
-        project_paths: 项目路径列表
-        include_suffixes: 要包含的文件后缀列表
-        db_path: 符号数据库文件路径，默认为当前目录下的symbols.db
-    """
+    """构建符号索引"""
     # 初始化数据库连接
     conn = init_symbol_database(db_path)
 
     try:
         # 扫描并处理项目文件
-        scan_project_files(project_paths, conn, include_suffixes)
+        scan_project_files_optimized(project_paths, conn, include_suffixes)
         print("符号索引构建完成")
     finally:
         # 关闭数据库连接
