@@ -1080,6 +1080,7 @@ class ChatbotUI:
         self.session = PromptSession(style=self.style)
         self.bindings = self._setup_keybindings()
         self.console = Console()
+        self.temperature = 0.6  # 默认温度值
 
     def _setup_keybindings(self):
         """设置快捷键绑定"""
@@ -1100,13 +1101,32 @@ class ChatbotUI:
         """处理斜杠命令"""
         commands = {
             "clear": lambda: os.system("clear"),
-            "help": lambda: print("可用命令：/clear, /help, /exit"),
+            "help": lambda: print("可用命令：/clear, /help, /exit, /temperature <value>"),
             "exit": lambda: sys.exit(0),
+            "temperature": self._handle_temperature_command,
         }
-        if cmd in commands:
+        if cmd.startswith("temperature"):
+            commands["temperature"](cmd)
+        elif cmd in commands:
             commands[cmd]()
         else:
             print(f"未知命令: {cmd}")
+
+    def _handle_temperature_command(self, cmd):
+        """处理温度设置命令"""
+        try:
+            parts = cmd.split()
+            if len(parts) == 1:
+                print(f"当前temperature: {self.temperature}")
+                return
+            temp = float(parts[1])
+            if 0 <= temp <= 1:
+                self.temperature = temp
+                print(f"temperature已设置为: {self.temperature}")
+            else:
+                print("temperature必须在0到1之间")
+        except ValueError:
+            print("temperature必须是一个数字")
 
     def get_completer(self):
         """获取自动补全器，支持@和/两种补全模式"""
@@ -1115,7 +1135,7 @@ class ChatbotUI:
         if os.path.exists(os.path.join(os.getenv("GPT_PATH"), "prompts")):
             prompt_files = ["@" + f for f in os.listdir(os.path.join(os.getenv("GPT_PATH"), "prompts"))]
 
-        commands = ["/clear", "/help", "/exit"]
+        commands = ["/clear", "/help", "/exit", "/temperature"]
         all_items = special_items + prompt_files + commands
 
         pattern = re.compile(r"(@|\/)\w*")
@@ -1129,6 +1149,7 @@ class ChatbotUI:
             "/clear": "清空屏幕",
             "/help": "显示帮助信息",
             "/exit": "退出程序",
+            "/temperature": "设置temperature参数 (0-1)",
         }
 
         return WordCompleter(
@@ -1148,7 +1169,7 @@ class ChatbotUI:
             base_url=os.getenv("GPT_BASE_URL"),
             stream=True,
             console=self.console,
-            temperature=0.6,
+            temperature=self.temperature,
         )
 
     def run(self):
@@ -1162,7 +1183,7 @@ class ChatbotUI:
                     key_bindings=self.bindings,
                     completer=self.get_completer(),
                     complete_while_typing=True,
-                    bottom_toolbar=lambda: "状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令]",
+                    bottom_toolbar=lambda: f"状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令] | temperature: {self.temperature}",
                     lexer=PygmentsLexer(MarkdownLexer),
                 )
 
