@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 import requests
 from openai import OpenAI
 from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory
+from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.styles import Style
@@ -1060,7 +1060,7 @@ class HackerStyle(PygmentsStyle):
 
 
 def chatbot_ui():
-    """实现一个终端聊天机器人UI，支持流式响应和Markdown渲染"""
+    """实现一个终端聊天机器人UI，支持流式响应、Markdown渲染和自动补全"""
 
     # 定义更丰富的颜色方案，增加神秘感
     style = Style.from_dict(
@@ -1094,15 +1094,39 @@ def chatbot_ui():
         """Ctrl+L清屏"""
         event.app.renderer.clear()
 
+    # 定义自动补全器
+    def get_completer():
+        """获取自动补全器，仅在输入@后触发补全"""
+        special_items = ["@clipboard", "@tree", "@treefull", "@read", "@listen", "@symbol:"]
+        prompt_files = []
+        if os.path.exists(os.path.join(os.getenv("GPT_PATH"), "prompts")):
+            prompt_files = ["@" + f for f in os.listdir(os.path.join(os.getenv("GPT_PATH"), "prompts"))]
+
+        # 修改补全模式，仅在@后触发
+        return WordCompleter(
+            words=special_items + prompt_files,
+            pattern=re.compile(r"@\w*"),
+            meta_dict={
+                "@clipboard": "从剪贴板读取内容",
+                "@tree": "显示目录树",
+                "@treefull": "显示完整目录树",
+                "@read": "读取文件内容",
+                "@listen": "语音输入",
+                "@symbol:": "插入特殊符号",
+            },
+            ignore_case=True,
+        )
+
     print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC退出")
     console = Console()
 
     def stream_response(prompt):
         """流式获取GPT响应并实时渲染Markdown"""
         # 使用query_gpt_api进行流式响应
+        text = process_text_with_file_path(prompt)
         return query_gpt_api(
             api_key=os.getenv("GPT_KEY"),
-            prompt=prompt,
+            prompt=text,
             model=os.environ["GPT_MODEL"],
             base_url=os.getenv("GPT_BASE_URL"),
             stream=True,
@@ -1112,13 +1136,13 @@ def chatbot_ui():
 
     while True:
         try:
-            # 获取用户输入
+            # 获取用户输入，启用自动补全
             text = session.prompt(
                 "> ",  # 绿色提示符
                 key_bindings=bindings,
-                completer=None,
-                complete_while_typing=False,
-                bottom_toolbar=lambda: "状态: 就绪 [Ctrl+L 清屏]",
+                completer=get_completer(),
+                complete_while_typing=True,
+                bottom_toolbar=lambda: "状态: 就绪 [Ctrl+L 清屏] [@ 触发补全]",
                 lexer=PygmentsLexer(MarkdownLexer),
             )
 
