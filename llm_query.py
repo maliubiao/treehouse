@@ -43,6 +43,7 @@ from rich.markdown import Markdown
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
+PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 
 
 def parse_arguments():
@@ -672,7 +673,7 @@ def _handle_shell_command(match):
 
 def _handle_prompt_file(match, env_vars):
     """处理prompts目录文件"""
-    with open(os.path.join("prompts", match), "r", encoding="utf-8") as f:
+    with open(os.path.join(PROMPT_DIR, match), "r", encoding="utf-8") as f:
         content = f.read()
         return f"\n{content.format(**env_vars)}\n"
 
@@ -776,11 +777,11 @@ def process_text_with_file_path(text):
         match = match.strip("\\@")
         try:
             replacement = ""
-            if any(match.startswith(cmd) for cmd in cmd_map):
+            if any(match.startswith(cmd) for cmd in cmd_map) and not os.path.exists(match):
                 replacement = _handle_command(match, cmd_map)
             elif match.endswith("="):
                 replacement = _handle_shell_command(match[:-1])
-            elif os.path.exists(os.path.join("prompts", match)):
+            elif os.path.exists(os.path.join(PROMPT_DIR, match)):
                 replacement = _handle_prompt_file(match, env_vars)
             elif os.path.exists(os.path.expanduser(match)):
                 replacement = _handle_local_file(match)
