@@ -1059,70 +1059,87 @@ class HackerStyle(PygmentsStyle):
     }
 
 
-def chatbot_ui():
-    """实现一个终端聊天机器人UI，支持流式响应、Markdown渲染和自动补全"""
+class ChatbotUI:
+    """终端聊天机器人UI类，支持流式响应、Markdown渲染和自动补全"""
 
-    # 定义更丰富的颜色方案，增加神秘感
-    style = Style.from_dict(
-        {
-            "prompt": "#00ff00",  # 绿色提示符
-            "input": "#00ff00 bold",  # 绿色加粗输入
-            "output": "#00ff00",  # 绿色输出
-            "status": "#00ff00 reverse",  # 绿色反色状态栏
-            "markdown.heading": "#00ff00 bold",  # 绿色加粗标题
-            "markdown.code": "#00ff00",  # 绿色代码块
-            "markdown.list": "#00ff00",  # 绿色列表
-            "gpt.response": "#00ff88",  # 新增：浅绿色GPT响应
-            "gpt.prefix": "#00ff00 bold",  # 新增：绿色加粗GPT前缀
+    def __init__(self):
+        """初始化UI组件和配置"""
+        self.style = Style.from_dict(
+            {
+                "prompt": "#00ff00",
+                "input": "#00ff00 bold",
+                "output": "#00ff00",
+                "status": "#00ff00 reverse",
+                "markdown.heading": "#00ff00 bold",
+                "markdown.code": "#00ff00",
+                "markdown.list": "#00ff00",
+                "gpt.response": "#00ff88",
+                "gpt.prefix": "#00ff00 bold",
+            }
+        )
+        self.session = PromptSession(style=self.style)
+        self.bindings = self._setup_keybindings()
+        self.console = Console()
+
+    def _setup_keybindings(self):
+        """设置快捷键绑定"""
+        bindings = KeyBindings()
+
+        @bindings.add("escape")
+        @bindings.add("c-c")
+        def _(event):
+            event.app.exit()
+
+        @bindings.add("c-l")
+        def _(event):
+            event.app.renderer.clear()
+
+        return bindings
+
+    def handle_command(self, cmd):
+        """处理斜杠命令"""
+        commands = {
+            "clear": lambda: os.system("clear"),
+            "help": lambda: print("可用命令：/clear, /help, /exit"),
+            "exit": lambda: sys.exit(0),
         }
-    )
+        if cmd in commands:
+            commands[cmd]()
+        else:
+            print(f"未知命令: {cmd}")
 
-    # 创建PromptSession
-    session = PromptSession(style=style)
-
-    # 定义快捷键绑定
-    bindings = KeyBindings()
-
-    @bindings.add("escape")
-    @bindings.add("c-c")
-    def _(event):
-        """按ESC、Ctrl+C, 或者什么都不输入按Enter退出"""
-        event.app.exit()
-
-    @bindings.add("c-l")
-    def _(event):
-        """Ctrl+L清屏"""
-        event.app.renderer.clear()
-
-    # 定义自动补全器
-    def get_completer():
-        """获取自动补全器，仅在输入@后触发补全"""
+    def get_completer(self):
+        """获取自动补全器，支持@和/两种补全模式"""
         special_items = ["@clipboard", "@tree", "@treefull", "@read", "@listen", "@symbol:"]
         prompt_files = []
         if os.path.exists(os.path.join(os.getenv("GPT_PATH"), "prompts")):
             prompt_files = ["@" + f for f in os.listdir(os.path.join(os.getenv("GPT_PATH"), "prompts"))]
 
-        # 修改补全模式，仅在@后触发
+        commands = ["/clear", "/help", "/exit"]
+        all_items = special_items + prompt_files + commands
+
+        pattern = re.compile(r"(@|\/)\w*")
+        meta_dict = {
+            "@clipboard": "从剪贴板读取内容",
+            "@tree": "显示目录树",
+            "@treefull": "显示完整目录树",
+            "@read": "读取文件内容",
+            "@listen": "语音输入",
+            "@symbol:": "插入特殊符号",
+            "/clear": "清空屏幕",
+            "/help": "显示帮助信息",
+            "/exit": "退出程序",
+        }
+
         return WordCompleter(
-            words=special_items + prompt_files,
-            pattern=re.compile(r"@\w*"),
-            meta_dict={
-                "@clipboard": "从剪贴板读取内容",
-                "@tree": "显示目录树",
-                "@treefull": "显示完整目录树",
-                "@read": "读取文件内容",
-                "@listen": "语音输入",
-                "@symbol:": "插入特殊符号",
-            },
+            words=all_items,
+            pattern=pattern,
+            meta_dict=meta_dict,
             ignore_case=True,
         )
 
-    print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC退出")
-    console = Console()
-
-    def stream_response(prompt):
+    def stream_response(self, prompt):
         """流式获取GPT响应并实时渲染Markdown"""
-        # 使用query_gpt_api进行流式响应
         text = process_text_with_file_path(prompt)
         return query_gpt_api(
             api_key=os.getenv("GPT_KEY"),
@@ -1130,41 +1147,46 @@ def chatbot_ui():
             model=os.environ["GPT_MODEL"],
             base_url=os.getenv("GPT_BASE_URL"),
             stream=True,
-            console=console,
+            console=self.console,
             temperature=0.6,
         )
 
-    while True:
-        try:
-            # 获取用户输入，启用自动补全
-            text = session.prompt(
-                "> ",  # 绿色提示符
-                key_bindings=bindings,
-                completer=get_completer(),
-                complete_while_typing=True,
-                bottom_toolbar=lambda: "状态: 就绪 [Ctrl+L 清屏] [@ 触发补全]",
-                lexer=PygmentsLexer(MarkdownLexer),
-            )
+    def run(self):
+        """启动聊天机器人主循环"""
+        print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC退出")
 
-            # 检查退出条件
-            if text and text.lower() == "q":
-                print("已退出聊天。")
+        while True:
+            try:
+                text = self.session.prompt(
+                    "> ",
+                    key_bindings=self.bindings,
+                    completer=self.get_completer(),
+                    complete_while_typing=True,
+                    bottom_toolbar=lambda: "状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令]",
+                    lexer=PygmentsLexer(MarkdownLexer),
+                )
+
+                if text and text.lower() == "q":
+                    print("已退出聊天。")
+                    break
+
+                if text and not text.strip():
+                    continue
+
+                if not text:
+                    break
+
+                if text.startswith("/"):
+                    self.handle_command(text[1:])
+                    continue
+
+                self.console.print("BOT:")
+                self.stream_response(text)
+            except KeyboardInterrupt:
+                print("\n已退出聊天。")
                 break
-
-            if text and not text.strip():
-                continue
-
-            if not text:
-                break
-
-            # 调用流式GPT API获取响应
-            console.print("BOT:")  # 绿色GPT前缀
-            stream_response(text)
-        except KeyboardInterrupt:
-            print("\n已退出聊天。")
-            break
-        except Exception as e:
-            print(f"\n发生错误: {str(e)}\n")
+            except Exception as e:
+                print(f"\n发生错误: {str(e)}\n")
 
 
 def handle_code_analysis(args, api_key, proxies):
@@ -1240,7 +1262,7 @@ def main():
     if args.ask:
         handle_ask_mode(args, os.getenv("GPT_KEY"), proxies)
     elif args.chatbot:
-        chatbot_ui()
+        ChatbotUI().run()
     else:
         handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)
 
