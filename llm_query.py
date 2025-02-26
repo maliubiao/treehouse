@@ -953,14 +953,16 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
 
         # 格式化内容：将非空思维过程渲染为绿色，去除背景色
         formatted_content = re.sub(
-            r"<think>(\s*\S+.*?)</think>",
-            r'<div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">\1</div>',
+            r"<think>\n*([\s\S]*?)\n*</think>",
+            lambda match: '<div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">'
+            + match.group(1).replace("\n", "<br>")
+            + "</div>",
             content,
             flags=re.DOTALL,
         )
 
         # 添加提示词
-        if ask_param:
+        if prompt:
             formatted_content = f"### 问题\n\n```\n{prompt}\n```\n\n### 回答\n{formatted_content}"
 
         # 写入响应内容
