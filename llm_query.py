@@ -930,7 +930,7 @@ def process_response(response_data, file_path, save=True, obsidian_doc=None, ask
     if save and file_path:
         with open(file_path, "w+", encoding="utf8") as f:
             # 删除<think>...</think>内容
-            cleaned_content = re.sub(r"<think>\n.*?\n</think>", "", content, flags=re.DOTALL)
+            cleaned_content = re.sub(r"<think>\n?.*?\n?</think>\n*", "", content, flags=re.DOTALL)
             f.write(cleaned_content)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", encoding="utf-8", delete=False) as tmp_file:

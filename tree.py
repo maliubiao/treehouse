@@ -717,17 +717,6 @@ async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_resu
     return {"completions": results}
 
 
-import pdb
-
-
-@app.get("/symbols/fuzzy")
-async def fuzzy_search(pattern: str = QueryArgs(..., min_length=1), max_distance: int = QueryArgs(1, ge=0, le=3)):
-    trie = app.state.symbol_trie
-    pdb.set_trace()
-    results = trie.fuzzy_search(pattern, max_distance)
-    return {"results": results[:50]}  # 限制最大返回数量
-
-
 def test_symbols_api():
     """测试符号相关API"""
     globals()["global_db_conn"] = sqlite3.connect(":memory:")
@@ -812,22 +801,6 @@ def test_symbols_api():
         # 情况2：无匹配结果的前缀搜索
         response = loop.run_until_complete(symbol_completion("xyz"))
         assert len(response["completions"]) == 0
-
-        # 测试模糊搜索接口
-        # 情况1：正常模糊搜索
-        response = loop.run_until_complete(fuzzy_search("calulate*", max_distance=1))
-        assert len(response["results"]) == 1
-        assert response["results"][0]["name"] == "calculate_sum"
-        assert response["results"][0]["distance"] <= 1
-
-        # 情况2：带通配符的模糊搜索
-        response = loop.run_until_complete(fuzzy_search("comp*age", max_distance=0))
-        assert len(response["results"]) == 1
-        assert response["results"][0]["name"] == "compute_average"
-
-        # 情况3：无匹配结果的模糊搜索
-        response = loop.run_until_complete(fuzzy_search("unknown*", max_distance=2))
-        assert len(response["results"]) == 0
 
     finally:
         # 关闭事件循环
@@ -1086,42 +1059,32 @@ class SymbolTrie:
         for char, child in node.children.items():
             self._dfs_collect(child, current_prefix + char, results)
 
-    def fuzzy_search(self, pattern, max_distance=2):
-        """模糊搜索（支持通配符和编辑距离）"""
-        pattern = self._normalize(pattern)
-        results = []
+    def to_dict(self):
+        """将前缀树转换为包含所有符号的字典"""
+        result = {}
+        self._collect_all_symbols(self.root, "", result)
+        return result
 
-        # 使用动态规划计算编辑距离
-        def dfs(node, current_word, remaining_pattern, dp_prev, path):
-            # 计算当前行的编辑距离
-            current_dp = [0] * (len(remaining_pattern) + 1)
-            current_dp[0] = dp_prev[0] + 1
+    def _collect_all_symbols(self, node, current_prefix, result):
+        """递归收集所有符号"""
+        if node.is_end:
+            result[current_prefix] = [symbol for symbol in node.symbols]
 
-            for j in range(1, len(remaining_pattern) + 1):
-                if remaining_pattern[j - 1] == "*":  # 通配符匹配
-                    current_dp[j] = dp_prev[j - 1]
-                elif remaining_pattern[j - 1] == "?":  # 单字符通配
-                    current_dp[j] = min(dp_prev[j - 1], current_dp[j - 1] + 1, dp_prev[j] + 1)
-                else:
-                    cost = 0 if path[-1] == remaining_pattern[j - 1] else 1
-                    current_dp[j] = min(dp_prev[j - 1] + cost, current_dp[j - 1] + 1, dp_prev[j] + 1)
+        for char, child in node.children.items():
+            self._collect_all_symbols(child, current_prefix + char, result)
 
-            # 检查是否满足条件
-            if len(remaining_pattern) == 0:
-                if current_dp[-1] <= max_distance and node.is_end:
-                    for symbol in node.symbols:
-                        results.append({"name": current_word, "distance": current_dp[-1], "details": symbol})
-                return
-
-            # 继续搜索子节点
-            for char, child in node.children.items():
-                dfs(child, current_word + char, remaining_pattern[1:], current_dp, path + char)
-
-        # 初始化动态规划表
-        initial_dp = [i for i in range(len(pattern) + 1)]
-        for char, child in self.root.children.items():
-            dfs(child, char, pattern, initial_dp, char)
-        return sorted(results, key=lambda x: x["distance"])
+    def __str__(self):
+        """将前缀树转换为字符串表示，列出所有符号"""
+        symbol_dict = self.to_dict()
+        output = []
+        for symbol_name, symbols in symbol_dict.items():
+            for symbol in symbols:
+                output.append(f"符号名称: {symbol_name}")
+                output.append(f"文件路径: {symbol['file_path']}")
+                output.append(f"签名: {symbol['signature']}")
+                output.append(f"定义哈希: {symbol['full_definition_hash']}")
+                output.append("-" * 40)
+        return "\n".join(output)
 
     @property
     def size(self):
@@ -1165,7 +1128,7 @@ def get_existing_symbols(conn: sqlite3.Connection) -> dict:
     return all_existing_symbols
 
 
-def parse_worker_wrapper(file_path, project_dir):
+def parse_worker_wrapper(file_path):
     """工作进程的包装函数"""
     try:
         start_time = time.time() * 1000
@@ -1373,7 +1336,7 @@ def scan_project_files_optimized(
         for i in range(0, len(tasks), batch_size):
             results = []
             batch = tasks[i : i + batch_size]
-            for result in pool.imap_unordered(partial(parse_worker_wrapper, project_dir=project_dir), batch):
+            for result in pool.imap_unordered(partial(parse_worker_wrapper), batch):
                 if result:
                     results.append(result)
             print(f"已完成批次 {i//batch_size + 1}/{(len(tasks)//batch_size)+1}")
