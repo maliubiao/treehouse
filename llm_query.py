@@ -918,7 +918,7 @@ def extract_and_diff_files(content):
         _display_and_apply_diff(diff_file)
 
 
-def process_response(response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
+def process_response(prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
     """处理API响应并保存结果"""
     if not response_data["choices"]:
         raise ValueError("API返回空响应")
@@ -951,9 +951,21 @@ def process_response(response_data, file_path, save=True, obsidian_doc=None, ask
         timestamp = f"{now.tm_hour}-{now.tm_min}-{now.tm_sec}.md"
         obsidian_file = month_dir / timestamp
 
+        # 格式化内容：将非空思维过程渲染为绿色，去除背景色
+        formatted_content = re.sub(
+            r"<think>(\s*\S+.*?)</think>",
+            r'<div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">\1</div>',
+            content,
+            flags=re.DOTALL,
+        )
+
+        # 添加提示词
+        if ask_param:
+            formatted_content = f"### 问题\n\n```\n{prompt}\n```\n\n### 回答\n{formatted_content}"
+
         # 写入响应内容
         with open(obsidian_file, "w", encoding="utf-8") as f:
-            f.write(content)
+            f.write(formatted_content)
 
         # 更新main.md
         main_file = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}-索引.md"
@@ -1039,6 +1051,7 @@ def handle_ask_mode(args, api_key, proxies):
         base_url=base_url,
     )
     process_response(
+        text,
         response_data,
         os.path.join(os.path.dirname(__file__), ".lastgptanswer"),
         save=True,
@@ -1225,6 +1238,7 @@ def handle_code_analysis(args, api_key, proxies):
             response_data = handle_small_code(args, code_content, prompt_template, api_key, proxies)
 
         process_response(
+            "",
             response_data,
             "",
             save=False,
