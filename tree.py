@@ -45,7 +45,7 @@ LANGUAGE_QUERIES = {
     "c": r"""
 [    
     (function_definition
-        type: _ @return_type
+        type: _ @function.return_type
         declarator: (function_declarator
             declarator: (identifier) @function.name
             parameters: (parameter_list) @function.params
@@ -347,7 +347,7 @@ def process_matches(matches, lang_name):
 
             if lang_name == C_LANG:
                 # 处理C语言函数
-                return_type_node = captures["return_type"][0]
+                return_type_node = captures["function.return_type"][0]
                 return_type = return_type_node.text.decode("utf-8")
 
                 params_node = captures["function.params"][0]
@@ -950,6 +950,10 @@ async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = Qu
 
 @app.get("/complete")
 async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
+    # 如果前缀为空，直接返回空结果
+    if not prefix:
+        return {"completions": []}
+
     trie = app.state.symbol_trie
     # 确保max_results是整数类型
     max_results = int(max_results)
@@ -962,6 +966,10 @@ async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_resu
 @app.get("/complete_simple")
 async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
     """简化版符号补全，返回纯文本格式：symbol:filebase/symbol"""
+    # 如果前缀为空，直接返回空响应
+    if not prefix:
+        return PlainTextResponse("")
+
     trie = app.state.symbol_trie
     max_results = max(1, min(50, int(max_results)))
     results = trie.search_prefix(prefix)[:max_results]
@@ -1414,16 +1422,15 @@ def parse_worker_wrapper(file_path):
 
 
 def check_file_needs_processing(conn: sqlite3.Connection, full_path: str) -> bool:
-    """快速检查文件是否需要处理"""
+    """快速检查文件是否需要处理，仅通过最后修改时间判断"""
     start_time = time.time() * 1000
     cursor = conn.cursor()
-    cursor.execute("SELECT file_hash, last_modified FROM file_metadata WHERE file_path = ?", (full_path,))
+    cursor.execute("SELECT last_modified FROM file_metadata WHERE file_path = ?", (full_path,))
     file_metadata = cursor.fetchone()
 
     if file_metadata:
-        file_hash = calculate_file_hash(Path(full_path))
         last_modified = Path(full_path).stat().st_mtime
-        if file_metadata[0] == file_hash and file_metadata[1] == last_modified:
+        if file_metadata[0] == last_modified:
             check_time = time.time() * 1000 - start_time
             print(f"文件 {full_path} 未修改，跳过处理，检查耗时 {check_time:.2f} 毫秒")
             return False
