@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import threading
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -85,7 +86,7 @@ LANGUAGE_QUERIES = {
     superclasses: (argument_list) ?
     body: (block 
         [(decorated_definition
-            _ @method.decorator
+            _ * @method.decorator
             (function_definition
                 "async"? @method.async
                 "def" @method.def
@@ -106,7 +107,7 @@ LANGUAGE_QUERIES = {
 ) @class
 
 (decorated_definition
-    _ @function-decorator
+    _ * @function-decorator
     (function_definition
         "async"? @function.async
         "def" @function.def
@@ -963,6 +964,28 @@ async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_resu
     return {"completions": results}
 
 
+def extract_identifiable_path(file_path: str) -> str:
+    """提取路径中易于识别的部分
+    如果是__init__.py文件，尝试提取上一级目录名
+    否则直接返回文件名
+
+    Args:
+        file_path: 文件路径
+
+    Returns:
+        易于识别的路径部分
+    """
+    # 使用os.path处理路径，确保跨平台兼容性
+    base_name = os.path.basename(file_path)
+    if base_name == "__init__.py":
+        # 获取上一级目录名
+        dir_name = os.path.basename(os.path.dirname(file_path))
+        if dir_name:
+            # 使用os.path.join确保路径分隔符正确
+            return os.path.join(dir_name, base_name)
+    return base_name
+
+
 @app.get("/complete_simple")
 async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
     """简化版符号补全，返回纯文本格式：symbol:filebase/symbol"""
@@ -977,7 +1000,7 @@ async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), m
     output = []
     for item in results:
         file_path = item["details"]["file_path"]
-        file_base = os.path.basename(file_path)
+        file_base = extract_identifiable_path(file_path)
         symbol_name = item["name"]
         if symbol_name.startswith("symbol:"):
             output.append(symbol_name)
@@ -1086,9 +1109,13 @@ def debug_process_source_file(file_path: Path, project_dir: Path):
     try:
         # 解析代码文件并构建符号表
         parser, query, lang_name = ParserLoader().get_parser(str(file_path))
+        print(f"[DEBUG] 即将开始解析文件: {file_path}")
         tree = parse_code_file(file_path, parser)
+        print(f"[DEBUG] 文件解析完成，开始匹配查询")
         matches = query.matches(tree.root_node)
+        print(f"[DEBUG] 查询匹配完成，共找到 {len(matches)} 个匹配项，开始处理符号")
         symbols = process_matches(matches, lang_name)
+        print(f"[DEBUG] 符号处理完成，共提取 {len(symbols)} 个符号")
 
         # 获取完整文件路径（规范化处理）
         full_path = str((project_dir / file_path).resolve().absolute())
@@ -1308,7 +1335,7 @@ class SymbolTrie:
 
             # 为自动补全插入带文件名的符号，避免递归
             if not symbol_name.startswith("symbol:"):
-                file_basename = os.path.basename(symbol_info["file_path"])
+                file_basename = extract_identifiable_path(symbol_info["file_path"])
                 composite_key = f"symbol:{file_basename}/{word}"
                 # 使用新的symbol_info副本，防止引用问题
                 self.insert(composite_key, symbol_info)
@@ -1407,18 +1434,47 @@ def get_existing_symbols(conn: sqlite3.Connection) -> dict:
     return all_existing_symbols
 
 
-def parse_worker_wrapper(file_path):
-    """工作进程的包装函数"""
-    try:
-        start_time = time.time() * 1000
-        parser1, query, lang_name = ParserLoader().get_parser(str(file_path))
-        symbols = parse_source_file(file_path, parser1, query, lang_name)
-        parse_time = time.time() * 1000 - start_time
-        print(f"文件 {file_path} 解析完成，耗时 {parse_time:.2f} 毫秒")
-        return (file_path, symbols)
-    except Exception as e:
-        print(f"解析失败 {file_path}: {str(e)}")
-        return None, None
+def parse_worker_wrapper(file_path: Path) -> tuple[Path | None, dict | None]:
+    """工作进程的包装函数，增加超时监控"""
+    # 用于存储解析结果
+    result = None
+    # 创建线程锁
+    result_lock = threading.Lock()
+
+    def parse_task():
+        nonlocal result
+        try:
+            start_time = time.time() * 1000
+            parser1, query, lang_name = ParserLoader().get_parser(str(file_path))
+            symbols = parse_source_file(file_path, parser1, query, lang_name)
+            parse_time = time.time() * 1000 - start_time
+            print(f"文件 {file_path} 解析完成，耗时 {parse_time:.2f} 毫秒")
+            # 加锁更新结果
+            with result_lock:
+                result = (file_path, symbols)
+        except Exception as e:
+            print(f"解析失败 {file_path}: {str(e)}")
+            # 加锁更新结果
+            with result_lock:
+                result = (None, None)
+
+    # 创建并启动解析线程
+    parse_thread = threading.Thread(target=parse_task)
+    parse_thread.start()
+
+    # 设置超时时间为5秒
+    timeout = 5
+    parse_thread.join(timeout)
+
+    if parse_thread.is_alive():
+        # 如果线程仍在运行，说明超时
+        print(f"警告：文件 {file_path} 解析超时（超过{timeout}秒），正在等待完成...")
+        # 继续等待线程完成
+        parse_thread.join()
+
+    # 加锁获取结果
+    with result_lock:
+        return result
 
 
 def check_file_needs_processing(conn: sqlite3.Connection, full_path: str) -> bool:
@@ -1470,9 +1526,9 @@ def debug_duplicate_symbol(symbol_name, all_existing_symbols, conn, data):
     print("符号定义差异对比：")
     for line in diff:
         print(line)
-    import pdb
+    # import pdb
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
 
 def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: dict, all_existing_symbols: dict):
@@ -1567,9 +1623,20 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
 
 
 def scan_project_files_optimized(
-    project_paths: List[str], conn: sqlite3.Connection, excludes: List[str] = None, include_suffixes: List[str] = None
+    project_paths: List[str],
+    conn: sqlite3.Connection,
+    excludes: List[str] = None,
+    include_suffixes: List[str] = None,
+    parallel: int = -1,
 ):
-    """优化后的项目文件扫描"""
+    """优化后的项目文件扫描
+    Args:
+        project_paths: 项目路径列表
+        conn: 数据库连接
+        excludes: 要排除的文件模式列表
+        include_suffixes: 要包含的文件后缀列表
+        parallel: 并行度，-1表示使用CPU核心数，0或1表示单进程
+    """
     # 检查路径是否存在
     non_existent_paths = [path for path in project_paths if not Path(path).exists()]
     if non_existent_paths:
@@ -1619,37 +1686,59 @@ def scan_project_files_optimized(
             if need_process:
                 tasks.append(file_path)
 
-    # 使用多进程池处理解析任务
-    with Pool(processes=os.cpu_count()) as pool:
-        batch_size = 32
-        for i in range(0, len(tasks), batch_size):
-            results = []
-            batch = tasks[i : i + batch_size]
-            for result in pool.imap_unordered(partial(parse_worker_wrapper), batch):
-                if result:
-                    results.append(result)
-            print(f"已完成批次 {i//batch_size + 1}/{(len(tasks)//batch_size)+1}")
-            # 单线程处理数据库写入
-            for file_path, symbols in results:
-                if not file_path:
-                    continue
+    # 根据并行度选择处理方式
+    if parallel in (0, 1):
+        # 单进程处理
+        print("\n使用单进程模式处理文件...")
+        for file_path in tasks:
+            print(f"[INFO] 开始处理文件: {file_path}")
+            file_path, symbols = parse_worker_wrapper(file_path)
+            if file_path:
+                print(f"[INFO] 文件 {file_path} 解析完成，开始插入数据库...")
                 process_symbols_to_db(
                     conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
                 )
+                print(f"[INFO] 文件 {file_path} 数据库插入完成")
+    else:
+        # 多进程处理
+        processes = os.cpu_count() if parallel == -1 else parallel
+        print(f"\n使用多进程模式处理文件，进程数：{processes}...")
+        with Pool(processes=processes) as pool:
+            batch_size = 32
+            for i in range(0, len(tasks), batch_size):
+                results = []
+                batch = tasks[i : i + batch_size]
+                for result in pool.imap_unordered(partial(parse_worker_wrapper), batch):
+                    if result:
+                        results.append(result)
+                print(f"已完成批次 {i//batch_size + 1}/{(len(tasks)//batch_size)+1}")
+                # 单线程处理数据库写入
+                for file_path, symbols in results:
+                    if not file_path:
+                        continue
+                    process_symbols_to_db(
+                        conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
+                    )
 
 
 def build_index(
-    project_paths: List[str] = ["."],
+    project_paths: List[str] = None,
     excludes: List[str] = None,
     include_suffixes: List[str] = None,
     db_path: str = "symbols.db",
+    parallel: int = -1,
 ):
-    """构建符号索引"""
+    """构建符号索引
+    Args:
+        parallel: 并行度，-1表示使用CPU核心数，0或1表示单进程
+    """
     # 初始化数据库连接
     conn = init_symbol_database(db_path)
     try:
         # 扫描并处理项目文件
-        scan_project_files_optimized(project_paths, conn, excludes=excludes, include_suffixes=include_suffixes)
+        scan_project_files_optimized(
+            project_paths, conn, excludes=excludes, include_suffixes=include_suffixes, parallel=parallel
+        )
         print("符号索引构建完成")
     finally:
         # 关闭数据库连接
@@ -1659,10 +1748,11 @@ def build_index(
 def main(
     host: str = "127.0.0.1",
     port: int = 8000,
-    project_paths: List[str] = ["."],
-    excludes: List[str] = ["."],
+    project_paths: List[str] = None,
+    excludes: List[str] = None,
     include_suffixes: List[str] = None,
     db_path: str = "symbols.db",
+    parallel: int = -1,
 ):
     """启动FastAPI服务
     Args:
@@ -1671,9 +1761,10 @@ def main(
         project_paths: 项目路径列表
         include_suffixes: 要包含的文件后缀列表
         db_path: 符号数据库文件路径，默认为当前目录下的symbols.db
+        parallel: 并行度，-1表示使用CPU核心数，0或1表示单进程
     """
     # 初始化数据库连接
-    build_index(project_paths, excludes, include_suffixes, db_path)
+    build_index(project_paths, excludes, include_suffixes, db_path, parallel)
     # 启动FastAPI服务
     uvicorn.run(app, host=host, port=port)
 
@@ -1692,6 +1783,7 @@ if __name__ == "__main__":
     parser.add_argument("--build-index", action="store_true", help="构建符号索引")
     parser.add_argument("--db-path", type=str, default="symbols.db", help="符号数据库文件路径")
     parser.add_argument("--excludes", type=str, nargs="+", help="要排除的文件或目录路径列表（可指定多个）")
+    parser.add_argument("--parallel", type=int, default=-1, help="并行度，-1表示使用CPU核心数，0或1表示单进程")
 
     args = parser.parse_args()
 
@@ -1704,7 +1796,11 @@ if __name__ == "__main__":
         format_c_code_in_directory(Path(args.format_dir))
     elif args.build_index:
         build_index(
-            project_paths=args.project, excludes=args.excludes, include_suffixes=args.include, db_path=args.db_path
+            project_paths=args.project,
+            excludes=args.excludes,
+            include_suffixes=args.include,
+            db_path=args.db_path,
+            parallel=args.parallel,
         )
     else:
         main(
@@ -1714,4 +1810,5 @@ if __name__ == "__main__":
             excludes=args.excludes,
             include_suffixes=args.include,
             db_path=args.db_path,
+            parallel=args.parallel,
         )
