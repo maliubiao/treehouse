@@ -1,4 +1,5 @@
 import asyncio
+import fnmatch
 import hashlib
 import importlib
 import json
@@ -17,84 +18,122 @@ from typing import Dict, List, Optional, Union
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi import Query as QueryArgs
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Parser, Query
 
+# 定义语言名称常量
+C_LANG = "c"
+PYTHON_LANG = "python"
+JAVASCRIPT_LANG = "javascript"
+JAVA_LANG = "java"
+GO_LANG = "go"
+
 # 文件后缀到语言名称的映射
 SUPPORTED_LANGUAGES = {
-    ".c": "c",
-    ".h": "c",
-    ".py": "python",
-    ".js": "javascript",
-    ".java": "java",
-    ".go": "go",
+    ".c": C_LANG,
+    ".h": C_LANG,
+    ".py": PYTHON_LANG,
+    ".js": JAVASCRIPT_LANG,
+    ".java": JAVA_LANG,
+    ".go": GO_LANG,
 }
 
 # 各语言的查询语句映射
 LANGUAGE_QUERIES = {
-    "c": """
-    [
-        (declaration
-            (storage_class_specifier) @storage_class
-            type: _ @return_type
-            declarator: (function_declarator
-                declarator: (identifier) @symbol_name
-                parameters: (parameter_list) @params
-            )
-        ) @func_decl
-        
-        (function_definition
-            type: _ @return_type
-            declarator: (function_declarator
-                declarator: (identifier) @symbol_name
-                parameters: (parameter_list) @params
-            )
-            body: (compound_statement) @body
+    "c": r"""
+[    
+    (function_definition
+        type: _ @return_type
+        declarator: (function_declarator
+            declarator: (identifier) @function.name
+            parameters: (parameter_list) @function.params
         )
-        (function_definition
-            type: _ @return_type
-            declarator: (pointer_declarator
-              declarator: (function_declarator
-                  declarator: (identifier) @symbol_name
-                  parameters: (parameter_list) @params
-              )
-            )
-            body: (compound_statement) @body
-        )  
-        (preproc_def
-            name: (identifier) @symbol_name
-            value: (_) @macro_value
-        )
-    ]
-    (
-        (call_expression
-            function: (identifier) @called_function
-            (#not-match? @called_function "^(__builtin_|typeof$)")
-        ) @call
+        body: (compound_statement) @function.body
     )
+    (function_definition
+        type: _ @function.return_type
+        declarator: (pointer_declarator
+            declarator: (function_declarator
+                declarator: (identifier) @function.name
+                parameters: (parameter_list) @function.params
+            )
+        )
+        body: (compound_statement) @function.body
+    )  
+]
+(
+    (call_expression
+        function: (identifier) @called_function
+        (#not-match? @called_function "^(__builtin_|typeof$)")
+    ) @call
+)
     """,
-    "python": """
-    [
+    "python": r"""
+[
+(module
+  (expression_statement
+  (assignment
+    left: _ @left
+    ) @assignment
+  )
+)
+
+(class_definition
+	name: (identifier) @class-name
+    superclasses: (argument_list) ?
+    body: (block 
+        [(decorated_definition
+            _ @method.decorator
+            (function_definition
+                "async"? @method.async
+                "def" @method.def
+                name: _ @method.name
+                parameters: _ @method.params
+                body: _ @method.body
+            ) 
+        )
         (function_definition
-            (async) @async_keyword
-            name: (identifier) @symbol_name
-            parameters: (parameters) @params
-            return_type: (_)? @return_type
-            body: (block) @body
-        )
-        
-        (class_definition
-            name: (identifier) @symbol_name
-            body: (block) @body
-        )
-    ]
-    (
-        (call
-            function: (identifier) @called_function
-        ) @call
-        (#contains? @body @call)
+                "async"? @method.async
+                "def" @method.def
+                name: _ @method.name
+                parameters: _ @method.params
+                body: _ @method.body
+            ) 
+        ]*  @functions
+    ) @class-body
+) @class
+
+(decorated_definition
+    _ @function-decorator
+    (function_definition
+        "async"? @function.async
+        "def" @function.def
+        name: _ @function.name
+        parameters: (parameters
+        ) @function.params
+        body: (block) @function.body
+        (#not-match? @function.params "\((self|cls).*\)")
     )
+) @function-full
+
+(module
+(function_definition
+    "async"? @function.async
+    "def" @function.def
+    name: _ @function.name
+    parameters: (parameters
+    ) @function.params
+    body: (block) @function.body
+    (#not-match? @function.params "\((self|cls).*\)")
+) @function-full
+)
+]
+(call 
+    function: _ @called_function
+    arguments: _
+) @method.call
     """,
     "javascript": """
     [
@@ -209,7 +248,7 @@ class ParserLoader:
 
         self._parsers[lang_name] = lang_parser
         self._queries[lang_name] = query
-        return lang_parser, query
+        return lang_parser, query, lang_name
 
 
 def parse_code_file(file_path, lang_parser):
@@ -222,7 +261,7 @@ def parse_code_file(file_path, lang_parser):
     # print(tree.root_node)
     # print("\n代码内容：")
     # print(code)
-    return tree, code
+    return tree
 
 
 def get_code_from_node(code, node):
@@ -230,67 +269,186 @@ def get_code_from_node(code, node):
     return code[node.start_byte : node.end_byte]
 
 
-def process_matches(matches, code):
-    """处理查询匹配结果"""
+# import pprint
+
+
+def process_matches(matches, lang_name):
+    """处理查询匹配结果，支持Python的类、方法、函数、装饰器等符号提取"""
     symbols = {}
-    current_function = None
     symbol_name = None
+
+    function_calls = []
+    block_array = []
 
     for match in matches:
         _, captures = match
         if not captures:
             continue
-        # print({k: [n.text.decode("utf-8") for n in v] for k, v in captures.items()})
+        # pprint.pprint(captures)
+        # 处理类定义及其方法
+        if "class-name" in captures:
+            class_node = captures["class-name"][0]
+            class_name = class_node.text.decode("utf-8")
+            symbol_name = class_name
 
-        if "symbol_name" in captures:
-            symbol_node = captures["symbol_name"][0]
-            symbol_name = code[symbol_node.start_byte : symbol_node.end_byte]
+            # 获取整个类定义的代码
+            class_def_node = captures["class"][0]
+            full_class_definition = class_def_node.text.decode("utf8")
 
-        if "storage_class" in captures and captures["storage_class"][0].text == b"extern":
-            return_type = get_code_from_node(code, captures["return_type"][0])
-            params = get_code_from_node(code, captures["params"][0])
-            signature = f"extern {return_type} {symbol_name}{params};"
-            symbols[symbol_name] = {
-                "type": "external_function",
-                "signature": signature,
-                "body": None,
-                "full_definition": signature,
+            # 初始化类信息
+            symbols[class_name] = {
+                "type": "class",
+                "signature": f"class {class_name}",
                 "calls": [],
+                "methods": [],
+                "full_definition": full_class_definition,
             }
-            continue
+            async_lines = [x.start_point[0] for x in captures.get("method.async", [])]
+            # 处理类中的所有方法
+            for i, method_node in enumerate(captures.get("method.name", [])):
+                method_name = method_node.text.decode("utf-8")
+                symbol_name = f"{class_name}.{method_name}"
 
-        if "return_type" in captures and "body" in captures:
-            return_type_node = captures["return_type"][0]
-            return_type = code[return_type_node.start_byte : return_type_node.end_byte]
+                # 处理装饰器
+                decorators = []
+                if "method.decorator" in captures:
+                    for decorator_node in captures["method.decorator"]:
+                        decorator = decorator_node.text.decode("utf-8")
+                        decorators.append(decorator)
 
-            params_node = captures["params"][0]
-            params = code[params_node.start_byte : params_node.end_byte]
+                # 处理async标志
+                def_line = captures["method.def"][i].start_point[0]
+                is_async = def_line in async_lines
+                # 获取方法参数和主体
+                params_node = captures["method.params"][i]
+                params = params_node.text.decode("utf-8")
 
-            body_node = captures["body"][0]
-            body = code[body_node.start_byte : body_node.end_byte]
+                body_node = captures["method.body"][i]
+                body = body_node.text.decode("utf-8")
+                block_array.append((symbol_name, body_node.start_point, body_node.end_point))
+                # 构建完整定义
+                async_prefix = "async " if is_async else ""
+                function_full = captures["functions"][i].text.decode("utf8")
+                symbol_info = {
+                    "type": "method",
+                    "signature": f"{async_prefix}def {symbol_name}{params}:",
+                    "body": body,
+                    "full_definition": function_full,
+                    "calls": [],
+                    "decorators": decorators,
+                }
+                # 添加到类的methods列表中
+                symbols[class_name]["methods"].append(symbol_info["signature"])
+                symbols[symbol_name] = symbol_info
 
-            full_definition = f"{return_type} {symbol_name}{params} {body}"
+        elif "function.name" in captures:
+            function_node = captures["function.name"][0]
+            function_name = function_node.text.decode("utf-8")
 
-            symbols[symbol_name] = {
-                "type": "function",
-                "signature": f"{return_type} {symbol_name}{params}",
-                "body": body,
-                "full_definition": full_definition,
-                "calls": [],
-            }
-            current_function = symbol_name
+            if lang_name == C_LANG:
+                # 处理C语言函数
+                return_type_node = captures["return_type"][0]
+                return_type = return_type_node.text.decode("utf-8")
 
-        elif "macro_value" in captures:
-            macro_node = captures["macro_value"][0]
-            macro_value = code[macro_node.start_byte : macro_node.end_byte]
-            symbols[symbol_name] = {"type": "macro", "value": macro_value}
+                params_node = captures["function.params"][0]
+                params = params_node.text.decode("utf-8")
 
-        elif "called_function" in captures and current_function:
-            called_node = captures["called_function"][0]
-            called_func = code[called_node.start_byte : called_node.end_byte]
-            if called_func not in symbols[current_function]["calls"]:
-                symbols[current_function]["calls"].append(called_func)
+                body_node = captures["function.body"][0]
+                body = body_node.text.decode("utf-8")
+                block_array.append((function_name, body_node.start_point, body_node.end_point))
 
+                # 构建C语言函数定义
+                full_definition = f"{return_type} {function_name}{params} {{\n{body}\n}}"
+
+                symbol_info = {
+                    "type": "function",
+                    "signature": f"{return_type} {function_name}{params}",
+                    "body": body,
+                    "full_definition": full_definition,
+                    "calls": [],
+                }
+            elif lang_name == PYTHON_LANG:
+                # 处理Python语言函数
+                decorators = []
+                if "function.decorator" in captures:
+                    for decorator_node in captures["function.decorator"]:
+                        decorator = decorator_node.text.decode("utf-8")
+                        decorators.append(decorator)
+
+                is_async = "function.async" in captures
+                params_node = captures["function.params"][0]
+                params = params_node.text.decode("utf-8")
+
+                body_node = captures["function.body"][0]
+                body = body_node.text.decode("utf-8")
+                block_array.append((function_name, body_node.start_point, body_node.end_point))
+
+                async_prefix = "async " if is_async else ""
+
+                symbol_info = {
+                    "type": "function",
+                    "signature": f"{async_prefix}def {function_name}{params}:",
+                    "body": body,
+                    "full_definition": captures["function-full"][0].text.decode("utf8"),
+                    "calls": [],
+                    "async": is_async,
+                    "decorators": decorators,
+                }
+
+            symbols[function_name] = symbol_info
+
+        # 处理函数调用
+        elif "called_function" in captures:
+            function_calls.append(captures)
+
+    # 首先对block_array按起始行号进行排序
+    block_array.sort(key=lambda x: x[1][0])
+
+    for function_call in function_calls:
+        called_node = function_call["called_function"][0]
+        called_func = called_node.text.decode("utf-8")
+        called_start_line = called_node.start_point[0]
+
+        # 使用bisect_left找到可能包含该调用的代码块范围
+        left = 0
+        right = len(block_array) - 1
+        possible_blocks = []
+
+        while left <= right:
+            mid = (left + right) // 2
+            block_start = block_array[mid][1][0]
+            block_end = block_array[mid][2][0]
+
+            if block_start <= called_start_line <= block_end:
+                # 找到可能匹配的块，向两边扩展查找所有可能匹配的块
+                possible_blocks.append(block_array[mid])
+                # 向左查找
+                i = mid - 1
+                while i >= 0 and block_array[i][1][0] <= called_start_line <= block_array[i][2][0]:
+                    possible_blocks.append(block_array[i])
+                    i -= 1
+                # 向右查找
+                i = mid + 1
+                while i < len(block_array) and block_array[i][1][0] <= called_start_line <= block_array[i][2][0]:
+                    possible_blocks.append(block_array[i])
+                    i += 1
+                break
+            elif called_start_line < block_start:
+                right = mid - 1
+            else:
+                left = mid + 1
+        # 在可能的块中精确匹配
+        for symbol_name, start_point, end_point in possible_blocks:
+            is_within_block = called_node.start_point[0] >= start_point[0] and called_node.end_point[0] <= end_point[0]
+            if is_within_block and called_node.start_point[0] == start_point[0]:
+                if called_node.start_point[1] < start_point[1]:
+                    is_within_block = False
+            if is_within_block and called_node.end_point[0] == end_point[0]:
+                if called_node.end_point[1] > end_point[1]:
+                    is_within_block = False
+            if is_within_block:
+                if called_func not in symbols[symbol_name]["calls"]:
+                    symbols[symbol_name]["calls"].append(called_func)
     return symbols
 
 
@@ -346,14 +504,14 @@ def demo_main():
     parser_loader = ParserLoader()
 
     # 获取解析器和查询对象
-    lang_parser, query = parser_loader.get_parser("test.c")
+    lang_parser, query, lang_name = parser_loader.get_parser("test.c")
 
     # 解析代码文件
-    tree, code = parse_code_file("test.c", lang_parser)
+    tree = parse_code_file("test.c", lang_parser)
 
     # 执行查询并处理结果
     matches = query.matches(tree.root_node)
-    symbols = process_matches(matches, code)
+    symbols = process_matches(matches, lang_name)
 
     # 生成并打印 JSON 输出
     output = generate_json_output(symbols)
@@ -540,19 +698,68 @@ def search_symbols(conn, prefix: str, limit: int = 10) -> List[Dict]:
     return [{"name": row[0], "file_path": row[1]} for row in cursor.fetchall()]
 
 
-def get_symbol_info(conn, symbol_name: str, file_path: Optional[str] = None) -> Optional[SymbolInfo]:
-    """获取符号的完整信息"""
-    validate_input(symbol_name)
+def get_symbol_info_simple(conn, symbol_name: str, file_path: Optional[str] = None) -> List[Dict]:
+    """获取符号的简化信息，只返回符号名、文件路径和签名"""
+    cursor = conn.cursor()
+    if file_path:
+        if not symbol_name:
+            cursor.execute(
+                """
+                SELECT name, file_path, signature FROM symbols
+                WHERE file_path LIKE ?
+                """,
+                (f"%{file_path}%",),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT name, file_path, signature FROM symbols
+                WHERE name = ? AND file_path LIKE ?
+                """,
+                (symbol_name, f"%{file_path}%"),
+            )
+    else:
+        cursor.execute(
+            """
+            SELECT name, file_path, signature FROM symbols
+            WHERE name = ?
+            """,
+            (symbol_name,),
+        )
+
+    results = []
+    for row in cursor.fetchall():
+        results.append(
+            {
+                "name": row[0],
+                "file_path": row[1],
+                "signature": row[2],
+            }
+        )
+    return results
+
+
+def get_symbol_info(conn, symbol_name: str, file_path: Optional[str] = None) -> List[SymbolInfo]:
+    """获取符号的完整信息，返回一个列表"""
 
     cursor = conn.cursor()
     if file_path:
-        cursor.execute(
-            """
-            SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
-            WHERE name = ? AND file_path LIKE ?
-            """,
-            (symbol_name, f"%{file_path}%"),
-        )
+        if not symbol_name:
+            cursor.execute(
+                """
+                SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
+                WHERE file_path LIKE ?
+                """,
+                (f"%{file_path}%",),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT name, file_path, type, signature, body, full_definition, calls FROM symbols
+                WHERE name = ? AND file_path LIKE ?
+                """,
+                (symbol_name, f"%{file_path}%"),
+            )
     else:
         cursor.execute(
             """
@@ -562,18 +769,31 @@ def get_symbol_info(conn, symbol_name: str, file_path: Optional[str] = None) -> 
             (symbol_name,),
         )
 
-    row = cursor.fetchone()
-    if row:
-        return SymbolInfo(
-            name=row[0],
-            file_path=row[1],
-            type=row[2],
-            signature=row[3],
-            body=row[4],
-            full_definition=row[5],
-            calls=json.loads(row[6]) if row[6] else [],
+    results = []
+    for row in cursor.fetchall():
+        results.append(
+            SymbolInfo(
+                name=row[0],
+                file_path=row[1],
+                type=row[2],
+                signature=row[3],
+                body=row[4],
+                full_definition=row[5],
+                calls=json.loads(row[6]) if row[6] else [],
+            )
         )
-    return None
+    return results
+
+
+def list_all_files(conn) -> List[str]:
+    """获取数据库中所有文件的路径"""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT DISTINCT file_path FROM symbols
+        """
+    )
+    return [row[0] for row in cursor.fetchall()]
 
 
 @app.get("/symbols/search")
@@ -585,7 +805,7 @@ async def search_symbols_api(prefix: str = QueryArgs(..., min_length=1), limit: 
         results = search_symbols(conn, prefix, limit)
         return {"results": results}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/symbols/{symbol_name}")
@@ -594,12 +814,34 @@ async def get_symbol_info_api(symbol_name: str, file_path: Optional[str] = Query
     try:
         validate_input(symbol_name)
         conn = get_db_connection()
-        symbol_info = get_symbol_info(conn, symbol_name, file_path)
-        if symbol_info:
-            return symbol_info
+        symbol_infos = get_symbol_info(conn, symbol_name, file_path)
+        if symbol_infos:
+            return {"results": symbol_infos}
         return {"error": "Symbol not found"}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/symbols/path/{path}")
+async def get_symbols_by_path_api(path: str):
+    """根据路径获取符号信息API"""
+    try:
+        conn = get_db_connection()
+        symbols = get_symbol_info_simple(conn, "", file_path=path)
+        return {"results": symbols}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/files")
+async def list_files_api():
+    """获取所有文件路径API"""
+    try:
+        conn = get_db_connection()
+        files = list_all_files(conn)
+        return {"results": files}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, max_depth: int = 3) -> dict:
@@ -703,10 +945,10 @@ async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = Qu
         context = get_symbol_context(conn, symbol_name, file_path, max_depth)
         return context
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@app.get("/symbols/complete")
+@app.get("/complete")
 async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
     trie = app.state.symbol_trie
     # 确保max_results是整数类型
@@ -715,6 +957,26 @@ async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_resu
     max_results = max(1, min(50, max_results))
     results = trie.search_prefix(prefix)[:max_results]
     return {"completions": results}
+
+
+@app.get("/complete_simple")
+async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
+    """简化版符号补全，返回纯文本格式：symbol:filebase/symbol"""
+    trie = app.state.symbol_trie
+    max_results = max(1, min(50, int(max_results)))
+    results = trie.search_prefix(prefix)[:max_results]
+    # 处理每个结果，提取文件名和符号名
+    output = []
+    for item in results:
+        file_path = item["details"]["file_path"]
+        file_base = os.path.basename(file_path)
+        symbol_name = item["name"]
+        if symbol_name.startswith("symbol:"):
+            output.append(symbol_name)
+        else:
+            output.append(f"symbol:{file_base}/{symbol_name}")
+
+    return PlainTextResponse("\n".join(output))
 
 
 def test_symbols_api():
@@ -779,8 +1041,9 @@ def test_symbols_api():
         assert len(response["results"]) == 1
 
         # 测试获取符号信息接口
-        response = loop.run_until_complete(get_symbol_info_api("main_function", "/path/to/file"))
-        assert response.name == "main_function"
+        response = loop.run_until_complete(search_symbols_api("main_function", 10))
+        assert len(response["results"]) == 1
+        assert response["results"][0]["name"] == "main_function"
 
         # 测试获取符号上下文接口
         # 情况1：正常获取上下文
@@ -814,10 +1077,10 @@ def debug_process_source_file(file_path: Path, project_dir: Path):
     """调试版本的源代码处理函数，直接打印符号信息而不写入数据库"""
     try:
         # 解析代码文件并构建符号表
-        parser, query = ParserLoader().get_parser(str(file_path))
-        tree, code = parse_code_file(file_path, parser)
+        parser, query, lang_name = ParserLoader().get_parser(str(file_path))
+        tree = parse_code_file(file_path, parser)
         matches = query.matches(tree.root_node)
-        symbols = process_matches(matches, code)
+        symbols = process_matches(matches, lang_name)
 
         # 获取完整文件路径（规范化处理）
         full_path = str((project_dir / file_path).resolve().absolute())
@@ -826,7 +1089,7 @@ def debug_process_source_file(file_path: Path, project_dir: Path):
         print("=" * 50)
 
         for symbol_name, symbol_info in symbols.items():
-            if not symbol_info.get("body"):
+            if not symbol_info.get("full_definition"):
                 continue
 
             print(f"\n符号名称: {symbol_name}")
@@ -917,11 +1180,11 @@ def format_c_code_in_directory(directory: Path):
             print("未找到 clang-format 命令，请确保已安装 clang-format")
 
 
-def parse_source_file(file_path: Path, parser, query):
+def parse_source_file(file_path: Path, parser, query, lang_name):
     """解析源代码文件并返回符号表"""
-    tree, code = parse_code_file(file_path, parser)
+    tree = parse_code_file(file_path, parser)
     matches = query.matches(tree.root_node)
-    return process_matches(matches, code)
+    return process_matches(matches, lang_name)
 
 
 def check_symbol_duplicate(symbol_name: str, symbol_info: dict, all_existing_symbols: dict) -> bool:
@@ -942,7 +1205,7 @@ def prepare_insert_data(symbols: dict, all_existing_symbols: dict, full_path: st
     existing_symbol_names = set()
 
     for symbol_name, symbol_info in symbols.items():
-        if not symbol_info.get("body"):
+        if not symbol_info.get("full_definition"):
             continue
 
         if check_symbol_duplicate(symbol_name, symbol_info, all_existing_symbols):
@@ -957,7 +1220,7 @@ def prepare_insert_data(symbols: dict, all_existing_symbols: dict, full_path: st
                 full_path,
                 symbol_info["type"],
                 symbol_info["signature"],
-                symbol_info["body"],
+                symbol_info.get("body", ""),
                 symbol_info["full_definition"],
                 calculate_crc32_hash(symbol_info["full_definition"]),
                 json.dumps(symbol_info["calls"]),
@@ -1015,7 +1278,8 @@ class SymbolTrie:
 
     def _normalize(self, word):
         """统一大小写处理"""
-        return word if self.case_sensitive else word.lower()
+        return word
+        # return word if self.case_sensitive else word.lower()
 
     def insert(self, symbol_name, symbol_info):
         """插入符号到前缀树"""
@@ -1033,6 +1297,13 @@ class SymbolTrie:
             if not node.is_end:  # 新增唯一符号计数
                 self._size += 1
             node.is_end = True
+
+            # 为自动补全插入带文件名的符号，避免递归
+            if not symbol_name.startswith("symbol:"):
+                file_basename = os.path.basename(symbol_info["file_path"])
+                composite_key = f"symbol:{file_basename}/{word}"
+                # 使用新的symbol_info副本，防止引用问题
+                self.insert(composite_key, symbol_info)
 
     def search_prefix(self, prefix):
         """前缀搜索"""
@@ -1132,8 +1403,8 @@ def parse_worker_wrapper(file_path):
     """工作进程的包装函数"""
     try:
         start_time = time.time() * 1000
-        parser1, query = ParserLoader().get_parser(str(file_path))
-        symbols = parse_source_file(file_path, parser1, query)
+        parser1, query, lang_name = ParserLoader().get_parser(str(file_path))
+        symbols = parse_source_file(file_path, parser1, query, lang_name)
         parse_time = time.time() * 1000 - start_time
         print(f"文件 {file_path} 解析完成，耗时 {parse_time:.2f} 毫秒")
         return (file_path, symbols)
@@ -1289,7 +1560,7 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
 
 
 def scan_project_files_optimized(
-    project_paths: List[str], conn: sqlite3.Connection, include_suffixes: List[str] = None
+    project_paths: List[str], conn: sqlite3.Connection, excludes: List[str] = None, include_suffixes: List[str] = None
 ):
     """优化后的项目文件扫描"""
     # 检查路径是否存在
@@ -1322,10 +1593,21 @@ def scan_project_files_optimized(
             continue
 
         for file_path in project_dir.rglob("*"):
+            # 检查文件后缀是否在支持列表中
             if file_path.suffix.lower() not in suffixes:
                 continue
 
+            # 检查文件路径是否在排除列表中
             full_path = str((project_dir / file_path).resolve().absolute())
+            if excludes:
+                excluded = False
+                for pattern in excludes:
+                    if fnmatch.fnmatch(full_path, pattern):
+                        excluded = True
+                        break
+                if excluded:
+                    continue
+
             need_process = check_file_needs_processing(conn, full_path)
             if need_process:
                 tasks.append(file_path)
@@ -1349,14 +1631,18 @@ def scan_project_files_optimized(
                 )
 
 
-def build_index(project_paths: List[str] = ["."], include_suffixes: List[str] = None, db_path: str = "symbols.db"):
+def build_index(
+    project_paths: List[str] = ["."],
+    excludes: List[str] = None,
+    include_suffixes: List[str] = None,
+    db_path: str = "symbols.db",
+):
     """构建符号索引"""
     # 初始化数据库连接
     conn = init_symbol_database(db_path)
-
     try:
         # 扫描并处理项目文件
-        scan_project_files_optimized(project_paths, conn, include_suffixes)
+        scan_project_files_optimized(project_paths, conn, excludes=excludes, include_suffixes=include_suffixes)
         print("符号索引构建完成")
     finally:
         # 关闭数据库连接
@@ -1367,6 +1653,7 @@ def main(
     host: str = "127.0.0.1",
     port: int = 8000,
     project_paths: List[str] = ["."],
+    excludes: List[str] = ["."],
     include_suffixes: List[str] = None,
     db_path: str = "symbols.db",
 ):
@@ -1379,7 +1666,7 @@ def main(
         db_path: 符号数据库文件路径，默认为当前目录下的symbols.db
     """
     # 初始化数据库连接
-    build_index(project_paths, include_suffixes, db_path)
+    build_index(project_paths, excludes, include_suffixes, db_path)
     # 启动FastAPI服务
     uvicorn.run(app, host=host, port=port)
 
@@ -1397,6 +1684,7 @@ if __name__ == "__main__":
     parser.add_argument("--format-dir", type=str, help="指定要格式化的目录路径")
     parser.add_argument("--build-index", action="store_true", help="构建符号索引")
     parser.add_argument("--db-path", type=str, default="symbols.db", help="符号数据库文件路径")
+    parser.add_argument("--excludes", type=str, nargs="+", help="要排除的文件或目录路径列表（可指定多个）")
 
     args = parser.parse_args()
 
@@ -1408,12 +1696,15 @@ if __name__ == "__main__":
     elif args.format_dir:
         format_c_code_in_directory(Path(args.format_dir))
     elif args.build_index:
-        build_index(project_paths=args.project, include_suffixes=args.include, db_path=args.db_path)
+        build_index(
+            project_paths=args.project, excludes=args.excludes, include_suffixes=args.include, db_path=args.db_path
+        )
     else:
         main(
             host=args.host,
             port=args.port,
             project_paths=args.project,
+            excludes=args.excludes,
             include_suffixes=args.include,
             db_path=args.db_path,
         )

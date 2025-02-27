@@ -18,6 +18,7 @@ export PATH="$GPT_PATH/bin:$PATH"
 export GPT_PROMPTS_DIR="$GPT_PATH/prompts"
 export GPT_LOGS_DIR="$GPT_PATH/logs"
 export GPT_MAX_TOKEN=16384
+#export GPT_API_SERVER=http://127.0.0.1:9050/
 
 #DEBUG=1
 #对话的uuid
@@ -369,11 +370,21 @@ if [[ -n "$ZSH_VERSION" ]]; then
                 [[ $DEBUG -eq 1 ]] && echo "Debug: 未找到提示词目录 $GPT_PATH/prompts" >&2
             fi
 
-            # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，最后普通文件补全
+            # 如果GPT_API_SERVER存在，则添加API补全
+            local api_completions=()
+            if [[ -n "$GPT_API_SERVER" ]]; then
+                local api_url="${GPT_API_SERVER}complete_simple?prefix=${PREFIX}"
+                [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
+                api_completions=($(curl -s "$api_url" 2>/dev/null))
+                [[ $DEBUG -eq 1 ]] && echo "Debug: 从API获取到补全: ${api_completions[@]}" >&2
+            fi
+
+            # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，API补全，最后普通文件补全
             [[ $DEBUG -eq 1 ]] && echo "Debug: 开始生成补全建议" >&2
             _alternative \
                 'special:特殊选项:(clipboard tree treefull read listen symbol:)' \
                 'prompts:提示词文件:(${prompt_files[@]})' \
+                'api:API补全:(${api_completions[@]})' \
                 'files:文件名:_files'
 
             # 恢复原始前缀（避免影响其他补全）

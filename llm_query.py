@@ -706,11 +706,17 @@ def read_last_query(_):
 
 def query_symbol(symbol_name):
     """查询符号定义信息"""
-
+    # 如果符号名包含斜杠，则分离路径和符号名
+    if "/" in symbol_name:
+        parts = symbol_name.split("/")
+        symbol_name = parts[-1]  # 最后一部分是符号名
+        file_path = "/".join(parts[:-1])  # 前面部分作为文件路径
+    else:
+        file_path = None
     try:
         # 从环境变量获取API地址
         api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050/symbols")
-        url = f"{api_url}/{symbol_name}/context?max_depth=5"
+        url = f"{api_url}/{symbol_name}/context?max_depth=5" + (f"&file_path={file_path}" if file_path else "")
 
         # 发送HTTP请求，禁用所有代理
         proxies = {"http": None, "https": None, "http_proxy": None, "https_proxy": None, "all_proxy": None}
