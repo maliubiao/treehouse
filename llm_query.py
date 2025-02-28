@@ -734,9 +734,20 @@ def query_symbol(symbol_name):
         context = "\n[symbol context start]\n"
         context += f"符号名称: {data['symbol_name']}\n"
 
-        # 首先提取并显示主要定义
+        # 查找当前符号的定义
         if data["definitions"]:
-            main_definition = data["definitions"][0]
+            # 查找匹配的定义
+            matching_definitions = [d for d in data["definitions"] if d["name"] == symbol_name]
+            if matching_definitions:
+                # 将匹配的定义移到最前面
+                main_definition = matching_definitions[0]
+                data["definitions"].remove(main_definition)
+                data["definitions"].insert(0, main_definition)
+            else:
+                # 如果没有完全匹配的，使用第一个定义
+                main_definition = data["definitions"][0]
+
+            # 显示主要定义
             context += "\n[main definition start]\n"
             context += f"函数名: {main_definition['name']}\n"
             context += f"文件路径: {main_definition['file_path']}\n"
@@ -777,73 +788,118 @@ def query_symbol(symbol_name):
 def process_text_with_file_path(text):
     """处理包含@...的文本，支持@cmd命令、@path文件路径、@http网址和prompts目录下的模板文件"""
     current_length = len(text)
-    cmd_map = {
-        "clipboard": get_clipboard_content,
-        "listen": monitor_clipboard,
-        "tree": get_directory_context_wrapper,
-        "treefull": get_directory_context_wrapper,
-        "last": lambda _: read_last_query(text),
-        "symbol": query_symbol,
-    }
-    env_vars = {
-        "os": sys.platform,
-        "os_version": platform.version(),
-        "current_path": os.getcwd(),
-    }
+    cmd_map = initialize_cmd_map()
+    env_vars = initialize_env_vars()
     matches = re.findall(r"(\\?@[^\s]+)", text)
-    truncated_suffix = "\n[输入太长内容已自动截断]"
 
     for match in matches:
         if current_length >= MAX_PROMPT_SIZE:
             break
+        text, current_length = process_match(match, text, current_length, cmd_map, env_vars)
 
-        if text.endswith(match):
-            match_key = f"{match}"
-        else:
-            match_key = f"{match} "
+    return finalize_text(text)
 
-        match_key_length = len(match_key)
-        match = match.strip("\\@")
-        try:
-            replacement = ""
-            if any(match.startswith(cmd) for cmd in cmd_map) and not os.path.exists(match):
-                replacement = _handle_command(match, cmd_map)
-            elif match.endswith("="):
-                replacement = _handle_shell_command(match[:-1])
-            elif os.path.exists(os.path.join(PROMPT_DIR, match)):
-                replacement = _handle_prompt_file(match, env_vars)
-            elif os.path.exists(os.path.expanduser(match)):
-                replacement = _handle_local_file(match)
-            elif match.startswith(("http", "read")):
-                replacement = _handle_url(match)
-            else:
-                continue
 
-            new_segment_length = len(replacement)
-            old_segment_length = match_key_length
+def initialize_cmd_map():
+    """初始化命令映射表"""
+    return {
+        "clipboard": get_clipboard_content,
+        "listen": monitor_clipboard,
+        "tree": get_directory_context_wrapper,
+        "treefull": get_directory_context_wrapper,
+        "last": read_last_query,
+        "symbol": query_symbol,
+    }
 
-            if current_length - old_segment_length + new_segment_length > MAX_PROMPT_SIZE:
-                allowable_length = MAX_PROMPT_SIZE - (current_length - old_segment_length)
-                replacement = replacement[: allowable_length - len(truncated_suffix)] + truncated_suffix
 
-            text = text.replace(match_key, replacement, 1)
-            current_length = current_length - old_segment_length + len(replacement)
+def initialize_env_vars():
+    """初始化环境变量"""
+    return {
+        "os": sys.platform,
+        "os_version": platform.version(),
+        "current_path": os.getcwd(),
+    }
 
-            if current_length > MAX_PROMPT_SIZE:
-                text = text[:MAX_PROMPT_SIZE]
-                break
 
-        except Exception as e:
-            print(f"处理 {match} 时出错: {str(e)}")
-            sys.exit(1)
+def process_match(match, text, current_length, cmd_map, env_vars):
+    """处理单个匹配项"""
+    match_key = f"{match}" if text.endswith(match) else f"{match} "
+    stripped_match = match.strip("\\@")
 
+    try:
+        replacement = get_replacement(stripped_match, cmd_map, env_vars)
+        if not replacement:
+            return text, current_length
+
+        replacement = adjust_replacement_length(replacement, len(match_key), current_length)
+        new_text = text.replace(match_key, replacement, 1)
+        new_length = current_length - len(match_key) + len(replacement)
+
+        return (new_text[:MAX_PROMPT_SIZE], MAX_PROMPT_SIZE) if new_length > MAX_PROMPT_SIZE else (new_text, new_length)
+
+    except Exception as e:
+        handle_processing_error(stripped_match, e)
+
+
+def get_replacement(match, cmd_map, env_vars):
+    """根据匹配类型获取替换内容"""
+    if is_command(match, cmd_map):
+        return _handle_command(match, cmd_map)
+    elif match.endswith("="):
+        return _handle_shell_command(match[:-1])
+    elif is_prompt_file(match):
+        return _handle_prompt_file(match, env_vars)
+    elif is_local_file(match):
+        return _handle_local_file(match)
+    elif is_url(match):
+        return _handle_url(match)
+    return None
+
+
+def adjust_replacement_length(replacement, match_length, current_length):
+    """调整替换内容长度"""
+    truncated_suffix = "\n[输入太长内容已自动截断]"
+    max_allowed = MAX_PROMPT_SIZE - (current_length - match_length)
+    if len(replacement) > max_allowed:
+        return replacement[: max_allowed - len(truncated_suffix)] + truncated_suffix
+    return replacement
+
+
+def finalize_text(text):
+    """最终处理文本"""
+    truncated_suffix = "\n[输入太长内容已自动截断]"
     if len(text) > MAX_PROMPT_SIZE:
-        suffix_len = len(truncated_suffix)
-        text = text[: MAX_PROMPT_SIZE - suffix_len] + truncated_suffix
+        text = text[: MAX_PROMPT_SIZE - len(truncated_suffix)] + truncated_suffix
 
     with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
         f.write(text)
     return text
+
+
+def is_command(match, cmd_map):
+    """判断是否为命令"""
+    return any(match.startswith(cmd) for cmd in cmd_map) and not os.path.exists(match)
+
+
+def is_prompt_file(match):
+    """判断是否为prompt文件"""
+    return os.path.exists(os.path.join(PROMPT_DIR, match))
+
+
+def is_local_file(match):
+    """判断是否为本地文件"""
+    return os.path.exists(os.path.expanduser(match))
+
+
+def is_url(match):
+    """判断是否为URL"""
+    return match.startswith(("http", "read"))
+
+
+def handle_processing_error(match, error):
+    """统一错误处理"""
+    print(f"处理 {match} 时出错: {str(error)}")
+    sys.exit(1)
 
 
 # 获取.shadowroot的绝对路径，支持~展开

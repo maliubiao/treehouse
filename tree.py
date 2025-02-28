@@ -285,188 +285,222 @@ def captures_dump(captures):
             print(f"  Node {i}: {node.text.decode('utf-8')} (位置: {node.start_point} -> {node.end_point})")
 
 
-def process_matches(matches, lang_name):
-    """处理查询匹配结果，支持Python的类、方法、函数、装饰器等符号提取"""
-    symbols = {}
-    symbol_name = None
+from typing import Any, Dict, List, Tuple
 
-    function_calls = []
-    block_array = []
+
+def process_matches(matches: List[Tuple[Any, Dict]], lang_name: str) -> Dict:
+    """处理查询匹配结果，支持多语言符号提取"""
+    symbols: Dict = {}
+    block_array: List[Tuple] = []
+    function_calls: List = []
 
     for match in matches:
         _, captures = match
         if not captures:
             continue
-        # captures_dump(captures)
-        # 处理类定义及其方法
+
         if "class-name" in captures:
-            class_node = captures["class-name"][0]
-            class_name = class_node.text.decode("utf-8")
-            symbol_name = class_name
-
-            # 获取整个类定义的代码
-            class_def_node = captures["class"][0]
-            full_class_definition = class_def_node.text.decode("utf8")
-            block_array.append((class_name, class_def_node.start_point, class_def_node.end_point))
-
-            # 初始化类信息
-            symbols[class_name] = {
-                "type": "class",
-                "signature": f"class {class_name}",
-                "calls": [],
-                "methods": [],
-                "full_definition": full_class_definition,
-            }
-            async_lines = [x.start_point[0] for x in captures.get("method.async", [])]
-            # 处理类中的所有方法
-            for i, method_node in enumerate(captures.get("method.name", [])):
-                method_name = method_node.text.decode("utf-8")
-                symbol_name = f"{class_name}.{method_name}"
-
-                # 处理装饰器
-                decorators = []
-                if "method.decorator" in captures:
-                    for decorator_node in captures["method.decorator"]:
-                        decorator = decorator_node.text.decode("utf-8")
-                        decorators.append(decorator)
-
-                # 处理async标志
-                def_line = captures["method.def"][i].start_point[0]
-                is_async = def_line in async_lines
-                # 获取方法参数和主体
-                params_node = captures["method.params"][i]
-                params = params_node.text.decode("utf-8")
-
-                body_node = captures["method.body"][i]
-                body = body_node.text.decode("utf-8")
-                block_array.append((symbol_name, body_node.start_point, body_node.end_point))
-                # 构建完整定义
-                async_prefix = "async " if is_async else ""
-                function_full = captures["functions"][i].text.decode("utf8")
-                symbol_info = {
-                    "type": "method",
-                    "class": class_name,
-                    "signature": f"{async_prefix}def {symbol_name}{params}:",
-                    "body": body,
-                    "full_definition": function_full,
-                    "calls": [],
-                    "decorators": decorators,
-                }
-                # 添加到类的methods列表中
-                symbols[class_name]["methods"].append(symbol_info["signature"])
-                symbols[symbol_name] = symbol_info
-
+            process_class_definition(captures, symbols, block_array)
         elif "function.name" in captures:
-            function_node = captures["function.name"][0]
-            function_name = function_node.text.decode("utf-8")
-
-            if lang_name == C_LANG:
-                # 处理C语言函数
-                return_type_node = captures["function.return_type"][0]
-                return_type = return_type_node.text.decode("utf-8")
-
-                params_node = captures["function.params"][0]
-                params = params_node.text.decode("utf-8")
-
-                body_node = captures["function.body"][0]
-                body = body_node.text.decode("utf-8")
-                block_array.append((function_name, body_node.start_point, body_node.end_point))
-
-                # 构建C语言函数定义
-                full_definition = f"{return_type} {function_name}{params} {{\n{body}\n}}"
-
-                symbol_info = {
-                    "type": "function",
-                    "signature": f"{return_type} {function_name}{params}",
-                    "body": body,
-                    "full_definition": full_definition,
-                    "calls": [],
-                }
-            elif lang_name == PYTHON_LANG:
-                # 处理Python语言函数
-                decorators = []
-                if "function.decorator" in captures:
-                    for decorator_node in captures["function.decorator"]:
-                        decorator = decorator_node.text.decode("utf-8")
-                        decorators.append(decorator)
-
-                is_async = "function.async" in captures
-                params_node = captures["function.params"][0]
-                params = params_node.text.decode("utf-8")
-
-                body_node = captures["function.body"][0]
-                body = body_node.text.decode("utf-8")
-                block_array.append((function_name, body_node.start_point, body_node.end_point))
-
-                async_prefix = "async " if is_async else ""
-
-                symbol_info = {
-                    "type": "function",
-                    "signature": f"{async_prefix}def {function_name}{params}:",
-                    "body": body,
-                    "full_definition": captures["function-full"][0].text.decode("utf8"),
-                    "calls": [],
-                    "async": is_async,
-                    "decorators": decorators,
-                }
-
-            symbols[function_name] = symbol_info
-
-        # 处理函数调用
+            process_function_definition(captures, lang_name, symbols, block_array)
         elif "called_function" in captures:
             function_calls.append(captures)
 
-    # 首先对block_array按起始行号进行排序
-    block_array.sort(key=lambda x: x[1][0])
-    for function_call in function_calls:
-        called_node = function_call["called_function"][0]
-        called_func = called_node.text.decode("utf-8")
-        called_start_line = called_node.start_point[0]
-
-        # 使用bisect_left找到可能包含该调用的代码块范围
-        left = 0
-        right = len(block_array) - 1
-        possible_blocks = []
-
-        while left <= right:
-            mid = (left + right) // 2
-            block_start = block_array[mid][1][0]
-            block_end = block_array[mid][2][0]
-
-            if block_start <= called_start_line <= block_end:
-                # 找到可能匹配的块，向两边扩展查找所有可能匹配的块
-                possible_blocks.append(block_array[mid])
-                # 向左查找
-                i = mid - 1
-                while i >= 0 and block_array[i][1][0] <= called_start_line <= block_array[i][2][0]:
-                    possible_blocks.append(block_array[i])
-                    i -= 1
-                # 向右查找
-                i = mid + 1
-                while i < len(block_array) and block_array[i][1][0] <= called_start_line <= block_array[i][2][0]:
-                    possible_blocks.append(block_array[i])
-                    i += 1
-                break
-            elif called_start_line < block_start:
-                right = mid - 1
-            else:
-                left = mid + 1
-        # 在可能的块中精确匹配
-        for symbol_name, start_point, end_point in possible_blocks:
-            is_within_block = called_node.start_point[0] >= start_point[0] and called_node.end_point[0] <= end_point[0]
-            if is_within_block and called_node.start_point[0] == start_point[0]:
-                if called_node.start_point[1] < start_point[1]:
-                    is_within_block = False
-            if is_within_block and called_node.end_point[0] == end_point[0]:
-                if called_node.end_point[1] > end_point[1]:
-                    is_within_block = False
-            if is_within_block:
-                symbol = symbols[symbol_name]
-                if called_func not in symbol["calls"]:
-                    symbol["calls"].append(called_func)
-                    if symbol["type"] == "method":
-                        symbols[symbol["class"]]["calls"].append(called_func)
+    process_function_calls(function_calls, block_array, symbols)
     return symbols
+
+
+def process_class_definition(captures: Dict, symbols: Dict, block_array: List) -> None:
+    """处理类定义及其方法"""
+    class_node = captures["class-name"][0]
+    class_name = class_node.text.decode("utf-8")
+    class_def_node = captures["class"][0]
+
+    symbols[class_name] = {
+        "type": "class",
+        "signature": f"class {class_name}",
+        "calls": [],
+        "methods": [],
+        "full_definition": class_def_node.text.decode("utf8"),
+    }
+
+    async_lines = [x.start_point[0] for x in captures.get("method.async", [])]
+
+    for i, method_node in enumerate(captures.get("method.name", [])):
+        process_class_method(captures, i, async_lines, class_name, symbols, block_array)
+
+
+def process_class_method(
+    captures: Dict, index: int, async_lines: List[int], class_name: str, symbols: Dict, block_array: List
+) -> None:
+    """处理类方法"""
+    method_node = captures["method.name"][index]
+    method_name = method_node.text.decode("utf-8")
+    symbol_name = f"{class_name}.{method_name}"
+
+    decorators = extract_decorators(captures.get("method.decorator", []))
+    is_async = check_async_status(captures["method.def"][index], async_lines)
+
+    params_node = captures["method.params"][index]
+    body_node = captures["method.body"][index]
+
+    async_prefix = "async " if is_async else ""
+    signature = f"{async_prefix}def {symbol_name}{params_node.text.decode('utf-8')}:"
+
+    symbols[class_name]["methods"].append(signature)
+    symbols[symbol_name] = {
+        "type": "method",
+        "signature": signature,
+        "body": body_node.text.decode("utf-8"),
+        "full_definition": captures["functions"][index].text.decode("utf8"),
+        "calls": [],
+        "decorators": decorators,
+    }
+    block_array.append((symbol_name, body_node.start_point, body_node.end_point))
+
+
+def process_function_definition(captures: Dict, lang_name: str, symbols: Dict, block_array: List) -> None:
+    """分发函数处理逻辑"""
+    if lang_name == C_LANG:
+        process_c_function(captures, symbols, block_array)
+    elif lang_name == PYTHON_LANG:
+        process_python_function(captures, symbols, block_array)
+
+
+def process_c_function(captures: Dict, symbols: Dict, block_array: List) -> None:
+    """处理C语言函数"""
+    function_node = captures["function.name"][0]
+    return_type_node = captures["function.return_type"][0]
+    params_node = captures["function.params"][0]
+    body_node = captures["function.body"][0]
+
+    function_name = function_node.text.decode("utf-8")
+    signature = f"{return_type_node.text.decode('utf-8')} {function_name}{params_node.text.decode('utf-8')}"
+
+    symbols[function_name] = {
+        "type": "function",
+        "signature": signature,
+        "body": body_node.text.decode("utf-8"),
+        "full_definition": f"{signature} {{\n{body_node.text.decode('utf-8')}\n}}",
+        "calls": [],
+    }
+    block_array.append((function_name, body_node.start_point, body_node.end_point))
+
+
+def process_python_function(captures: Dict, symbols: Dict, block_array: List) -> None:
+    """处理Python函数"""
+    function_node = captures["function.name"][0]
+    function_name = function_node.text.decode("utf-8")
+
+    decorators = extract_decorators(captures.get("function.decorator", []))
+    is_async = "function.async" in captures
+    params_node = captures["function.params"][0]
+    body_node = captures["function.body"][0]
+
+    async_prefix = "async " if is_async else ""
+    signature = f"{async_prefix}def {function_name}{params_node.text.decode('utf-8')}:"
+
+    symbols[function_name] = {
+        "type": "function",
+        "signature": signature,
+        "body": body_node.text.decode("utf-8"),
+        "full_definition": captures["function-full"][0].text.decode("utf8"),
+        "calls": [],
+        "async": is_async,
+        "decorators": decorators,
+    }
+    block_array.append((function_name, body_node.start_point, body_node.end_point))
+
+
+def process_function_calls(function_calls: List, block_array: List, symbols: Dict) -> None:
+    """处理函数调用关系"""
+    block_array.sort(key=lambda x: x[1][0])
+
+    for call in function_calls:
+        called_node = call["called_function"][0]
+        called_func = called_node.text.decode("utf-8")
+        called_line = called_node.start_point[0]
+
+        containing_blocks = find_containing_blocks(called_line, block_array)
+
+        for symbol_name, start, end in containing_blocks:
+            if is_within_block(called_node, start, end):
+                update_symbol_calls(symbol_name, called_func, symbols)
+
+
+def find_containing_blocks(line: int, blocks: List) -> List:
+    """使用二分查找定位包含指定行的代码块"""
+    left, right = 0, len(blocks) - 1
+    found = []
+
+    while left <= right:
+        mid = (left + right) // 2
+        block_start = blocks[mid][1][0]
+        block_end = blocks[mid][2][0]
+
+        if block_start <= line <= block_end:
+            found.extend(collect_adjacent_blocks(mid, line, blocks))
+            break
+        elif line < block_start:
+            right = mid - 1
+        else:
+            left = mid + 1
+    return found
+
+
+def collect_adjacent_blocks(mid: int, line: int, blocks: List) -> List:
+    """收集相邻的可能包含指定行的代码块"""
+    collected = [blocks[mid]]
+
+    # 向左收集
+    i = mid - 1
+    while i >= 0 and blocks[i][1][0] <= line <= blocks[i][2][0]:
+        collected.append(blocks[i])
+        i -= 1
+
+    # 向右收集
+    i = mid + 1
+    while i < len(blocks) and blocks[i][1][0] <= line <= blocks[i][2][0]:
+        collected.append(blocks[i])
+        i += 1
+
+    return collected
+
+
+def is_within_block(node: Any, start: Tuple[int, int], end: Tuple[int, int]) -> bool:
+    """检查节点是否完全包含在代码块范围内"""
+    node_start = node.start_point
+    node_end = node.end_point
+
+    # 检查行号范围
+    if not (start[0] <= node_start[0] <= end[0]):
+        return False
+
+    # 检查起始行首列
+    if node_start[0] == start[0] and node_start[1] < start[1]:
+        return False
+
+    # 检查结束行尾列
+    if node_end[0] == end[0] and node_end[1] > end[1]:
+        return False
+
+    return True
+
+
+def update_symbol_calls(symbol_name: str, called_func: str, symbols: Dict) -> None:
+    """更新符号的调用关系"""
+    if symbol_name in symbols and called_func not in symbols[symbol_name]["calls"]:
+        symbols[symbol_name]["calls"].append(called_func)
+
+
+def extract_decorators(decorator_nodes: List) -> List[str]:
+    """提取装饰器列表"""
+    return [node.text.decode("utf-8") for node in decorator_nodes]
+
+
+def check_async_status(def_node: Any, async_lines: List[int]) -> bool:
+    """检查是否为异步函数"""
+    return def_node.start_point[0] in async_lines
 
 
 def generate_mermaid_dependency_graph(symbols):
