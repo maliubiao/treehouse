@@ -11,10 +11,11 @@ import threading
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from difflib import unified_diff
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -283,9 +284,6 @@ def captures_dump(captures):
         for i, node in enumerate(nodes):
             # 输出节点文本内容及其位置范围
             print(f"  Node {i}: {node.text.decode('utf-8')} (位置: {node.start_point} -> {node.end_point})")
-
-
-from typing import Any, Dict, List, Tuple
 
 
 def process_matches(matches: List[Tuple[Any, Dict]], lang_name: str) -> Dict:
@@ -576,13 +574,14 @@ app = FastAPI()
 
 # 全局数据库连接
 global_db_conn = None
+default_db = "symbols.db"
 
 
 def get_db_connection():
     """获取全局数据库连接"""
     global global_db_conn
     if global_db_conn is None:
-        global_db_conn = init_symbol_database()
+        global_db_conn = init_symbol_database(default_db)
     return global_db_conn
 
 
@@ -958,16 +957,25 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
         if name not in symbol_dict:
             symbol_dict[name] = path
         else:
-            # 如果当前符号已经存在，且当前路径与目标文件更匹配，则更新
-            if file_path and path.endswith(file_path):
+            # 如果当前符号已经存在，优先保留当前文件中的符号
+            if file_path and path == file_path:
+                symbol_dict[name] = path
+            elif file_path and path.endswith(file_path) and symbol_dict[name] != file_path:
                 symbol_dict[name] = path
 
     # 确保目标符号在结果中
     if symbol_name not in symbol_dict:
         symbol_dict[symbol_name] = file_path if file_path else rows[0][1]
 
-    # 按优先级排序：目标符号在前，其他符号按字母顺序
-    sorted_symbols = sorted(symbol_dict.keys(), key=lambda x: (x != symbol_name, x))
+    # 按优先级排序：当前文件中的符号优先，目标符号优先，其他符号按字母顺序
+    sorted_symbols = sorted(
+        symbol_dict.keys(),
+        key=lambda x: (
+            file_path and symbol_dict[x] != file_path,  # 当前文件中的符号排在最前
+            x != symbol_name,  # 目标符号其次
+            x,  # 其他符号按字母顺序
+        ),
+    )
 
     # 查询符号定义
     placeholders = ",".join(["?"] * len(sorted_symbols))
@@ -976,8 +984,12 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
         SELECT name, file_path, full_definition 
         FROM symbols 
         WHERE name IN ({placeholders})
+        ORDER BY CASE 
+            WHEN file_path = ? THEN 0 
+            ELSE 1 
+        END, name
         """,
-        sorted_symbols,
+        sorted_symbols + [file_path] if file_path else sorted_symbols,
     )
 
     definitions = []
@@ -1102,28 +1114,28 @@ async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), m
 
     # 如果前缀树搜索结果为空，则根据情况从数据库搜索
     if not results:
-        print(f"[DEBUG] 前缀树搜索无结果，开始数据库搜索，前缀: {prefix}")
+        print("[DEBUG] 前缀树搜索无结果，开始数据库搜索，前缀: {}".format(prefix))
         # 处理以symbol:开头的情况
         if prefix.startswith("symbol:"):
-            print(f"[DEBUG] 前缀包含'symbol:'，进行特殊处理")
+            print("[DEBUG] 前缀包含'symbol:'，进行特殊处理")
             # 去掉symbol:前缀
             clean_prefix = prefix[len("symbol:") :]
             # 判断是否包含路径分隔符
             if "/" in clean_prefix:
-                print(f"[DEBUG] 前缀包含路径分隔符，拆分路径和符号名")
+                print("[DEBUG] 前缀包含路径分隔符，拆分路径和符号名")
                 # 如果包含路径，则拆分路径和符号名
                 parts = clean_prefix.rsplit("/", 1)
                 path_prefix = parts[0] if len(parts) > 1 else ""
                 symbol_prefix = parts[-1]
-                print(f"[DEBUG] 路径前缀: {path_prefix}, 符号前缀: {symbol_prefix}")
+                print("[DEBUG] 路径前缀: {}, 符号前缀: {}".format(path_prefix, symbol_prefix))
                 # 将路径和符号名分别传入
                 results = get_symbols_from_db(symbol_prefix, max_results, path_prefix)
             else:
-                print(f"[DEBUG] 前缀不包含路径，仅使用符号名搜索")
+                print("[DEBUG] 前缀不包含路径，仅使用符号名搜索")
                 # 如果不包含路径，则只传入符号名，路径为空
                 results = get_symbols_from_db(clean_prefix, max_results, "")
         else:
-            print(f"[DEBUG] 前缀不以'symbol:'开头，直接进行模糊搜索")
+            print("[DEBUG] 前缀不以'symbol:'开头，直接进行模糊搜索")
             # 如果不以symbol:开头，则直接进行模糊搜索，路径为空
             results = get_symbols_from_db(prefix, max_results, "")
 
@@ -1674,7 +1686,6 @@ def debug_duplicate_symbol(symbol_name, all_existing_symbols, conn, data):
         print(f"    完整定义内容: {record[6]}")
     t2 = data[6]
     # 使用difflib生成unified diff格式的差异对比
-    from difflib import unified_diff
 
     diff = unified_diff(t.splitlines(), t2.splitlines(), fromfile="数据库中的定义", tofile="内存中的定义", lineterm="")
     print("符号定义差异对比：")
@@ -1941,6 +1952,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    default_db = args.db_path
     if args.demo:
         demo_main()
         test_symbols_api()

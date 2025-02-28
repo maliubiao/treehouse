@@ -402,8 +402,11 @@ def check_deps_installed():
     return all_installed
 
 
-def get_directory_context_wrapper(_, max_depth=1):
-    text = get_directory_context(max_depth)
+def get_directory_context_wrapper(tag):
+    if tag == "treefull":
+        text = get_directory_context(1024)
+    else:
+        text = get_directory_context(1)
     return f"\n[directory tree start]\n{text}\n[directory tree end]\n"
 
 
@@ -425,7 +428,7 @@ def get_directory_context(max_depth=1):
                 cmd.extend(["/A", "/F"])
         else:
             # 非Windows系统使用Linux/macOS的tree命令
-            cmd = ["tree", "-I", ".*"]
+            cmd = ["tree"]
             if max_depth is not None:
                 cmd.extend(["-L", str(max_depth)])
         try:
@@ -682,7 +685,7 @@ def _handle_prompt_file(match, env_vars):
     """处理prompts目录文件"""
     with open(os.path.join(PROMPT_DIR, match), "r", encoding="utf-8") as f:
         content = f.read()
-        return f"\n{content.format(**env_vars)}\n"
+        return f"\n{content}\n"
 
 
 def _handle_local_file(match):
@@ -714,6 +717,7 @@ def read_last_query(_):
 def query_symbol(symbol_name):
     """查询符号定义信息，优化上下文长度"""
     # 如果符号名包含斜杠，则分离路径和符号名
+    print(symbol_name)
     if "/" in symbol_name:
         parts = symbol_name.split("/")
         symbol_name = parts[-1]  # 最后一部分是符号名
@@ -735,7 +739,6 @@ def query_symbol(symbol_name):
         response = requests.get(url, proxies=proxies, timeout=5)
         response.raise_for_status()
         data = response.json()
-
         # 构建上下文
         context = "\n[symbol context start]\n"
         context += f"符号名称: {data['symbol_name']}\n"
@@ -791,19 +794,71 @@ def query_symbol(symbol_name):
         return f"\n[error] 符号查询时发生错误: {str(e)}\n"
 
 
+def preprocess_text(text):
+    """预处理文本，将文本按{}分段，并提取@命令"""
+    # 使用正则表达式按{}分段
+    segments = re.split(r"(\{.*?\})", text)
+    # 初始化结果列表
+    result = []
+
+    for segment in segments:
+        if segment.startswith("{") and segment.endswith("}"):
+            # 处理模板命令段
+            # 提取所有@命令，保留@符号
+            matches = re.findall(r"(\\?@[^\s]+)", segment.strip("{}"))
+            if matches:
+                # 第一个是模板，后面的都是参数
+                template = matches[0].lstrip("\\")  # 只去掉转义符，保留@
+                params = [match.lstrip("\\") for match in matches[1:]]  # 保留@
+                # template的实现 "{} {}".format(*params)
+            result.append(("template_cmd", template, *params))
+        else:
+            # 处理普通文本段，保留@符号和文本的混合
+            # 按@符号分割文本，同时保留@符号
+            parts = re.split(r"(\\?@[^\s]+)", segment)
+            for part in parts:
+                if not part:
+                    continue
+                if re.match(r"\\?@[^\s]+", part):
+                    # 处理@命令，保留@符号
+                    cmd = part.lstrip("\\")
+                    result.append(("cmd", cmd))
+                else:
+                    # 处理普通文本
+                    result.append(("text", part))
+
+    return result
+
+
 def process_text_with_file_path(text):
     """处理包含@...的文本，支持@cmd命令、@path文件路径、@http网址和prompts目录下的模板文件"""
-    current_length = len(text)
+    parts = preprocess_text(text)
+    current_length = 0
     cmd_map = initialize_cmd_map()
     env_vars = initialize_env_vars()
-    matches = re.findall(r"(\\?@[^\s]+)", text)
-
-    for match in matches:
+    final_text = ""
+    for part in parts:
+        if part[0] == "text":
+            final_text += part[1]
+        elif part[0] == "cmd":
+            cmd = part[1]
+            text, current_length = process_match(cmd, text, current_length, cmd_map, env_vars)
+            final_text += text
+        elif part[0] == "template_cmd":
+            template_replacement = get_replacement(part[1].strip("@"), cmd_map, env_vars)
+            args = []
+            for template_part in part[2:]:
+                arg_templatement = get_replacement(template_part.strip("@"), cmd_map, env_vars)
+                if arg_templatement:
+                    args.append(arg_templatement)
+            replacement = template_replacement.format(*args)
+            final_text += replacement
+            current_length += len(replacement)
+        else:
+            raise ValueError("bad part: %s" % part)
         if current_length >= MAX_PROMPT_SIZE:
             break
-        text, current_length = process_match(match, text, current_length, cmd_map, env_vars)
-
-    return finalize_text(text)
+    return finalize_text(final_text)
 
 
 def initialize_cmd_map():
@@ -830,7 +885,7 @@ def initialize_env_vars():
 def process_match(match, text, current_length, cmd_map, env_vars):
     """处理单个匹配项"""
     match_key = f"{match}" if text.endswith(match) else f"{match} "
-    stripped_match = match.strip("\\@")
+    stripped_match = match.strip("@")
 
     try:
         replacement = get_replacement(stripped_match, cmd_map, env_vars)

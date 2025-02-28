@@ -374,7 +374,7 @@ if [[ -n "$ZSH_VERSION" ]]; then
             if [[ -n "$GPT_API_SERVER" && "$PREFIX" == symbol* ]]; then
                 local api_url="${GPT_API_SERVER}complete_simple?prefix=${PREFIX}"
                 [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
-                api_completions=($(curl -s "$api_url" 2>/dev/null))
+                api_completions=($(curl -s --noproxy "*" "$api_url" 2>/dev/null))
                 # 在每个补全结果前添加@符号
                 # api_completions=("${api_completions[@]/#/@}")
                 [[ $DEBUG -eq 1 ]] && echo "Debug: 从API获取到补全: ${api_completions[@]}" >&2
