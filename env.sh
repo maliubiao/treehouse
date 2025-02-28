@@ -424,47 +424,35 @@ fi
 
 if [[ -n "$BASH_VERSION" ]]; then
     _askgpt_bash_complete() {
-        local cur prev prompt_files special_items
+        local cur prev prompt_files special_items api_completions
         cur="${COMP_WORDS[COMP_CWORD]}"
 
-        # 处理 @ 开头的补全
         if [[ "$cur" == @* ]]; then
             local prefix="@"
             local search_prefix="${cur#@}"
 
-            # 特殊项
             special_items=(clipboard tree treefull read listen symbol:)
-
-            # 提示词文件
             prompt_files=()
             if [[ -d "$GPT_PATH/prompts" ]]; then
                 prompt_files=($(ls "$GPT_PATH/prompts" 2>/dev/null))
             fi
 
-            # 生成补全建议
+            api_completions=()
+            if [[ -n "$GPT_API_SERVER" && "$search_prefix" == symbol* ]]; then
+                local api_url="${GPT_API_SERVER}complete_simple?prefix=${search_prefix}"
+                api_completions=($(curl -s "$api_url" 2>/dev/null))
+            fi
+
             COMPREPLY=()
-
-            # 特殊项补全
-            if [[ -z "$search_prefix" || " ${special_items[@]} " =~ "$search_prefix"* ]]; then
-                COMPREPLY+=("${special_items[@]/#/$prefix}")
-            fi
-
-            # 提示词文件补全
-            if [[ ${#prompt_files[@]} -gt 0 ]]; then
-                COMPREPLY+=("${prompt_files[@]/#/$prefix}")
-            fi
-
-            # 文件系统补全
+            [[ -n "$search_prefix" ]] || COMPREPLY+=("${special_items[@]/#/$prefix}")
+            [[ ${#prompt_files[@]} -gt 0 ]] && COMPREPLY+=("${prompt_files[@]/#/$prefix}")
+            [[ ${#api_completions[@]} -gt 0 ]] && COMPREPLY+=("${api_completions[@]/#/$prefix}")
             COMPREPLY+=($(compgen -f -- "$search_prefix" | sed 's/^/@/'))
-            [[ $DEBUG -eq 1 ]] && echo "Debug: COMPREPLY = ${COMPREPLY[*]}" >&2
-            # 过滤匹配项
             COMPREPLY=($(compgen -W "${COMPREPLY[*]}" -- "$cur"))
         else
-            # 普通文件补全
             COMPREPLY=($(compgen -f -- "$cur"))
         fi
     }
-
     complete -F _askgpt_bash_complete askgpt
     complete -F _askgpt_bash_complete naskgpt
 

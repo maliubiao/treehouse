@@ -3,10 +3,10 @@ import asyncio
 import atexit
 import json
 import os
-import pdb
 import subprocess
 import threading
 from logging import getLogger
+from urllib.parse import unquote, urlparse
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
@@ -14,8 +14,6 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -53,10 +51,7 @@ class GenericLSPClient:
             self.stdout = self.process.stdout
             self.running = True
 
-            # 启动响应读取线程
             threading.Thread(target=self._read_responses, daemon=True).start()
-
-            # 发送初始化请求
             self.initialize()
 
         except (subprocess.SubprocessError, OSError) as e:
@@ -109,24 +104,20 @@ class GenericLSPClient:
         """持续读取服务器响应"""
         try:
             while self.running:
-                # 读取头部信息
                 headers = {}
                 while True:
                     line = self.stdout.readline().strip()
-                    if not line:  # 遇到空行表示头部结束
+                    if not line:
                         break
-                    if ": " in line:  # 确保是有效的头部字段
+                    if ": " in line:
                         name, value = line.split(": ", 1)
                         headers[name.lower()] = value
 
-                # 检查必须的Content-Length字段
                 if "content-length" not in headers:
                     break
-                # 读取消息体
                 content_length = int(headers["content-length"])
                 content = self.stdout.read(content_length)
                 try:
-                    # 处理消息体
                     msg = json.loads(content)
                     print(msg)
                     self._handle_response(msg)
@@ -160,11 +151,9 @@ class GenericLSPClient:
             return
 
         try:
-            # 发送shutdown请求并等待响应
             await self.send_request("shutdown", None)
             self.send_notification("exit", None)
 
-            # 等待进程结束
             if self.process:
                 await asyncio.get_event_loop().run_in_executor(None, self.process.wait)
         except (OSError, RuntimeError) as e:
@@ -187,7 +176,6 @@ class GenericLSPClient:
             finally:
                 self.process = None
 
-        # 关闭管道
         for pipe in [self.stdin, self.stdout, self.process.stderr if self.process else None]:
             try:
                 if pipe:
@@ -195,7 +183,6 @@ class GenericLSPClient:
             except (OSError, RuntimeError) as e:
                 logger.debug("Error closing pipe: %s", str(e))
 
-        # 清理未完成的future
         with self._lock:
             for future in self.response_futures.values():
                 if not future.done():
@@ -204,7 +191,6 @@ class GenericLSPClient:
                     )
             self.response_futures.clear()
 
-    # 以下是通用LSP方法
     async def get_document_symbols(self, file_path):
         """获取文档符号"""
         try:
@@ -234,7 +220,7 @@ class GenericLSPClient:
                 "textDocument/hover",
                 {
                     "textDocument": {"uri": f"file://{file_path}"},
-                    "position": {"line": line - 1, "character": character},  # LSP使用0-based索引
+                    "position": {"line": line - 1, "character": character},
                 },
             )
         except (OSError, RuntimeError) as e:
@@ -256,6 +242,15 @@ class GenericLSPClient:
             logger.error("Failed to get completion: %s", str(e))
             return None
 
+    async def _read_source_context(self, file_path, start_line):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                return "".join(lines[max(0, start_line - 2) : start_line + 3])
+        except (OSError, RuntimeError) as e:
+            logger.debug("Failed to read source: %s", str(e))
+            return ""
+
     async def get_definition(self, file_path, line, character):
         """获取符号定义位置及源码信息"""
         try:
@@ -263,41 +258,40 @@ class GenericLSPClient:
                 "textDocument/definition",
                 {
                     "textDocument": {"uri": f"file://{file_path}"},
-                    "position": {"line": line - 1, "character": character},  # LSP使用0-based索引
+                    "position": {"line": line - 1, "character": character},
                 },
             )
 
             if not definition:
                 return None
 
-            # 处理多位置情况（如重载函数）
             locations = definition if isinstance(definition, list) else [definition]
             results = []
 
             for loc in locations:
-                # 解析定义位置
-                uri = loc["uri"].replace("file://", "", 1)
-                start_line = loc["range"]["start"]["line"] + 1  # 转回1-based
+                parsed_uri = urlparse(loc["uri"])
+                file_path = unquote(parsed_uri.path)
+                if os.name == "nt" and len(file_path) >= 3 and file_path[0] == "/" and file_path[2] == ":":
+                    file_path = file_path[1:]
+                file_path = os.path.normpath(file_path)
+
+                start_line = loc["range"]["start"]["line"] + 1
                 start_char = loc["range"]["start"]["character"]
 
-                # 读取定义文件内容
-                try:
-                    with open(uri, "r") as f:
-                        lines = f.readlines()
-                        # 提取完整符号定义范围（示例取前后5行）
-                        context = "".join(lines[max(0, start_line - 2) : start_line + 3])
-                except Exception as e:
-                    logger.debug(f"Failed to read source: {str(e)}")
-                    context = ""
-
+                context = await self._read_source_context(file_path, start_line)
                 results.append(
-                    {"file_path": uri, "line": start_line, "character": start_char, "source_context": context.strip()}
+                    {
+                        "file_path": file_path,
+                        "line": start_line,
+                        "character": start_char,
+                        "source_context": context.strip(),
+                    }
                 )
 
             return results[0] if len(results) == 1 else results
 
-        except Exception as e:
-            logger.error(f"Failed to get definition: {str(e)}")
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to get definition: %s", str(e))
             return None
 
 
@@ -313,10 +307,9 @@ class LSPCompleter(Completer):
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor.split()
-        if len(text) == 0:
+        if not text:
             return
 
-        # 命令补全
         if len(text) == 1:
             for cmd in self.commands:
                 if cmd.startswith(text[0].lower()):
@@ -325,7 +318,6 @@ class LSPCompleter(Completer):
                     )
             return
 
-        # 参数值补全
         cmd = text[0].lower()
         if cmd not in self.commands:
             return
@@ -336,7 +328,6 @@ class LSPCompleter(Completer):
 
         param_name = self.commands[cmd][param_index]
 
-        # 文件路径补全
         if param_name == "file_path":
             cwd = os.getcwd()
             for f in os.listdir(cwd):
@@ -347,7 +338,6 @@ class LSPCompleter(Completer):
 
 
 def format_completion_item(item):
-    """格式化补全项为完整信息"""
     return {
         "label": item.get("label"),
         "kind": item.get("kind"),
@@ -359,8 +349,6 @@ def format_completion_item(item):
 
 
 async def debug_console(lsp_client):
-    """启动交互式调试控制台"""
-
     console = Console()
     session = PromptSession(
         history=FileHistory(".lsp_debug_history"),
@@ -392,10 +380,11 @@ async def debug_console(lsp_client):
                 await lsp_client.shutdown()
                 break
 
-            elif cmd == "help":
+            if cmd == "help":
                 console.print(Panel(help_text, title="帮助", border_style="green"))
+                continue
 
-            elif cmd in ("definition", "hover", "completion"):
+            if cmd in ("definition", "hover", "completion"):
                 if len(parts) != 4:
                     console.print("[red]参数错误，需要: <file_path> <line> <character>[/red]")
                     continue
