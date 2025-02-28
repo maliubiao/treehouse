@@ -319,6 +319,12 @@ def query_gpt_api(
         # 保存更新后的对话历史
         save_conversation_history(conversation_file, history)
 
+        thinking_end_tag = "</think>\n\n"
+        if content and content.index(thinking_end_tag) and not content.strip().startswith("<think>"):
+            pos = content.find(thinking_end_tag)
+            reasoning = content[:pos]
+            content = content[pos + len(thinking_end_tag) :]
+
         # 存储思维过程
         if reasoning:
             content = f"<think>\n{reasoning}\n</think>\n\n\n{content}"
