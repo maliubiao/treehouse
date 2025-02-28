@@ -38,7 +38,6 @@ from pygments.token import Token
 
 # 初始化Markdown渲染器
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 

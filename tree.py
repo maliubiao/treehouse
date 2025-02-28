@@ -1433,8 +1433,8 @@ class SymbolTrie:
 
     def _normalize(self, word):
         """统一大小写处理"""
-        return word
-        # return word if self.case_sensitive else word.lower()
+        # return word
+        return word if self.case_sensitive else word.lower()
 
     def insert(self, symbol_name, symbol_info):
         """插入符号到前缀树"""
