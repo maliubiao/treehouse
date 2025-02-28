@@ -320,7 +320,7 @@ def query_gpt_api(
         save_conversation_history(conversation_file, history)
 
         thinking_end_tag = "</think>\n\n"
-        if content and content.index(thinking_end_tag) and not content.strip().startswith("<think>"):
+        if content and content.find(thinking_end_tag) != -1 and not content.strip().startswith("<think>"):
             pos = content.find(thinking_end_tag)
             reasoning = content[:pos]
             content = content[pos + len(thinking_end_tag) :]
