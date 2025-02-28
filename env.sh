@@ -371,7 +371,7 @@ if [[ -n "$ZSH_VERSION" ]]; then
             fi
             # 如果GPT_API_SERVER存在，则添加API补全
             local api_completions=()
-            if [[ -n "$GPT_API_SERVER" ]]; then
+            if [[ -n "$GPT_API_SERVER" && "$PREFIX" == symbol* ]]; then
                 local api_url="${GPT_API_SERVER}complete_simple?prefix=${PREFIX}"
                 [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
                 api_completions=($(curl -s "$api_url" 2>/dev/null))
