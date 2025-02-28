@@ -39,6 +39,8 @@ from pygments.token import Token
 # 初始化Markdown渲染器
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.table import Table
+from rich.text import Text
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
@@ -705,7 +707,7 @@ def read_last_query(_):
 
 
 def query_symbol(symbol_name):
-    """查询符号定义信息"""
+    """查询符号定义信息，优化上下文长度"""
     # 如果符号名包含斜杠，则分离路径和符号名
     if "/" in symbol_name:
         parts = symbol_name.split("/")
@@ -716,7 +718,7 @@ def query_symbol(symbol_name):
     try:
         # 从环境变量获取API地址
         api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050/symbols")
-        url = f"{api_url}/{symbol_name}/context?max_depth=5" + (f"&file_path={file_path}" if file_path else "")
+        url = f"{api_url}/{symbol_name}/context?max_depth=2" + (f"&file_path={file_path}" if file_path else "")
 
         # 发送HTTP请求，禁用所有代理
         proxies = {"http": None, "https": None, "http_proxy": None, "https_proxy": None, "all_proxy": None}
@@ -728,17 +730,39 @@ def query_symbol(symbol_name):
         response = requests.get(url, proxies=proxies, timeout=5)
         response.raise_for_status()
         data = response.json()
+
         # 构建上下文
         context = "\n[symbol context start]\n"
         context += f"符号名称: {data['symbol_name']}\n"
 
-        # 处理每个定义
-        for definition in data["definitions"]:
-            context += "\n[function definition start]\n"
-            context += f"函数名: {definition['name']}\n"
-            context += f"文件路径: {definition['file_path']}\n"
-            context += f"完整定义:\n{definition['full_definition']}\n"
-            context += "[function definition end]\n"
+        # 首先提取并显示主要定义
+        if data["definitions"]:
+            main_definition = data["definitions"][0]
+            context += "\n[main definition start]\n"
+            context += f"函数名: {main_definition['name']}\n"
+            context += f"文件路径: {main_definition['file_path']}\n"
+            context += f"完整定义:\n{main_definition['full_definition']}\n"
+            context += "[main definition end]\n"
+
+        # 计算剩余可用长度
+        remaining_length = MAX_PROMPT_SIZE - len(context) - 1024  # 保留1024字符余量
+
+        # 添加其他定义，直到达到长度限制
+        if len(data["definitions"]) > 1 and remaining_length > 0:
+            context += "\n[other definitions start]\n"
+            for definition in data["definitions"][1:]:
+                definition_text = (
+                    f"\n[function definition start]\n"
+                    f"函数名: {definition['name']}\n"
+                    f"文件路径: {definition['file_path']}\n"
+                    f"完整定义:\n{definition['full_definition']}\n"
+                    "[function definition end]\n"
+                )
+                if len(definition_text) > remaining_length:
+                    break
+                context += definition_text
+                remaining_length -= len(definition_text)
+            context += "[other definitions end]\n"
 
         context += "[symbol context end]\n"
         return context
@@ -1123,7 +1147,7 @@ class ChatbotUI:
         """处理斜杠命令"""
         commands = {
             "clear": lambda: os.system("clear"),
-            "help": lambda: print("可用命令：/clear, /help, /exit, /temperature <value>"),
+            "help": self._display_help,
             "exit": lambda: sys.exit(0),
             "temperature": self._handle_temperature_command,
         }
@@ -1133,6 +1157,51 @@ class ChatbotUI:
             commands[cmd]()
         else:
             print(f"未知命令: {cmd}")
+
+    def _display_help(self):
+        """显示详细的帮助信息"""
+
+        # 创建帮助表格
+        table = Table(show_header=True, header_style="bold magenta", box=None)
+        table.add_column("命令", width=15)
+        table.add_column("描述")
+        table.add_column("示例", style="dim")
+
+        # 添加命令信息
+        commands = [
+            ("/clear", "清空屏幕内容", "/clear"),
+            ("/help", "显示本帮助信息", "/help"),
+            ("/exit", "退出程序", "/exit"),
+            ("/temperature", "设置生成温度(0-1)", "/temperature 0.8"),
+        ]
+
+        for cmd, desc, example in commands:
+            table.add_row(Text(cmd, style="cyan"), desc, Text(example, style="green"))
+
+        # 添加特殊符号说明
+        self.console.print("\n[bold]常用特殊符号:[/]")
+        symbol_table = Table(show_header=False, box=None, padding=(0, 1, 0, 0))
+        symbol_table.add_column("符号", style="cyan", width=12)
+        symbol_table.add_column("描述", style="white")
+
+        symbols = [
+            ("@clipboard", "插入剪贴板内容"),
+            ("@tree", "显示当前目录结构"),
+            ("@treefull", "显示完整目录结构"),
+            ("@read", "读取文件内容"),
+            ("@listen", "语音输入"),
+            ("@symbol:", "插入特殊符号(如@symbol:check)"),
+        ]
+
+        for symbol, desc in symbols:
+            symbol_table.add_row(symbol, desc)
+
+        # 组合输出内容
+        self.console.print("\n[bold]可用命令列表:[/]")
+        self.console.print(table)
+        self.console.print("\n[bold]符号功能说明:[/]")
+        self.console.print(symbol_table)
+        self.console.print("\n[dim]提示: 输入时使用Tab键触发自动补全，" "按Ctrl+L清屏，Esc键退出程序[/]")
 
     def _handle_temperature_command(self, cmd):
         """处理温度设置命令"""
@@ -1169,9 +1238,9 @@ class ChatbotUI:
             "@listen": "语音输入",
             "@symbol:": "插入特殊符号",
             "/clear": "清空屏幕",
-            "/help": "显示帮助信息",
+            "/help": "显示详细帮助信息",
             "/exit": "退出程序",
-            "/temperature": "设置temperature参数 (0-1)",
+            "/temperature": "设置生成温度参数 (0-1)",
         }
 
         return WordCompleter(

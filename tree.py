@@ -132,8 +132,10 @@ LANGUAGE_QUERIES = {
 )
 ]
 (call 
-    function: _ @called_function
-    arguments: _
+    function: [
+        (identifier) @called_function
+        (attribute attribute: (identifier) @called_function)
+    ]
 ) @method.call
     """,
     "javascript": """
@@ -273,6 +275,16 @@ def get_code_from_node(code, node):
 # import pprint
 
 
+def captures_dump(captures):
+    # 结构化输出captures字典内容，用于调试
+    print("===========\nCaptures 字典内容：")
+    for key, nodes in captures.items():
+        print(f"Key: {key}")
+        for i, node in enumerate(nodes):
+            # 输出节点文本内容及其位置范围
+            print(f"  Node {i}: {node.text.decode('utf-8')} (位置: {node.start_point} -> {node.end_point})")
+
+
 def process_matches(matches, lang_name):
     """处理查询匹配结果，支持Python的类、方法、函数、装饰器等符号提取"""
     symbols = {}
@@ -285,7 +297,7 @@ def process_matches(matches, lang_name):
         _, captures = match
         if not captures:
             continue
-        # pprint.pprint(captures)
+        # captures_dump(captures)
         # 处理类定义及其方法
         if "class-name" in captures:
             class_node = captures["class-name"][0]
@@ -295,6 +307,7 @@ def process_matches(matches, lang_name):
             # 获取整个类定义的代码
             class_def_node = captures["class"][0]
             full_class_definition = class_def_node.text.decode("utf8")
+            block_array.append((class_name, class_def_node.start_point, class_def_node.end_point))
 
             # 初始化类信息
             symbols[class_name] = {
@@ -332,6 +345,7 @@ def process_matches(matches, lang_name):
                 function_full = captures["functions"][i].text.decode("utf8")
                 symbol_info = {
                     "type": "method",
+                    "class": class_name,
                     "signature": f"{async_prefix}def {symbol_name}{params}:",
                     "body": body,
                     "full_definition": function_full,
@@ -404,7 +418,6 @@ def process_matches(matches, lang_name):
 
     # 首先对block_array按起始行号进行排序
     block_array.sort(key=lambda x: x[1][0])
-
     for function_call in function_calls:
         called_node = function_call["called_function"][0]
         called_func = called_node.text.decode("utf-8")
@@ -448,8 +461,11 @@ def process_matches(matches, lang_name):
                 if called_node.end_point[1] > end_point[1]:
                     is_within_block = False
             if is_within_block:
-                if called_func not in symbols[symbol_name]["calls"]:
-                    symbols[symbol_name]["calls"].append(called_func)
+                symbol = symbols[symbol_name]
+                if called_func not in symbol["calls"]:
+                    symbol["calls"].append(called_func)
+                    if symbol["type"] == "method":
+                        symbols[symbol["class"]]["calls"].append(called_func)
     return symbols
 
 
@@ -845,7 +861,7 @@ async def list_files_api():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, max_depth: int = 3) -> dict:
+def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, max_depth: int = 2) -> dict:
     """获取符号的调用树上下文（带深度限制）"""
     validate_input(symbol_name)
     if max_depth < 0 or max_depth > 10:
@@ -938,7 +954,7 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
 
 
 @app.get("/symbols/{symbol_name}/context")
-async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = QueryArgs(None), max_depth: int = 3):
+async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = QueryArgs(None), max_depth: int = 1):
     """获取符号上下文API"""
     try:
         validate_input(symbol_name)
@@ -947,6 +963,50 @@ async def get_symbol_context_api(symbol_name: str, file_path: Optional[str] = Qu
         return context
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def get_symbols_from_db(prefix: str, max_results: int, file_path: Optional[str] = None) -> list:
+    """从数据库获取符号信息
+    支持根据前缀和文件路径进行模糊匹配查询
+    当同时提供前缀和路径时，使用两者进行查询
+    当只提供其中一个时，仅使用提供的条件进行查询
+    """
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 构建查询条件和参数
+    conditions = []
+    params = []
+
+    if prefix:
+        conditions.append("name LIKE ?")
+        params.append(f"%{prefix}%")
+
+    if file_path:
+        conditions.append("file_path LIKE ?")
+        params.append(f"%{file_path}%")
+
+    # 如果没有提供任何条件，返回空列表
+    if not conditions:
+        return []
+
+    # 构建完整的SQL查询
+    where_clause = " AND ".join(conditions)
+    query = f"SELECT name, file_path FROM symbols WHERE {where_clause} LIMIT ?"
+    params.append(max_results)
+
+    # 输出调试信息：SQL查询语句和参数
+    print(f"[DEBUG] 执行SQL查询: {query}")
+    print(f"[DEBUG] 查询参数: {params}")
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    # 输出调试信息：查询结果数量
+    print(f"[DEBUG] 查询到 {len(rows)} 条记录")
+
+    return [{"name": row[0], "details": {"file_path": row[1]}} for row in rows]
 
 
 @app.get("/complete")
@@ -960,7 +1020,14 @@ async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_resu
     max_results = int(max_results)
     # 限制结果范围在1到50之间
     max_results = max(1, min(50, max_results))
+
+    # 首先尝试使用前缀树搜索
     results = trie.search_prefix(prefix)[:max_results]
+
+    # 如果前缀树搜索结果为空，则使用数据库模糊搜索
+    if not results:
+        results = get_symbols_from_db(prefix, max_results)
+
     return {"completions": results}
 
 
@@ -995,7 +1062,37 @@ async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), m
 
     trie = app.state.symbol_trie
     max_results = max(1, min(50, int(max_results)))
+
+    # 无论是否包含路径，都先尝试前缀树搜索
     results = trie.search_prefix(prefix)[:max_results]
+
+    # 如果前缀树搜索结果为空，则根据情况从数据库搜索
+    if not results:
+        print(f"[DEBUG] 前缀树搜索无结果，开始数据库搜索，前缀: {prefix}")
+        # 处理以symbol:开头的情况
+        if prefix.startswith("symbol:"):
+            print(f"[DEBUG] 前缀包含'symbol:'，进行特殊处理")
+            # 去掉symbol:前缀
+            clean_prefix = prefix[len("symbol:") :]
+            # 判断是否包含路径分隔符
+            if "/" in clean_prefix:
+                print(f"[DEBUG] 前缀包含路径分隔符，拆分路径和符号名")
+                # 如果包含路径，则拆分路径和符号名
+                parts = clean_prefix.rsplit("/", 1)
+                path_prefix = parts[0] if len(parts) > 1 else ""
+                symbol_prefix = parts[-1]
+                print(f"[DEBUG] 路径前缀: {path_prefix}, 符号前缀: {symbol_prefix}")
+                # 将路径和符号名分别传入
+                results = get_symbols_from_db(symbol_prefix, max_results, path_prefix)
+            else:
+                print(f"[DEBUG] 前缀不包含路径，仅使用符号名搜索")
+                # 如果不包含路径，则只传入符号名，路径为空
+                results = get_symbols_from_db(clean_prefix, max_results, "")
+        else:
+            print(f"[DEBUG] 前缀不以'symbol:'开头，直接进行模糊搜索")
+            # 如果不以symbol:开头，则直接进行模糊搜索，路径为空
+            results = get_symbols_from_db(prefix, max_results, "")
+
     # 处理每个结果，提取文件名和符号名
     output = []
     for item in results:
@@ -1026,7 +1123,7 @@ def test_symbols_api():
             "signature": "def main_function()",
             "body": "pass",
             "full_definition": "def main_function(): pass",
-            "calls": ["helper_function", "undefined_function"],  # 增加未定义的函数
+            "calls": ["helper_function", "undefined_function"],
         },
         {
             "name": "helper_function",
@@ -1055,6 +1152,24 @@ def test_symbols_api():
             "full_definition": "def compute_average(values): return sum(values) / len(values)",
             "calls": [],
         },
+        {
+            "name": "init_module",
+            "file_path": "/path/to/__init__.py",
+            "type": "module",
+            "signature": "",
+            "body": "",
+            "full_definition": "",
+            "calls": [],
+        },
+        {
+            "name": "symbol:test/symbol",
+            "file_path": "/path/to/symbol.py",
+            "type": "symbol",
+            "signature": "",
+            "body": "",
+            "full_definition": "",
+            "calls": [],
+        },
     ]
     trie = SymbolTrie.from_symbols({})
     app.state.symbol_trie = trie
@@ -1077,24 +1192,29 @@ def test_symbols_api():
         assert response["results"][0]["name"] == "main_function"
 
         # 测试获取符号上下文接口
-        # 情况1：正常获取上下文
         response = loop.run_until_complete(get_symbol_context_api("main_function", "/path/to/file"))
         assert response["symbol_name"] == "main_function"
         assert len(response["definitions"]) == 2
 
-        # 情况2：获取不存在的符号上下文
         response = loop.run_until_complete(get_symbol_context_api("nonexistent", "/path/to/file"))
         assert "error" in response
 
         # 测试前缀搜索接口
-        # 情况1：正常前缀搜索
         response = loop.run_until_complete(symbol_completion("calc"))
         assert len(response["completions"]) == 1
         assert response["completions"][0]["name"] == "calculate_sum"
 
-        # 情况2：无匹配结果的前缀搜索
         response = loop.run_until_complete(symbol_completion("xyz"))
         assert len(response["completions"]) == 0
+
+        # 测试简化版符号补全接口
+        # 情况1：正常符号补全
+        response = loop.run_until_complete(symbol_completion_simple("calc"))
+        assert "calculate_sum" in response.body
+
+        # 情况2：包含路径的符号补全
+        response = loop.run_until_complete(symbol_completion_simple("symbol:test/"))
+        assert "symbol:test/symbol" in response.body
 
     finally:
         # 关闭事件循环

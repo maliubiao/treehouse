@@ -369,17 +369,18 @@ if [[ -n "$ZSH_VERSION" ]]; then
             else
                 [[ $DEBUG -eq 1 ]] && echo "Debug: 未找到提示词目录 $GPT_PATH/prompts" >&2
             fi
-
             # 如果GPT_API_SERVER存在，则添加API补全
             local api_completions=()
             if [[ -n "$GPT_API_SERVER" ]]; then
                 local api_url="${GPT_API_SERVER}complete_simple?prefix=${PREFIX}"
                 [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
                 api_completions=($(curl -s "$api_url" 2>/dev/null))
+                # 在每个补全结果前添加@符号
+                # api_completions=("${api_completions[@]/#/@}")
                 [[ $DEBUG -eq 1 ]] && echo "Debug: 从API获取到补全: ${api_completions[@]}" >&2
             fi
 
-            # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，API补全，最后普通文件补全
+            # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，接着API补全，最后普通文件补全
             [[ $DEBUG -eq 1 ]] && echo "Debug: 开始生成补全建议" >&2
             _alternative \
                 'special:特殊选项:(clipboard tree treefull read listen symbol:)' \
