@@ -47,6 +47,27 @@ recentconversation
 
 # Start new conversation
 newconversation
+
+# Generate commit message after git add (not supported in PowerShell)
+commitgpt
+
+# Temporary query without affecting current conversation
+naskgpt hello
+
+# Clipboard listening, add multiple copies to context
+askgpt @listen What trends do these user comments reflect?
+
+# Repeat last prompt
+askgpt @last
+
+# Symbol context query, lists multi-level symbol calls across files
+askgpt @symbol:show_tty_driver
+
+# Chatbot for casual conversation
+chatbot
+
+# Continue chatting, affected by newconversation
+chatagain
 ```
 
 ## Features
@@ -64,6 +85,7 @@ newconversation
 - **Web Content Conversion**:
   - Built-in HTML-to-Markdown service
   - Browser extension integration bypassing Cloudflare
+  - Automatic content extraction and format conversion
 - **Obsidian Integration**: Auto-save queries to Obsidian vault
 - **Proxy Support**: Automatic HTTP proxy detection
 - **Multi-model Switching**: Configure local/remote models via `model.json`
@@ -103,7 +125,8 @@ source $GPT_PATH/env.sh  # Enables @ autocomplete
 . \path\to\env.ps1  # Use \@ for autocomplete
 ```
 
-### Recommended API Provider
+### Recommended API Providers
+[ByteDance Volcano Ark](https://www.volcengine.com/experience/ark?utm_term=202502dsinvite&ac=DSASUQY5&rc=FNTDEYLA) - Fastest API response, lowest cost, 30M free tokens.  
 [SiliconFlow Cloud](https://cloud.siliconflow.cn/i/BofVjNGq) - 20M free tokens, runs on Huawei Ascend NPUs.  
 [Tutorial](https://docs.siliconflow.cn/usercases/use-siliconcloud-in-chatbox)
 
@@ -143,7 +166,7 @@ usegpt 14b  # Switch model
         "key": "ollama",
         "base_url": "http://192.168.40.116:11434/v1",
         "model_name": "deepseek-r1:14b",
-        "max_tokens": 8192
+        "max_tokens": 131072
     }
 }
 ```
@@ -159,6 +182,31 @@ curl "http://localhost:8000/convert?url=CURRENT_PAGE_URL"
 
 # Readability news extraction (Node.js)
 cd node; npm install; npm start  # Port 3000
+```
+
+**Element Filters for Web Conversion**
+```yaml
+# Supports glob patterns
+filters:
+    - pattern: https://www.guancha.cn/*/*.shtml
+      cache_seconds: 600 # Cache results for 10 minutes
+      selectors:
+        - "div.content > div > ul" # Focus on main content
+
+    - pattern: https://x.com/*/status/*
+      selectors:
+        - "//article/ancestor::div[4]" # XPath selector
+```
+
+**Plugin Configuration**
+Click the plugin icon to load an element selector, which helps locate CSS selectors for desired content.
+
+### Symbol Query
+
+tree.py is a tree-sitter based AST parser that generates a SQLite index for source code. Set `GPT_SYMBOL_API_URL` to the API server location.
+
+```bash
+python tree.py --project /path/to/project/ --port 9050
 ```
 
 ### Prompt Templates
@@ -224,4 +272,3 @@ terminal-llm/
 ## License
 
 MIT License © 2024 maliubiao
-
