@@ -811,7 +811,7 @@ def preprocess_text(text):
                 template = matches[0].lstrip("\\")  # 只去掉转义符，保留@
                 params = [match.lstrip("\\") for match in matches[1:]]  # 保留@
                 # template的实现 "{} {}".format(*params)
-            result.append(("template_cmd", template, *params))
+                result.append(("template_cmd", template, *params))
         else:
             # 处理普通文本段，保留@符号和文本的混合
             # 按@符号分割文本，同时保留@符号

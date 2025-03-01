@@ -255,6 +255,82 @@ class ParserLoader:
         return lang_parser, query, lang_name
 
 
+class ParserUtil:
+    def __init__(self, parser_loader: ParserLoader):
+        """初始化解析器工具类"""
+        self.parser_loader = parser_loader
+
+    @staticmethod
+    def get_symbol_name(node):
+        """提取节点的符号名称"""
+        if node.type == "class_definition":
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode("utf8")
+        elif node.type == "function_definition":
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode("utf8")
+        elif node.type == "assignment":
+            left = node.child_by_field_name("left")
+            if left and left.type == "identifier":
+                return left.text.decode("utf8")
+        return None
+
+    def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
+        """递归遍历语法树，仅记录当前符号节点的路径和源代码"""
+        symbol_name = self.get_symbol_name(node)
+        added = False
+        if symbol_name is not None:
+            current_symbols.append(symbol_name)
+            current_nodes.append(node)
+            added = True
+
+            # 仅保存当前符号节点的路径和代码
+            path_key = " > ".join(current_symbols)
+            current_node = current_nodes[-1]  # 当前新增的节点
+            start_byte = current_node.start_byte
+            end_byte = current_node.end_byte
+            code = source_bytes[start_byte:end_byte].decode("utf8")
+            code_map[path_key] = code  # 仅保存当前节点的代码
+
+            results.append(path_key)  # 添加完整路径到结果
+
+        # 遍历子节点
+        for child in node.children:
+            self.traverse(child, current_symbols, current_nodes, code_map, source_bytes, results)
+
+        # 回溯
+        if added:
+            current_symbols.pop()
+            current_nodes.pop()
+
+    def get_symbol_paths(self, file_path: str):
+        """解析代码文件并返回所有符号路径及对应代码"""
+        # 获取对应语言的解析器
+        parser, _, _ = self.parser_loader.get_parser(file_path)
+
+        # 读取源代码文件
+        with open(file_path, "rb") as f:
+            source_code = f.read()
+
+        # 解析代码
+        tree = parser.parse(source_code)
+        root_node = tree.root_node
+
+        # 收集符号路径和代码
+        results = []
+        code_map = {}
+        self.traverse(root_node, [], [], code_map, source_code, results)
+        return results, code_map
+
+    def print_symbol_paths(self, file_path: str):
+        """打印文件中的所有符号路径及对应代码"""
+        paths, code_map = self.get_symbol_paths(file_path)
+        for path in paths:
+            print(f"{path}:\n{code_map[path]}\n")
+
+
 def parse_code_file(file_path, lang_parser):
     """解析代码文件"""
     with open(file_path, "r", encoding="utf-8") as f:
@@ -1949,6 +2025,7 @@ if __name__ == "__main__":
     parser.add_argument("--db-path", type=str, default="symbols.db", help="符号数据库文件路径")
     parser.add_argument("--excludes", type=str, nargs="+", help="要排除的文件或目录路径列表（可指定多个）")
     parser.add_argument("--parallel", type=int, default=-1, help="并行度，-1表示使用CPU核心数，0或1表示单进程")
+    parser.add_argument("--source-symbol-path", type=str, help="输出指定文件的符号路径")
 
     args = parser.parse_args()
 
@@ -1968,6 +2045,10 @@ if __name__ == "__main__":
             db_path=args.db_path,
             parallel=args.parallel,
         )
+    elif args.source_symbol_path:
+        parser_loader = ParserLoader()
+        parser_util = ParserUtil(parser_loader)
+        parser_util.print_symbol_paths(args.source_symbol_path)
     else:
         main(
             host=args.host,

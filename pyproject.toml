@@ -33,6 +33,7 @@ dependencies = [
     "prompt-toolkit>=3.0.50",
     "rich>=13.9.4",
     "python-lsp-server>=1.12.2",
+    "setuptools>=75.8.2",
 ]
 
 [tool.black]

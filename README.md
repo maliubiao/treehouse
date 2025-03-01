@@ -83,7 +83,13 @@ chatagain
 
 #prompt模板, 假设main.c.skel是main.c的框架文件(提炼的接口), 剪贴板里有我们想修改的代码, {}执行了字符串模板的功能
 naskgpt  "{ @edit-with-skel @main.c.skel @clipboard }" 找出给定代码的bug
+
+#多行输入, 正常情况下可以用\换行
+naskgpt \
+> hello \
+> world
 ```
+
 
 
 ## 功能特性
