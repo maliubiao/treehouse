@@ -331,6 +331,202 @@ class ParserUtil:
             print(f"{path}:\n{code_map[path]}\n")
 
 
+class BlockPatch:
+    """用于生成代码块的差异补丁"""
+
+    def __init__(self, file_path: str, patch_range: tuple, block_content: bytes, update_content: bytes):
+        """
+        初始化补丁对象
+
+        参数：
+            file_path: 源文件路径
+            patch_range: 补丁范围，格式为((start_row, start_col), (end_row, end_col))
+            block_content: 原始块内容(bytes)
+            update_content: 更新后的内容(bytes)
+        """
+        self.file_path = file_path
+        with open(file_path, "rb") as f:
+            self.source_code = f.read()
+        self.patch_range = patch_range
+        self.block_content = block_content
+        self.update_content = update_content
+
+    def generate_diff(self) -> str:
+        """生成差异补丁"""
+        # 获取原始代码分段
+        (start_row, start_col), (end_row, end_col) = self.patch_range
+        before, selected, after = split_source(self.source_code.decode("utf8"), start_row, start_col, end_row, end_col)
+
+        # 校验选中的内容是否与传入的block_content匹配
+        if selected.strip() != self.block_content.decode("utf8").strip():
+            raise ValueError(
+                f"选中的内容与传入的block_content不匹配。\n选中内容：{selected}\n传入内容：{self.block_content.decode('utf8')}"
+            )
+
+        # 生成修改后的代码
+        modified_code = before.encode("utf8") + self.update_content + after.encode("utf8")
+
+        # 生成差异
+        diff = unified_diff(
+            self.source_code.decode("utf8").splitlines(keepends=True),
+            modified_code.decode("utf8").splitlines(keepends=True),
+            fromfile=self.file_path,
+            tofile=self.file_path,
+            lineterm="",
+            n=max(3, start_row),  # 显示足够的上下文
+        )
+
+        return "".join(diff)
+
+    def apply_patch(self) -> bytes:
+        """应用补丁，返回修改后的代码(bytes)"""
+        (start_row, start_col), (end_row, end_col) = self.patch_range
+        before, selected, after = split_source(self.source_code.decode("utf8"), start_row, start_col, end_row, end_col)
+
+        # 校验选中的内容是否与传入的block_content匹配
+        if selected.strip() != self.block_content.decode("utf8").strip():
+            raise ValueError(
+                f"选中的内容与传入的block_content不匹配。\n选中内容：{selected}\n传入内容：{self.block_content.decode('utf8')}"
+            )
+
+        return before.encode("utf8") + self.update_content + after.encode("utf8")
+
+
+def split_source(source: str, start_row: int, start_col: int, end_row: int, end_col: int) -> tuple[str, str, str]:
+    """
+    根据行列位置将源代码分割为三段
+
+    参数：
+        source: 原始源代码字符串
+        start_row: 起始行号(0-based)
+        start_col: 起始列号(0-based)
+        end_row: 结束行号(0-based)
+        end_col: 结束列号(0-based)
+
+    返回：
+        tuple: (前段内容, 选中内容, 后段内容)
+    """
+    lines = source.splitlines(keepends=True)
+    if not lines:
+        return ("", "", "") if source == "" else (source, "", "")
+
+    # 处理越界行号
+    max_row = len(lines) - 1
+    start_row = max(0, min(start_row, max_row))
+    end_row = max(0, min(end_row, max_row))
+
+    # 计算行列位置对应的绝对字节偏移
+    def calc_pos(row: int, col: int) -> int:
+        line = lines[row]
+        # 列号限制在[0, 当前行长度]范围内
+        clamped_col = max(0, min(col, len(line)))
+        # 计算该行之前的累计长度
+        prev_lines_len = sum(len(l) for l in lines[:row])
+        return prev_lines_len + clamped_col
+
+    # 获取实际偏移位置
+    start_pos = calc_pos(start_row, start_col)
+    end_pos = calc_pos(end_row, end_col)
+
+    # 确保顺序正确
+    if start_pos > end_pos:
+        start_pos, end_pos = end_pos, start_pos
+
+    return (source[:start_pos], source[start_pos:end_pos], source[end_pos:])
+
+
+def get_node_segment(code: str, node) -> tuple[str, str, str]:
+    """根据AST节点获取代码分段"""
+    start_row = node.start_point[0]
+    start_col = node.start_point[1]
+    end_row = node.end_point[0]
+    end_col = node.end_point[1]
+    return split_source(code, start_row, start_col, end_row, end_col)
+
+
+def safe_replace(code: str, new_code: str, start: tuple[int, int], end: tuple[int, int]) -> str:
+    """安全替换代码段"""
+    before, _, after = split_source(code, *start, *end)
+    return before + new_code + after
+
+
+def test_split_source_and_patch():
+    """使用tree-sitter验证代码提取功能"""
+    # 创建临时文件并写入测试代码
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp_file:
+        code = """// Sample code
+#include <stdio.h>
+
+int main() {
+    printf("Hello\\n");
+    return 0;
+}"""
+        tmp_file.write(code)
+        tmp_file_path = tmp_file.name
+
+    try:
+        # 获取解析器和查询对象
+        parser_loader = ParserLoader()
+        query_str = """
+        (return_statement) @return
+        """
+        LANGUAGE_QUERIES["c"] = query_str
+        lang_parser, query, _ = parser_loader.get_parser("test.c")
+
+        # 解析代码文件
+        tree = parse_code_file(tmp_file_path, lang_parser)
+        captures = query.matches(tree.root_node)
+
+        # 验证是否找到return语句
+        assert len(captures) > 0, "未找到return语句"
+
+        # 获取第一个return语句的节点
+        _, capture = captures[0]
+        return_node = capture["return"][0]
+        # 使用split_source提取代码
+        start_row, start_col = return_node.start_point
+        end_row, end_col = return_node.end_point
+        before, selected, after = split_source(code, start_row, start_col, end_row, end_col)
+
+        # 验证提取结果
+        assert selected == "return 0;", "提取的return语句不匹配"
+        assert (
+            before
+            == """// Sample code
+#include <stdio.h>
+
+int main() {
+    printf("Hello\\n");
+    """
+        ), "前段内容不匹配"
+        assert after == "\n}", "后段内容不匹配"
+
+        # 测试BlockPatch功能
+        patch = BlockPatch(
+            file_path=tmp_file_path,
+            patch_range=((start_row, start_col), (end_row, end_col)),
+            block_content=selected.encode("utf-8"),
+            update_content=b"return 1;",
+        )
+
+        # 生成差异
+        diff = patch.generate_diff()
+        assert "-    return 0;" in diff, "差异中缺少删除行"
+        assert "+    return 1;" in diff, "差异中缺少添加行"
+
+        # 应用补丁
+        modified_code = patch.apply_patch()
+        assert b"return 1;" in modified_code, "修改后的代码中缺少更新内容"
+
+    finally:
+        # 删除临时文件
+        import os
+
+        os.unlink(tmp_file_path)
+
+
 def parse_code_file(file_path, lang_parser):
     """解析代码文件"""
     with open(file_path, "r", encoding="utf-8") as f:
@@ -2031,8 +2227,10 @@ if __name__ == "__main__":
 
     default_db = args.db_path
     if args.demo:
+        test_split_source_and_patch()
         demo_main()
         test_symbols_api()
+
     elif args.debug_file:
         debug_process_source_file(Path(args.debug_file), Path(args.project[0]))
     elif args.format_dir:
