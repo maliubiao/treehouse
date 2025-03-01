@@ -1215,6 +1215,7 @@ def handle_ask_mode(args, api_key, proxies):
         proxies=proxies,
         model=os.environ["GPT_MODEL"],
         base_url=base_url,
+        temperature=float(os.getenv("GPT_TEMPERATURE", 0.0)),
     )
     process_response(
         text,

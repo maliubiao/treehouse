@@ -165,8 +165,8 @@ function usegpt() {
     }
 
     # 使用python3一次性解析并提取所有配置项
-    local key base_url model max_tokens
-    read key base_url model max_tokens <<< $(python3 -c "import json, sys; config=json.load(open('$config_file')).get('$model_name', {}); print(config.get('key', ''), config.get('base_url', ''), config.get('model_name', ''), config.get('max_tokens', ''))" 2>/dev/null)
+    local key base_url model max_tokens temperature
+    read key base_url model max_tokens temperature <<< $(python3 -c "import json, sys; config=json.load(open('$config_file')).get('$model_name', {}); print(config.get('key', ''), config.get('base_url', ''), config.get('model_name', ''), config.get('max_tokens', ''), config.get('temperature', ''))" 2>/dev/null)
 
     # 检查是否成功获取配置
     if [[ -z "$key" || -z "$base_url" || -z "$model" ]]; then
@@ -179,6 +179,7 @@ function usegpt() {
     export GPT_BASE_URL="$base_url"
     export GPT_MODEL="$model"
     [[ -n "$max_tokens" ]] && export GPT_MAX_TOKEN="$max_tokens"
+    [[ -n "$temperature" ]] && export GPT_TEMPERATURE="$temperature"
 
     # 如果VERBOSE参数不存在，则输出成功日志
     if [[ -z "$no_verbose" ]]; then
@@ -187,6 +188,7 @@ function usegpt() {
         echo "  GPT_BASE_URL: $base_url"
         echo "  GPT_MODEL: $model"
         [[ -n "$max_tokens" ]] && echo "  GPT_MAX_TOKEN: $max_tokens"
+        [[ -n "$temperature" ]] && echo "  GPT_TEMPERATURE: $temperature"
     fi
 }
 
@@ -478,4 +480,3 @@ if [[ -n "$BASH_VERSION" ]]; then
 
 
 fi
-
