@@ -1725,9 +1725,9 @@ async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), m
 
 def test_symbols_api():
     """测试符号相关API"""
-    globals()["global_db_conn"] = sqlite3.connect(":memory:")
+    globals()["GLOBAL_DB_CONN"] = sqlite3.connect(":memory:")
     # 初始化内存数据库
-    test_conn = globals()["global_db_conn"]
+    test_conn = globals()["GLOBAL_DB_CONN"]
     init_symbol_database(test_conn)
 
     # 准备测试数据
@@ -1831,6 +1831,16 @@ def test_symbols_api():
         # 情况2：包含路径的符号补全
         response = loop.run_until_complete(symbol_completion_simple("symbol:test/"))
         assert b"symbol:test/symbol" in response.body
+
+        # 新增测试实时符号补全接口
+        # 情况1：测试存在的文件路径
+        response = loop.run_until_complete(symbol_completion_realtime("symbol:file", 10))
+        assert b"main_function" in response.body
+        assert b"helper_function" in response.body
+
+        # 情况2：测试不存在的文件路径
+        response = loop.run_until_complete(symbol_completion_realtime("symbol:nonexistent", 10))
+        assert response.body == b""
 
     finally:
         # 关闭事件循环
