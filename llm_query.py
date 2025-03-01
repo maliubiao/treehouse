@@ -691,11 +691,30 @@ def _handle_prompt_file(match, env_vars):
 def _handle_local_file(match):
     """处理本地文件路径"""
     expanded_path = os.path.abspath(os.path.expanduser(match))
-    with open(expanded_path, "r", encoding="utf-8") as f:
-        content = f.read()
-        replacement = f"\n\n[file name]: {expanded_path}\n[file content begin]\n{content}"
-        replacement += "\n[file content end]\n\n"
+    if os.path.isfile(expanded_path):
+        # 如果是文件，直接读取内容
+        with open(expanded_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            replacement = f"\n\n[file name]: {expanded_path}\n[file content begin]\n{content}"
+            replacement += "\n[file content end]\n\n"
+            return replacement
+    elif os.path.isdir(expanded_path):
+        # 如果是目录，读取目录下所有文件
+        replacement = f"\n\n[directory]: {expanded_path}\n"
+        for root, _, files in os.walk(expanded_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        replacement += f"[file name]: {file_path}\n[file content begin]\n{content}"
+                        replacement += "\n[file content end]\n\n"
+                except Exception as e:
+                    replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
+        replacement += f"[directory end]: {expanded_path}\n\n"  # 添加目录结束标志
         return replacement
+    else:
+        return f"\n\n[error]: 路径不存在 {expanded_path}\n\n"
 
 
 def _handle_url(match):
@@ -717,7 +736,6 @@ def read_last_query(_):
 def query_symbol(symbol_name):
     """查询符号定义信息，优化上下文长度"""
     # 如果符号名包含斜杠，则分离路径和符号名
-    print(symbol_name)
     if "/" in symbol_name:
         parts = symbol_name.split("/")
         symbol_name = parts[-1]  # 最后一部分是符号名

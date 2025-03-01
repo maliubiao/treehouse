@@ -215,7 +215,7 @@ class TrieNode:
 
 
 class SymbolTrie:
-    def __init__(self, case_sensitive=False):
+    def __init__(self, case_sensitive=True):
         self.root = TrieNode()
         self.case_sensitive = case_sensitive
         self._size = 0  # 记录唯一符号数量
@@ -352,7 +352,7 @@ class SymbolTrie:
         return self._size
 
     @classmethod
-    def from_symbols(cls, symbols_dict, case_sensitive=False):
+    def from_symbols(cls, symbols_dict, case_sensitive=True):
         """从现有符号字典构建前缀树"""
         trie = cls(case_sensitive)
         for symbol_name, entries in symbols_dict.items():
@@ -1595,7 +1595,7 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1)):
     Returns:
         纯文本格式的源代码内容
     """
-    trie = app.state.symbol_trie
+    trie = app.state.file_symbol_trie
     # 在前缀树中搜索符号路径
     result = trie.search_exact(symbol_path)
 
@@ -1643,7 +1643,7 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1)):
 
 
 @app.get("/complete_realtime")
-async def symbol_completion_realtime(file_path: str = QueryArgs(..., min_length=1), max_results: int = 10):
+async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
     """实时符号补全，直接解析指定文件并返回符号列表
 
     Args:
@@ -1654,22 +1654,30 @@ async def symbol_completion_realtime(file_path: str = QueryArgs(..., min_length=
         纯文本格式的符号列表，每行一个符号
     """
     # 初始化解析器
-    trie = app.state.symbol_trie
+    trie = app.state.file_symbol_trie
     max_results = max(1, min(50, int(max_results)))
     # 首先尝试使用前缀树搜索
-    results = trie.search_prefix(file_path, max_results)
-
-    # 如果前缀树搜索结果为空且文件存在，则解析文件并更新符号表
-    if not results and os.path.exists(file_path):
-        # 初始化解析器工具
-        parser_loader = ParserLoader()
-        parser_util = ParserUtil(parser_loader)
-
-        # 解析文件并更新符号表
-        parser_util.update_symbol_trie(file_path, trie)
-
-        # 再次尝试搜索
-        results = trie.search_prefix(file_path, max_results)
+    results = trie.search_prefix(prefix, max_results=max_results)
+    # 如果前缀以"symbol:"开头，尝试提取文件路径
+    if not results and prefix.startswith("symbol:"):
+        # 匹配模式：以支持的语言后缀结尾，后跟斜杠
+        pattern = r"symbol:([^/]+.*?(?:" + "|".join(re.escape(ext) for ext in SUPPORTED_LANGUAGES.keys()) + r"))/?"
+        match = re.search(pattern, prefix)
+        file_path = match.group(1)
+        if os.path.exists(file_path):
+            # 输出慢路径调试日志
+            print(f"[DEBUG] 进入慢路径处理: prefix={prefix}, file_path={file_path}")
+            # 初始化解析器工具
+            parser_loader = ParserLoader()
+            parser_util = ParserUtil(parser_loader)
+            # 解析文件并更新符号表
+            start_time = time.time()
+            parser_util.update_symbol_trie(file_path, app.state.file_symbol_trie)
+            elapsed_time = time.time() - start_time
+            print(f"[DEBUG] 文件解析完成: {file_path}, 耗时: {elapsed_time:.2f}秒")
+            # 更新前缀树搜索结果
+            results = trie.search_prefix(prefix, max_results)
+            print(f"[DEBUG] 慢路径搜索结果: 找到{len(results)}个匹配项")
 
     # 返回纯文本格式，每行一个符号，从结果中提取name字段
     return PlainTextResponse("\n".join(result["name"] for result in results))
@@ -2287,7 +2295,7 @@ def scan_project_files_optimized(
     all_existing_symbols = get_existing_symbols(conn)
     trie = SymbolTrie.from_symbols(all_existing_symbols)
     app.state.symbol_trie = trie
-
+    app.state.file_symbol_trie = SymbolTrie.from_symbols({})
     # 获取需要处理的文件列表
     tasks = []
     for project_path in project_paths:
