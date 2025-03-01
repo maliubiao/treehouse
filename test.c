@@ -2,7 +2,12 @@
 
 extern int printf(const char *format, ...);
 
+
 int print(const char *format , ...) {
+    printf(format, __VA_ARGS__);
+}
+
+struct a* print1(const char *format , ...) {
     printf(format, __VA_ARGS__);
 }
 

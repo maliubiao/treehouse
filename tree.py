@@ -203,6 +203,166 @@ LANGUAGE_QUERIES = {
 }
 
 
+class TrieNode:
+    """前缀树节点"""
+
+    __slots__ = ["children", "is_end", "symbols"]
+
+    def __init__(self):
+        self.children = {}  # 字符到子节点的映射
+        self.is_end = False  # 是否单词结尾
+        self.symbols = []  # 存储符号详细信息（支持同名不同定义的符号）
+
+
+class SymbolTrie:
+    def __init__(self, case_sensitive=False):
+        self.root = TrieNode()
+        self.case_sensitive = case_sensitive
+        self._size = 0  # 记录唯一符号数量
+
+    def _normalize(self, word):
+        """统一大小写处理"""
+        # return word
+        return word if self.case_sensitive else word.lower()
+
+    def insert(self, symbol_name, symbol_info):
+        """插入符号到前缀树"""
+        node = self.root
+        word = self._normalize(symbol_name)
+
+        for char in word:
+            if char not in node.children:
+                node.children[char] = TrieNode()
+            node = node.children[char]
+
+        # 避免重复添加相同定义的符号
+        if not any(s["full_definition_hash"] == symbol_info["full_definition_hash"] for s in node.symbols):
+            node.symbols.append(symbol_info)
+            if not node.is_end:  # 新增唯一符号计数
+                self._size += 1
+            node.is_end = True
+
+            # 为自动补全插入带文件名的符号，避免递归
+            if not symbol_name.startswith("symbol:"):
+                file_basename = extract_identifiable_path(symbol_info["file_path"])
+                composite_key = f"symbol:{file_basename}/{word}"
+                # 使用新的symbol_info副本，防止引用问题
+                self.insert(composite_key, symbol_info)
+
+    def search_exact(self, symbol_path):
+        """精确搜索符号路径
+
+        参数：
+            symbol_path: 要搜索的完整符号路径
+
+        返回：
+            匹配的符号信息，如果未找到则返回None
+        """
+        node = self.root
+        path = self._normalize(symbol_path)
+
+        # 遍历路径中的每个字符
+        for char in path:
+            if char not in node.children:
+                return None
+            node = node.children[char]
+
+        # 如果找到完整匹配的节点，返回第一个符号信息
+        if node.is_end and node.symbols:
+            return node.symbols[0]
+        return None
+
+    def search_prefix(self, prefix, max_results=None):
+        """前缀搜索
+
+        参数：
+            prefix: 要搜索的前缀字符串
+            max_results: 最大返回结果数量，None表示不限制
+
+        返回：
+            匹配前缀的符号列表
+        """
+        node = self.root
+        prefix = self._normalize(prefix)
+
+        # 定位到前缀末尾节点
+        for char in prefix:
+            if char not in node.children:
+                return []
+            node = node.children[char]
+
+        # 收集所有子节点符号
+        results = []
+        self._dfs_collect(node, prefix, results, max_results)
+        return results
+
+    def _dfs_collect(self, node, current_prefix, results, max_results):
+        """深度优先收集符号
+
+        参数：
+            node: 当前节点
+            current_prefix: 当前前缀
+            results: 结果列表
+            max_results: 最大结果数量限制
+        """
+        # 如果达到最大结果数量，直接返回
+        if max_results is not None and len(results) >= max_results:
+            return
+
+        if node.is_end:
+            for symbol in node.symbols:
+                results.append({"name": current_prefix, "details": symbol})
+                # 检查是否达到最大结果数量
+                if max_results is not None and len(results) >= max_results:
+                    return
+
+        for char, child in node.children.items():
+            self._dfs_collect(child, current_prefix + char, results, max_results)
+
+    def to_dict(self):
+        """将前缀树转换为包含所有符号的字典"""
+        result = {}
+        self._collect_all_symbols(self.root, "", result)
+        return result
+
+    def _collect_all_symbols(self, node, current_prefix, result):
+        """递归收集所有符号"""
+        if node.is_end:
+            result[current_prefix] = [symbol for symbol in node.symbols]
+
+        for char, child in node.children.items():
+            self._collect_all_symbols(child, current_prefix + char, result)
+
+    def __str__(self):
+        """将前缀树转换为字符串表示，列出所有符号"""
+        symbol_dict = self.to_dict()
+        output = []
+        for symbol_name, symbols in symbol_dict.items():
+            for symbol in symbols:
+                output.append(f"符号名称: {symbol_name}")
+                output.append(f"文件路径: {symbol['file_path']}")
+                output.append(f"签名: {symbol['signature']}")
+                output.append(f"定义哈希: {symbol['full_definition_hash']}")
+                output.append("-" * 40)
+        return "\n".join(output)
+
+    @property
+    def size(self):
+        """返回唯一符号数量"""
+        return self._size
+
+    @classmethod
+    def from_symbols(cls, symbols_dict, case_sensitive=False):
+        """从现有符号字典构建前缀树"""
+        trie = cls(case_sensitive)
+        for symbol_name, entries in symbols_dict.items():
+            for entry in entries:
+                trie.insert(
+                    symbol_name, {"file_path": entry[0], "signature": entry[1], "full_definition_hash": entry[2]}
+                )
+        return trie
+
+
 class ParserLoader:
     def __init__(self):
         self._parsers = {}
@@ -229,7 +389,7 @@ class ParserLoader:
         self._languages[lang_name] = lang_module.language
         return lang_module.language
 
-    def get_parser(self, file_path: str) -> tuple[Parser, Query]:
+    def get_parser(self, file_path: str) -> tuple[Parser, Query, str]:
         """根据文件路径获取对应的解析器和查询对象"""
         suffix = Path(file_path).suffix.lower()
         lang_name = SUPPORTED_LANGUAGES.get(suffix)
@@ -237,7 +397,7 @@ class ParserLoader:
             raise ValueError(f"不支持的文件类型: {suffix}")
 
         if lang_name in self._parsers:
-            return self._parsers[lang_name], self._queries[lang_name]
+            return self._parsers[lang_name], self._queries[lang_name], lang_name
 
         language = self._get_language(lang_name)
         lang = Language(language())
@@ -267,10 +427,32 @@ class ParserUtil:
             for child in node.children:
                 if child.type == "identifier":
                     return child.text.decode("utf8")
+
         elif node.type == "function_definition":
+            # 首先查找pointer_declarator节点
+            pointer_declarator = None
             for child in node.children:
-                if child.type == "identifier":
-                    return child.text.decode("utf8")
+                if child.type == "pointer_declarator":
+                    pointer_declarator = child
+                    break
+
+            # 如果有pointer_declarator，则在其内部查找function_declarator
+            if pointer_declarator:
+                func_declarator = pointer_declarator.child_by_field_name("declarator")
+                if func_declarator and func_declarator.type == "function_declarator":
+                    # 在function_declarator中查找identifier
+                    for func_child in func_declarator.children:
+                        if func_child.type == "identifier":
+                            return func_child.text.decode("utf8")
+
+            # 如果没有pointer_declarator，直接查找function_declarator
+            for child in node.children:
+                if child.type == "function_declarator":
+                    # 在function_declarator中查找identifier节点
+                    for declarator_child in child.children:
+                        if declarator_child.type == "identifier":
+                            return declarator_child.text.decode("utf8")
+            return None
         elif node.type == "assignment":
             left = node.child_by_field_name("left")
             if left and left.type == "identifier":
@@ -278,7 +460,7 @@ class ParserUtil:
         return None
 
     def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
-        """递归遍历语法树，仅记录当前符号节点的路径和源代码"""
+        """递归遍历语法树，记录符号节点的路径、代码和位置信息"""
         symbol_name = self.get_symbol_name(node)
         added = False
         if symbol_name is not None:
@@ -286,13 +468,29 @@ class ParserUtil:
             current_nodes.append(node)
             added = True
 
-            # 仅保存当前符号节点的路径和代码
-            path_key = " > ".join(current_symbols)
+            # 获取当前节点的路径、代码和位置信息
+            path_key = ">".join(current_symbols)
             current_node = current_nodes[-1]  # 当前新增的节点
+
+            # 获取字节位置
             start_byte = current_node.start_byte
             end_byte = current_node.end_byte
+
+            # 获取行号和列号（从0开始）
+            start_point = current_node.start_point
+            end_point = current_node.end_point
+
+            # 提取代码内容
             code = source_bytes[start_byte:end_byte].decode("utf8")
-            code_map[path_key] = code  # 仅保存当前节点的代码
+
+            # 保存代码内容和位置信息
+            code_map[path_key] = {
+                "code": code,
+                "start_line": start_point[0],  # 起始行号（从0开始）
+                "start_col": start_point[1],  # 起始列号（从0开始）
+                "end_line": end_point[0],  # 结束行号（从0开始）
+                "end_col": end_point[1],  # 结束列号（从0开始）
+            }
 
             results.append(path_key)  # 添加完整路径到结果
 
@@ -306,14 +504,13 @@ class ParserUtil:
             current_nodes.pop()
 
     def get_symbol_paths(self, file_path: str):
-        """解析代码文件并返回所有符号路径及对应代码"""
+        """解析代码文件并返回所有符号路径及对应代码和位置信息"""
         # 获取对应语言的解析器
         parser, _, _ = self.parser_loader.get_parser(file_path)
 
         # 读取源代码文件
         with open(file_path, "rb") as f:
             source_code = f.read()
-
         # 解析代码
         tree = parser.parse(source_code)
         root_node = tree.root_node
@@ -324,11 +521,42 @@ class ParserUtil:
         self.traverse(root_node, [], [], code_map, source_code, results)
         return results, code_map
 
-    def print_symbol_paths(self, file_path: str):
-        """打印文件中的所有符号路径及对应代码"""
+    def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
+        """
+        更新符号前缀树，将文件中的所有符号插入到前缀树中
+
+        参数：
+            file_path: 文件路径
+            symbol_trie: 要更新的符号前缀树
+        """
         paths, code_map = self.get_symbol_paths(file_path)
         for path in paths:
-            print(f"{path}:\n{code_map[path]}\n")
+            info = code_map[path]
+            # 计算代码的CRC32哈希值
+            full_definition_hash = calculate_crc32_hash(info["code"])
+            # 构建位置信息
+            location = ((info["start_line"], info["start_col"]), (info["end_line"], info["end_col"]))
+            # 构建符号信息字典
+            symbol_info = {
+                "file_path": file_path,
+                "signature": "",  # 可以根据需要添加签名信息
+                "full_definition_hash": full_definition_hash,
+                "location": location,
+            }
+            # 将符号插入前缀树
+            symbol_trie.insert(path, symbol_info)
+
+    def print_symbol_paths(self, file_path: str):
+        """打印文件中的所有符号路径及对应代码和位置信息"""
+        paths, code_map = self.get_symbol_paths(file_path)
+        for path in paths:
+            info = code_map[path]
+            print(
+                f"{path}:\n"
+                f"代码位置: 第{info['start_line']+1}行{info['start_col']+1}列 "
+                f"到 第{info['end_line']+1}行{info['end_col']+1}列\n"
+                f"代码内容:\n{info['code']}\n"
+            )
 
 
 class BlockPatch:
@@ -520,10 +748,29 @@ int main() {
         modified_code = patch.apply_patch()
         assert b"return 1;" in modified_code, "修改后的代码中缺少更新内容"
 
+        # 测试符号解析功能
+        parser_util = ParserUtil(parser_loader)
+        symbol_trie = SymbolTrie()
+
+        # 解析测试文件并更新符号前缀树
+        parser_util.update_symbol_trie(tmp_file_path, symbol_trie)
+
+        # 测试精确搜索
+        main_symbol = symbol_trie.search_exact("main")
+        assert main_symbol is not None, "未找到main函数符号"
+        assert main_symbol["file_path"] == tmp_file_path, "文件路径不匹配"
+
+        # 测试前缀搜索
+        prefix_results = symbol_trie.search_prefix("main")
+        assert len(prefix_results) > 0, "前缀搜索未找到结果"
+        assert any(result["name"] == "main" for result in prefix_results), "未找到main函数符号"
+
+        # 打印符号路径
+        print("\n测试文件中的符号路径：")
+        parser_util.print_symbol_paths(tmp_file_path)
+
     finally:
         # 删除临时文件
-        import os
-
         os.unlink(tmp_file_path)
 
 
@@ -845,16 +1092,16 @@ def demo_main():
 app = FastAPI()
 
 # 全局数据库连接
-global_db_conn = None
-default_db = "symbols.db"
+GLOBAL_DB_CONN = None
+DEFAULT_DB = "symbols.db"
 
 
 def get_db_connection():
     """获取全局数据库连接"""
-    global global_db_conn
-    if global_db_conn is None:
-        global_db_conn = init_symbol_database(default_db)
-    return global_db_conn
+    global GLOBAL_DB_CONN
+    if GLOBAL_DB_CONN is None:
+        GLOBAL_DB_CONN = init_symbol_database(DEFAULT_DB)
+    return GLOBAL_DB_CONN
 
 
 class SymbolInfo(BaseModel):
@@ -952,10 +1199,6 @@ def insert_symbol(conn, symbol_info: Dict):
     """插入符号信息到数据库，处理唯一性冲突，并更新前缀搜索树"""
     cursor = conn.cursor()
     try:
-        # 验证输入
-        for field in ["name", "file_path", "type", "signature", "body", "full_definition"]:
-            validate_input(str(symbol_info[field]))
-
         # 验证calls字段
         calls = symbol_info.get("calls", [])
         if not isinstance(calls, list):
@@ -1173,71 +1416,49 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
         raise ValueError("深度值必须在0到10之间")
 
     cursor = conn.cursor()
-    if file_path:
-        cursor.execute(
-            """
-            WITH RECURSIVE call_tree(name, file_path, depth) AS (
-                SELECT s.name, s.file_path, 0
-                FROM symbols s
-                WHERE s.name = ? AND s.file_path LIKE ?
-                
-                UNION ALL
-                
-                SELECT json_each.value, s.file_path, ct.depth + 1
-                FROM call_tree ct
-                JOIN symbols s ON ct.name = s.name AND ct.file_path = s.file_path
-                JOIN json_each(s.calls)
-                WHERE ct.depth < ?
-            )
-            SELECT DISTINCT name, file_path 
-            FROM call_tree
-            WHERE depth <= ?
-            """,
-            (symbol_name, f"%{file_path}%", max_depth - 1, max_depth),
-        )
-    else:
-        cursor.execute(
-            """
-            WITH RECURSIVE call_tree(name, file_path, depth) AS (
-                SELECT s.name, s.file_path, 0
-                FROM symbols s
-                WHERE s.name = ?
-                
-                UNION ALL
-                
-                SELECT json_each.value, s.file_path, ct.depth + 1
-                FROM call_tree ct
-                JOIN symbols s ON ct.name = s.name AND ct.file_path = s.file_path
-                JOIN json_each(s.calls)
-                WHERE ct.depth < ?
-            )
-            SELECT DISTINCT name, file_path 
-            FROM call_tree
-            WHERE depth <= ?
-            """,
-            (symbol_name, max_depth - 1, max_depth),
-        )
-
-    # 获取所有结果并处理重复符号
-    rows = cursor.fetchall()
-    if not rows:
-        return {"error": f"未找到符号 {symbol_name} 的定义"}
-
-    # 创建一个字典来存储符号及其文件路径
     symbol_dict = {}
-    for name, path in rows:
-        if name not in symbol_dict:
-            symbol_dict[name] = path
-        else:
-            # 如果当前符号已经存在，优先保留当前文件中的符号
-            if file_path and path == file_path:
-                symbol_dict[name] = path
-            elif file_path and path.endswith(file_path) and symbol_dict[name] != file_path:
-                symbol_dict[name] = path
+    current_symbols = [(symbol_name, file_path)]
+
+    # 分层查询调用关系
+    for depth in range(max_depth + 1):
+        next_symbols = []
+
+        for symbol, path in current_symbols:
+            # 查询当前符号的定义
+            if path:
+                query = "SELECT name, file_path, calls FROM symbols WHERE name = ? AND file_path LIKE ?"
+                params = (symbol, f"%{path}%")
+            else:
+                query = "SELECT name, file_path, calls FROM symbols WHERE name = ?"
+                params = (symbol,)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            if not rows:
+                continue
+
+            # 记录符号信息（优先保留当前文件中的定义）
+            for name, path, calls in rows:
+                if name not in symbol_dict or path == file_path:
+                    symbol_dict[name] = path
+
+            # 收集下一层要查询的符号
+            for name, path, calls in rows:
+                try:
+                    called_symbols = json.loads(calls)
+                    next_symbols.extend([(s, path) for s in called_symbols])
+                except json.JSONDecodeError:
+                    continue
+
+        current_symbols = list(set(next_symbols))  # 去重
+
+        if not current_symbols:
+            break
 
     # 确保目标符号在结果中
     if symbol_name not in symbol_dict:
-        symbol_dict[symbol_name] = file_path if file_path else rows[0][1]
+        return {"error": f"未找到符号 {symbol_name} 的定义"}
 
     # 按优先级排序：当前文件中的符号优先，目标符号优先，其他符号按字母顺序
     sorted_symbols = sorted(
@@ -1314,15 +1535,8 @@ def get_symbols_from_db(prefix: str, max_results: int, file_path: Optional[str] 
     query = f"SELECT name, file_path FROM symbols WHERE {where_clause} LIMIT ?"
     params.append(max_results)
 
-    # 输出调试信息：SQL查询语句和参数
-    print(f"[DEBUG] 执行SQL查询: {query}")
-    print(f"[DEBUG] 查询参数: {params}")
-
     cursor.execute(query, params)
     rows = cursor.fetchall()
-
-    # 输出调试信息：查询结果数量
-    print(f"[DEBUG] 查询到 {len(rows)} 条记录")
 
     return [{"name": row[0], "details": {"file_path": row[1]}} for row in rows]
 
@@ -1371,6 +1585,96 @@ def extract_identifiable_path(file_path: str) -> str:
     return base_name
 
 
+@app.get("/symbol_content")
+async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1)):
+    """根据符号路径获取符号对应的源代码内容
+
+    Args:
+        symbol_path: 符号路径，格式为file_path>a>b>c
+
+    Returns:
+        纯文本格式的源代码内容
+    """
+    trie = app.state.symbol_trie
+    # 在前缀树中搜索符号路径
+    result = trie.search_exact(symbol_path)
+
+    if not result:
+        return PlainTextResponse("未找到符号内容", status_code=404)
+
+    # 获取符号的位置信息
+    location = result["location"]
+    file_path = result["file_path"]
+
+    # 读取源代码文件
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            source_code = f.read()
+    except Exception as e:
+        return PlainTextResponse(f"无法读取文件: {str(e)}", status_code=500)
+
+    # 提取符号对应的代码内容
+    start_line, start_col = location[0]
+    end_line, end_col = location[1]
+
+    # 将源代码按行分割
+    lines = source_code.splitlines()
+
+    # 如果符号跨多行
+    if start_line == end_line:
+        # 单行情况
+        line = lines[start_line]
+        content = line[start_col:end_col]
+    else:
+        # 多行情况
+        content_lines = []
+        # 第一行
+        first_line = lines[start_line]
+        content_lines.append(first_line[start_col:])
+        # 中间行
+        for i in range(start_line + 1, end_line):
+            content_lines.append(lines[i])
+        # 最后一行
+        last_line = lines[end_line]
+        content_lines.append(last_line[:end_col])
+        content = "\n".join(content_lines)
+
+    return PlainTextResponse(content)
+
+
+@app.get("/complete_realtime")
+async def symbol_completion_realtime(file_path: str = QueryArgs(..., min_length=1), max_results: int = 10):
+    """实时符号补全，直接解析指定文件并返回符号列表
+
+    Args:
+        file_path: 要解析的文件路径
+        max_results: 最大返回结果数量，默认为10，范围1-50
+
+    Returns:
+        纯文本格式的符号列表，每行一个符号
+    """
+    # 初始化解析器
+    trie = app.state.symbol_trie
+    max_results = max(1, min(50, int(max_results)))
+    # 首先尝试使用前缀树搜索
+    results = trie.search_prefix(file_path, max_results)
+
+    # 如果前缀树搜索结果为空且文件存在，则解析文件并更新符号表
+    if not results and os.path.exists(file_path):
+        # 初始化解析器工具
+        parser_loader = ParserLoader()
+        parser_util = ParserUtil(parser_loader)
+
+        # 解析文件并更新符号表
+        parser_util.update_symbol_trie(file_path, trie)
+
+        # 再次尝试搜索
+        results = trie.search_prefix(file_path, max_results)
+
+    # 返回纯文本格式，每行一个符号，从结果中提取name字段
+    return PlainTextResponse("\n".join(result["name"] for result in results))
+
+
 @app.get("/complete_simple")
 async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
     """简化版符号补全，返回纯文本格式：symbol:filebase/symbol"""
@@ -1386,28 +1690,22 @@ async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), m
 
     # 如果前缀树搜索结果为空，则根据情况从数据库搜索
     if not results:
-        print("[DEBUG] 前缀树搜索无结果，开始数据库搜索，前缀: {}".format(prefix))
         # 处理以symbol:开头的情况
         if prefix.startswith("symbol:"):
-            print("[DEBUG] 前缀包含'symbol:'，进行特殊处理")
             # 去掉symbol:前缀
             clean_prefix = prefix[len("symbol:") :]
             # 判断是否包含路径分隔符
             if "/" in clean_prefix:
-                print("[DEBUG] 前缀包含路径分隔符，拆分路径和符号名")
                 # 如果包含路径，则拆分路径和符号名
                 parts = clean_prefix.rsplit("/", 1)
                 path_prefix = parts[0] if len(parts) > 1 else ""
                 symbol_prefix = parts[-1]
-                print("[DEBUG] 路径前缀: {}, 符号前缀: {}".format(path_prefix, symbol_prefix))
                 # 将路径和符号名分别传入
                 results = get_symbols_from_db(symbol_prefix, max_results, path_prefix)
             else:
-                print("[DEBUG] 前缀不包含路径，仅使用符号名搜索")
                 # 如果不包含路径，则只传入符号名，路径为空
                 results = get_symbols_from_db(clean_prefix, max_results, "")
         else:
-            print("[DEBUG] 前缀不以'symbol:'开头，直接进行模糊搜索")
             # 如果不以symbol:开头，则直接进行模糊搜索，路径为空
             results = get_symbols_from_db(prefix, max_results, "")
 
@@ -1528,11 +1826,11 @@ def test_symbols_api():
         # 测试简化版符号补全接口
         # 情况1：正常符号补全
         response = loop.run_until_complete(symbol_completion_simple("calc"))
-        assert "calculate_sum" in response.body
+        assert b"symbol:file/calculate_sum" in response.body
 
         # 情况2：包含路径的符号补全
         response = loop.run_until_complete(symbol_completion_simple("symbol:test/"))
-        assert "symbol:test/symbol" in response.body
+        assert b"symbol:test/symbol" in response.body
 
     finally:
         # 关闭事件循环
@@ -1730,121 +2028,6 @@ def get_database_stats(conn: sqlite3.Connection) -> tuple:
     indexes = cursor.fetchall()
 
     return total_symbols, total_files, indexes
-
-
-class TrieNode:
-    """前缀树节点"""
-
-    __slots__ = ["children", "is_end", "symbols"]
-
-    def __init__(self):
-        self.children = {}  # 字符到子节点的映射
-        self.is_end = False  # 是否单词结尾
-        self.symbols = []  # 存储符号详细信息（支持同名不同定义的符号）
-
-
-class SymbolTrie:
-    def __init__(self, case_sensitive=False):
-        self.root = TrieNode()
-        self.case_sensitive = case_sensitive
-        self._size = 0  # 记录唯一符号数量
-
-    def _normalize(self, word):
-        """统一大小写处理"""
-        # return word
-        return word if self.case_sensitive else word.lower()
-
-    def insert(self, symbol_name, symbol_info):
-        """插入符号到前缀树"""
-        node = self.root
-        word = self._normalize(symbol_name)
-
-        for char in word:
-            if char not in node.children:
-                node.children[char] = TrieNode()
-            node = node.children[char]
-
-        # 避免重复添加相同定义的符号
-        if not any(s["full_definition_hash"] == symbol_info["full_definition_hash"] for s in node.symbols):
-            node.symbols.append(symbol_info)
-            if not node.is_end:  # 新增唯一符号计数
-                self._size += 1
-            node.is_end = True
-
-            # 为自动补全插入带文件名的符号，避免递归
-            if not symbol_name.startswith("symbol:"):
-                file_basename = extract_identifiable_path(symbol_info["file_path"])
-                composite_key = f"symbol:{file_basename}/{word}"
-                # 使用新的symbol_info副本，防止引用问题
-                self.insert(composite_key, symbol_info)
-
-    def search_prefix(self, prefix):
-        """前缀搜索"""
-        node = self.root
-        prefix = self._normalize(prefix)
-
-        # 定位到前缀末尾节点
-        for char in prefix:
-            if char not in node.children:
-                return []
-            node = node.children[char]
-
-        # 收集所有子节点符号
-        results = []
-        self._dfs_collect(node, prefix, results)
-        return results
-
-    def _dfs_collect(self, node, current_prefix, results):
-        """深度优先收集符号"""
-        if node.is_end:
-            for symbol in node.symbols:
-                results.append({"name": current_prefix, "details": symbol})
-
-        for char, child in node.children.items():
-            self._dfs_collect(child, current_prefix + char, results)
-
-    def to_dict(self):
-        """将前缀树转换为包含所有符号的字典"""
-        result = {}
-        self._collect_all_symbols(self.root, "", result)
-        return result
-
-    def _collect_all_symbols(self, node, current_prefix, result):
-        """递归收集所有符号"""
-        if node.is_end:
-            result[current_prefix] = [symbol for symbol in node.symbols]
-
-        for char, child in node.children.items():
-            self._collect_all_symbols(child, current_prefix + char, result)
-
-    def __str__(self):
-        """将前缀树转换为字符串表示，列出所有符号"""
-        symbol_dict = self.to_dict()
-        output = []
-        for symbol_name, symbols in symbol_dict.items():
-            for symbol in symbols:
-                output.append(f"符号名称: {symbol_name}")
-                output.append(f"文件路径: {symbol['file_path']}")
-                output.append(f"签名: {symbol['signature']}")
-                output.append(f"定义哈希: {symbol['full_definition_hash']}")
-                output.append("-" * 40)
-        return "\n".join(output)
-
-    @property
-    def size(self):
-        """返回唯一符号数量"""
-        return self._size
-
-    @classmethod
-    def from_symbols(cls, symbols_dict, case_sensitive=False):
-        """从现有符号字典构建前缀树"""
-        trie = cls(case_sensitive)
-        for symbol_name, entries in symbols_dict.items():
-            for entry in entries:
-                trie.insert(
-                    symbol_name, {"file_path": entry[0], "signature": entry[1], "full_definition_hash": entry[2]}
-                )
-        return trie
 
 
 def get_existing_symbols(conn: sqlite3.Connection) -> dict:
@@ -2225,7 +2408,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    default_db = args.db_path
+    DEFAULT_DB = args.db_path
     if args.demo:
         test_split_source_and_patch()
         demo_main()
