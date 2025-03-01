@@ -1,0 +1,39 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "gptlang",
+      "camelcase": "Gptlang",
+      "title": "Gptlang",
+      "scope": "source.gptlang",
+      "file-types": [
+        "gptlang"
+      ],
+      "injection-regex": "^gptlang$",
+      "class-name": "TreeSitterGptlang"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "a language used in terminal-llm to craft prompt",
+    "authors": [
+      {
+        "name": "maliubiao",
+        "email": "maliubiao@gmail.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/maliubiao/terminal-llm"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}
