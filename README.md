@@ -97,6 +97,9 @@ naskgpt @large-file:100-
 
 #20-50
 naskgpt @large-file:20-50
+
+#把prompt当shell脚本执行, 获取它的结果, 填入上下文, =号结尾，跟自定义prompt一样
+naskgpt @script=
 ```
 
 
