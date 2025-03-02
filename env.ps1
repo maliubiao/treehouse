@@ -1,439 +1,443 @@
 # env.ps1
-# 获取Python可执行文件路径
+# PowerShell 5.0 compatible environment configuration
 
-# 设置 GPT_PATH
-if (-not $env:GPT_PATH) {
-    $scriptPath = $PSScriptRoot
-    $env:GPT_PATH = $scriptPath
+# 设置控制台编码为UTF-8
+[console]::InputEncoding = [System.Text.Encoding]::UTF8
+[console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# 初始化基础环境变量
+function global:Initialize-GptEnv {
+    if (-not $env:GPT_PATH) {
+        $env:GPT_PATH = $PSScriptRoot
+    }
+
+    $env:GPT_DOC = Join-Path -Path $env:GPT_PATH -ChildPath "obsidian"
+    $env:PATH = "$(Join-Path -Path $env:GPT_PATH -ChildPath 'bin');$env:PATH"
+    $env:GPT_PROMPTS_DIR = Join-Path -Path $env:GPT_PATH -ChildPath "prompts"
+    $env:GPT_LOGS_DIR = Join-Path -Path $env:GPT_PATH -ChildPath "logs"
+    $env:GPT_MAX_TOKEN = if ($env:GPT_MAX_TOKEN) { $env:GPT_MAX_TOKEN } else { 16384 }
+    $env:GPT_UUID_CONVERSATION = if ($env:GPT_UUID_CONVERSATION) { $env:GPT_UUID_CONVERSATION } else { [guid]::NewGuid().ToString() }
 }
 
-# 检测操作系统类型
-if ($PSVersionTable.PSVersion.Major -lt 6) {
-    # PowerShell 5.x 及以下版本
-    $IsWindows = $env:OS -eq "Windows_NT"
+# 初始化目录结构
+function global:Initialize-Directories {
+    $paths = @('bin', 'prompts', 'logs', 'conversation')
+    foreach ($dir in $paths) {
+        $fullPath = Join-Path -Path $env:GPT_PATH -ChildPath $dir
+        if (-not (Test-Path $fullPath)) {
+            New-Item -ItemType Directory -Path $fullPath -Force | Out-Null
+        }
+    }
 }
 
-
-function global:Get-PythonPath {
-    # 检查虚拟环境中的Python路径
-    $venvPythonPath = if ($IsWindows) {
-        Join-Path $env:GPT_PATH ".venv" | Join-Path -ChildPath "Scripts" | Join-Path -ChildPath "python.exe"
-    }
-    else {
-        Join-Path $env:GPT_PATH ".venv" | Join-Path -ChildPath "bin" | Join-Path -ChildPath "python"
-    }
-
-    # 如果虚拟环境中的Python存在，直接返回
-    if (Test-Path $venvPythonPath) {
-        return $venvPythonPath
-    }
-
-    # 检查系统默认的Python
-    $systemPython = if ($IsWindows) { "python.exe" } else { "python3" }
-    $systemPythonPath = Get-Command $systemPython -ErrorAction SilentlyContinue
-
-    if ($systemPythonPath) {
-        Write-Warning "未找到虚拟环境中的Python，将使用系统默认的Python。建议使用'uv venv'创建虚拟环境。"
-        return $systemPythonPath.Source
-    }
-
-    # 如果都没有找到，抛出错误
-    Write-Error "未找到可用的Python解释器。请先安装Python并使用'uv venv'创建虚拟环境。"
-    return $null
-}
-
-# 导出其他环境变量
-$env:GPT_DOC = Join-Path -Path $env:GPT_PATH -ChildPath "obsidian"
-$env:PATH = [System.IO.Path]::Combine($env:GPT_PATH, "bin") + [System.IO.Path]::PathSeparator + $env:PATH
-$env:GPT_PROMPTS_DIR = Join-Path -Path $env:GPT_PATH -ChildPath "prompts"
-$env:GPT_LOGS_DIR = Join-Path -Path $env:GPT_PATH -ChildPath "logs"
-$env:GPT_UUID_CONVERSATION = [guid]::NewGuid().ToString()
-$env:GPT_MAX_TOKEN = 8192
-# 初始化目录
-$binPath = Join-Path -Path $env:GPT_PATH -ChildPath "bin"
-$promptsPath = Join-Path -Path $env:GPT_PATH -ChildPath "prompts"
-$logsPath = Join-Path -Path $env:GPT_PATH -ChildPath "logs"
-New-Item -ItemType Directory -Force -Path $binPath | Out-Null
-New-Item -ItemType Directory -Force -Path $promptsPath | Out-Null
-New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
-
-# $env:DEBUG=1
-# 函数定义
-function global:newconversation {
+# 会话管理函数
+function global:New-Conversation {
     $env:GPT_UUID_CONVERSATION = [guid]::NewGuid().ToString()
     Write-Host "新会话编号: $env:GPT_UUID_CONVERSATION"
 }
 
-function global:allconversation {
-    # 调用内部函数，传入0表示无限制输出
-    _conversation_list 0
+# 会话列表核心逻辑（纯PowerShell实现）
+function global:Get-ConversationList {
+    param(
+        [int]$Limit = 0
+    )
+
+    $conversationDir = Join-Path -Path $env:GPT_PATH -ChildPath "conversation"
+    $allFiles = @()
+
+    if (Test-Path $conversationDir) {
+        Get-ChildItem -Path $conversationDir -Recurse -File -Filter *.json | ForEach-Object {
+            try {
+                $dirName = $_.Directory.Name
+                $fileName = $_.BaseName
+                $uuidParts = $fileName -split '-'
+                $dateStr = $dirName
+                $timeStr = "$($uuidParts[0])-$($uuidParts[1])-$($uuidParts[2])"
+                $uuid = $uuidParts[3..($uuidParts.Count)] -join '-'
+                
+                # 读取预览内容
+                $preview = "N/A"
+                $content = Get-Content $_.FullName -Encoding UTF8 | ConvertFrom-Json
+                if ($content -is [array] -and $content.Count -gt 0) {
+                    $preview = ($content[0].content -replace "`n", " ").Substring(0, [Math]::Min(32, $content[0].content.Length))
+                }
+
+                $allFiles += [PSCustomObject]@{
+                    MTime   = $_.LastWriteTime
+                    Date    = $dateStr
+                    Time    = $timeStr
+                    UUID    = $uuid
+                    Preview = $preview
+                    Path    = $_.FullName
+                }
+            }
+            catch {}
+        }
+    }
+
+    $sorted = $allFiles | Sort-Object -Property MTime -Descending
+    if ($Limit -gt 0) {
+        $sorted = $sorted | Select-Object -First $Limit
+    }
+
+    return $sorted
 }
 
-function global:_conversation_list {
-    $limit = $args[0]
-    if (-not $limit) { $limit = 0 }
+function global:Show-ConversationMenu {
+    param(
+        [Parameter (ValueFromPipeline)]$Items,
+        [string]$Title
+    )
 
-    $conversation_dir = Join-Path -Path $env:GPT_PATH -ChildPath "conversation"
-    $title = if ($limit -gt 0) { "最近的${limit}条对话记录" } else { "所有对话记录" }
+    Write-Host "`n$Title："
+    $index = 1
+    $Items | ForEach-Object {
+        $preview = if ($_.Preview.Length -gt 32) { "$($_.Preview.Substring(0,32))..." } else { $_.Preview }
+        Write-Host ("{0,-3} {1,-19} {2,-36} {3}" -f "$index)", "$($_.Date) $($_.Time)", $_.UUID, $preview)
+        $index++
+    }
+}
 
-    $pythonScript = @"
-import os, sys, json, datetime
-from datetime import datetime
+function global:Invoke-ConversationSelection {
+    param(
+        [Parameter(ValueFromPipeline)]$Items,
+        [string]$Title
+    )
 
-conversation_dir = r"$conversation_dir"
-files = []
-
-for root, _, filenames in os.walk(conversation_dir):
-    for fname in filenames:
-        if fname in ["index.json", ".DS_Store"] or not fname.endswith(".json"):
-            continue
-        path = os.path.join(root, fname)
-        try:
-            date_str = os.path.basename(os.path.dirname(path))
-            time_uuid = os.path.splitext(fname)[0]
-            uuid = "-".join(time_uuid.split("-")[3:])
-            time_str = ":".join(time_uuid.split("-")[0:3])
-            mtime = os.path.getmtime(path)
-            preview = "N/A"
-            with open(path, "r") as f:
-                data = json.load(f)
-                if isinstance(data, list) and len(data) > 0:
-                    first_msg = data[0].get("content", "")
-                    preview = first_msg[:32].replace("\n", " ").strip()
-            files.append((mtime, date_str, time_str, uuid, preview, path))
-        except Exception as e:
-            continue
-
-files.sort(reverse=True, key=lambda x: x[0])
-if $limit > 0:
-    files = files[:$limit]
-
-for idx, (_, date, time, uuid, preview, _) in enumerate(files):
-    print(f"{idx+1}\t{date} {time}\t{uuid}\t{preview}")
-"@
-
-    $pythonExecutable = Get-PythonPath
-    $selection = & $pythonExecutable -c $pythonScript
-
-    if (-not $selection) {
+    $list = @($Items)
+    if ($list.Count -eq 0) {
         Write-Host "没有找到历史对话"
         return
     }
 
-    Write-Host "${title}："
-    $selection | ForEach-Object {
-        $parts = $_ -split "\t"
-        $index = $parts[0]
-        $datetime = $parts[1]
-        $uuid = $parts[2]
-        $preview = $parts[3]
-        Write-Host ("{0,-3} {1,-19} {2,-36} {3}" -f "$index)", $datetime, $uuid, $preview)
-    }
+    Show-ConversationMenu -Items $list -Title $Title
+    $choice = Read-Host "`n请选择对话 (1-$($list.Count)，直接回车取消)"
 
-    $itemCount = ($selection | Measure-Object).Count
-    if ($env:DEBUG -eq "1") {
-        Write-Host "[DEBUG] 找到的对话数量: $itemCount"
-        Write-Host "[DEBUG] 选择列表内容:"
-        $selection | ForEach-Object { Write-Host "  $_" }
-    }
-
-    $choice = Read-Host "请选择对话 (1-${itemCount}，直接回车取消)"
-    $choice = [int]$choice
-
-    if ($choice -match '^\d+$' -and $choice -ge 1 -and $choice -le $itemCount) {
-        $selected = $selection[$choice - 1] -split "\t"
-        if ($env:DEBUG -eq "1") {
-            Write-Host "[DEBUG] 用户选择: $choice"
-            Write-Host "[DEBUG] 解析后的选择项:"
-            $selected | ForEach-Object { Write-Host "  $_" }
-        }
-        $env:GPT_UUID_CONVERSATION = $selected[2]
-        Write-Host "已切换到对话: $($selected[2])"
+    if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $list.Count) {
+        $selected = $list[[int]$choice - 1]
+        $env:GPT_UUID_CONVERSATION = $selected.UUID
+        Write-Host "已切换到对话: $($selected.UUID)"
     }
     else {
-        if ($env:DEBUG -eq "1") {
-            Write-Host "[DEBUG] 用户输入: $choice"
-            Write-Host "[DEBUG] 输入无效或取消操作"
-        }
         Write-Host "操作已取消"
     }
 }
 
+# 模型管理函数
+function global:Get-ModelList {
+    param(
+        [string]$ConfigFile = (Join-Path -Path $env:GPT_PATH -ChildPath "model.json")
+    )
+
+    if (-not (Test-Path $ConfigFile)) {
+        Write-Error "错误：未找到配置文件: $ConfigFile"
+        return
+    }
+
+    $config = Get-Content -Path $ConfigFile -Encoding UTF8 | ConvertFrom-Json
+    $config.PSObject.Properties | Where-Object { $_.Value.key } | ForEach-Object {
+        Write-Host "$($_.Name): $($_.Value.model_name)"
+    }
+}
+
+function global:Use-GptModel {
+    param(
+        [Parameter(Mandatory)]$ModelName,
+        [string]$ConfigFile = (Join-Path -Path $env:GPT_PATH -ChildPath "model.json"),
+        [switch]$Silent
+    )
+
+    if (-not (Test-Path $ConfigFile)) {
+        Write-Error "错误：未找到配置文件: $ConfigFile"
+        return
+    }
+
+    $config = Get-Content -Path $ConfigFile -Encoding UTF8 | ConvertFrom-Json
+    $modelConfig = $config.$ModelName
+
+    if (-not $modelConfig -or -not $modelConfig.key -or -not $modelConfig.base_url -or -not $modelConfig.model_name) {
+        Write-Error "错误：未找到模型 '$ModelName' 或配置不完整"
+        return
+    }
+
+    $env:GPT_KEY = $modelConfig.key
+    $env:GPT_BASE_URL = $modelConfig.base_url
+    $env:GPT_MODEL = $modelConfig.model_name
+    if ($modelConfig.max_tokens) { $env:GPT_MAX_TOKEN = $modelConfig.max_tokens }
+    if ($modelConfig.temperature) { $env:GPT_TEMPERATURE = $modelConfig.temperature }
+
+    if (-not $Silent) {
+        Write-Host "成功设置GPT环境变量："
+        Write-Host "  GPT_KEY: $($modelConfig.key.Substring(0,4))****"
+        Write-Host "  GPT_BASE_URL: $($modelConfig.base_url)"
+        Write-Host "  GPT_MODEL: $($modelConfig.model_name)"
+        if ($modelConfig.max_tokens) { Write-Host "  GPT_MAX_TOKEN: $($modelConfig.max_tokens)" }
+        if ($modelConfig.temperature) { Write-Host "  GPT_TEMPERATURE: $($modelConfig.temperature)" }
+    }
+}
+
+# 新增 usegpt 函数
+function global:usegpt {
+    param(
+        [Parameter(ValueFromRemainingArguments)]$ModelName
+    )
+    if (-not $ModelName) {
+        Write-Host "可用模型列表："
+        Get-ModelList
+        return
+    }
+    Use-GptModel -ModelName $ModelName
+}
+
+# 环境检查
+function global:Test-GptEnv {
+    if (-not $env:GPT_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
+        Write-Error "错误：请先配置GPT_KEY、GPT_BASE_URL和GPT_MODEL环境变量"
+        return $false
+    }
+    return $true
+}
+
+# 公共工具函数
+function global:Write-Debug {
+    param([string]$Message)
+    if ($env:GPT_DEBUG -eq "1") {
+        Write-Host "DEBUG: $Message" -ForegroundColor DarkGray
+    }
+}
+
+# 主功能命令
+function global:allconversation {
+    Get-ConversationList -Limit 0 | Invoke-ConversationSelection -Title "所有对话记录"
+}
+
 function global:recentconversation {
-    _conversation_list 10
+    Get-ConversationList -Limit 10 | Invoke-ConversationSelection -Title "最近10条对话记录"
 }
 
 function global:listgpt {
-    $config_file = if ($args[0]) { $args[0] } else { Join-Path -Path $env:GPT_PATH -ChildPath "model.json" }
-
-    if (-not (Test-Path $config_file)) {
-        Write-Error "错误：未找到配置文件: $config_file"
-        return
-    }
-
-    $config = Get-Content -Path $config_file -Raw | ConvertFrom-Json
-    $config.PSObject.Properties | ForEach-Object {
-        if ($_.Value.key) {
-            Write-Host "$($_.Name): $($_.Value.model_name)"
-        }
-    }
+    Get-ModelList @args
 }
 
-function global:commitgpt {
-    # 开始新会话
-    newconversation
-    
-    # 生成提交信息
-    askgpt \@git-commit-message \@git-stage= \@git-diff-summary.txt
-    
-    # 删除临时文件
-    Remove-Item -Path git-diff-summary.txt -ErrorAction SilentlyContinue
-    
-    # 检查并编辑提交信息
-    $commitFile = Join-Path -Path $env:GPT_PATH -ChildPath ".lastgptanswer"
-    if (Test-Path $commitFile) {
-        # 默认使用 VS Code 打开文件
-        $editor = $env:EDITOR
-        if (-not $editor) {
-            $editor = "code"
-        }
-        Start-Process -FilePath $editor -ArgumentList $commitFile -Wait
-        
-        # 执行git提交
-        git commit -F $commitFile
-        
-        # 删除临时文件
-        Remove-Item -Path $commitFile
-    }
-    else {
-        Write-Error "错误：未找到提交信息文件 $commitFile"
-        return 1
-    }
-}
-
-
-function global:usegpt {
-    if (-not $args[0]) {
-        Write-Error "错误：模型名称不能为空"
-        return
-    }
-
-    $model_name = $args[0]
-    $config_file = if ($args[1]) { $args[1] } else { Join-Path -Path $env:GPT_PATH -ChildPath "model.json" }
-
-    if (-not (Test-Path $config_file)) {
-        Write-Error "错误：未找到配置文件: $config_file"
-        return
-    }
-
-    $config = Get-Content -Path $config_file -Raw | ConvertFrom-Json
-    $model_config = $config.$model_name
-    $key = $model_config.key
-    $base_url = $model_config.base_url
-    $model = $model_config.model_name
-    $max_tokens = $model_config.max_tokens
-
-    if (-not $key -or -not $base_url -or -not $model) {
-        Write-Error "错误：未找到模型 '$model_name' 或配置不完整"
-        return
-    }
-
-    $env:GPT_KEY = $key
-    $env:GPT_BASE_URL = $base_url
-    $env:GPT_MODEL = $model
-    if ($max_tokens) {
-        $env:GPT_MAX_TOKEN = $max_tokens
-    }
-
-    Write-Host "成功设置GPT环境变量："
-    Write-Host "  GPT_KEY: $($key.Substring(0,4))****"
-    Write-Host "  GPT_BASE_URL: $base_url"
-    Write-Host "  GPT_MODEL: $model"
-    if ($max_tokens) {
-        Write-Host "  GPT_MAX_TOKEN: $max_tokens"
-    }
-}
-
-# $env:DEBUG=1
-
-Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
+function global:explaingpt {
     param(
-        $wordToComplete,
-        $commandAst,
-        $cursorPosition
+        [Parameter(Mandatory)]$File,
+        $PromptFile = (Join-Path -Path $env:GPT_PROMPTS_DIR -ChildPath "source-query.txt")
     )
 
-    # 调试信息输出
-    if ($env:DEBUG) {
-        Write-Host "`n[DEBUG] 自动补全调试信息:"
-        Write-Host "  wordToComplete: $wordToComplete"
-        Write-Host "  cursorPosition: $cursorPosition"
-        Write-Host "  CommandAst: $($commandAst | Out-String)"
+    if (-not (Test-Path $File)) { throw "源文件不存在: $File" }
+    if (-not (Test-Path $PromptFile)) { throw "提示文件不存在: $PromptFile" }
+
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --file $File --prompt-file $PromptFile
+}
+
+function global:chat {
+    param([switch]$New)
+    if (-not (Test-GptEnv)) { return }
+    if ($New) { New-Conversation }
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --chatbot
+}
+
+function global:chatbot {
+    chat -New
+}
+
+function global:chatagain {
+    chat
+}
+
+
+function global:askgpt {
+    param([Parameter(ValueFromRemainingArguments)]$Question)
+    if (-not $Question) { throw "问题不能为空" }
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask $Question
+}
+
+
+
+# 补全支持
+function global:Get-PromptFiles {
+    Get-ChildItem -Path $env:GPT_PROMPTS_DIR -File | Select-Object -ExpandProperty Name
+}
+
+Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
+    param($commandName, $commandAst, $cursorPosition)
+
+    # 从AST中获取当前输入的单词
+    $wordToComplete = $commandAst.CommandElements[-1].Value
+
+    if ($env:GPT_DEBUG -eq "1") {
+        $debugInfo = @(
+            "开始自动补全调试信息：",
+            "当前输入: $wordToComplete",
+            "光标位置: $cursorPosition",
+            "完整AST结构:",
+            ($commandAst.CommandElements)
+        )
+        $debugInfo | ForEach-Object {
+            Write-Host $_ -ForegroundColor DarkGray
+        }
     }
 
-    $currentToken = $commandAst.CommandElements |
-        Where-Object { 
-            $_.Extent.StartOffset -le $cursorPosition -and 
-            $_.Extent.EndOffset -ge $cursorPosition 
-        } |
-        Select-Object -ExpandProperty Value -First 1
-
-    if ($currentToken -like '\@*') {
-        $prefix = '\@'
-        $search = $currentToken.Substring(2)
-
-        if ($env:DEBUG) {
-            Write-Host "  currentToken: $currentToken"
-            Write-Host "  search: $search"
+    if ($wordToComplete -like '*@*' -or $wordToComplete -like '*\@*') {
+        # 处理包含@或\@的情况
+        $search = if ($wordToComplete.StartsWith('@')) {
+            $wordToComplete.Substring(1)
+        }
+        elseif ($wordToComplete.StartsWith('\@')) {
+            $wordToComplete.Substring(2)
+        }
+        else {
+            $wordToComplete.Substring($wordToComplete.IndexOf('@') + 1)
+        }
+        
+        if ($env:GPT_DEBUG -eq "1") {
+            Write-Host "搜索前缀: $search" -ForegroundColor DarkGray
         }
 
-        # 特殊项（保持原样）
-        $special = @('clipboard', 'tree', 'treefull', 'read')
-
-        # 提示词文件（仅搜索prompts目录）
-        $prompts = @()
-        if (Test-Path $env:GPT_PROMPTS_DIR) {
-            $prompts = Get-ChildItem -Path $env:GPT_PROMPTS_DIR -File -Filter "$search*" |
-                ForEach-Object { $prefix + $_.Name }
-        }
-
-        if ($env:DEBUG) {
-            Write-Host "  找到提示词文件: $($prompts -join ', ')"
-        }
-
-        # 文件系统补全（仅当前目录，不递归子目录）
-        $files = @()
-        try {
-            $searchPath = Join-Path (Get-Location).Path $search
-            if ($search -match "[/\\]") {
-                $dir = Split-Path $searchPath -Parent
-                $file = Split-Path $searchPath -Leaf
-                $files = Get-ChildItem -Path $dir -File -Filter "$file*" -ErrorAction SilentlyContinue |
-                    ForEach-Object { $prefix + (Join-Path (Split-Path $search) $_.Name) }
+        $prompts = @(Get-PromptFiles | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" })
+        $special = @('clipboard', 'tree', 'treefull', 'read', 'listen', 'symbol:', 'glow', 'last') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
+        $files = Get-ChildItem -File -Filter "$search*" | Select-Object -ExpandProperty Name | ForEach-Object { "\@$_" }
+        
+        # 添加API补全支持
+        $apiCompletions = @()
+        if ($env:GPT_API_SERVER -and $search -like "symbol:*") {
+            $symbolPrefix = $search.Substring(7)  # 去掉"symbol:"
+            if ($symbolPrefix -notmatch "\.") {
+                # 本地文件补全
+                $apiCompletions = Get-ChildItem -File -Filter "$symbolPrefix*" | 
+                    Select-Object -ExpandProperty Name | 
+                    ForEach-Object { "\@symbol:$_" }
             }
             else {
-                $files = Get-ChildItem -Path . -File -Filter "$search*" -ErrorAction SilentlyContinue |
-                    ForEach-Object { $prefix + $_.Name }
+                # 远程API补全
+                try {
+                    $apiServer = $env:GPT_API_SERVER.TrimEnd('/')
+                    $response = Invoke-RestMethod -Uri "$apiServer/complete_realtime?prefix=$search" -UseBasicParsing
+                    $apiCompletions = $response -split "`n" | ForEach-Object { "\@$_" }
+                }
+                catch {
+                    Write-Debug "API补全请求失败: $_"
+                }
             }
         }
-        catch {}
-
-        if ($env:DEBUG) {
-            Write-Host "  找到文件系统匹配项: $($files -join ', ')"
+        
+        if ($env:GPT_DEBUG -eq "1") {
+            Write-Host "找到的提示文件: $($prompts -join ', ')" -ForegroundColor DarkGray
+            Write-Host "找到的特殊命令: $($special -join ', ')" -ForegroundColor DarkGray
+            Write-Host "找到的匹配文件: $($files -join ', ')" -ForegroundColor DarkGray
+            Write-Host "找到的API补全: $($apiCompletions -join ', ')" -ForegroundColor DarkGray
         }
 
-        # 合并建议项（优先显示特殊项和提示词）
-        $suggestions = @()
-        $suggestions += $special | Where-Object { $_ -like "$search*" } | ForEach-Object { $prefix + $_ }
-        $suggestions += $prompts
-        $suggestions += $files | Sort-Object -Unique
-
-        if ($env:DEBUG) {
-            Write-Host "  最终建议项: $($suggestions -join ', ')"
+        $results = @($special) + @($prompts) + @($files) + @($apiCompletions)
+        
+        if ($env:GPT_DEBUG -eq "1") {
+            Write-Host "最终补全结果: $($results -join ', ')" -ForegroundColor DarkGray
+            Write-Host "自动补全调试结束" -ForegroundColor DarkGray
         }
 
-        $suggestions | ForEach-Object {
-            [System.Management.Automation.CompletionResult]::new(
-                $_, 
-                $_, 
-                "ParameterValue", 
-                $_
-            )
+        $results | ForEach-Object {
+            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
         }
-    }
+    } 
 }
 
 
 Register-ArgumentCompleter -CommandName usegpt -ScriptBlock {
-    param($commandName, $wordToComplete, $cursorPosition)
+    param($commandName, $commandAst, $cursorPosition)
 
-    if ($env:DEBUG) {
-        Write-Host "开始补全useGPT命令参数"
-        Write-Host "当前输入: $wordToComplete"
+    if ($env:GPT_DEBUG -eq "1") {
+        Write-Host "开始usegpt自动补全" -ForegroundColor DarkGray
     }
 
-    $config_file = Join-Path $env:GPT_PATH "model.json"
-    if (-not (Test-Path $config_file)) {
-        if ($env:DEBUG) {
-            Write-Host "未找到配置文件: $config_file"
+    # 获取当前命令元素
+    $elements = $commandAst.CommandElements
+
+    # 如果当前是空格后的补全（即没有输入任何内容）
+    if ($elements.Count -eq 1 -or ($elements.Count -eq 2 -and $elements[-1].Value -eq "")) {
+        $wordToComplete = ""
+    }
+    else {
+        # 从AST中获取当前输入的单词
+        $wordToComplete = $elements[-1].Value
+
+        # 处理可能存在的./前缀
+        if ($wordToComplete -like "./*") {
+            $wordToComplete = $wordToComplete.Substring(2)
         }
-        return 
     }
 
-    if ($env:DEBUG) {
-        Write-Host "正在读取配置文件: $config_file"
+    if ($env:GPT_DEBUG -eq "1") {
+        Write-Host "当前补全单词: $wordToComplete" -ForegroundColor DarkGray
     }
 
-    $providers = & {
-        $config = Get-Content $config_file | ConvertFrom-Json
-        $config.PSObject.Properties | Where-Object { $_.Value.key } | ForEach-Object { $_.Name }
+    $configFile = Join-Path -Path $env:GPT_PATH -ChildPath "model.json"
+    if (Test-Path $configFile) {
+        if ($env:GPT_DEBUG -eq "1") {
+            Write-Host "找到模型配置文件: $configFile" -ForegroundColor DarkGray
+        }
+
+        $models = (Get-Content $configFile | ConvertFrom-Json).PSObject.Properties.Name
+        
+        if ($env:GPT_DEBUG -eq "1") {
+            Write-Host "所有可用模型: $($models -join ', ')" -ForegroundColor DarkGray
+        }
+
+        $filteredModels = $models | Where-Object { $_ -like "$wordToComplete*" }
+        
+        if ($env:GPT_DEBUG -eq "1") {
+            Write-Host "匹配的模型: $($filteredModels -join ', ')" -ForegroundColor DarkGray
+        }
+
+        $filteredModels | ForEach-Object {
+            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
+    }
+    else {
+        if ($env:GPT_DEBUG -eq "1") {
+            Write-Host "未找到模型配置文件" -ForegroundColor DarkGray
+        }
     }
 
-    if ($env:DEBUG) {
-        Write-Host "找到的可用provider: $($providers -join ', ')"
-        Write-Host "正在过滤匹配项..."
-    }
-    
-    $searchTerm = if ($wordToComplete -like "usegpt*") { $wordToComplete -replace "^usegpt[ .\\/]*", "" } else { $wordToComplete }
-    if ($env:DEBUG) {
-        Write-Host "匹配词 $searchTerm"
-    }
-    $filteredProviders = $providers | Where-Object { $_ -like "$searchTerm*" }
-
-    if ($env:DEBUG) {
-        Write-Host "匹配的provider: $($filteredProviders -join ', ')"
-        Write-Host "生成补全建议..."
-    }
-
-    $filteredProviders | ForEach-Object {
-        [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_)
+    if ($env:GPT_DEBUG -eq "1") {
+        Write-Host "usegpt自动补全结束" -ForegroundColor DarkGray
     }
 }
 
-# 加载默认配置
+# 初始化流程
+Initialize-GptEnv
+Initialize-Directories
+
+# 自动配置默认模型
 if (-not $env:GPT_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
-    if (Test-Path (Join-Path $env:GPT_PATH "model.json")) {
-        $config = Get-Content (Join-Path $env:GPT_PATH "model.json") | ConvertFrom-Json
-        $defaultProvider = if ($config.PSObject.Properties["default"]) {
-            "default"
-        }
-        else {
-            ($config.PSObject.Properties.Name | Select-Object -First 1)
-        }
-        if ($defaultProvider) {
-            usegpt $defaultProvider
+    $configFile = Join-Path -Path $env:GPT_PATH -ChildPath "model.json"
+    if (Test-Path $configFile) {
+        $firstModel = (Get-Content $configFile | ConvertFrom-Json).PSObject.Properties | 
+            Where-Object { $_.Value.key } | 
+            Select-Object -First 1 -ExpandProperty Name
+        if ($firstModel) {
+            Use-GptModel -ModelName $firstModel -Silent
         }
     }
 }
 
-# 主功能函数
-function global:askgpt {
-    # 将参数拼接为单个字符串
-    $question = $args -join " "
-
-    $pythonPath = Get-PythonPath
-    & $pythonPath (Join-Path $env:GPT_PATH "llm_query.py") --ask "$question"
-}
-
-function global:explaingpt {
-    if ($args.Count -lt 1) {
-        Write-Error "错误：需要提供源文件路径"
-        return
+# 获取Python路径
+function global:Get-PythonPath {
+    $venvPython = if ($env:OS -eq 'Windows_NT') {
+        Join-Path -Path $env:GPT_PATH -ChildPath ".venv\Scripts\python.exe"
+    }
+    else {
+        Join-Path -Path $env:GPT_PATH -ChildPath ".venv/bin/python"
     }
 
-    $file = $args[0]
-    $prompt_file = if ($args.Count -gt 1) { $args[1] } else { Join-Path $env:GPT_PROMPTS_DIR "source-query.txt" }
-
-    if (-not (Test-Path $file)) {
-        Write-Error "错误：未找到源文件: $file"
-        return
+    if (Test-Path $venvPython) { return $venvPython }
+    
+    $sysPython = if ($env:OS -eq 'Windows_NT') { 'python.exe' } else { 'python3' }
+    $sysPath = Get-Command $sysPython -ErrorAction SilentlyContinue
+    if ($sysPath) { 
+        Write-Warning "使用系统Python: $($sysPath.Source)"
+        return $sysPath.Source
     }
 
-    if (-not (Test-Path $prompt_file)) {
-        Write-Error "错误：未找到提示文件: $prompt_file"
-        return
-    }
-
-    $pythonPath = Get-PythonPath
-    & $pythonPath (Join-Path $env:GPT_PATH "llm_query.py") --file $file --prompt-file $prompt_file
+    throw "未找到可用的Python解释器"
 }
