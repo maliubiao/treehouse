@@ -559,6 +559,168 @@ class ParserUtil:
             )
 
 
+def dump_tree(node, source_bytes, indent=0):
+    prefix = "  " * indent
+    node_text = node.text.decode("utf8") if node.text else ""
+    # 或者根据 source_bytes 截取：node_text = source_bytes[node.start_byte:node.end_byte].decode('utf8')
+    print(f"{prefix}{node.type} [start:{node.start_byte}, end:{node.end_byte}] '{node_text}'")
+    for child in node.children:
+        dump_tree(child, source_bytes, indent + 1)
+
+
+# 定义Tree-sitter节点类型常量
+class NodeTypes:
+    MODULE = "module"
+    CLASS_DEFINITION = "class_definition"
+    FUNCTION_DEFINITION = "function_definition"
+    DECORATED_DEFINITION = "decorated_definition"
+    EXPRESSION_STATEMENT = "expression_statement"
+    IMPORT_STATEMENT = "import_statement"
+    IMPORT_FROM_STATEMENT = "import_from_statement"
+    BLOCK = "block"
+    ASSIGNMENT = "assignment"
+    BODY = "body"
+
+
+class SourceSkeleton:
+    def __init__(self, parser_loader: ParserLoader):
+        self.parser_loader = parser_loader
+
+    def _get_docstring(self, body, parent_type: str):
+        """根据Tree-sitter节点类型提取文档字符串"""
+        if parent_type == NodeTypes.DECORATED_DEFINITION:
+            for i in body.children:
+                if i.type == NodeTypes.FUNCTION_DEFINITION:
+                    body = i
+                    parent_type = NodeTypes.FUNCTION_DEFINITION
+                    break
+        # 模块文档字符串：第一个连续的字符串表达式
+        if parent_type == NodeTypes.MODULE:
+            if len(body.children) > 1 and body.children[0].type == NodeTypes.EXPRESSION_STATEMENT:
+                return body.children[0].text.decode("utf8")
+
+        # 类/函数文档字符串：body中的第一个字符串表达式
+        elif parent_type in [NodeTypes.CLASS_DEFINITION, NodeTypes.FUNCTION_DEFINITION]:
+            body = body.child_by_field_name(NodeTypes.BODY)
+            if body:
+                if len(body.children) > 1 and body.children[0].type == NodeTypes.EXPRESSION_STATEMENT:
+                    return body.children[0].text.decode("utf8")
+
+        return None
+
+    def _capture_signature(self, node, source_bytes: bytes) -> str:
+        """精确捕获定义签名（基于Tree-sitter解析结构）"""
+        # todo 定位到params后边那个:号，也不只这样，可能还有个-> type:
+        # 处理装饰器
+        start = node.start_byte
+        end = 0
+        if node.type == NodeTypes.DECORATED_DEFINITION:
+            for i, v in enumerate(node.children):
+                if v.type in (NodeTypes.FUNCTION_DEFINITION, NodeTypes.CLASS_DEFINITION):
+                    for j, v1 in enumerate(v.children):
+                        if v1.type == NodeTypes.BLOCK:
+                            end = v.children[j - 1].end_byte
+                            break
+            if end == 0:
+                dump_tree(node, source_bytes)
+                raise ValueError("unknown ast")
+
+            return source_bytes[start:end].decode("utf8")
+        # 捕获定义主体
+        elif node.type == NodeTypes.FUNCTION_DEFINITION or node.type == NodeTypes.CLASS_DEFINITION:
+            end = 0
+            for j, v1 in enumerate(node.children):
+                if v1.type == NodeTypes.BLOCK:
+                    end = node.children[j - 1].end_byte
+                    break
+            if end == 0:
+                dump_tree(node, source_bytes)
+                raise ValueError("unknown ast")
+            return source_bytes[start:end].decode("utf8")
+        else:
+            dump_tree(node, source_bytes)
+            raise ValueError("unknown ast")
+
+    def _process_node(self, node, source_bytes: bytes, indent=0) -> List[str]:
+        """基于Tree-sitter节点类型的处理逻辑"""
+        output = []
+        indent_str = "    " * indent
+
+        # 处理模块级元素
+        if node.type == NodeTypes.MODULE:
+            # 处理模块子节点
+            for child in node.children:
+                if child.type in [
+                    NodeTypes.CLASS_DEFINITION,
+                    NodeTypes.FUNCTION_DEFINITION,
+                    NodeTypes.IMPORT_FROM_STATEMENT,
+                    NodeTypes.EXPRESSION_STATEMENT,
+                    NodeTypes.IMPORT_STATEMENT,
+                    NodeTypes.DECORATED_DEFINITION,
+                ]:
+                    output.extend(self._process_node(child, source_bytes))
+
+        # 处理类定义
+        elif node.type == NodeTypes.CLASS_DEFINITION:
+            # 捕获类签名
+            class_sig = self._capture_signature(node, source_bytes)
+            output.append(f"\n{class_sig}")
+
+            # 提取类文档字符串
+            docstring = self._get_docstring(node, NodeTypes.CLASS_DEFINITION)
+            if docstring:
+                output.append(f'{indent_str}    """{docstring}"""')
+
+            # 处理类成员
+            body = node.child_by_field_name(NodeTypes.BODY)
+            if body:
+                for member in body.children:
+                    if member.type in [NodeTypes.FUNCTION_DEFINITION, NodeTypes.DECORATED_DEFINITION]:
+                        output.extend(self._process_node(member, source_bytes, indent + 1))
+                    elif member.type == NodeTypes.ASSIGNMENT:
+                        code = source_bytes[member.start_byte : member.end_byte].decode("utf8")
+                        output.append(f"{indent_str}    {code}")
+
+        # 处理函数/方法定义
+        elif node.type in [NodeTypes.FUNCTION_DEFINITION, NodeTypes.DECORATED_DEFINITION]:
+            # 捕获函数签名
+            func_sig = self._capture_signature(node, source_bytes)
+            output.append(f"{indent_str}{func_sig}")
+
+            # 提取函数文档字符串
+            docstring = self._get_docstring(node, node.type)
+            if docstring:
+                output.append(f"{indent_str}    {docstring}")
+            # 添加占位符
+            output.append(f"{indent_str}    pass  # Placeholder")
+
+        # 处理模块级赋值
+        elif (
+            node.type in (NodeTypes.EXPRESSION_STATEMENT, NodeTypes.IMPORT_STATEMENT, NodeTypes.IMPORT_FROM_STATEMENT)
+            and node.parent.type == NodeTypes.MODULE
+        ):
+            code = source_bytes[node.start_byte : node.end_byte].decode("utf8")
+            output.append(f"{code}")
+
+        return output
+
+    def generate_framework(self, file_path: str) -> str:
+        """生成符合测试样例结构的框架代码"""
+        parser, _, _ = self.parser_loader.get_parser(file_path)
+
+        with open(file_path, "rb") as f:
+            source_bytes = f.read()
+
+        tree = parser.parse(source_bytes)
+        root = tree.root_node
+        framework = ["# Auto-generated code skeleton\n"]
+        framework_content = self._process_node(root, source_bytes)
+
+        # 合并结果并优化格式
+        result = "\n".join(framework + framework_content)
+        return re.sub(r"\n{3,}", "\n\n", result).strip() + "\n"
+
+
 class BlockPatch:
     """用于生成代码块的差异补丁"""
 
@@ -1858,6 +2020,39 @@ def test_symbols_api():
         test_conn.commit()
 
 
+def debug_tree_source_file(file_path: Path):
+    """调试函数：解析指定文件并打印整个语法树结构
+
+    Args:
+        file_path: 要调试的源代码文件路径
+    """
+    try:
+        # 获取解析器和查询对象
+        parser, _, _ = ParserLoader().get_parser(str(file_path))
+        print(f"[DEBUG] 开始解析文件: {file_path}")
+
+        # 解析文件并获取语法树
+        tree = parse_code_file(file_path, parser)
+        print(f"[DEBUG] 文件解析完成，开始打印语法树")
+
+        # 递归打印语法树结构
+        def print_tree(node, indent=0):
+            # 获取节点文本内容
+            node_text = node.text.decode("utf-8") if node.text else ""
+            # 打印节点类型、位置和内容
+            print(" " * indent + f"{node.type} ({node.start_point} -> {node.end_point}): {node_text}")
+            for child in node.children:
+                print_tree(child, indent + 2)
+
+        # 从根节点开始打印
+        print_tree(tree.root_node)
+        print(f"[DEBUG] 语法树打印完成")
+
+    except Exception as e:
+        print(f"[ERROR] 调试语法树时发生错误: {str(e)}")
+        raise
+
+
 def debug_process_source_file(file_path: Path, project_dir: Path):
     """调试版本的源代码处理函数，直接打印符号信息而不写入数据库"""
     try:
@@ -2417,6 +2612,7 @@ if __name__ == "__main__":
     parser.add_argument("--demo", action="store_true", help="运行演示模式")
     parser.add_argument("--include", type=str, nargs="+", help="要包含的文件后缀列表（可指定多个，如 .c .h）")
     parser.add_argument("--debug-file", type=str, help="单文件调试模式，指定要调试的文件路径")
+    parser.add_argument("--debug-tree", type=str, help="树结构调试模式，指定要调试的文件路径")
     parser.add_argument("--format-dir", type=str, help="指定要格式化的目录路径")
     parser.add_argument("--build-index", action="store_true", help="构建符号索引")
     parser.add_argument("--db-path", type=str, default="symbols.db", help="符号数据库文件路径")
@@ -2431,9 +2627,10 @@ if __name__ == "__main__":
         test_split_source_and_patch()
         demo_main()
         test_symbols_api()
-
     elif args.debug_file:
         debug_process_source_file(Path(args.debug_file), Path(args.project[0]))
+    elif args.debug_tree:
+        debug_tree_source_file(Path(args.debug_tree))
     elif args.format_dir:
         format_c_code_in_directory(Path(args.format_dir))
     elif args.build_index:

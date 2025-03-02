@@ -733,6 +733,37 @@ def read_last_query(_):
         return ""
 
 
+def patch_symbol(symbol_name):
+    """使用公共http函数请求符号补丁"""
+    api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
+    url = f"{api_url}/symbol_content?symbol_path=symbol:{symbol_name}"
+    return _send_http_request(url)
+
+
+def _fetch_symbol_data(symbol_name, file_path=None):
+    """获取符号数据"""
+    # 从环境变量获取API地址
+    api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
+    url = f"{api_url}/symbols/{symbol_name}/context?max_depth=2" + (f"&file_path={file_path}" if file_path else "")
+
+    # 使用公共函数发送请求
+    return _send_http_request(url)
+
+
+def _send_http_request(url):
+    """发送HTTP请求的公共函数"""
+    # 禁用所有代理
+    proxies = {"http": None, "https": None, "http_proxy": None, "https_proxy": None, "all_proxy": None}
+    # 同时清除环境变量中的代理设置
+    os.environ.pop("http_proxy", None)
+    os.environ.pop("https_proxy", None)
+    os.environ.pop("all_proxy", None)
+
+    response = requests.get(url, proxies=proxies, timeout=5)
+    response.raise_for_status()
+    return response.json()
+
+
 def query_symbol(symbol_name):
     """查询符号定义信息，优化上下文长度"""
     # 如果符号名包含斜杠，则分离路径和符号名
@@ -743,20 +774,7 @@ def query_symbol(symbol_name):
     else:
         file_path = None
     try:
-        # 从环境变量获取API地址
-        api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050/symbols")
-        url = f"{api_url}/{symbol_name}/context?max_depth=2" + (f"&file_path={file_path}" if file_path else "")
-
-        # 发送HTTP请求，禁用所有代理
-        proxies = {"http": None, "https": None, "http_proxy": None, "https_proxy": None, "all_proxy": None}
-        # 同时清除环境变量中的代理设置
-        os.environ.pop("http_proxy", None)
-        os.environ.pop("https_proxy", None)
-        os.environ.pop("all_proxy", None)
-
-        response = requests.get(url, proxies=proxies, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+        data = _fetch_symbol_data(symbol_name, file_path)
         # 构建上下文
         context = "\n[symbol context start]\n"
         context += f"符号名称: {data['symbol_name']}\n"
@@ -888,6 +906,7 @@ def initialize_cmd_map():
         "treefull": get_directory_context_wrapper,
         "last": read_last_query,
         "symbol": query_symbol,
+        "patch": patch_symbol,
     }
 
 
