@@ -2610,6 +2610,10 @@ def main(
 
 if __name__ == "__main__":
     import argparse
+    import logging
+
+    # 配置日志格式
+    logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
     parser = argparse.ArgumentParser(description="代码分析工具")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP服务器绑定地址")
@@ -2625,22 +2629,37 @@ if __name__ == "__main__":
     parser.add_argument("--excludes", type=str, nargs="+", help="要排除的文件或目录路径列表（可指定多个）")
     parser.add_argument("--parallel", type=int, default=-1, help="并行度，-1表示使用CPU核心数，0或1表示单进程")
     parser.add_argument("--source-symbol-path", type=str, help="输出指定文件的符号路径")
-    parser.add_argument("--debug-skeleton", type=str, help="调试模式，输出指定文件的框架信息")
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="设置日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL",
+    )
 
     args = parser.parse_args()
 
+    # 设置日志级别
+    logging.getLogger().setLevel(args.log_level)
+    logger = logging.getLogger(__name__)
+    logger.info(f"启动代码分析工具，日志级别设置为：{args.log_level}")
+
     DEFAULT_DB = args.db_path
     if args.demo:
+        logger.debug("进入演示模式")
         test_split_source_and_patch()
         demo_main()
         test_symbols_api()
     elif args.debug_file:
+        logger.debug(f"单文件调试模式，文件路径：{args.debug_file}")
         debug_process_source_file(Path(args.debug_file), Path(args.project[0]))
     elif args.debug_tree:
         debug_tree_source_file(Path(args.debug_tree))
     elif args.format_dir:
+        logger.debug(f"格式化目录：{args.format_dir}")
         format_c_code_in_directory(Path(args.format_dir))
     elif args.build_index:
+        logger.info("开始构建符号索引")
         build_index(
             project_paths=args.project,
             excludes=args.excludes,
@@ -2649,6 +2668,7 @@ if __name__ == "__main__":
             parallel=args.parallel,
         )
     elif args.source_symbol_path:
+        logger.debug(f"输出符号路径：{args.source_symbol_path}")
         parser_loader = ParserLoader()
         parser_util = ParserUtil(parser_loader)
         parser_util.print_symbol_paths(args.source_symbol_path)
@@ -2659,6 +2679,7 @@ if __name__ == "__main__":
         print("源代码框架信息：")
         print(framework)
     else:
+        logger.info("启动FastAPI服务")
         main(
             host=args.host,
             port=args.port,
