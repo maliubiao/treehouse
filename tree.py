@@ -694,7 +694,7 @@ class SourceSkeleton:
             if docstring:
                 output.append(f"{indent_str}{INDENT_UNIT}{docstring}")
             # 添加占位符
-            output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
+            # output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
 
         # 处理模块级赋值
         elif (
@@ -2621,6 +2621,7 @@ if __name__ == "__main__":
     parser.add_argument("--excludes", type=str, nargs="+", help="要排除的文件或目录路径列表（可指定多个）")
     parser.add_argument("--parallel", type=int, default=-1, help="并行度，-1表示使用CPU核心数，0或1表示单进程")
     parser.add_argument("--source-symbol-path", type=str, help="输出指定文件的符号路径")
+    parser.add_argument("--debug-skeleton", type=str, help="调试模式，输出指定文件的框架信息")
 
     args = parser.parse_args()
 
@@ -2647,6 +2648,12 @@ if __name__ == "__main__":
         parser_loader = ParserLoader()
         parser_util = ParserUtil(parser_loader)
         parser_util.print_symbol_paths(args.source_symbol_path)
+    elif args.debug_skeleton:
+        parser_loader = ParserLoader()
+        skeleton = SourceSkeleton(parser_loader)
+        framework = skeleton.generate_framework(args.debug_skeleton)
+        print("源代码框架信息：")
+        print(framework)
     else:
         main(
             host=args.host,
