@@ -231,8 +231,8 @@ chat() {
 }
 
 askgpt() {
-    [[ -z "$@" ]] && { echo >&2 "Error: Question cannot be empty"; return 1; }
-    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --ask "$@"
+    [[ -z "$*" ]] && { echo >&2 "Error: Question cannot be empty"; return 1; }
+    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --ask "$*"
 }
 
 # 补全功能辅助函数
