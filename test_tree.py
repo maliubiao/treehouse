@@ -39,6 +39,7 @@ class TestSourceFrameworkParser(unittest.TestCase):
             @decorator2
             def my_method(self):
                 \"\"\"Method docstring\"\"\"
+                pass  # Placeholder
         """
         ).strip()
 
@@ -73,6 +74,7 @@ class TestSourceFrameworkParser(unittest.TestCase):
         VALUE = 100
         @class_decorator
         class MyClass:
+            pass  # Placeholder
         """
         ).strip()
 

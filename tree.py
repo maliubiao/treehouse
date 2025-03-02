@@ -578,8 +578,8 @@ class NodeTypes:
     IMPORT_STATEMENT = "import_statement"
     IMPORT_FROM_STATEMENT = "import_from_statement"
     BLOCK = "block"
-    ASSIGNMENT = "assignment"
     BODY = "body"
+    STRING = "string"
 
 
 INDENT_UNIT = "    "  # 定义缩进单位
@@ -606,7 +606,11 @@ class SourceSkeleton:
         elif parent_type in [NodeTypes.CLASS_DEFINITION, NodeTypes.FUNCTION_DEFINITION]:
             body = body.child_by_field_name(NodeTypes.BODY)
             if body:
-                if len(body.children) > 1 and body.children[0].type == NodeTypes.EXPRESSION_STATEMENT:
+                if (
+                    len(body.children) > 1
+                    and body.children[0].type == NodeTypes.EXPRESSION_STATEMENT
+                    and body.children[0].children[0].type == NodeTypes.STRING
+                ):
                     return body.children[0].text.decode("utf8")
 
         return None
@@ -679,7 +683,7 @@ class SourceSkeleton:
                 for member in body.children:
                     if member.type in [NodeTypes.FUNCTION_DEFINITION, NodeTypes.DECORATED_DEFINITION]:
                         output.extend(self._process_node(member, source_bytes, indent + 1))
-                    elif member.type == NodeTypes.ASSIGNMENT:
+                    elif member.type == NodeTypes.EXPRESSION_STATEMENT:
                         code = source_bytes[member.start_byte : member.end_byte].decode("utf8")
                         output.append(f"{indent_str}{INDENT_UNIT}{code}")
 
@@ -694,7 +698,7 @@ class SourceSkeleton:
             if docstring:
                 output.append(f"{indent_str}{INDENT_UNIT}{docstring}")
             # 添加占位符
-            # output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
+            output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
 
         # 处理模块级赋值
         elif (
