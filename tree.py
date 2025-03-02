@@ -582,6 +582,9 @@ class NodeTypes:
     BODY = "body"
 
 
+INDENT_UNIT = "    "  # 定义缩进单位
+
+
 class SourceSkeleton:
     def __init__(self, parser_loader: ParserLoader):
         self.parser_loader = parser_loader
@@ -610,8 +613,7 @@ class SourceSkeleton:
 
     def _capture_signature(self, node, source_bytes: bytes) -> str:
         """精确捕获定义签名（基于Tree-sitter解析结构）"""
-        # todo 定位到params后边那个:号，也不只这样，可能还有个-> type:
-        # 处理装饰器
+
         start = node.start_byte
         end = 0
         if node.type == NodeTypes.DECORATED_DEFINITION:
@@ -644,7 +646,7 @@ class SourceSkeleton:
     def _process_node(self, node, source_bytes: bytes, indent=0) -> List[str]:
         """基于Tree-sitter节点类型的处理逻辑"""
         output = []
-        indent_str = "    " * indent
+        indent_str = INDENT_UNIT * indent
 
         # 处理模块级元素
         if node.type == NodeTypes.MODULE:
@@ -669,7 +671,7 @@ class SourceSkeleton:
             # 提取类文档字符串
             docstring = self._get_docstring(node, NodeTypes.CLASS_DEFINITION)
             if docstring:
-                output.append(f'{indent_str}    """{docstring}"""')
+                output.append(f'{indent_str}{INDENT_UNIT}"""{docstring}"""')
 
             # 处理类成员
             body = node.child_by_field_name(NodeTypes.BODY)
@@ -679,7 +681,7 @@ class SourceSkeleton:
                         output.extend(self._process_node(member, source_bytes, indent + 1))
                     elif member.type == NodeTypes.ASSIGNMENT:
                         code = source_bytes[member.start_byte : member.end_byte].decode("utf8")
-                        output.append(f"{indent_str}    {code}")
+                        output.append(f"{indent_str}{INDENT_UNIT}{code}")
 
         # 处理函数/方法定义
         elif node.type in [NodeTypes.FUNCTION_DEFINITION, NodeTypes.DECORATED_DEFINITION]:
@@ -690,9 +692,9 @@ class SourceSkeleton:
             # 提取函数文档字符串
             docstring = self._get_docstring(node, node.type)
             if docstring:
-                output.append(f"{indent_str}    {docstring}")
+                output.append(f"{indent_str}{INDENT_UNIT}{docstring}")
             # 添加占位符
-            output.append(f"{indent_str}    pass  # Placeholder")
+            output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
 
         # 处理模块级赋值
         elif (
