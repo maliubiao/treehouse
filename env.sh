@@ -339,230 +339,159 @@ function askgpt() {
     $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --ask "$question"
 }
 
-if [[ -n "$ZSH_VERSION" ]]; then
-    _at_complete() {
-        # 定义调试开关
-        local DEBUG=${GPT_DEBUG:-0}
+# 通用函数
+_debug_print() {
+    [[ ${GPT_DEBUG:-0} -eq 1 ]] && echo "Debug: $1" >&2
+}
 
-        # 输出调试信息
-        [[ $DEBUG -eq 1 ]] && echo "Debug: 当前PREFIX = $PREFIX" >&2
-        [[ $DEBUG -eq 1 ]] && echo "Debug: 当前GPT_PATH = $GPT_PATH" >&2
+_get_prompt_files() {
+    local prompt_files=()
+    if [[ -d "$GPT_PATH/prompts" ]]; then
+        prompt_files=($(ls "$GPT_PATH/prompts" 2>/dev/null))
+        _debug_print "找到提示词文件: ${prompt_files[@]}"
+    else
+        _debug_print "未找到提示词目录 $GPT_PATH/prompts"
+    fi
+    echo "${prompt_files[@]}"
+}
 
-        # 检查当前输入是否以@开头
-        if [[ "$PREFIX" == @* ]]; then
-            # 保存原始前缀
-            local orig_prefix=$PREFIX
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 检测到@前缀，原始前缀 = $orig_prefix" >&2
-
-            # 提取@后的部分作为新前缀
-            PREFIX=${orig_prefix#@}
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 新PREFIX = $PREFIX" >&2
-
-            # 设置IPREFIX为@，使得补全结果自动添加@
-            IPREFIX="@"
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 设置IPREFIX = $IPREFIX" >&2
-
-            # 获取prompts目录下的文件列表
-            local prompt_files=()
-            if [[ -d "$GPT_PATH/prompts" ]]; then
-                prompt_files=($(ls "$GPT_PATH/prompts"))
-                # 只输出一次提示词文件信息
-                [[ $DEBUG -eq 1 ]] && echo "Debug: 找到提示词文件: ${prompt_files[@]}" >&2
-            else
-                [[ $DEBUG -eq 1 ]] && echo "Debug: 未找到提示词目录 $GPT_PATH/prompts" >&2
-            fi
-            # 如果GPT_API_SERVER存在，则添加API补全
-            local api_completions=()
-            if [[ -n "$GPT_API_SERVER" && "$PREFIX" == symbol:* ]]; then
-                # 检查是否包含路径且没有文件扩展名
-                if [[ "$PREFIX" != *.* ]]; then
-                    # 提取路径部分
-                    local path_part="${PREFIX#symbol:}"
-                    # 查找本地文件补全
-                    local local_files=()
-                    # 使用zsh的glob模式匹配文件
-                    for f in ${~path_part}*(N); do
-                        local_files+=("$f")
-                    done
-                    if [[ ${#local_files[@]} -gt 0 ]]; then
-                        # 为每个本地文件补全添加symbol:前缀
-                        api_completions=(${local_files[@]/#/symbol:})
-                        [[ $DEBUG -eq 1 ]] && echo "Debug: 找到本地文件补全: ${api_completions[@]}" >&2
-                    else
-                        # 没有找到本地文件补全，尝试远程API
-                        local api_url="${GPT_API_SERVER}complete_realtime?prefix=${PREFIX}"
-                        [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
-                        api_completions=($(curl -s --noproxy "*" "$api_url" 2>/dev/null))
-                        [[ $DEBUG -eq 1 ]] && echo "Debug: 从API获取到补全: ${api_completions[@]}" >&2
-                    fi
-                else
-                    # 直接使用API补全
-                    local api_url="${GPT_API_SERVER}complete_realtime?prefix=${PREFIX}"
-                    [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
-                    api_completions=($(curl -s --noproxy "*" "$api_url" 2>/dev/null))
-                    [[ $DEBUG -eq 1 ]] && echo "Debug: 从API获取到补全: ${api_completions[@]}" >&2
-                fi
-            fi
-
-            # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，接着API补全，最后普通文件补全
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 开始生成补全建议" >&2
-            _alternative \
-                'special:特殊选项:(clipboard tree treefull read listen symbol: glow last)' \
-                'prompts:提示词文件:(${prompt_files[@]})' \
-                'api:API补全:(${api_completions[@]})' \
-                'files:文件名:_files'
-
-            # 恢复原始前缀（避免影响其他补全）
-            PREFIX=$orig_prefix
-            IPREFIX=""
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 恢复原始前缀 PREFIX = $PREFIX, IPREFIX = $IPREFIX" >&2
-        else
-            # 其他情况使用默认文件补全
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 未检测到@前缀，使用默认文件补全" >&2
-            _files "$@"
-        fi
-    }
-
-    compdef _at_complete askgpt
-    compdef _at_complete naskgpt
-
-    function _usegpt_complete() {
-        local config_file="${1:-$GPT_PATH/model.json}"
+_get_api_completions() {
+    local prefix="$1"
+    local api_completions=()
+    
+    if [[ -n "$GPT_API_SERVER" && "$prefix" == symbol:* ]]; then
+        local symbol_prefix="${prefix#symbol:}"
         
-        # 检查配置文件是否存在
-        [[ -f "$config_file" ]] || {
-            echo >&2 "错误：未找到配置文件: $config_file"
-            return 1
-        }
-
-        # 获取所有可用的provider名称
-        local providers=($(python3 -c "import json, sys; config=json.load(open('$config_file')); [print(k) for k in config.keys() if config[k].get('key')]" 2>/dev/null))
-
-        # 生成补全建议
-        _describe 'command' providers
-    }
-
-    compdef _usegpt_complete usegpt
-
-fi
-
-if [[ -n "$BASH_VERSION" ]]; then
-    _askgpt_bash_complete() {
-        # 定义调试开关
-        local DEBUG=${GPT_DEBUG:-0}
-        local cur prev prompt_files special_items api_completions
-        cur="${COMP_WORDS[COMP_CWORD]}"
-
-        # 输出调试信息
-        [[ $DEBUG -eq 1 ]] && echo "Debug: 当前PREFIX = $cur" >&2
-        [[ $DEBUG -eq 1 ]] && echo "Debug: 当前PREV = $prev" >&2
-        [[ $DEBUG -eq 1 ]] && echo "Debug: 当前GPT_PATH = $GPT_PATH" >&2
-
-        # 检查当前输入是否以@开头
-        if [[ "$cur" == @* || "$prev" == @* ]]; then
-            # 如果当前词为空但前一个词是@，则cur=@
-            [[ -z "$cur" && "$prev" == @* ]] && cur="@"
-            
-            # 保存原始前缀
-            local orig_prefix=$cur
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 检测到@前缀，原始前缀 = $orig_prefix" >&2
-
-            # 提取@后的部分作为新前缀
-            local search_prefix="${cur#@}"
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 新PREFIX = $search_prefix" >&2
-
-            # 设置IPREFIX为@，使得补全结果自动添加@
-            local prefix="@"
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 设置IPREFIX = $prefix" >&2
-
-            # 获取prompts目录下的文件列表
-            prompt_files=()
-            if [[ -d "$GPT_PATH/prompts" ]]; then
-                prompt_files=($(ls "$GPT_PATH/prompts" 2>/dev/null))
-                [[ $DEBUG -eq 1 ]] && echo "Debug: 找到提示词文件: ${prompt_files[@]}" >&2
+        if [[ "$symbol_prefix" != *.* ]]; then
+            local local_files=("$symbol_prefix"*)
+            if [[ ${#local_files[@]} -gt 0 ]]; then
+                api_completions=(${local_files[@]/#/symbol:})
+                _debug_print "找到本地文件补全: ${api_completions[@]}"
             else
-                [[ $DEBUG -eq 1 ]] && echo "Debug: 未找到提示词目录 $GPT_PATH/prompts" >&2
+                local api_url="${GPT_API_SERVER}complete_realtime?prefix=${prefix}"
+                _debug_print "尝试从API获取补全: $api_url"
+                api_completions=($(curl -s --noproxy "*" "$api_url" 2>/dev/null))
+                _debug_print "从API获取到补全: ${api_completions[@]}"
             fi
-
-            # 如果GPT_API_SERVER存在，则添加API补全
-            api_completions=()
-            if [[ -n "$GPT_API_SERVER" && "$search_prefix" == symbol:* ]]; then
-                # 提取symbol:后的部分
-                local symbol_prefix="${search_prefix#symbol:}"
-                [[ $DEBUG -eq 1 ]] && echo "Debug: 提取symbol前缀 = $symbol_prefix" >&2
-                
-                # 检查是否包含路径且没有文件扩展名
-                if [[ "$symbol_prefix" != *.* ]]; then
-                    # 使用glob模式匹配本地文件
-                    local_files=("$symbol_prefix"*)
-                    
-                    if [[ ${#local_files[@]} -gt 0 ]]; then
-                        # 为每个本地文件补全添加symbol:前缀
-                        api_completions=(${local_files[@]/#/symbol:})
-                        [[ $DEBUG -eq 1 ]] && echo "Debug: 找到本地文件补全: ${api_completions[@]}" >&2
-                    else
-                        # 没有找到本地文件补全，尝试远程API
-                        local api_url="${GPT_API_SERVER}complete_realtime?prefix=${search_prefix}"
-                        [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
-                        api_completions=($(curl -s --noproxy "*" "$api_url" 2>/dev/null))
-                        [[ $DEBUG -eq 1 ]] && echo "Debug: 从API获取到补全: ${api_completions[@]}" >&2
-                    fi
-                else
-                    # 直接使用API补全
-                    local api_url="${GPT_API_SERVER}complete_realtime?prefix=${search_prefix}"
-                    [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试从API获取补全: $api_url" >&2
-                    api_completions=($(curl -s --noproxy "*" "$api_url" 2>/dev/null))
-                    [[ $DEBUG -eq 1 ]] && echo "Debug: 从API获取到补全: ${api_completions[@]}" >&2
-                fi
-            fi
-
-            # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，接着API补全，最后普通文件补全
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 开始生成补全建议" >&2
-            COMPREPLY=()
-            # 添加特殊选项
-            [[ $DEBUG -eq 1 ]] && echo "Debug: symbol: 当前目录补全: $(ls -p | grep -v / | sed 's/^/symbol:/')" >&2
-            local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol:/'))
-            special_items=(clipboard tree treefull read listen symbol: "${symbol_items[@]}" glow last)
-            COMPREPLY+=("${special_items[@]/#/$prefix}")
-            # 添加提示词文件
-            [[ ${#prompt_files[@]} -gt 0 ]] && COMPREPLY+=("${prompt_files[@]/#/$prefix}")
-            # 添加API补全
-            [[ ${#api_completions[@]} -gt 0 ]] && COMPREPLY+=("${api_completions[@]/#/$prefix}")
-            # 添加普通文件补全
-            COMPREPLY+=($(compgen -f -- "$search_prefix" | sed 's/^/@/'))
-            COMPREPLY=($(compgen -W "${COMPREPLY[*]}" -- "$cur"))
-
-            # 恢复原始前缀（避免影响其他补全）
-            cur=$orig_prefix
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 恢复原始前缀 PREFIX = $cur" >&2
         else
-            # 其他情况使用默认文件补全
-            [[ $DEBUG -eq 1 ]] && echo "Debug: 未检测到@前缀，使用默认文件补全" >&2
-            COMPREPLY=($(compgen -f -- "$cur"))
+            local api_url="${GPT_API_SERVER}complete_realtime?prefix=${prefix}"
+            _debug_print "尝试从API获取补全: $api_url"
+            api_completions=($(curl -s --noproxy "*" "$api_url" 2>/dev/null))
+            _debug_print "从API获取到补全: ${api_completions[@]}"
         fi
+    fi
+    
+    echo "${api_completions[@]}"
+}
+
+# ZSH 补全函数
+_zsh_at_complete() {
+    local DEBUG=${GPT_DEBUG:-0}
+    _debug_print "当前PREFIX = $PREFIX"
+    _debug_print "当前GPT_PATH = $GPT_PATH"
+
+    if [[ "$PREFIX" == @* ]]; then
+        local orig_prefix=$PREFIX
+        _debug_print "检测到@前缀，原始前缀 = $orig_prefix"
+
+        PREFIX=${orig_prefix#@}
+        _debug_print "新PREFIX = $PREFIX"
+        IPREFIX="@"
+        _debug_print "设置IPREFIX = $IPREFIX"
+
+        local prompt_files=($(_get_prompt_files))
+        local api_completions=($(_get_api_completions "$PREFIX"))
+
+        _debug_print "开始生成补全建议"
+        _alternative \
+            'special:特殊选项:(clipboard tree treefull read listen symbol: glow last)' \
+            'prompts:提示词文件:(${prompt_files[@]})' \
+            'api:API补全:(${api_completions[@]})' \
+            'files:文件名:_files'
+
+        PREFIX=$orig_prefix
+        IPREFIX=""
+        _debug_print "恢复原始前缀 PREFIX = $PREFIX, IPREFIX = $IPREFIX"
+    else
+        _debug_print "未检测到@前缀，使用默认文件补全"
+        _files "$@"
+    fi
+}
+
+_zsh_usegpt_complete() {
+    local config_file="${1:-$GPT_PATH/model.json}"
+    
+    [[ -f "$config_file" ]] || {
+        echo >&2 "错误：未找到配置文件: $config_file"
+        return 1
     }
-    complete -F _askgpt_bash_complete askgpt
-    complete -F _askgpt_bash_complete naskgpt
 
-    _usegpt_bash_complete() {
-        local cur prev config_file
-        cur="${COMP_WORDS[COMP_CWORD]}"
-        config_file="${GPT_PATH}/model.json"
+    local providers=($(python3 -c "import json, sys; config=json.load(open('$config_file')); [print(k) for k in config.keys() if config[k].get('key')]" 2>/dev/null))
+    _describe 'command' providers
+}
 
-        # 检查配置文件是否存在
-        if [[ ! -f "$config_file" ]]; then
-            echo >&2 "错误：未找到配置文件: $config_file"
-            return 1
-        fi
+# Bash 补全函数
+_bash_at_complete() {
+    local DEBUG=${GPT_DEBUG:-0}
+    local cur prev
+    cur="${COMP_WORDS[COMP_CWORD]}"
 
-        # 获取所有可用的provider名称
-        local providers=($(python3 -c "import json, sys; config=json.load(open('$config_file')); [print(k) for k in config.keys() if config[k].get('key')]" 2>/dev/null))
+    _debug_print "当前PREFIX = $cur"
+    _debug_print "当前PREV = $prev"
+    _debug_print "当前GPT_PATH = $GPT_PATH"
 
-        # 生成补全建议
-        COMPREPLY=($(compgen -W "${providers[*]}" -- "$cur"))
-    }
+    if [[ "$cur" == @* || "$prev" == @* ]]; then
+        [[ -z "$cur" && "$prev" == @* ]] && cur="@"
+        local orig_prefix=$cur
+        _debug_print "检测到@前缀，原始前缀 = $orig_prefix"
 
-    complete -F _usegpt_bash_complete usegpt
+        local search_prefix="${cur#@}"
+        _debug_print "新PREFIX = $search_prefix"
+        local prefix="@"
+        _debug_print "设置IPREFIX = $prefix"
 
+        local prompt_files=($(_get_prompt_files))
+        local api_completions=($(_get_api_completions "$search_prefix"))
 
+        _debug_print "开始生成补全建议"
+        COMPREPLY=()
+        local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol:/'))
+        local special_items=(clipboard tree treefull read listen symbol: "${symbol_items[@]}" glow last)
+        COMPREPLY+=("${special_items[@]/#/$prefix}")
+        [[ ${#prompt_files[@]} -gt 0 ]] && COMPREPLY+=("${prompt_files[@]/#/$prefix}")
+        [[ ${#api_completions[@]} -gt 0 ]] && COMPREPLY+=("${api_completions[@]/#/$prefix}")
+        COMPREPLY+=($(compgen -f -- "$search_prefix" | sed 's/^/@/'))
+        COMPREPLY=($(compgen -W "${COMPREPLY[*]}" -- "$cur"))
+
+        cur=$orig_prefix
+        _debug_print "恢复原始前缀 PREFIX = $cur"
+    else
+        _debug_print "未检测到@前缀，使用默认文件补全"
+        COMPREPLY=($(compgen -f -- "$cur"))
+    fi
+}
+
+_bash_usegpt_complete() {
+    local cur prev config_file
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    config_file="${GPT_PATH}/model.json"
+
+    if [[ ! -f "$config_file" ]]; then
+        echo >&2 "错误：未找到配置文件: $config_file"
+        return 1
+    fi
+
+    local providers=($(python3 -c "import json, sys; config=json.load(open('$config_file')); [print(k) for k in config.keys() if config[k].get('key')]" 2>/dev/null))
+    COMPREPLY=($(compgen -W "${providers[*]}" -- "$cur"))
+}
+
+# 主逻辑
+if [[ -n "$ZSH_VERSION" ]]; then
+    compdef _zsh_at_complete askgpt
+    compdef _zsh_at_complete naskgpt
+    compdef _zsh_usegpt_complete usegpt
+elif [[ -n "$BASH_VERSION" ]]; then
+    complete -F _bash_at_complete askgpt
+    complete -F _bash_at_complete naskgpt
+    complete -F _bash_usegpt_complete usegpt
 fi
