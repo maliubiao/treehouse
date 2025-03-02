@@ -830,10 +830,16 @@ def query_symbol(symbol_name):
         return f"\n[error] 符号查询时发生错误: {str(e)}\n"
 
 
+# 定义正则表达式常量
+CMD_PATTERN = r"(\\?@[^\s\u3000]+)"  # 匹配@命令，排除英文空格和中文全角空格
+TEMPLATE_PATTERN = r"(\{.*?\})"  # 匹配模板段
+CMD_MATCH_PATTERN = r"\\?@[^\s\u3000]+"  # 匹配单个@命令，排除英文空格和中文全角空格
+
+
 def preprocess_text(text):
     """预处理文本，将文本按{}分段，并提取@命令"""
     # 使用正则表达式按{}分段
-    segments = re.split(r"(\{.*?\})", text)
+    segments = re.split(TEMPLATE_PATTERN, text)
     # 初始化结果列表
     result = []
 
@@ -841,7 +847,7 @@ def preprocess_text(text):
         if segment.startswith("{") and segment.endswith("}"):
             # 处理模板命令段
             # 提取所有@命令，保留@符号
-            matches = re.findall(r"(\\?@[^\s]+)", segment.strip("{}"))
+            matches = re.findall(CMD_PATTERN, segment.strip("{}"))
             if matches:
                 # 第一个是模板，后面的都是参数
                 template = matches[0].lstrip("\\")  # 只去掉转义符，保留@
@@ -851,18 +857,17 @@ def preprocess_text(text):
         else:
             # 处理普通文本段，保留@符号和文本的混合
             # 按@符号分割文本，同时保留@符号
-            parts = re.split(r"(\\?@[^\s]+)", segment)
+            parts = re.split(CMD_PATTERN, segment)
             for part in parts:
                 if not part:
                     continue
-                if re.match(r"\\?@[^\s]+", part):
+                if re.match(CMD_MATCH_PATTERN, part):
                     # 处理@命令，保留@符号
                     cmd = part.lstrip("\\")
                     result.append(("cmd", cmd))
                 else:
                     # 处理普通文本
                     result.append(("text", part))
-
     return result
 
 
@@ -1085,14 +1090,15 @@ def extract_and_diff_files(content):
     for filename, file_content in matches:
         file_path = Path(filename)
         old_file_path = file_path
+        if not old_file_path.exists():
+            old_file_path.parent.mkdir(parents=True, exist_ok=True)
+            old_file_path.touch()
         file_path = _process_file_path(file_path)
         shadow_file_path = shadowroot / file_path
-
         _save_file_to_shadowroot(shadow_file_path, file_content)
         original_content = ""
-        if old_file_path.exists():
-            with open(old_file_path, "r", encoding="utf8") as f:
-                original_content = f.read()
+        with open(old_file_path, "r", encoding="utf8") as f:
+            original_content = f.read()
         diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
         diff_content += "\n".join(diff) + "\n\n"
 
