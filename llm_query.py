@@ -1088,7 +1088,7 @@ def extract_and_diff_files(content):
 
     diff_content = ""
     for filename, file_content in matches:
-        file_path = Path(filename)
+        file_path = Path(filename.strip())
         old_file_path = file_path
         if not old_file_path.exists():
             old_file_path.parent.mkdir(parents=True, exist_ok=True)
