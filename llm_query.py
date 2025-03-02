@@ -360,19 +360,19 @@ def _check_tool_installed(tool_name, install_url=None, install_commands=None):
 def check_deps_installed():
     """检查glow、tree和剪贴板工具是否已安装"""
     all_installed = True
-
-    # 检查glow
-    if not _check_tool_installed(
-        "glow",
-        install_url="https://github.com/charmbracelet/glow",
-        install_commands=[
-            "brew install glow  # macOS",
-            "choco install glow  # Windows Chocolatey",
-            "scoop install glow  # Windows Scoop",
-            "winget install charmbracelet.glow  # Windows Winget",
-        ],
-    ):
-        all_installed = False
+    if GPT_FLAGS.get(GPT_FLAG_GLOW):
+        # 检查glow
+        if not _check_tool_installed(
+            "glow",
+            install_url="https://github.com/charmbracelet/glow",
+            install_commands=[
+                "brew install glow  # macOS",
+                "choco install glow  # Windows Chocolatey",
+                "scoop install glow  # Windows Scoop",
+                "winget install charmbracelet.glow  # Windows Winget",
+            ],
+        ):
+            all_installed = False
 
     # 检查剪贴板工具
     if sys.platform == "win32":
@@ -666,6 +666,7 @@ def _handle_command(match, cmd_map):
 
 def _handle_shell_command(match):
     """处理shell命令"""
+    match = match.strip("=")
     with open(os.path.join("prompts", match), "r", encoding="utf-8") as f:
         content = f.read()
     try:
@@ -902,9 +903,14 @@ def process_text_with_file_path(text):
     return finalize_text(final_text)
 
 
+GPT_FLAG_GLOW = "glow"
+
+GPT_FLAGS = {GPT_FLAG_GLOW: False}
+
+
 def initialize_cmd_map():
     """初始化命令映射表"""
-    return {
+    cmd_map = {
         "clipboard": get_clipboard_content,
         "listen": monitor_clipboard,
         "tree": get_directory_context_wrapper,
@@ -913,6 +919,12 @@ def initialize_cmd_map():
         "symbol": query_symbol,
         "patch": patch_symbol,
     }
+
+    # 添加GPT flags相关处理函数
+    for flag in GPT_FLAGS:
+        cmd_map[flag] = lambda _, f=flag: GPT_FLAGS.update({f: True})
+
+    return cmd_map
 
 
 def initialize_env_vars():
@@ -928,11 +940,10 @@ def process_match(match, text, current_length, cmd_map, env_vars):
     """处理单个匹配项"""
     match_key = f"{match}" if text.endswith(match) else f"{match} "
     stripped_match = match.strip("@")
-
     try:
         replacement = get_replacement(stripped_match, cmd_map, env_vars)
         if not replacement:
-            return text, current_length
+            return "", current_length
 
         replacement = adjust_replacement_length(replacement, len(match_key), current_length)
         new_text = text.replace(match_key, replacement, 1)
@@ -946,16 +957,16 @@ def process_match(match, text, current_length, cmd_map, env_vars):
 
 def get_replacement(match, cmd_map, env_vars):
     """根据匹配类型获取替换内容"""
-    if is_command(match, cmd_map):
-        return _handle_command(match, cmd_map)
-    elif match.endswith("="):
-        return _handle_shell_command(match[:-1])
-    elif is_prompt_file(match):
+    if match.endswith("="):
+        return _handle_shell_command(match)
+    if is_prompt_file(match):
         return _handle_prompt_file(match, env_vars)
     elif is_local_file(match):
         return _handle_local_file(match)
     elif is_url(match):
         return _handle_url(match)
+    elif is_command(match, cmd_map):
+        return _handle_command(match, cmd_map)
     return None
 
 
@@ -1169,14 +1180,15 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
     if not check_deps_installed():
         sys.exit(1)
 
-    # 调用提取和diff函数
-    try:
-        subprocess.run(["glow", save_path], check=True)
-        # 如果是临时文件，使用后删除
-        if not save:
-            os.unlink(save_path)
-    except subprocess.CalledProcessError as e:
-        print(f"glow运行失败: {e}")
+    if GPT_FLAGS.get(GPT_FLAG_GLOW):
+        # 调用提取和diff函数
+        try:
+            subprocess.run(["glow", save_path], check=True)
+            # 如果是临时文件，使用后删除
+            if not save:
+                os.unlink(save_path)
+        except subprocess.CalledProcessError as e:
+            print(f"glow运行失败: {e}")
 
     extract_and_diff_files(content)
 

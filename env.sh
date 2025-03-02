@@ -252,7 +252,7 @@ function explaingpt() {
 
 function commitgpt() {
     newconversation
-    askgpt @git-commit-message @git-stage= @git-diff-summary.txt; rm git-diff-summary.txt
+    askgpt @git-commit-message @git-stage @git-diff-summary.txt; rm git-diff-summary.txt
     
     # 检查结果文件是否存在且内容有效
     if [[ -f "$GPT_PATH/.lastgptanswer" ]]; then
@@ -385,7 +385,7 @@ if [[ -n "$ZSH_VERSION" ]]; then
             # 生成补全建议：首先添加clipboard和tree，然后prompts目录文件，接着API补全，最后普通文件补全
             [[ $DEBUG -eq 1 ]] && echo "Debug: 开始生成补全建议" >&2
             _alternative \
-                'special:特殊选项:(clipboard tree treefull read listen symbol:)' \
+                'special:特殊选项:(clipboard tree treefull read listen symbol: glow last)' \
                 'prompts:提示词文件:(${prompt_files[@]})' \
                 'api:API补全:(${api_completions[@]})' \
                 'files:文件名:_files'
@@ -433,7 +433,7 @@ if [[ -n "$BASH_VERSION" ]]; then
             local prefix="@"
             local search_prefix="${cur#@}"
 
-            special_items=(clipboard tree treefull read listen symbol:)
+            special_items=(clipboard tree treefull read listen symbol: glow last)
             prompt_files=()
             if [[ -d "$GPT_PATH/prompts" ]]; then
                 prompt_files=($(ls "$GPT_PATH/prompts" 2>/dev/null))
