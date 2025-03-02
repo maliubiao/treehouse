@@ -692,10 +692,26 @@ def _handle_prompt_file(match, env_vars):
 def _handle_local_file(match):
     """处理本地文件路径"""
     expanded_path = os.path.abspath(os.path.expanduser(match))
+    line_range = re.findall(r"(:(\d+)?-(\d+)?)$", match)
+    if line_range:
+        right_match = line_range[0][0]
+        expanded_path = expanded_path[: -len(right_match)]
     if os.path.isfile(expanded_path):
-        # 如果是文件，直接读取内容
+        # 如果是文件，读取内容
         with open(expanded_path, "r", encoding="utf-8") as f:
-            content = f.read()
+            lines = f.readlines()
+            # 如果有行号范围，按行号截取
+            if line_range:
+                _, start_str, end_str = line_range[0]
+                # 处理开始行号
+                start = int(start_str) if start_str else 0
+                start = max(0, start)
+                # 处理结束行号
+                end = int(end_str) if end_str else len(lines)
+                end = min(len(lines), end)
+                content = "".join(lines[start:end])
+            else:
+                content = "".join(lines)
             replacement = f"\n\n[file name]: {expanded_path}\n[file content begin]\n{content}"
             replacement += "\n[file content end]\n\n"
             return replacement
@@ -1002,6 +1018,9 @@ def is_prompt_file(match):
 
 def is_local_file(match):
     """判断是否为本地文件"""
+    # 如果匹配包含行号范围（如:10-20），先去掉行号部分再判断
+    if re.search(r":(\d+)?-(\d+)?$", match):
+        match = re.sub(r":(\d+)?-(\d+)?$", "", match)
     return os.path.exists(os.path.expanduser(match))
 
 

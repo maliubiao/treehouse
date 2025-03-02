@@ -88,6 +88,15 @@ naskgpt  "{ @edit-with-skel @main.c.skel @clipboard }" 找出给定代码的bug
 naskgpt \
 > hello \
 > world
+
+#文件行号选择, 文件太大的折中办法, 前100
+naskgpt @large-file:-100
+
+#100以后
+naskgpt @large-file:100-
+
+#20-50
+naskgpt @large-file:20-50
 ```
 
 
