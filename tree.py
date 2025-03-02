@@ -452,8 +452,13 @@ class ParserUtil:
                     for declarator_child in child.children:
                         if declarator_child.type == "identifier":
                             return declarator_child.text.decode("utf8")
+                elif child.type == "identifier":
+                    return child.text.decode("utf8")
             return None
         elif node.type == "assignment":
+            for i in node.children:
+                if i.type == "identifier":
+                    return i.text.decode("utf8")
             left = node.child_by_field_name("left")
             if left and left.type == "identifier":
                 return left.text.decode("utf8")
@@ -2694,7 +2699,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--db-path", type=str, default="symbols.db", help="符号数据库文件路径")
     arg_parser.add_argument("--excludes", type=str, nargs="+", help="要排除的文件或目录路径列表（可指定多个）")
     arg_parser.add_argument("--parallel", type=int, default=-1, help="并行度，-1表示使用CPU核心数，0或1表示单进程")
-    arg_parser.add_argument("--source-symbol-path", type=str, help="输出指定文件的符号路径")
+    arg_parser.add_argument("--debug-symbol-path", type=str, help="输出指定文件的符号路径")
     arg_parser.add_argument("--debug-skeleton", type=str, help="调试源代码框架，指定要调试的文件路径")
     arg_parser.add_argument(
         "--log-level",
@@ -2734,11 +2739,11 @@ if __name__ == "__main__":
             db_path=args.db_path,
             parallel=args.parallel,
         )
-    elif args.source_symbol_path:
-        logger.debug("输出符号路径：%s", args.source_symbol_path)
+    elif args.debug_symbol_path:
+        logger.debug("输出符号路径：%s", args.debug_symbol_path)
         parser_loader_s = ParserLoader()
         parser_util = ParserUtil(parser_loader_s)
-        parser_util.print_symbol_paths(args.source_symbol_path)
+        parser_util.print_symbol_paths(args.debug_symbol_path)
     elif args.debug_skeleton:
         parser_loader_s = ParserLoader()
         skeleton = SourceSkeleton(parser_loader_s)

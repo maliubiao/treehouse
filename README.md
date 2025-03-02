@@ -98,8 +98,8 @@ naskgpt @large-file:100-
 #20-50
 naskgpt @large-file:20-50
 
-#把prompt当shell脚本执行, 获取它的结果, 填入上下文, =号结尾，跟自定义prompt一样
-naskgpt @script=
+#把prompt当脚本执行, 如果你给它设置了可执行权限, 或者以#!开头
+naskgpt @script.sh
 ```
 
 

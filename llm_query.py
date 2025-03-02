@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -664,16 +665,26 @@ def _handle_command(match, cmd_map):
         return cmd_map[match](match)
 
 
-def _handle_shell_command(match):
+def _handle_any_script(match):
     """处理shell命令"""
     match = match.strip("=")
-    with open(os.path.join("prompts", match), "r", encoding="utf-8") as f:
-        content = f.read()
+    file_path = os.path.join("prompts", match)
+    # 检查文件是否有执行权限
+    if not os.access(file_path, os.X_OK):
+        # 获取当前文件权限
+        current_mode = os.stat(file_path).st_mode
+        # 添加用户执行权限
+        new_mode = current_mode | stat.S_IXUSR
+        # 修改文件权限
+        os.chmod(file_path, new_mode)
+
     try:
-        process = subprocess.Popen(content, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # 直接执行文件
+        process = subprocess.Popen(
+            f"./{file_path}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
         stdout, stderr = process.communicate()
-        output = f"\n\n[shell command]: {content}\n"
-        # if stdout:
+        output = f"\n\n[shell command]: ./{file_path}\n"
         output += f"[stdout begin]\n{stdout}\n[stdout end]\n"
         if stderr:
             output += f"[stderr begin]\n{stderr}\n[stderr end]\n"
@@ -684,8 +695,21 @@ def _handle_shell_command(match):
 
 def _handle_prompt_file(match, env_vars):
     """处理prompts目录文件"""
-    with open(os.path.join(PROMPT_DIR, match), "r", encoding="utf-8") as f:
-        content = f.read()
+    file_path = os.path.join(PROMPT_DIR, match)
+
+    # 检查文件是否有可执行权限或以#!开头
+    if os.access(file_path, os.X_OK):
+        # 如果有可执行权限，则作为shell命令处理
+        return _handle_any_script(match)
+
+    # 检查文件是否以#!开头
+    with open(file_path, "r", encoding="utf-8") as f:
+        first_line = f.readline()
+        if first_line.startswith("#!"):
+            # 如果以#!开头，也作为shell命令处理
+            return _handle_any_script(match)
+        # 否则读取整个文件内容作为普通文件处理
+        content = first_line + f.read()
         return f"\n{content}\n"
 
 
@@ -973,8 +997,6 @@ def process_match(match, text, current_length, cmd_map, env_vars):
 
 def get_replacement(match, cmd_map, env_vars):
     """根据匹配类型获取替换内容"""
-    if match.endswith("="):
-        return _handle_shell_command(match)
     if is_prompt_file(match):
         return _handle_prompt_file(match, env_vars)
     elif is_local_file(match):

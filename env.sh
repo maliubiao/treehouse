@@ -252,7 +252,7 @@ function explaingpt() {
 
 function commitgpt() {
     newconversation
-    askgpt @git-commit-message @git-stage= @git-diff-summary.txt; rm git-diff-summary.txt
+    askgpt @git-commit-message @git-stage @git-diff-summary.txt; rm git-diff-summary.txt
     
     # 检查结果文件是否存在且内容有效
     if [[ -f "$GPT_PATH/.lastgptanswer" ]]; then
