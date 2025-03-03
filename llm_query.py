@@ -1166,7 +1166,7 @@ def parse_project_text(text: str) -> ProjectSections:
 
 
 # 定义正则表达式常量
-CMD_PATTERN = r"(?<!\\)@[^\s\u3000]+"  # 匹配@命令，排除转义@、英文空格和中文全角空格
+CMD_PATTERN = r"(?<!\\)@[^ \u3000]+"  # 匹配@命令，排除转义@、英文空格和中文全角空格
 
 
 class GPTContextProcessor:
@@ -1225,7 +1225,7 @@ class GPTContextProcessor:
                         result.append(TextNode(content=part))
                     if i < len(commands):  # 处理命令
                         cmd = commands[i].lstrip("@")
-                        if ":" in cmd:
+                        if ":" in cmd and not cmd.startswith("http"):
                             symbol, _, arg = cmd.partition(":")
                             cmd_groups[symbol].append(arg)
                         else:
