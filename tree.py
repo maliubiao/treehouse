@@ -476,13 +476,22 @@ class ParserUtil:
             path_key = ">".join(current_symbols)
             current_node = current_nodes[-1]  # 当前新增的节点
 
+            # 处理装饰器情况：如果当前节点是function_definition且父节点是decorated_definition，则使用父节点范围
+            effective_node = current_node
+            if (
+                effective_node.type == "function_definition"
+                and effective_node.parent
+                and effective_node.parent.type == "decorated_definition"
+            ):
+                effective_node = effective_node.parent
+
             # 获取字节位置
-            start_byte = current_node.start_byte
-            end_byte = current_node.end_byte
+            start_byte = effective_node.start_byte
+            end_byte = effective_node.end_byte
 
             # 获取行号和列号（从0开始）
-            start_point = current_node.start_point
-            end_point = current_node.end_point
+            start_point = effective_node.start_point
+            end_point = effective_node.end_point
 
             # 提取代码内容
             code = source_bytes[start_byte:end_byte].decode("utf8")
