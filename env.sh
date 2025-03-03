@@ -355,7 +355,7 @@ function naskgpt() {
 # 自动配置默认模型
 if [[ -z "$GPT_KEY" || -z "$GPT_BASE_URL" || -z "$GPT_MODEL" ]]; then
     [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试自动配置默认模型" >&2
-    [[ -f "$GPT_PATH/model.json" ]] && usegpt $(_list_models | head -1) "$GPT_PATH/model.json" 1
+    [[ -f "$GPT_PATH/model.json" ]] && usegpt $(_list_model_names | head -1) "$GPT_PATH/model.json" 1
 fi
 
 session_id=$(uuidgen)

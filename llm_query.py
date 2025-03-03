@@ -880,9 +880,6 @@ def parse_llm_response(response_text, expected_file_path=None):
     return parser.parse(response_text)
 
 
-import pdb
-
-
 def process_patch_response(response_text, symbol_detail):
     """
     处理大模型的补丁响应，生成差异并应用补丁
