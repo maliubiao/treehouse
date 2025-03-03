@@ -806,17 +806,21 @@ def read_last_query(_):
         return ""
 
 
-def generate_patch_prompt(symbol_names, symbol_map):
+def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
     """生成多符号补丁提示词字符串
 
     参数:
         symbol_names: 符号名称列表
         symbol_map: 包含符号信息的字典，key为符号名称，value为补丁信息字典
+        patch_require: 是否需要生成修改指令
 
     返回:
         格式化后的提示词字符串
     """
-    prompt = """
+    prompt = ""
+
+    if patch_require:
+        prompt += """
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
 2. 若无修改需求，请完整返回原始内容
@@ -826,7 +830,8 @@ def generate_patch_prompt(symbol_names, symbol_map):
 6. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
 7. 输入有几个符号，就输出几个符号块
 """
-
+    if not patch_require:
+        prompt += "现有代码库里的符号:\n"
     # 添加每个符号的信息
     for symbol_name in symbol_names.args:
         patch_dict = symbol_map[symbol_name]
@@ -841,7 +846,8 @@ def generate_patch_prompt(symbol_names, symbol_map):
 [CONTENT END]
 """
 
-    prompt += """
+    if patch_require:
+        prompt += """
 # 响应格式
 [modified symbol]: 符号路径
 [source code start]
@@ -913,9 +919,6 @@ def parse_llm_response(response_text, symbol_names=None):
     """
     parser = BlockPatchResponse(symbol_names=symbol_names)
     return parser.parse(response_text)
-
-
-import pdb
 
 
 def process_patch_response(response_text, symbol_detail):
@@ -999,9 +1002,8 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
     for symbol_name in symbol_names.args:
         symbol = get_symbol_detail(symbol_name)
         symbol_map[symbol_name] = symbol
-
-    GPT_FLAGS[GPT_FLAG_PATCH] = symbol_map
-    return generate_patch_prompt(symbol_names, symbol_map)
+    GPT_FLAGS[GPT_SYMBOL_PATCH] = symbol_map
+    return generate_patch_prompt(symbol_names, symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH))
 
 
 def get_symbol_detail(symbol_name):
@@ -1195,8 +1197,14 @@ class GPTContextProcessor:
 
     def _add_gpt_flags(self):
         """添加GPT flags相关处理函数"""
+
+        def update_gpt_flag(cmd):
+            """更新GPT标志的函数"""
+            GPT_FLAGS.update({cmd.command: True})
+            return ""
+
         for flag in GPT_FLAGS:
-            self.cmd_map[flag] = lambda _, f=flag: GPT_FLAGS.update({f: True})
+            self.cmd_map[flag] = update_gpt_flag
 
     def preprocess_text(self, text) -> List[Union[TextNode, CmdNode, TemplateNode]]:
         """预处理文本，将文本按{}分段，并提取@命令"""
@@ -1232,9 +1240,19 @@ class GPTContextProcessor:
                             result.append(CmdNode(command=cmd))
 
         # 处理带参数的命令
-        for symbol, args in cmd_groups.items():
-            result.insert(0, CmdNode(command=symbol, args=args))
+        last_cmd_index = -1
+        # 查找最后一个CmdNode的位置
+        for i, node in enumerate(result):
+            if isinstance(node, CmdNode):
+                last_cmd_index = i
 
+        for symbol, args in cmd_groups.items():
+            if last_cmd_index != -1:
+                # 在最后一个命令后插入
+                result.insert(last_cmd_index + 1, CmdNode(command=symbol, args=args))
+            else:
+                # 如果没有找到命令，插入到第一位
+                result.insert(0, CmdNode(command=symbol, args=args))
         return result
 
     def process_text_with_file_path(self, text: str) -> str:
@@ -1330,8 +1348,9 @@ class GPTContextProcessor:
 GPT_FLAG_GLOW = "glow"
 GPT_FLAG_EDIT = "edit"
 GPT_FLAG_PATCH = "patch"
+GPT_SYMBOL_PATCH = "0patch"
 
-GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False}
+GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False, GPT_SYMBOL_PATCH: False}
 
 
 def finalize_text(text):
@@ -1548,10 +1567,11 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
                 os.unlink(save_path)
         except subprocess.CalledProcessError as e:
             print(f"glow运行失败: {e}")
+
     if GPT_FLAGS.get(GPT_FLAG_EDIT):
         extract_and_diff_files(content)
     if GPT_FLAGS.get(GPT_FLAG_PATCH):
-        process_patch_response(content, GPT_FLAGS[GPT_FLAG_PATCH])
+        process_patch_response(content, GPT_FLAGS[GPT_SYMBOL_PATCH])
 
 
 def validate_environment():

@@ -1,0 +1,8 @@
+<think>
+1. 输出以[modified file]: path\n[source code start]\n开头
+1. 请输出完整的修改后文件源代码
+2. 即使不修改，也要输出原来的的代码
+3. 不可以使用markdown ```修饰输出的代码
+4. 除了源代码不可以添加解释性的内容, 
+5. 输出以\n[source code end]\n结尾
+</think>
