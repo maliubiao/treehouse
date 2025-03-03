@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from llm_query import (
     MAX_PROMPT_SIZE,
+    CmdNode,
     GPTContextProcessor,
     _fetch_symbol_data,
     get_symbol_detail,
@@ -110,6 +111,44 @@ class TestGPTContextProcessor(unittest.TestCase):
         with patch.dict(self.processor.cmd_map, {"symbol": lambda x: f"符号补丁 {x.args}"}):
             result = self.processor.process_text_with_file_path(text)
             self.assertIn("符号补丁 ['a', 'b']", result)
+
+    def test_url_processing(self):
+        """测试URL处理"""
+        text = "@https://example.com"
+        with patch("llm_query._handle_url") as mock_handle_url:
+            mock_handle_url.return_value = "URL处理结果"
+            result = self.processor.process_text_with_file_path(text)
+            self.assertIn("URL处理结果", result)
+            mock_handle_url.assert_called_once_with(
+                CmdNode(command="https://example.com", command_type=None, args=None)
+            )
+
+    def test_multiple_urls(self):
+        """测试多个URL处理"""
+        text = "@https://example.com @https://another.com"
+        with patch("llm_query._handle_url") as mock_handle_url:
+            mock_handle_url.side_effect = ["URL1结果", "URL2结果"]
+            result = self.processor.process_text_with_file_path(text)
+            self.assertIn("URL1结果", result)
+            self.assertIn("URL2结果", result)
+            self.assertEqual(mock_handle_url.call_count, 2)
+            mock_handle_url.assert_any_call(CmdNode(command="https://example.com", command_type=None, args=None))
+            mock_handle_url.assert_any_call(CmdNode(command="https://another.com", command_type=None, args=None))
+
+    def test_mixed_url_and_commands(self):
+        """测试混合URL和命令处理"""
+        text = "开始 @https://example.com 中间 @clipboard 结束"
+        with (
+            patch("llm_query._handle_url") as mock_handle_url,
+            patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容"}),
+        ):
+            mock_handle_url.return_value = "URL处理结果"
+            result = self.processor.process_text_with_file_path(text)
+            self.assertIn("URL处理结果", result)
+            self.assertIn("剪贴板内容", result)
+            mock_handle_url.assert_called_once_with(
+                CmdNode(command="https://example.com", command_type=None, args=None)
+            )
 
     def test_patch_symbol_with_prompt(self):
         """测试生成符号补丁提示词"""
