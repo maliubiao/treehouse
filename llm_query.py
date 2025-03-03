@@ -434,7 +434,7 @@ def check_deps_installed():
 
 
 def get_directory_context_wrapper(tag):
-    if tag == "treefull":
+    if tag.command == "treefull":
         text = get_directory_context(1024)
     else:
         text = get_directory_context(1)
