@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 import zlib
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import unified_diff
 from functools import partial
@@ -499,6 +500,7 @@ class ParserUtil:
             # 保存代码内容和位置信息
             code_map[path_key] = {
                 "code": code,
+                "block_range": (start_byte, end_byte),
                 "start_line": start_point[0],  # 起始行号（从0开始）
                 "start_col": start_point[1],  # 起始列号（从0开始）
                 "end_line": end_point[0],  # 结束行号（从0开始）
@@ -548,7 +550,11 @@ class ParserUtil:
             # 计算代码的CRC32哈希值
             full_definition_hash = calculate_crc32_hash(info["code"])
             # 构建位置信息
-            location = ((info["start_line"], info["start_col"]), (info["end_line"], info["end_col"]))
+            location = (
+                (info["start_line"], info["start_col"]),
+                (info["end_line"], info["end_col"]),
+                info["block_range"],
+            )
             # 构建符号信息字典
             symbol_info = {
                 "file_path": file_path,
@@ -807,62 +813,171 @@ class SourceSkeleton:
 
 
 class BlockPatch:
-    """用于生成代码块的差异补丁"""
+    """用于生成多文件代码块的差异补丁"""
 
-    def __init__(self, file_path: str, patch_range: tuple, block_content: bytes, update_content: bytes):
+    def __init__(
+        self,
+        file_paths: list[str],
+        patch_ranges: list[tuple],
+        block_contents: list[bytes],
+        update_contents: list[bytes],
+    ):
         """
-        初始化补丁对象
+        初始化补丁对象（支持多文件）
 
         参数：
-            file_path: 源文件路径
-            patch_range: 补丁范围，格式为((start_row, start_col), (end_row, end_col))
-            block_content: 原始块内容(bytes)
-            update_content: 更新后的内容(bytes)
+            file_paths: 源文件路径列表
+            patch_ranges: 补丁范围列表，每个元素格式为(start_pos, end_pos)
+            block_contents: 原始块内容列表(bytes)
+            update_contents: 更新后的内容列表(bytes)
         """
-        self.file_path = file_path
-        with open(file_path, "rb") as f:
-            self.source_code = f.read()
-        self.patch_range = patch_range
-        self.block_content = block_content
-        self.update_content = update_content
+        if len({len(file_paths), len(patch_ranges), len(block_contents), len(update_contents)}) != 1:
+            raise ValueError("所有参数列表的长度必须一致")
+
+        # 过滤掉没有实际更新的块
+        self.file_paths = []
+        self.patch_ranges = []
+        self.block_contents = []
+        self.update_contents = []
+        for i in range(len(file_paths)):
+            if block_contents[i] != update_contents[i]:
+                self.file_paths.append(file_paths[i])
+                self.patch_ranges.append(patch_ranges[i])
+                self.block_contents.append(block_contents[i])
+                self.update_contents.append(update_contents[i])
+
+        # 如果没有需要更新的块，直接返回
+        if not self.file_paths:
+            return
+
+        # 按文件路径分组存储源代码
+        self.source_codes = {}
+        for path in set(self.file_paths):
+            with open(path, "rb") as f:
+                self.source_codes[path] = f.read()
+
+    def _build_modified_blocks(self, original_code: str, replacements: list) -> list[str]:
+        """构建修改后的代码块数组"""
+        # 验证所有块内容
+        for (start_pos, end_pos), old_content, _ in replacements:
+            selected = original_code[start_pos:end_pos]
+            if selected.decode("utf8").strip() != old_content.strip():
+                raise ValueError(f"内容不匹配\n选中内容：{selected}\n传入内容：{old_content}")
+
+        # 检查替换区间是否有重叠
+        sorted_ranges = sorted([(start_pos, end_pos) for (start_pos, end_pos), _, _ in replacements])
+        for i in range(1, len(sorted_ranges)):
+            if sorted_ranges[i][0] < sorted_ranges[i - 1][1]:
+                raise ValueError(f"替换区间存在重叠：{sorted_ranges[i-1]} 和 {sorted_ranges[i]}")
+
+        # 按起始位置排序替换区间
+        replacements.sort(key=lambda x: x[0][0])
+
+        # 初始化变量
+        blocks = []
+        last_pos = 0
+
+        # 遍历替换区间，拆分原始代码
+        for (start_pos, end_pos), old_content, new_content in replacements:
+            # 添加替换区间前的代码块
+            if last_pos < start_pos:
+                blocks.append(original_code[last_pos:start_pos].decode("utf8"))
+
+            # 添加替换区间代码块
+            blocks.append(new_content)  # 直接使用新内容，已经是utf8字符串
+
+            # 更新最后位置
+            last_pos = end_pos
+
+        # 添加最后一段代码
+        if last_pos < len(original_code):
+            blocks.append(original_code[last_pos:].decode("utf8"))
+
+        return blocks
+
+    def _process_single_file_diff(self, file_path: str, indices: list[int]) -> list[str]:
+        """处理单个文件的差异生成"""
+        original_code = self.source_codes[file_path]
+
+        # 收集所有需要替换的块
+        replacements = []
+        for idx in indices:
+            start_pos, end_pos = self.patch_ranges[idx]
+            replacements.append(
+                (
+                    (start_pos, end_pos),
+                    self.block_contents[idx].decode("utf8"),
+                    self.update_contents[idx].decode("utf8"),
+                )
+            )
+
+        # 构建修改后的代码块
+        modified_blocks = self._build_modified_blocks(original_code, replacements)
+        modified_code = "".join(modified_blocks)
+
+        # 生成完整文件差异
+        return list(
+            unified_diff(
+                original_code.decode("utf8").splitlines(keepends=True),
+                modified_code.splitlines(keepends=True),
+                fromfile=file_path,
+                tofile=file_path,
+                lineterm="",
+                n=3,
+            )
+        )
 
     def generate_diff(self) -> str:
-        """生成差异补丁"""
-        # 获取原始代码分段
-        (start_row, start_col), (end_row, end_col) = self.patch_range
-        before, selected, after = split_source(self.source_code.decode("utf8"), start_row, start_col, end_row, end_col)
-        # 校验选中的内容是否与传入的block_content匹配
-        if selected.strip() != self.block_content.decode("utf8").strip():
-            raise ValueError(
-                f"选中的内容与传入的block_content不匹配。\n选中内容：{selected}\n传入内容：{self.block_content.decode('utf8')}"
+        """生成多文件差异补丁"""
+        if not self.file_paths:
+            return ""
+
+        diff_output = []
+        # 按文件分组处理
+        file_groups = defaultdict(list)
+        for idx, path in enumerate(self.file_paths):
+            file_groups[path].append(idx)
+
+        for file_path, indices in file_groups.items():
+            diff_output.extend(self._process_single_file_diff(file_path, indices))
+
+        return "".join(diff_output)
+
+    def _process_single_file_patch(self, file_path: str, indices: list[int]) -> bytes:
+        """处理单个文件的补丁应用"""
+        original_code = self.source_codes[file_path]
+
+        # 收集所有需要替换的块
+        replacements = []
+        for idx in indices:
+            start_pos, end_pos = self.patch_ranges[idx]
+            replacements.append(
+                (
+                    (start_pos, end_pos),
+                    self.block_contents[idx].decode("utf8"),
+                    self.update_contents[idx].decode("utf8"),
+                )
             )
 
-        # 生成修改后的代码
-        modified_code = before.encode("utf8") + self.update_content + after.encode("utf8")
+        # 构建修改后的代码块
+        modified_blocks = self._build_modified_blocks(original_code, replacements)
+        return "".join(modified_blocks).encode("utf8")
 
-        # 生成差异
-        diff = unified_diff(
-            self.source_code.decode("utf8").splitlines(keepends=True),
-            modified_code.decode("utf8").splitlines(keepends=True),
-            fromfile=self.file_path,
-            tofile=self.file_path,
-            lineterm="",
-            n=3,
-        )
-        return "".join(diff)
+    def apply_patch(self) -> dict[str, bytes]:
+        """应用多文件补丁，返回修改后的代码字典"""
+        if not self.file_paths:
+            return {}
 
-    def apply_patch(self) -> bytes:
-        """应用补丁，返回修改后的代码(bytes)"""
-        (start_row, start_col), (end_row, end_col) = self.patch_range
-        before, selected, after = split_source(self.source_code.decode("utf8"), start_row, start_col, end_row, end_col)
+        patched_files = {}
+        # 按文件分组处理
+        file_groups = defaultdict(list)
+        for idx, path in enumerate(self.file_paths):
+            file_groups[path].append(idx)
 
-        # 校验选中的内容是否与传入的block_content匹配
-        if selected.strip() != self.block_content.decode("utf8").strip():
-            raise ValueError(
-                f"选中的内容与传入的block_content不匹配。\n选中内容：{selected}\n传入内容：{self.block_content.decode('utf8')}"
-            )
+        for file_path, indices in file_groups.items():
+            patched_files[file_path] = self._process_single_file_patch(file_path, indices)
 
-        return before.encode("utf8") + self.update_content + after.encode("utf8")
+        return patched_files
 
 
 def split_source(source: str, start_row: int, start_col: int, end_row: int, end_col: int) -> tuple[str, str, str]:
@@ -978,10 +1093,10 @@ int main() {
 
         # 测试BlockPatch功能
         patch = BlockPatch(
-            file_path=tmp_file_path,
-            patch_range=((start_row, start_col), (end_row, end_col)),
-            block_content=selected.encode("utf-8"),
-            update_content=b"return 1;",
+            file_paths=[tmp_file_path],
+            patch_ranges=[(return_node.start_byte, return_node.end_byte)],
+            block_contents=[selected.encode("utf-8")],
+            update_contents=[b"return 1;"],
         )
 
         # 生成差异
@@ -990,8 +1105,8 @@ int main() {
         assert "+    return 1;" in diff, "差异中缺少添加行"
 
         # 应用补丁
-        modified_code = patch.apply_patch()
-        assert b"return 1;" in modified_code, "修改后的代码中缺少更新内容"
+        file_map = patch.apply_patch()
+        assert b"return 1;" in list(file_map.values())[0], "修改后的代码中缺少更新内容"
 
         # 测试符号解析功能
         parser_util = ParserUtil(parser_loader)
@@ -1320,7 +1435,7 @@ def demo_main():
     lang_parser, query, lang_name = parser_loader.get_parser("test.c")
 
     # 解析代码文件
-    tree = parse_code_file("test.c", lang_parser)
+    tree = parse_code_file("test-code-files/test.c", lang_parser)
 
     # 执行查询并处理结果
     matches = query.matches(tree.root_node)
@@ -1838,6 +1953,9 @@ def extract_identifiable_path(file_path: str) -> str:
     return base_name
 
 
+import pdb
+
+
 @app.get("/symbol_content")
 async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), json: bool = False):
     """根据符号路径获取符号对应的源代码内容
@@ -1851,7 +1969,6 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), js
     """
     trie = app.state.file_symbol_trie
     file_mtime_cache = app.state.file_mtime_cache
-
     # 检查并更新前缀树
     update_trie_if_needed(symbol_path, trie, file_mtime_cache)
     # 在前缀树中搜索符号路径
@@ -1874,7 +1991,7 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), js
     # 提取符号对应的代码内容
     start_line, start_col = location[0]
     end_line, end_col = location[1]
-
+    block_range = location[2]
     # 将源代码按行分割
     lines = source_code.splitlines()
 
@@ -1902,7 +2019,13 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), js
         return {
             "file_path": file_path,
             "content": content,
-            "location": {"start_line": start_line, "start_col": start_col, "end_line": end_line, "end_col": end_col},
+            "location": {
+                "start_line": start_line,
+                "start_col": start_col,
+                "end_line": end_line,
+                "end_col": end_col,
+                "block_range": block_range,
+            },
         }
     return PlainTextResponse(content)
 
@@ -2087,6 +2210,8 @@ def test_symbols_api():
     ]
     trie = SymbolTrie.from_symbols({})
     app.state.symbol_trie = trie
+    app.state.file_symbol_trie = SymbolTrie.from_symbols({})
+    app.state.file_mtime_cache = {}
     # 插入测试数据
     for symbol in test_symbols:
         insert_symbol(test_conn, symbol)

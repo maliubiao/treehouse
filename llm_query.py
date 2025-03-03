@@ -10,6 +10,7 @@ import argparse
 import datetime
 import difflib
 import json
+import marshal
 import os
 import platform
 import re
@@ -20,8 +21,10 @@ import tempfile
 import threading
 import time
 import traceback
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -49,6 +52,30 @@ MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
+
+
+@dataclass
+class TextNode:
+    """纯文本节点"""
+
+    content: str
+
+
+@dataclass
+class CmdNode:
+    """命令节点"""
+
+    command: str
+    command_type: str = None
+    args: List[str] = None
+
+
+@dataclass
+class TemplateNode:
+    """模板节点，可能包含多个命令节点"""
+
+    template: CmdNode
+    commands: List[CmdNode]
 
 
 def parse_arguments():
@@ -654,24 +681,26 @@ def fetch_url_content(url, is_news=False):
         return f"获取URL内容失败: {str(e)}"
 
 
-def _handle_command(match, cmd_map):
-    """处理命令类型匹配"""
-    # 查找第一个冒号的位置
-    colon_index = match.find(":")
-    if colon_index != -1:
-        # 如果找到冒号，将字符串分成两部分
-        key = match[:colon_index]
-        value = match[colon_index + 1 :]
-        return cmd_map[key](value)
-    else:
-        # 如果没有冒号，直接处理整个字符串
-        return cmd_map[match](match)
+def _handle_command(match: CmdNode, cmd_map: Dict[str, Callable]) -> str:
+    """处理命令类型匹配
+
+    根据输入的CmdNode或CmdNode列表，执行对应的命令处理函数。
+
+    参数：
+        match: 要处理的命令，可以是CmdNode或CmdNode列表
+        cmd_map: 命令映射字典，key为命令前缀，value为对应的处理函数
+
+    返回：
+        命令处理函数的执行结果
+    """
+    # 处理单个CmdNode
+    return cmd_map[match.command](match)
 
 
-def _handle_any_script(match):
+def _handle_any_script(match: CmdNode) -> str:
     """处理shell命令"""
-    match = match.strip("=")
-    file_path = os.path.join("prompts", match)
+    script_name = match.command.strip("=")
+    file_path = os.path.join("prompts", script_name)
     # 检查文件是否有执行权限
     if not os.access(file_path, os.X_OK):
         # 获取当前文件权限
@@ -696,9 +725,9 @@ def _handle_any_script(match):
         return f"\n\n[shell command error]: {str(e)}\n"
 
 
-def _handle_prompt_file(match, env_vars):
+def _handle_prompt_file(match: CmdNode) -> str:
     """处理prompts目录文件"""
-    file_path = os.path.join(PROMPT_DIR, match)
+    file_path = os.path.join(PROMPT_DIR, match.command)
 
     # 检查文件是否有可执行权限或以#!开头
     if os.access(file_path, os.X_OK):
@@ -716,10 +745,10 @@ def _handle_prompt_file(match, env_vars):
         return f"\n{content}\n"
 
 
-def _handle_local_file(match):
+def _handle_local_file(match: CmdNode) -> str:
     """处理本地文件路径"""
-    expanded_path = os.path.abspath(os.path.expanduser(match))
-    line_range = re.findall(r"(:(\d+)?-(\d+)?)$", match)
+    expanded_path = os.path.abspath(os.path.expanduser(match.command))
+    line_range = re.findall(r"(:(\d+)?-(\d+)?)$", match.command)
     if line_range:
         right_match = line_range[0][0]
         expanded_path = expanded_path[: -len(right_match)]
@@ -761,10 +790,10 @@ def _handle_local_file(match):
         return f"\n\n[error]: 路径不存在 {expanded_path}\n\n"
 
 
-def _handle_url(match):
+def _handle_url(match: CmdNode) -> str:
     """处理URL请求"""
-    url = match[4:] if match.startswith("read") else match
-    markdown_content = fetch_url_content(url, is_news=match.startswith("read"))
+    url = match.command[4:] if match.command.startswith("read") else match.command
+    markdown_content = fetch_url_content(url, is_news=match.command.startswith("read"))
     return f"\n\n[reference url, content converted to markdown]: {url} \n[markdown content begin]\n{markdown_content}\n[markdown content end]\n\n"
 
 
@@ -777,44 +806,50 @@ def read_last_query(_):
         return ""
 
 
-def generate_patch_prompt(symbol_name, patch_dict):
-    """生成符号补丁提示词字符串
+def generate_patch_prompt(symbol_names, symbol_map):
+    """生成多符号补丁提示词字符串
 
     参数:
-        symbol_name: 符号名称
-        patch_dict: 包含补丁信息的字典
-        user_prompt: 用户原始提示词
+        symbol_names: 符号名称列表
+        symbol_map: 包含符号信息的字典，key为符号名称，value为补丁信息字典
 
     返回:
         格式化后的提示词字符串
     """
-    prompt = f"""
+    prompt = """
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
 2. 若无修改需求，请完整返回原始内容
 3. 修改时必须包含完整文件内容，不得省略任何代码
 4. 保持原有缩进和代码风格，仅添加必要注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
+6. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
+7. 输入有几个符号，就输出几个符号块
+"""
 
+    # 添加每个符号的信息
+    for symbol_name in symbol_names.args:
+        patch_dict = symbol_map[symbol_name]
+        prompt += f"""
 [SYMBOL START]
 符号名称: {symbol_name}
 文件路径: {patch_dict["file_path"]}
-起始位置: 行 {patch_dict["patch_range"][0][0]} 列 {patch_dict["patch_range"][0][1]}
-结束位置: 行 {patch_dict["patch_range"][1][0]} 列 {patch_dict["patch_range"][1][1]}
 [SYMBOL END]
 
 [CONTENT START]
 {patch_dict["block_content"].decode('utf-8')}
 [CONTENT END]
+"""
 
+    prompt += """
 # 响应格式
-[modified file]: 文件路径
+[modified symbol]: 符号路径
 [source code start]
 完整文件内容
 [source code end]
 
 或（无修改时）:
-
+[modified symbol]: 符号路径
 [source code start]
 完整原始内容
 [source code end]
@@ -827,35 +862,35 @@ def generate_patch_prompt(symbol_name, patch_dict):
 class BlockPatchResponse:
     """大模型响应解析器"""
 
-    def __init__(self, expected_file_path=None):
-        self.expected_file_path = expected_file_path
+    def __init__(self, symbol_names=None):
+        self.symbol_names = symbol_names
 
     def parse(self, response_text):
         """
         解析大模型返回的响应内容
-        返回格式: (file_path, source_code)
+        返回格式: [(symbol_name, source_code), ...]
         """
         # 基础格式校验
         if "[source code start]" not in response_text or "[source code end]" not in response_text:
             raise ValueError("响应缺少必要的代码块标签")
 
-        # 提取文件名（可选）
-        file_path = self._extract_file_path(response_text)
-        source_code = self._extract_source_code(response_text)
+        # 提取所有修改的符号和代码
+        results = []
+        sections = response_text.split("[modified symbol]:")
+        for section in sections[1:]:  # 跳过第一个空的部分
+            # 提取符号名称
+            symbol_end = section.find("\n")
+            symbol_name = section[:symbol_end].strip()
 
-        # 二次校验
-        if self.expected_file_path and file_path and file_path != self.expected_file_path:
-            raise ValueError(f"文件路径不匹配，预期: {self.expected_file_path}，实际: {file_path}")
+            # 验证符号名称是否在预期列表中
+            if self.symbol_names and symbol_name not in self.symbol_names:
+                raise ValueError(f"返回的符号 {symbol_name} 不在预期符号列表中")
 
-        return file_path, source_code
+            # 提取源代码
+            source_code = self._extract_source_code(section)
+            results.append((symbol_name, source_code))
 
-    def _extract_file_path(self, text):
-        """从响应中提取文件路径"""
-        if "[modified file]:" in text:
-            start = text.find("[modified file]:") + len("[modified file]:")
-            end = text.find("\n", start)
-            return text[start:end].strip()
-        return None
+        return results
 
     def _extract_source_code(self, text):
         """提取源代码内容"""
@@ -871,13 +906,16 @@ class BlockPatchResponse:
         return text[start_idx + len(start_tag) : end_idx].strip()
 
 
-def parse_llm_response(response_text, expected_file_path=None):
+def parse_llm_response(response_text, symbol_names=None):
     """
     快速解析响应内容
-    返回格式: (file_path, source_code)
+    返回格式: [(symbol_name, source_code), ...]
     """
-    parser = BlockPatchResponse(expected_file_path=expected_file_path)
+    parser = BlockPatchResponse(symbol_names=symbol_names)
     return parser.parse(response_text)
+
+
+import pdb
 
 
 def process_patch_response(response_text, symbol_detail):
@@ -892,27 +930,34 @@ def process_patch_response(response_text, symbol_detail):
         如果用户确认应用补丁，则返回修改后的代码(bytes)
         否则返回None
     """
+    # 将响应文本和符号详情写入临时文件，用于调试和测试
+    with open("diff_test.json", "wb") as f:  # 使用'wb'模式确保二进制写入
+        marshal.dump((response_text, symbol_detail), f)
     # 解析大模型响应
-    file_path, source_code = parse_llm_response(response_text, symbol_detail["file_path"])
+    results = parse_llm_response(response_text, symbol_detail.keys())
+
+    # 准备BlockPatch参数
+    file_paths = []
+    patch_ranges = []
+    block_contents = []
+    update_contents = []
+
+    # 遍历解析结果，构造参数
+    for symbol_name, source_code in results:
+        # 获取符号详细信息
+        detail = symbol_detail[symbol_name]
+        file_paths.append(detail["file_path"])
+        patch_ranges.append(detail["block_range"])
+        block_contents.append(detail["block_content"])
+        update_contents.append(source_code.encode("utf-8"))
+
     # 创建BlockPatch对象
     patch = BlockPatch(
-        file_path=file_path,
-        patch_range=symbol_detail["patch_range"],
-        block_content=symbol_detail["block_content"],
-        update_content=source_code.encode("utf-8"),
+        file_paths=file_paths,
+        patch_ranges=patch_ranges,
+        block_contents=block_contents,
+        update_contents=update_contents,
     )
-
-    # 保存BlockPatch参数到临时文件，用于后续测试
-    patch_params = {
-        "file_path": file_path,
-        "patch_range": symbol_detail["patch_range"],
-        "block_content": symbol_detail["block_content"].decode("utf-8"),
-        "update_content": source_code,
-    }
-
-    # 创建文件保存参数
-    with open("diff_test.json", "w") as f:
-        json.dump(patch_params, f)
 
     # 生成并显示差异
     diff = patch.generate_diff()
@@ -923,9 +968,10 @@ def process_patch_response(response_text, symbol_detail):
     # 询问用户是否应用补丁
     user_input = input("\n是否应用此补丁？(y/n): ").lower()
     if user_input == "y":
-        content = patch.apply_patch()
-        with open(file_path, "w+") as f:
-            f.write(content.decode("utf8"))
+        file_map = patch.apply_patch()
+        for file in file_map:
+            with open(file, "w+") as f:
+                f.write(file_map[file])
         print("补丁已成功应用")
     else:
         print("补丁未应用")
@@ -934,41 +980,36 @@ def process_patch_response(response_text, symbol_detail):
 def test_patch_response():
     """测试补丁响应处理功能"""
     # 读取前面生成的测试文件
-    with open("diff_test.json", "r") as f:
-        patch_params = json.load(f)
+    with open("diff_test.json", "rb") as f:
+        args = marshal.load(f)
 
-    # 创建BlockPatch对象
-    patch = BlockPatch(
-        file_path=patch_params["file_path"],
-        patch_range=patch_params["patch_range"],
-        block_content=patch_params["block_content"].encode("utf-8"),
-        update_content=patch_params["update_content"].encode("utf-8"),
-    )
-
-    # 生成差异
-    diff = patch.generate_diff()
-    print("测试生成的差异补丁：")
-    print(diff)
+    process_patch_response(*args)
 
 
-def patch_symbol_with_prompt(symbol_name):
+def patch_symbol_with_prompt(symbol_names: CmdNode):
     """获取符号的纯文本内容
 
     参数:
-        symbol_name: 要查询的符号名称，可能包含斜杠等特殊字符
+        symbol_names: CmdNode对象，包含要查询的符号名称列表
 
     返回:
         符号对应的纯文本内容
     """
-    symbol = get_symbol_detail(symbol_name)
-    GPT_FLAGS[GPT_FLAG_PATCH] = symbol
-    return generate_patch_prompt(symbol_name, symbol)
+    symbol_map = {}
+    for symbol_name in symbol_names.args:
+        symbol = get_symbol_detail(symbol_name)
+        symbol_map[symbol_name] = symbol
+
+    GPT_FLAGS[GPT_FLAG_PATCH] = symbol_map
+    return generate_patch_prompt(symbol_names, symbol_map)
 
 
 def get_symbol_detail(symbol_name):
     """使用公共http函数请求符号补丁并生成BlockPatch对象"""
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
-    url = f"{api_url}/symbol_content?symbol_path=symbol:{symbol_name}&json=true"
+    # 对符号名称进行URL编码，处理可能包含的/等特殊字符
+    encoded_symbol = requests.utils.quote(symbol_name)
+    url = f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbol}&json=true"
     # 获取符号内容
     symbol_data = _send_http_request(url)
 
@@ -977,7 +1018,7 @@ def get_symbol_detail(symbol_name):
     location = symbol_data["location"]
 
     # 创建BlockPatch对象
-    patch_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
+    code_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
 
     # 将内容转换为bytes
     block_content = content.encode("utf-8")
@@ -985,7 +1026,8 @@ def get_symbol_detail(symbol_name):
     # 返回包含补丁信息的字典
     return {
         "file_path": symbol_data["file_path"],
-        "patch_range": patch_range,
+        "code_range": code_range,
+        "block_range": location["block_range"],
         "block_content": block_content,
     }
 
@@ -1124,75 +1166,165 @@ def parse_project_text(text: str) -> ProjectSections:
 
 
 # 定义正则表达式常量
-CMD_PATTERN = r"(\\?@[^\s\u3000]+)"  # 匹配@命令，排除英文空格和中文全角空格
-TEMPLATE_PATTERN = r"(\{.*?\})"  # 匹配模板段
-CMD_MATCH_PATTERN = r"\\?@[^\s\u3000]+"  # 匹配单个@命令，排除英文空格和中文全角空格
+CMD_PATTERN = r"(?<!\\)@[^\s\u3000]+"  # 匹配@命令，排除转义@、英文空格和中文全角空格
 
 
-def preprocess_text(text):
-    """预处理文本，将文本按{}分段，并提取@命令"""
-    # 使用正则表达式按{}分段
-    segments = re.split(TEMPLATE_PATTERN, text)
-    # 初始化结果列表
-    result = []
+class GPTContextProcessor:
+    """文本处理类，封装所有文本处理相关功能"""
 
-    for segment in segments:
-        if segment.startswith("{") and segment.endswith("}"):
-            # 处理模板命令段
-            # 提取所有@命令，保留@符号
-            matches = re.findall(CMD_PATTERN, segment.strip("{}"))
-            if matches:
-                # 第一个是模板，后面的都是参数
-                template = matches[0].lstrip("\\")  # 只去掉转义符，保留@
-                params = [match.lstrip("\\") for match in matches[1:]]  # 保留@
-                # template的实现 "{} {}".format(*params)
-                result.append(("template_cmd", template, *params))
-        else:
-            # 处理普通文本段，保留@符号和文本的混合
-            # 按@符号分割文本，同时保留@符号
-            parts = re.split(CMD_PATTERN, segment)
-            for part in parts:
-                if not part:
-                    continue
-                if re.match(CMD_MATCH_PATTERN, part):
-                    # 处理@命令，保留@符号
-                    cmd = part.lstrip("\\")
-                    result.append(("cmd", cmd))
-                else:
-                    # 处理普通文本
-                    result.append(("text", part))
-    return result
+    def __init__(self):
+        self.cmd_map = self._initialize_cmd_map()
+        self.env_vars = {
+            "os": sys.platform,
+            "os_version": platform.version(),
+            "current_path": os.getcwd(),
+        }
+        self.current_length = 0
+        self._add_gpt_flags()
 
+    def _initialize_cmd_map(self):
+        """初始化命令映射表"""
+        return {
+            "clipboard": self.get_clipboard_content,
+            "listen": self.monitor_clipboard,
+            "tree": self.get_directory_context_wrapper,
+            "treefull": self.get_directory_context_wrapper,
+            "last": self.read_last_query,
+            "symbol": self.patch_symbol_with_prompt,
+        }
 
-def process_text_with_file_path(text):
-    """处理包含@...的文本，支持@cmd命令、@path文件路径、@http网址和prompts目录下的模板文件"""
-    parts = preprocess_text(text)
-    current_length = 0
-    cmd_map = initialize_cmd_map()
-    env_vars = initialize_env_vars()
-    final_text = ""
-    for part in parts:
-        if part[0] == "text":
-            final_text += part[1]
-        elif part[0] == "cmd":
-            cmd = part[1]
-            text, current_length = process_match(cmd, text, current_length, cmd_map, env_vars)
-            final_text += text
-        elif part[0] == "template_cmd":
-            template_replacement = get_replacement(part[1].strip("@"), cmd_map, env_vars)
-            args = []
-            for template_part in part[2:]:
-                arg_templatement = get_replacement(template_part.strip("@"), cmd_map, env_vars)
-                if arg_templatement:
-                    args.append(arg_templatement)
-            replacement = template_replacement.format(*args)
-            final_text += replacement
-            current_length += len(replacement)
-        else:
-            raise ValueError("bad part: %s" % part)
-        if current_length >= MAX_PROMPT_SIZE:
-            break
-    return finalize_text(final_text)
+    def _add_gpt_flags(self):
+        """添加GPT flags相关处理函数"""
+        for flag in GPT_FLAGS:
+            self.cmd_map[flag] = lambda _, f=flag: GPT_FLAGS.update({f: True})
+
+    def preprocess_text(self, text) -> List[Union[TextNode, CmdNode, TemplateNode]]:
+        """预处理文本，将文本按{}分段，并提取@命令"""
+        result = []
+        cmd_groups = defaultdict(list)
+
+        # 首先按{}分割文本
+        segments = re.split(r"({.*?})", text)
+
+        for segment in segments:
+            if segment.startswith("{") and segment.endswith("}"):  # 处理模板段
+                template_content = segment.strip("{}")
+                # 直接匹配所有命令
+                commands = [CmdNode(command=cmd.lstrip("@")) for cmd in re.findall(CMD_PATTERN, template_content)]
+                if commands:
+                    result.append(TemplateNode(template=commands[0], commands=commands[1:]))
+            else:  # 处理非模板段
+                # 先匹配所有命令
+                commands = re.findall(CMD_PATTERN, segment)
+                # 将命令之间的文本作为普通文本处理
+                text_parts = re.split(CMD_PATTERN, segment)
+                for i, part in enumerate(text_parts):
+                    if part:  # 处理普通文本
+                        # 处理转义的@符号
+                        part = part.replace("\\@", "@")
+                        result.append(TextNode(content=part))
+                    if i < len(commands):  # 处理命令
+                        cmd = commands[i].lstrip("@")
+                        if ":" in cmd:
+                            symbol, _, arg = cmd.partition(":")
+                            cmd_groups[symbol].append(arg)
+                        else:
+                            result.append(CmdNode(command=cmd))
+
+        # 处理带参数的命令
+        for symbol, args in cmd_groups.items():
+            result.insert(0, CmdNode(command=symbol, args=args))
+
+        return result
+
+    def process_text_with_file_path(self, text: str) -> str:
+        """处理包含@...的文本"""
+        parts = self.preprocess_text(text)
+        for i, node in enumerate(parts):
+            if isinstance(node, TextNode):
+                parts[i] = node.content
+                self.current_length += len(node.content)
+            elif isinstance(node, CmdNode):
+                processed_text = self._process_match(node)
+                parts[i] = processed_text
+                self.current_length += len(processed_text)
+            elif isinstance(node, TemplateNode):
+                template_replacement = self._process_match(node.template)
+                args = []
+                for template_cmd in node.commands:
+                    arg_replacement = self._process_match(template_cmd)
+                    if arg_replacement:
+                        args.append(arg_replacement)
+                replacement = template_replacement.format(*args)
+                parts[i] = replacement
+                self.current_length += len(replacement)
+            else:
+                raise ValueError(f"无法识别的部分类型: {type(node)}")
+
+            if self.current_length >= MAX_PROMPT_SIZE:
+                break
+
+        return self._finalize_text("".join(parts))
+
+    def _process_match(self, match: CmdNode) -> Tuple[str]:
+        """处理单个匹配项或匹配项列表"""
+        try:
+            return self._get_replacement(match)
+        except Exception as e:
+            error_match = " ".join([m.command for m in match]) if isinstance(match, list) else match.command
+            handle_processing_error(error_match, e)
+
+    def _get_replacement(self, match: CmdNode):
+        """根据匹配类型获取替换内容"""
+        if is_prompt_file(match.command):
+            return _handle_prompt_file(match)
+        elif is_local_file(match.command):
+            return _handle_local_file(match)
+        elif is_url(match.command):
+            return _handle_url(match)
+        elif self._is_command(match.command):
+            return _handle_command(match, self.cmd_map)
+        return ""
+
+    def _finalize_text(self, text):
+        """最终处理文本"""
+        truncated_suffix = "\n[输入太长内容已自动截断]"
+        if len(text) > MAX_PROMPT_SIZE:
+            text = text[: MAX_PROMPT_SIZE - len(truncated_suffix)] + truncated_suffix
+
+        with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
+            f.write(text)
+        return text
+
+    def _is_command(self, match):
+        """判断是否为命令"""
+        return any(match.startswith(cmd) for cmd in self.cmd_map) and not os.path.exists(match)
+
+    @staticmethod
+    def get_clipboard_content(_):
+        """获取剪贴板内容"""
+        text = get_clipboard_content_string()
+        return f"\n[clipboard content start]\n{text}\n[clipboard content end]\n"
+
+    @staticmethod
+    def monitor_clipboard(_, debug=False):
+        """监控剪贴板内容"""
+        return monitor_clipboard(_, debug)
+
+    @staticmethod
+    def get_directory_context_wrapper(tag):
+        """获取目录上下文"""
+        return get_directory_context_wrapper(tag)
+
+    @staticmethod
+    def read_last_query(_):
+        """读取最后一次查询内容"""
+        return read_last_query(_)
+
+    @staticmethod
+    def patch_symbol_with_prompt(symbol_names):
+        """处理符号补丁提示"""
+        return patch_symbol_with_prompt(symbol_names)
 
 
 GPT_FLAG_GLOW = "glow"
@@ -1200,74 +1332,6 @@ GPT_FLAG_EDIT = "edit"
 GPT_FLAG_PATCH = "patch"
 
 GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False}
-
-
-def initialize_cmd_map():
-    """初始化命令映射表"""
-    cmd_map = {
-        "clipboard": get_clipboard_content,
-        "listen": monitor_clipboard,
-        "tree": get_directory_context_wrapper,
-        "treefull": get_directory_context_wrapper,
-        "last": read_last_query,
-        "symbol": patch_symbol_with_prompt,
-    }
-
-    # 添加GPT flags相关处理函数
-    for flag in GPT_FLAGS:
-        cmd_map[flag] = lambda _, f=flag: GPT_FLAGS.update({f: True})
-
-    return cmd_map
-
-
-def initialize_env_vars():
-    """初始化环境变量"""
-    return {
-        "os": sys.platform,
-        "os_version": platform.version(),
-        "current_path": os.getcwd(),
-    }
-
-
-def process_match(match, text, current_length, cmd_map, env_vars):
-    """处理单个匹配项"""
-    match_key = f"{match}" if text.endswith(match) else f"{match} "
-    stripped_match = match.strip("@")
-    try:
-        replacement = get_replacement(stripped_match, cmd_map, env_vars)
-        if not replacement:
-            return "", current_length
-
-        replacement = adjust_replacement_length(replacement, len(match_key), current_length)
-        new_text = text.replace(match_key, replacement, 1)
-        new_length = current_length - len(match_key) + len(replacement)
-
-        return (new_text[:MAX_PROMPT_SIZE], MAX_PROMPT_SIZE) if new_length > MAX_PROMPT_SIZE else (new_text, new_length)
-
-    except Exception as e:
-        handle_processing_error(stripped_match, e)
-
-
-def get_replacement(match, cmd_map, env_vars):
-    """根据匹配类型获取替换内容"""
-    if is_prompt_file(match):
-        return _handle_prompt_file(match, env_vars)
-    elif is_local_file(match):
-        return _handle_local_file(match)
-    elif is_url(match):
-        return _handle_url(match)
-    elif is_command(match, cmd_map):
-        return _handle_command(match, cmd_map)
-    return None
-
-
-def adjust_replacement_length(replacement, match_length, current_length):
-    """调整替换内容长度"""
-    truncated_suffix = "\n[输入太长内容已自动截断]"
-    max_allowed = MAX_PROMPT_SIZE - (current_length - match_length)
-    if len(replacement) > max_allowed:
-        return replacement[: max_allowed - len(truncated_suffix)] + truncated_suffix
-    return replacement
 
 
 def finalize_text(text):
@@ -1307,6 +1371,7 @@ def is_url(match):
 def handle_processing_error(match, error):
     """统一错误处理"""
     print(f"处理 {match} 时出错: {str(error)}")
+    traceback.print_exc()  # 打印完整的调用栈信息
     sys.exit(1)
 
 
@@ -1540,7 +1605,8 @@ def print_proxy_info(proxies, proxy_sources):
 def handle_ask_mode(args, api_key, proxies):
     """处理--ask模式"""
     base_url = os.getenv("GPT_BASE_URL")
-    text = process_text_with_file_path(args.ask)
+    context_processor = GPTContextProcessor()
+    text = context_processor.process_text_with_file_path(args.ask)
     print(text)
     response_data = query_gpt_api(
         api_key,
@@ -1720,7 +1786,7 @@ class ChatbotUI:
 
     def stream_response(self, prompt):
         """流式获取GPT响应并实时渲染Markdown"""
-        text = process_text_with_file_path(prompt)
+        text = GPTContextProcessor().process_text_with_file_path(prompt)
         return query_gpt_api(
             api_key=os.getenv("GPT_KEY"),
             prompt=text,
@@ -1832,6 +1898,7 @@ def handle_small_code(args, code_content, prompt_template, api_key, proxies):
 
 
 def main():
+    # test_patch_response()
     args = parse_arguments()
     shadowroot.mkdir(parents=True, exist_ok=True)
 
