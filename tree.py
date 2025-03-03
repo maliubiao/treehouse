@@ -235,19 +235,18 @@ class SymbolTrie:
                 node.children[char] = TrieNode()
             node = node.children[char]
 
-        # 避免重复添加相同定义的符号
-        if not any(s["full_definition_hash"] == symbol_info["full_definition_hash"] for s in node.symbols):
-            node.symbols.append(symbol_info)
-            if not node.is_end:  # 新增唯一符号计数
-                self._size += 1
-            node.is_end = True
+        # 直接替换符号信息
+        node.symbols = [symbol_info]
+        if not node.is_end:  # 新增唯一符号计数
+            self._size += 1
+        node.is_end = True
 
-            # 为自动补全插入带文件名的符号，避免递归
-            if not symbol_name.startswith("symbol:"):
-                file_basename = extract_identifiable_path(symbol_info["file_path"])
-                composite_key = f"symbol:{file_basename}/{word}"
-                # 使用新的symbol_info副本，防止引用问题
-                self.insert(composite_key, symbol_info)
+        # 为自动补全插入带文件名的符号，避免递归
+        if not symbol_name.startswith("symbol:"):
+            file_basename = extract_identifiable_path(symbol_info["file_path"])
+            composite_key = f"symbol:{file_basename}/{word}"
+            # 使用新的symbol_info副本，防止引用问题
+            self.insert(composite_key, symbol_info)
 
     def search_exact(self, symbol_path):
         """精确搜索符号路径
@@ -823,7 +822,6 @@ class BlockPatch:
         # 获取原始代码分段
         (start_row, start_col), (end_row, end_col) = self.patch_range
         before, selected, after = split_source(self.source_code.decode("utf8"), start_row, start_col, end_row, end_col)
-
         # 校验选中的内容是否与传入的block_content匹配
         if selected.strip() != self.block_content.decode("utf8").strip():
             raise ValueError(
@@ -840,9 +838,8 @@ class BlockPatch:
             fromfile=self.file_path,
             tofile=self.file_path,
             lineterm="",
-            n=max(3, start_row),  # 显示足够的上下文
+            n=3,
         )
-
         return "".join(diff)
 
     def apply_patch(self) -> bytes:
@@ -1782,23 +1779,31 @@ def get_symbols_from_db(prefix: str, max_results: int, file_path: Optional[str] 
 
 @app.get("/complete")
 async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
+    """处理符号自动补全请求，支持前缀树和数据库两种搜索方式
+
+    Args:
+        prefix: 用户输入的搜索前缀，最小长度为1
+        max_results: 最大返回结果数量，自动限制在1-50之间
+    """
     # 如果前缀为空，直接返回空结果
     if not prefix:
         return {"completions": []}
 
     trie = app.state.symbol_trie
-    # 确保max_results是整数类型
+    # 确保max_results是整数类型（处理可能的字符串输入）
     max_results = int(max_results)
-    # 限制结果范围在1到50之间
+    # 限制结果范围在1到50之间，避免过大或非法的请求
     max_results = max(1, min(50, max_results))
 
-    # 首先尝试使用前缀树搜索
+    # 首先尝试使用前缀树搜索（高效的前缀匹配算法）
     results = trie.search_prefix(prefix)[:max_results]
 
-    # 如果前缀树搜索结果为空，则使用数据库模糊搜索
+    # 如果前缀树搜索结果为空，则使用数据库模糊搜索（回退机制保证覆盖率）
     if not results:
+        # 使用数据库的LIKE查询进行模糊匹配
         results = get_symbols_from_db(prefix, max_results)
 
+    # 返回标准化格式的补全结果列表
     return {"completions": results}
 
 
@@ -1825,16 +1830,21 @@ def extract_identifiable_path(file_path: str) -> str:
 
 
 @app.get("/symbol_content")
-async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1)):
+async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), json: bool = False):
     """根据符号路径获取符号对应的源代码内容
 
     Args:
         symbol_path: 符号路径，格式为file_path>a>b>c
+        json: 是否返回JSON格式，包含行号信息
 
     Returns:
-        纯文本格式的源代码内容
+        纯文本格式的源代码内容，或包含行号信息的JSON
     """
     trie = app.state.file_symbol_trie
+    file_mtime_cache = app.state.file_mtime_cache
+
+    # 检查并更新前缀树
+    update_trie_if_needed(symbol_path, trie, file_mtime_cache)
     # 在前缀树中搜索符号路径
     result = trie.search_exact(symbol_path)
 
@@ -1878,7 +1888,51 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1)):
         content_lines.append(last_line[:end_col])
         content = "\n".join(content_lines)
 
+    if json:
+        # 返回JSON格式，包含行号信息
+        return {
+            "file_path": file_path,
+            "content": content,
+            "location": {"start_line": start_line, "start_col": start_col, "end_line": end_line, "end_col": end_col},
+        }
     return PlainTextResponse(content)
+
+
+def update_trie_if_needed(prefix: str, trie, file_mtime_cache) -> bool:
+    """根据前缀更新前缀树，如果需要的话
+
+    Args:
+        prefix: 要检查的前缀
+        trie: 前缀树对象
+        file_mtime_cache: 文件修改时间缓存
+
+    Returns:
+        bool: 是否执行了更新操作
+    """
+    if not prefix.startswith("symbol:"):
+        return False
+
+    pattern = r"symbol:([^/]+.*?(?:" + "|".join(re.escape(ext) for ext in SUPPORTED_LANGUAGES.keys()) + r"))/?"
+    match = re.search(pattern, prefix)
+    if not match:
+        return False
+
+    file_path = match.group(1)
+    if not os.path.exists(file_path):
+        return False
+
+    current_mtime = os.path.getmtime(file_path)
+    cached_mtime = file_mtime_cache.get(file_path, 0)
+
+    if current_mtime > cached_mtime:
+        print(f"[DEBUG] 检测到文件修改: {file_path} (旧时间:{cached_mtime} 新时间:{current_mtime})")
+        parser_loader = ParserLoader()
+        parser_util = ParserUtil(parser_loader)
+        parser_util.update_symbol_trie(file_path, trie)
+        file_mtime_cache[file_path] = current_mtime
+        return True
+
+    return False
 
 
 @app.get("/complete_realtime")
@@ -1892,33 +1946,21 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
     Returns:
         纯文本格式的符号列表，每行一个符号
     """
-    # 初始化解析器
     trie = app.state.file_symbol_trie
     max_results = max(1, min(50, int(max_results)))
-    # 首先尝试使用前缀树搜索
-    results = trie.search_prefix(prefix, max_results=max_results)
-    # 如果前缀以"symbol:"开头，尝试提取文件路径
-    if not results and prefix.startswith("symbol:"):
-        # 匹配模式：以支持的语言后缀结尾，后跟斜杠
-        pattern = r"symbol:([^/]+.*?(?:" + "|".join(re.escape(ext) for ext in SUPPORTED_LANGUAGES.keys()) + r"))/?"
-        match = re.search(pattern, prefix)
-        file_path = match.group(1)
-        if os.path.exists(file_path):
-            # 输出慢路径调试日志
-            print(f"[DEBUG] 进入慢路径处理: prefix={prefix}, file_path={file_path}")
-            # 初始化解析器工具
-            parser_loader = ParserLoader()
-            parser_util = ParserUtil(parser_loader)
-            # 解析文件并更新符号表
-            start_time = time.time()
-            parser_util.update_symbol_trie(file_path, app.state.file_symbol_trie)
-            elapsed_time = time.time() - start_time
-            print(f"[DEBUG] 文件解析完成: {file_path}, 耗时: {elapsed_time:.2f}秒")
-            # 更新前缀树搜索结果
-            results = trie.search_prefix(prefix, max_results)
-            print(f"[DEBUG] 慢路径搜索结果: 找到{len(results)}个匹配项")
+    file_mtime_cache = app.state.file_mtime_cache
 
-    # 返回纯文本格式，每行一个符号，从结果中提取name字段
+    # 检查并更新前缀树
+    updated = update_trie_if_needed(prefix, trie, file_mtime_cache)
+
+    # 搜索前缀
+    results = trie.search_prefix(prefix, max_results=max_results)
+
+    # 如果没有找到结果，尝试强制更新并重新搜索
+    if not results and not updated:
+        if update_trie_if_needed(prefix, trie, file_mtime_cache):
+            results = trie.search_prefix(prefix, max_results)
+
     return PlainTextResponse("\n".join(result["name"] for result in results))
 
 
@@ -2568,6 +2610,7 @@ def scan_project_files_optimized(
     trie = SymbolTrie.from_symbols(all_existing_symbols)
     app.state.symbol_trie = trie
     app.state.file_symbol_trie = SymbolTrie.from_symbols({})
+    app.state.file_mtime_cache = {}
     # 获取需要处理的文件列表
     tasks = []
     for project_path in project_paths:

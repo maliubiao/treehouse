@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -41,6 +42,8 @@ from pygments.token import Token
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+
+from tree import BlockPatch, ParserLoader, SourceSkeleton
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
@@ -774,11 +777,220 @@ def read_last_query(_):
         return ""
 
 
-def patch_symbol(symbol_name):
-    """使用公共http函数请求符号补丁"""
+def generate_patch_prompt(symbol_name, patch_dict):
+    """生成符号补丁提示词字符串
+
+    参数:
+        symbol_name: 符号名称
+        patch_dict: 包含补丁信息的字典
+        user_prompt: 用户原始提示词
+
+    返回:
+        格式化后的提示词字符串
+    """
+    prompt = f"""
+# 指令说明
+1. 必须返回结构化内容，使用严格指定的标签格式
+2. 若无修改需求，请完整返回原始内容
+3. 修改时必须包含完整文件内容，不得省略任何代码
+4. 保持原有缩进和代码风格，仅添加必要注释
+5. 输出必须为纯文本，禁止使用markdown或代码块
+
+[SYMBOL START]
+符号名称: {symbol_name}
+文件路径: {patch_dict["file_path"]}
+起始位置: 行 {patch_dict["patch_range"][0][0]} 列 {patch_dict["patch_range"][0][1]}
+结束位置: 行 {patch_dict["patch_range"][1][0]} 列 {patch_dict["patch_range"][1][1]}
+[SYMBOL END]
+
+[CONTENT START]
+{patch_dict["block_content"].decode('utf-8')}
+[CONTENT END]
+
+# 响应格式
+[modified file]: 文件路径
+[source code start]
+完整文件内容
+[source code end]
+
+或（无修改时）:
+
+[source code start]
+完整原始内容
+[source code end]
+
+用户的要求如下:
+"""
+    return prompt
+
+
+class BlockPatchResponse:
+    """大模型响应解析器"""
+
+    def __init__(self, expected_file_path=None):
+        self.expected_file_path = expected_file_path
+
+    def parse(self, response_text):
+        """
+        解析大模型返回的响应内容
+        返回格式: (file_path, source_code)
+        """
+        # 基础格式校验
+        if "[source code start]" not in response_text or "[source code end]" not in response_text:
+            raise ValueError("响应缺少必要的代码块标签")
+
+        # 提取文件名（可选）
+        file_path = self._extract_file_path(response_text)
+        source_code = self._extract_source_code(response_text)
+
+        # 二次校验
+        if self.expected_file_path and file_path and file_path != self.expected_file_path:
+            raise ValueError(f"文件路径不匹配，预期: {self.expected_file_path}，实际: {file_path}")
+
+        return file_path, source_code
+
+    def _extract_file_path(self, text):
+        """从响应中提取文件路径"""
+        if "[modified file]:" in text:
+            start = text.find("[modified file]:") + len("[modified file]:")
+            end = text.find("\n", start)
+            return text[start:end].strip()
+        return None
+
+    def _extract_source_code(self, text):
+        """提取源代码内容"""
+        start_tag = "[source code start]"
+        end_tag = "[source code end]"
+
+        start_idx = text.find(start_tag)
+        end_idx = text.find(end_tag)
+
+        if start_idx == -1 or end_idx == -1:
+            raise ValueError("源代码块标签不完整")
+
+        return text[start_idx + len(start_tag) : end_idx].strip()
+
+
+def parse_llm_response(response_text, expected_file_path=None):
+    """
+    快速解析响应内容
+    返回格式: (file_path, source_code)
+    """
+    parser = BlockPatchResponse(expected_file_path=expected_file_path)
+    return parser.parse(response_text)
+
+
+import pdb
+
+
+def process_patch_response(response_text, symbol_detail):
+    """
+    处理大模型的补丁响应，生成差异并应用补丁
+
+    参数:
+        response_text: 大模型返回的响应文本
+        symbol_detail: 要处理的符号
+
+    返回:
+        如果用户确认应用补丁，则返回修改后的代码(bytes)
+        否则返回None
+    """
+    # 解析大模型响应
+    file_path, source_code = parse_llm_response(response_text, symbol_detail["file_path"])
+    # 创建BlockPatch对象
+    patch = BlockPatch(
+        file_path=file_path,
+        patch_range=symbol_detail["patch_range"],
+        block_content=symbol_detail["block_content"],
+        update_content=source_code.encode("utf-8"),
+    )
+
+    # 保存BlockPatch参数到临时文件，用于后续测试
+    patch_params = {
+        "file_path": file_path,
+        "patch_range": symbol_detail["patch_range"],
+        "block_content": symbol_detail["block_content"].decode("utf-8"),
+        "update_content": source_code,
+    }
+
+    # 创建文件保存参数
+    with open("diff_test.json", "w") as f:
+        json.dump(patch_params, f)
+
+    # 生成并显示差异
+    diff = patch.generate_diff()
+    highlighted_diff = highlight(diff, DiffLexer(), TerminalFormatter())
+    print("\n高亮显示的diff内容：")
+    print(highlighted_diff)
+
+    # 询问用户是否应用补丁
+    user_input = input("\n是否应用此补丁？(y/n): ").lower()
+    if user_input == "y":
+        content = patch.apply_patch()
+        with open(file_path, "w+") as f:
+            f.write(content.decode("utf8"))
+        print("补丁已成功应用")
+    else:
+        print("补丁未应用")
+
+
+def test_patch_response():
+    """测试补丁响应处理功能"""
+    # 读取前面生成的测试文件
+    with open("diff_test.json", "r") as f:
+        patch_params = json.load(f)
+
+    # 创建BlockPatch对象
+    patch = BlockPatch(
+        file_path=patch_params["file_path"],
+        patch_range=patch_params["patch_range"],
+        block_content=patch_params["block_content"].encode("utf-8"),
+        update_content=patch_params["update_content"].encode("utf-8"),
+    )
+
+    # 生成差异
+    diff = patch.generate_diff()
+    print("测试生成的差异补丁：")
+    print(diff)
+
+
+def patch_symbol_with_prompt(symbol_name):
+    """获取符号的纯文本内容
+
+    参数:
+        symbol_name: 要查询的符号名称，可能包含斜杠等特殊字符
+
+    返回:
+        符号对应的纯文本内容
+    """
+    symbol = get_symbol_detail(symbol_name)
+    GPT_FLAGS[GPT_FLAG_PATCH] = symbol
+    return generate_patch_prompt(symbol_name, symbol)
+
+
+def get_symbol_detail(symbol_name):
+    """使用公共http函数请求符号补丁并生成BlockPatch对象"""
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
-    url = f"{api_url}/symbol_content?symbol_path=symbol:{symbol_name}"
-    return _send_http_request(url)
+    url = f"{api_url}/symbol_content?symbol_path=symbol:{symbol_name}&json=true"
+    # 获取符号内容
+    symbol_data = _send_http_request(url)
+
+    # 解析返回的JSON数据
+    content = symbol_data["content"]
+    location = symbol_data["location"]
+
+    # 创建BlockPatch对象
+    patch_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
+
+    # 将内容转换为bytes
+    block_content = content.encode("utf-8")
+
+    # 返回包含补丁信息的字典
+    return {
+        "file_path": symbol_data["file_path"],
+        "patch_range": patch_range,
+        "block_content": block_content,
+    }
 
 
 def _fetch_symbol_data(symbol_name, file_path=None):
@@ -791,8 +1003,12 @@ def _fetch_symbol_data(symbol_name, file_path=None):
     return _send_http_request(url)
 
 
-def _send_http_request(url):
-    """发送HTTP请求的公共函数"""
+def _send_http_request(url, is_plain_text=False):
+    """发送HTTP请求的公共函数
+    Args:
+        url: 请求的URL
+        is_plain_text: 是否返回纯文本内容，默认为False返回JSON
+    """
     # 禁用所有代理
     proxies = {"http": None, "https": None, "http_proxy": None, "https_proxy": None, "all_proxy": None}
     # 同时清除环境变量中的代理设置
@@ -802,7 +1018,8 @@ def _send_http_request(url):
 
     response = requests.get(url, proxies=proxies, timeout=5)
     response.raise_for_status()
-    return response.json()
+
+    return response.text if is_plain_text else response.json()
 
 
 def query_symbol(symbol_name):
@@ -869,6 +1086,44 @@ def query_symbol(symbol_name):
         return f"\n[error] 无效的API响应格式: {str(e)}\n"
     except Exception as e:
         return f"\n[error] 符号查询时发生错误: {str(e)}\n"
+
+
+@dataclass
+class ProjectSections:
+    project_design: str
+    readme: str
+    dir_tree: str
+    setup_script: str
+    api_description: str
+    # 可以根据需要扩展更多字段
+
+
+def parse_project_text(text: str) -> ProjectSections:
+    """
+    从输入文本中提取结构化项目数据
+
+    参数：
+    text: 包含标记的原始文本
+
+    返回：
+    ProjectSections对象，可通过成员访问各字段内容
+    """
+    pattern = r"[(\w+)_START\](.*?)\[\1_END\]"
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    section_dict = {}
+    for name, content in matches:
+        # 转换为小写蛇形命名，如 PROJECT_DESIGN -> project_design
+        key = name.lower()
+        section_dict[key] = content.strip()
+
+    # 验证必要字段
+    required_fields = {"project_design", "readme", "dir_tree", "setup_script", "api_description"}
+    if not required_fields.issubset(section_dict.keys()):
+        missing = required_fields - section_dict.keys()
+        raise ValueError(f"缺少必要字段: {', '.join(missing)}")
+
+    return ProjectSections(**section_dict)
 
 
 # 定义正则表达式常量
@@ -944,8 +1199,10 @@ def process_text_with_file_path(text):
 
 
 GPT_FLAG_GLOW = "glow"
+GPT_FLAG_EDIT = "edit"
+GPT_FLAG_PATCH = "patch"
 
-GPT_FLAGS = {GPT_FLAG_GLOW: False}
+GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False}
 
 
 def initialize_cmd_map():
@@ -956,8 +1213,7 @@ def initialize_cmd_map():
         "tree": get_directory_context_wrapper,
         "treefull": get_directory_context_wrapper,
         "last": read_last_query,
-        "symbol": query_symbol,
-        "patch": patch_symbol,
+        "symbol": patch_symbol_with_prompt,
     }
 
     # 添加GPT flags相关处理函数
@@ -1230,8 +1486,10 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
                 os.unlink(save_path)
         except subprocess.CalledProcessError as e:
             print(f"glow运行失败: {e}")
-
-    extract_and_diff_files(content)
+    if GPT_FLAGS.get(GPT_FLAG_EDIT):
+        extract_and_diff_files(content)
+    if GPT_FLAGS.get(GPT_FLAG_PATCH):
+        process_patch_response(content, GPT_FLAGS[GPT_FLAG_PATCH])
 
 
 def validate_environment():
