@@ -1212,30 +1212,16 @@ def get_symbol_detail(symbol_name):
     location = symbol_data["location"]
     file_path = symbol_data["file_path"]
 
-    # 仅在存在flags时执行文件验证和换行符处理
+    # 处理标记相关逻辑
     if flags:
-        try:
-            with open(file_path, "rb") as f:
-                file_content = f.read()
-
-            block_start, block_end = location["block_range"]
-            file_block_content = file_content[block_start:block_end].decode("utf8")
-
-            if file_block_content != content:
-                print(f"Error: File content has changed for symbol {symbol_name}")
-                return None
-
-            # 处理换行符位置
-            if flags["position"] == "before":
-                start_pos = block_start
-                newline_pos = find_nearest_newline(start_pos, file_content, "backward")
-            else:
-                end_pos = block_end
-                newline_pos = find_nearest_newline(end_pos, file_content, "forward")
-
-            flags["newline_pos"] = newline_pos
-        except Exception as e:
-            print(f"Error processing file {file_path}: {str(e)}")
+        flags = _process_symbol_flags(
+            file_path=file_path,
+            symbol_name=symbol_name,
+            content=content,
+            block_range=location["block_range"],
+            flags=flags,
+        )
+        if not flags:
             return None
 
     code_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
@@ -1249,6 +1235,42 @@ def get_symbol_detail(symbol_name):
         "block_content": block_content,
         "flags": flags if flags else None,
     }
+
+
+def _process_symbol_flags(file_path, symbol_name, content, block_range, flags):
+    """处理符号标记相关的文件验证和位置计算
+    输入假设:
+    - file_path: 符号所在的物理文件路径
+    - content: API返回的符号预期内容
+    - block_range: 文件中的字节范围元组(start, end)
+    - flags: 包含位置标记的字典
+    不符合假设时返回None并记录日志
+    """
+    try:
+        with open(file_path, "rb") as f:
+            file_content = f.read()
+
+        block_start, block_end = block_range
+        file_block_content = file_content[block_start:block_end].decode("utf8")
+
+        if file_block_content != content:
+            print(f"Error: File content has changed for symbol {symbol_name}")
+            return None
+
+        # 计算换行符位置
+        if flags["position"] == "before":
+            start_pos = block_start
+            newline_pos = find_nearest_newline(start_pos, file_content, "backward")
+        else:
+            end_pos = block_end
+            newline_pos = find_nearest_newline(end_pos, file_content, "forward")
+
+        flags["newline_pos"] = newline_pos
+        return flags
+
+    except Exception as e:
+        print(f"Error processing file {file_path}: {str(e)}")
+        return None
 
 
 def _fetch_symbol_data(symbol_name, file_path=None):
