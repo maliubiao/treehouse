@@ -486,67 +486,103 @@ def _print_newline(console) -> None:
         print()
 
 
-def _check_tool_installed(tool_name, install_url=None, install_commands=None):
-    """检查指定工具是否已安装"""
+def _check_tool_installed(
+    tool_name: str, install_url: str | None = None, install_commands: list[str] | None = None
+) -> bool:
+    """检查指定工具是否已安装
+
+    Args:
+        tool_name: 需要检查的命令行工具名称
+        install_url: 该工具的安装文档URL
+        install_commands: 适用于不同平台的安装命令列表
+
+    Raises:
+        ValueError: 当输入参数不符合约定时（非阻断性错误，会继续执行）
+
+    输入假设:
+        1. tool_name必须是有效的可执行文件名称
+        2. install_commands应为非空列表（当需要显示安装指引时）
+        3. 系统环境PATH配置正确，能正确找到已安装工具
+    """
+    # 参数前置校验
+    if not isinstance(tool_name, str) or not tool_name:
+        print(f"参数校验失败: tool_name需要非空字符串，收到类型：{type(tool_name)}")
+        return False
+
+    if install_commands and (
+        not isinstance(install_commands, list) or any(not isinstance(cmd, str) for cmd in install_commands)
+    ):
+        print("参数校验失败: install_commands需要字符串列表")
+        return False
+
     try:
-        if sys.platform == "win32":
-            # Windows系统使用where命令
-            subprocess.run(["where", tool_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        else:
-            # 非Windows系统使用which命令
-            subprocess.run(["which", tool_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        check_cmd = ["where", tool_name] if sys.platform == "win32" else ["which", tool_name]
+        subprocess.run(check_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True)
         return True
     except subprocess.CalledProcessError:
-        print(f"错误：{tool_name} 未安装")
+        print(f"依赖缺失: {tool_name} 未安装")
         if install_url:
-            print(f"请访问 {install_url} 安装{tool_name}")
+            print(f"|-- 安装文档: {install_url}")
         if install_commands:
-            print("请使用以下命令安装：")
+            print("|-- 可用安装命令:")
             for cmd in install_commands:
-                print(f"  {cmd}")
+                print(f"|   {cmd}")
         return False
 
 
-def check_deps_installed():
-    """检查glow、tree和剪贴板工具是否已安装"""
+def check_deps_installed() -> bool:
+    """检查系统环境是否满足依赖要求
+
+    Returns:
+        bool: 所有必需依赖已安装返回True，否则False
+
+    输入假设:
+        1. GPT_FLAGS全局变量已正确初始化
+        2. 当GPT_FLAG_GLOW标志启用时才需要检查glow
+        3. Windows系统需要pywin32访问剪贴板
+        4. Linux系统需要xclip或xsel工具
+    """
     all_installed = True
-    if GPT_FLAGS.get(GPT_FLAG_GLOW):
-        # 检查glow
+
+    # 检查glow（条件性检查）
+    if GPT_FLAGS.get(GPT_FLAG_GLOW, False):
         if not _check_tool_installed(
-            "glow",
+            tool_name="glow",
             install_url="https://github.com/charmbracelet/glow",
             install_commands=[
                 "brew install glow  # macOS",
-                "choco install glow  # Windows Chocolatey",
-                "scoop install glow  # Windows Scoop",
-                "winget install charmbracelet.glow  # Windows Winget",
+                "choco install glow  # Windows",
+                "scoop install glow  # Windows",
+                "winget install charmbracelet.glow  # Windows",
             ],
         ):
             all_installed = False
 
-    # 检查剪贴板工具
+    # 检查剪贴板支持
     if sys.platform == "win32":
         try:
-            import win32clipboard as _
-        except ImportError:
-            print("错误：需要安装pywin32来访问Windows剪贴板")
-            print("请执行：pip install pywin32")
+            import win32clipboard  # type: ignore
+        except ImportError as e:
+            print("剪贴板支持缺失: 需要pywin32包")
+            print("解决方案: pip install pywin32")
             all_installed = False
-    elif sys.platform != "darwin":  # Linux系统
-        clipboard_installed = _check_tool_installed(
-            "xclip",
-            install_commands=[
-                "Ubuntu/Debian: sudo apt install xclip",
-                "CentOS/Fedora: sudo yum install xclip",
-            ],
-        ) or _check_tool_installed(
-            "xsel",
-            install_commands=[
-                "Ubuntu/Debian: sudo apt install xsel",
-                "CentOS/Fedora: sudo yum install xsel",
-            ],
+    elif sys.platform == "linux":  # 精确匹配Linux平台
+        clipboard_ok = any(
+            [
+                _check_tool_installed(
+                    "xclip",
+                    install_commands=[
+                        "sudo apt install xclip  # Debian/Ubuntu",
+                        "sudo yum install xclip  # RHEL/CentOS",
+                    ],
+                ),
+                _check_tool_installed(
+                    "xsel",
+                    install_commands=["sudo apt install xsel  # Debian/Ubuntu", "sudo yum install xsel  # RHEL/CentOS"],
+                ),
+            ]
         )
-        if not clipboard_installed:
+        if not clipboard_ok:
             all_installed = False
 
     return all_installed
