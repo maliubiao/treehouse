@@ -584,9 +584,6 @@ class ParserUtil:
         return True
 
     def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
-        """递归遍历语法树，记录符号节点的路径、代码和位置信息"""
-        if node.type == "module" and len(node.children) != 0:
-            self._process_import_block(node, code_map, source_bytes, results)
 
         added = self._process_symbol_node(node, current_symbols, current_nodes, code_map, source_bytes, results)
 
@@ -608,6 +605,11 @@ class ParserUtil:
 
         results = []
         code_map = {}
+        """递归遍历语法树，记录符号节点的路径、代码和位置信息"""
+        node = root_node
+        source_bytes = source_code
+        if node.type == "module" and len(node.children) != 0:
+            self._process_import_block(node, code_map, source_bytes, results)
         self.traverse(root_node, [], [], code_map, source_code, results)
         return results, code_map
 
