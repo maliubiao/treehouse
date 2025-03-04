@@ -1117,6 +1117,56 @@ def test_patch_response():
     process_patch_response(*args)
 
 
+def find_nearest_newline(position: int, content: str, direction: str = "forward") -> int:
+    """查找指定位置向前/向后的第一个换行符位置
+
+    参数:
+        position: 起始位置(包含)
+        content: 要搜索的文本内容
+        direction: 搜索方向 'forward' 或 'backward'
+
+    返回:
+        找到的换行符索引(从0开始)，未找到返回原position
+
+    假设:
+        - position在0到len(content)-1之间
+        - direction只能是'forward'或'backward'
+        - content不为空
+    """
+    if direction not in ("forward", "backward"):
+        raise ValueError("Invalid direction, must be 'forward' or 'backward'")
+
+    max_pos = len(content) - 1
+    step = 1 if direction == "forward" else -1
+    end = max_pos + 1 if direction == "forward" else -1
+
+    for i in range(position, end, step):
+        if content[i] == "\n":
+            return i
+    return position
+
+
+def move_forward_from_position(current_pos: int, content: str) -> int:
+    """从当前位置向前移动到下一个换行符之后的位置
+
+    参数:
+        current_pos: 当前光标位置
+        content: 文本内容
+
+    返回:
+        新位置，如果到达文件末尾则返回len(content)
+
+    假设:
+        - current_pos在0到len(content)之间
+        - content长度至少为1
+    """
+    if current_pos >= len(content):
+        return current_pos
+
+    newline_pos = find_nearest_newline(current_pos, content, "forward")
+    return newline_pos + 1 if newline_pos != current_pos else len(content)
+
+
 def patch_symbol_with_prompt(symbol_names: CmdNode):
     """获取符号的纯文本内容
 
@@ -1129,36 +1179,75 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
     symbol_map = {}
     for symbol_name in symbol_names.args:
         symbol = get_symbol_detail(symbol_name)
+        symbol_name = symbol.get("symbol_name", symbol_name)
         symbol_map[symbol_name] = symbol
     GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH] = symbol_map
     return generate_patch_prompt(symbol_names, symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH))
 
 
 def get_symbol_detail(symbol_name):
-    """使用公共http函数请求符号补丁并生成BlockPatch对象"""
+    """使用公共http函数请求符号补丁并生成BlockPatch对象
+    输入假设:
+    - symbol_name: 字符串，可能包含特殊标记^或$
+    - 环境变量GPT_SYMBOL_API_URL存在，否则使用默认值
+    - 返回的symbol_data包含content, location, file_path等字段
+    - 当存在特殊标记时才会验证文件内容一致性
+    """
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
-    # 对符号名称进行URL编码，处理可能包含的/等特殊字符
+
+    # 处理符号名称中的特殊标记
+    flags = {}
+    if symbol_name.endswith("^"):
+        flags["position"] = "before"
+        symbol_name = symbol_name[:-1]
+    elif symbol_name.endswith("$"):
+        flags["position"] = "after"
+        symbol_name = symbol_name[:-1]
+
     encoded_symbol = requests.utils.quote(symbol_name)
     url = f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbol}&json=true"
-    # 获取符号内容
     symbol_data = _send_http_request(url)
 
-    # 解析返回的JSON数据
     content = symbol_data["content"]
     location = symbol_data["location"]
+    file_path = symbol_data["file_path"]
 
-    # 创建BlockPatch对象
+    # 仅在存在flags时执行文件验证和换行符处理
+    if flags:
+        try:
+            with open(file_path, "rb") as f:
+                file_content = f.read()
+
+            block_start, block_end = location["block_range"]
+            file_block_content = file_content[block_start:block_end].decode("utf8")
+
+            if file_block_content != content:
+                print(f"Error: File content has changed for symbol {symbol_name}")
+                return None
+
+            # 处理换行符位置
+            if flags["position"] == "before":
+                start_pos = block_start
+                newline_pos = find_nearest_newline(start_pos, file_content, "backward")
+            else:
+                end_pos = block_end
+                newline_pos = find_nearest_newline(end_pos, file_content, "forward")
+
+            flags["newline_pos"] = newline_pos
+        except Exception as e:
+            print(f"Error processing file {file_path}: {str(e)}")
+            return None
+
     code_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
-
-    # 将内容转换为bytes
     block_content = content.encode("utf-8")
 
-    # 返回包含补丁信息的字典
     return {
-        "file_path": symbol_data["file_path"],
+        "symbol_name": symbol_name,
+        "file_path": file_path,
         "code_range": code_range,
         "block_range": location["block_range"],
         "block_content": block_content,
+        "flags": flags if flags else None,
     }
 
 
