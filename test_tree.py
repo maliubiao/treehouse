@@ -388,6 +388,33 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("code", code_map["__import__"])
         self.assertEqual(code_map["__import__"]["code"].strip(), "# This is a comment\nimport os\nimport sys")
 
+    def test_import_block_with_strings_and_from_import(self):
+        """测试包含字符串字面量、注释和多种导入语句的头部块"""
+        code = dedent(
+            """
+            # 模块注释
+            "文档字符串"
+            """
+            """\n            aaa\n            bbb\n            """
+            """
+            import os
+            from sys import version
+            import sys as sys1
+        """
+        )
+        path = self.create_temp_file(code)
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("__import__", paths)
+        import_entry = code_map["__import__"]
+        self.assertIn("# 模块注释", import_entry["code"])
+        self.assertIn('"文档字符串"', import_entry["code"])
+        self.assertIn("aaa\nbbb", import_entry["code"])
+        self.assertIn("import os", import_entry["code"])
+        self.assertIn("from sys import version", import_entry["code"])
+        self.assertIn("import sys as sys1", import_entry["code"])
+
 
 if __name__ == "__main__":
     unittest.main()

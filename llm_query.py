@@ -1407,9 +1407,6 @@ class GPTContextProcessor:
             else:
                 raise ValueError(f"无法识别的部分类型: {type(node)}")
 
-            if self.current_length >= MAX_PROMPT_SIZE:
-                break
-
         return self._finalize_text("".join(parts))
 
     def _process_match(self, match: CmdNode) -> Tuple[str]:

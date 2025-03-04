@@ -421,10 +421,16 @@ class ParserUtil:
         self.parser_loader = parser_loader
 
     def _extract_import_block(self, node):
-        """提取文件开头的import块"""
+        """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
         import_block = []
         current_node = node
-        while current_node and current_node.type in ("comment", "import_statement"):
+        # 扩展支持模块头部的字符串字面量（如文档字符串）、注释和所有导入语句
+        while current_node and current_node.type in (
+            "comment",
+            "import_statement",
+            "expression_statement",
+            "import_from_statement",
+        ):
             import_block.append(current_node)
             current_node = current_node.next_sibling
         return import_block

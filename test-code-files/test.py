@@ -1,8 +1,12 @@
 # pylint: disable=undefined-variable,unnecessary-pass,unnecessary-comprehension,raise-missing-from,keyword-arg-before-vararg,redefined-outer-name,unspecified-encoding
-
+"""
+aaa
+bbb
+"""
 import os
 import sys
 import sys as sys1
+from os import path
 
 print(os.listdir("."))
 
