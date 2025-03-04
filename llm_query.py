@@ -947,6 +947,7 @@ def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
 4. 在doc string里列出可能的输入假设, 不符合要打日志，退出流程
 5. 函数参数不超过5个,太多则用kwargs或者class, struct等结构传递
 6. 实现类时, 需要实现toString, __str__等这样的设施便于调试
+7. 不必实现import include等这样的包引用, 用户会自行处理
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
@@ -955,7 +956,7 @@ def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
 4. 保持原有缩进和代码风格，仅添加必要注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
 6. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
-7. 输入有几个符号，就输出几个符号块
+7. 只输出你修改的那个符号块
 """
     if not patch_require:
         prompt += "现有代码库里的符号:\n"

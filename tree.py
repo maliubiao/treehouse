@@ -854,7 +854,36 @@ class BlockPatch:
         self.source_codes = {}
         for path in set(self.file_paths):
             with open(path, "rb") as f:
-                self.source_codes[path] = f.read()
+                content = f.read()
+                if self._is_binary_file(content):
+                    raise ValueError(f"文件 {path} 是二进制文件，拒绝修改以避免不可预测的结果")
+                try:
+                    # 检测是否为UTF-8编码
+                    content.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise ValueError(f"文件 {path} 不是UTF-8编码，拒绝修改以避免不可预测的结果")
+                self.source_codes[path] = content
+
+    def _is_binary_file(self, content: bytes) -> bool:
+        """判断文件是否为二进制文件"""
+        # 常见二进制文件的magic number
+        binary_magic_numbers = {
+            b"\x89PNG",  # PNG
+            b"\xff\xd8",  # JPEG
+            b"GIF",  # GIF
+            b"BM",  # BMP
+            b"%PDF",  # PDF
+            b"MZ",  # Windows PE executable
+            b"\x7fELF",  # ELF executable
+            b"PK",  # ZIP
+            b"Rar!",  # RAR
+        }
+
+        # 检查文件头是否匹配已知的二进制文件类型
+        for magic in binary_magic_numbers:
+            if content.startswith(magic):
+                return True
+        return False
 
     def _build_modified_blocks(self, original_code: str, replacements: list) -> list[str]:
         """构建修改后的代码块数组"""
