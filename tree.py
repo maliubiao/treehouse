@@ -2072,73 +2072,74 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), js
     """根据符号路径获取符号对应的源代码内容
 
     Args:
-        symbol_path: 符号路径，格式为file_path>a>b>c
-        json: 是否返回JSON格式，包含行号信息
+        symbol_path: 符号路径，格式为file_path/symbol1,symbol2,... 例如 "main.c/a,b,c"
+        json: 是否返回JSON格式，包含每个符号的行号信息
 
     Returns:
-        纯文本格式的源代码内容，或包含行号信息的JSON
+        纯文本格式的源代码内容（多个符号内容用空行分隔），或包含每个符号信息的JSON数组
     """
     trie = app.state.file_symbol_trie
     file_mtime_cache = app.state.file_mtime_cache
+    # 解析符号路径
+    if "/" not in symbol_path:
+        return PlainTextResponse("符号路径格式错误，应为文件路径/符号1,符号2,...", status_code=400)
+    last_slash_index = symbol_path.rfind("/", 1)
+    file_path_part = symbol_path[:last_slash_index]
+    symbols_part = symbol_path[last_slash_index + 1 :]
+    symbols = [s.strip() for s in symbols_part.split(",") if s.strip()]
+    if not symbols:
+        return PlainTextResponse("至少需要一个符号", status_code=400)
+
     # 检查并更新前缀树
-    update_trie_if_needed(symbol_path, trie, file_mtime_cache)
-    # 在前缀树中搜索符号路径
-    result = trie.search_exact(symbol_path)
+    update_trie_if_needed(file_path_part, trie, file_mtime_cache)
 
-    if not result:
-        return PlainTextResponse("未找到符号内容", status_code=404)
+    # 收集所有符号的结果
+    symbol_results = []
+    for symbol in symbols:
+        full_symbol_path = f"{file_path_part}/{symbol}"
+        result = trie.search_exact(full_symbol_path)
+        if not result:
+            return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
+        symbol_results.append(result)
 
-    # 获取符号的位置信息
-    location = result["location"]
-    file_path = result["file_path"]
-
-    # 读取源代码文件
+    # 读取源代码文件（假设所有符号属于同一文件）
+    file_path = symbol_results[0]["file_path"]
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             source_code = f.read()
     except Exception as e:
         return PlainTextResponse(f"无法读取文件: {str(e)}", status_code=500)
 
-    # 提取符号对应的代码内容
-    start_line, start_col = location[0]
-    end_line, end_col = location[1]
-    block_range = location[2]
-    # 将源代码按行分割
-    lines = source_code.splitlines()
-
-    # 如果符号跨多行
-    if start_line == end_line:
-        # 单行情况
-        line = lines[start_line]
-        content = line[start_col:end_col]
-    else:
-        # 多行情况
-        content_lines = []
-        # 第一行
-        first_line = lines[start_line]
-        content_lines.append(first_line[start_col:])
-        # 中间行
-        for i in range(start_line + 1, end_line):
-            content_lines.append(lines[i])
-        # 最后一行
-        last_line = lines[end_line]
-        content_lines.append(last_line[:end_col])
-        content = "\n".join(content_lines)
+    # 提取每个符号的内容
+    contents = []
+    for result in symbol_results:
+        block_range = result["location"][2]
+        content = source_code[block_range[0] : block_range[1]]
+        contents.append(content)
 
     if json:
-        # 返回JSON格式，包含行号信息
-        return {
-            "file_path": file_path,
-            "content": content,
-            "location": {
-                "start_line": start_line,
-                "start_col": start_col,
-                "end_line": end_line,
-                "end_col": end_col,
-                "block_range": block_range,
-            },
-        }
-    return PlainTextResponse(content)
+        # 构建JSON响应
+        response_data = []
+        for result, content in zip(symbol_results, contents):
+            loc = result["location"]
+            response_data.append(
+                {
+                    "file_path": result["file_path"],
+                    "content": content,
+                    "location": {
+                        "start_line": loc[0][0],
+                        "start_col": loc[0][1],
+                        "end_line": loc[1][0],
+                        "end_col": loc[1][1],
+                        "block_range": loc[2],
+                    },
+                }
+            )
+        return response_data
+    else:
+        # 返回拼接的纯文本
+        combined_content = "\n\n".join(contents)
+        return PlainTextResponse(combined_content)
 
 
 def update_trie_if_needed(prefix: str, trie, file_mtime_cache) -> bool:
@@ -2155,7 +2156,10 @@ def update_trie_if_needed(prefix: str, trie, file_mtime_cache) -> bool:
     if not prefix.startswith("symbol:"):
         return False
 
-    pattern = r"symbol:([^/]+.*?(?:" + "|".join(re.escape(ext) for ext in SUPPORTED_LANGUAGES.keys()) + r"))/?"
+    # 匹配带扩展名的文件路径（支持多级目录）
+    pattern = r"symbol:((?:[^,/]+/)*[^/,]+?\.(?:{}))(?:/|,|$)".format(
+        "|".join(re.escape(ext) for ext in SUPPORTED_LANGUAGES.keys())
+    )
     match = re.search(pattern, prefix)
     if not match:
         return False
@@ -2183,28 +2187,66 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
     """实时符号补全，直接解析指定文件并返回符号列表
 
     Args:
-        file_path: 要解析的文件路径
+        prefix: 补全前缀，格式为symbol:文件路径/符号1,符号2,...
         max_results: 最大返回结果数量，默认为10，范围1-50
 
     Returns:
-        纯文本格式的符号列表，每行一个符号
+        纯文本格式的补全列表，每行一个补全结果
     """
     trie = app.state.file_symbol_trie
     max_results = max(1, min(50, int(max_results)))
     file_mtime_cache = app.state.file_mtime_cache
 
+    # 解析文件路径和符号层级
+    symbols_part = None
+    file_path, symbols = None, []
+    if prefix.startswith("symbol:"):
+        # 分割路径和符号层级
+        remaining = prefix[len("symbol:") :]
+        slash_idx = remaining.find("/")
+
+        if slash_idx != -1:
+            # 分离文件路径和符号部分
+            file_path = remaining[:slash_idx]
+            symbols_part = remaining[slash_idx + 1 :]
+            # 解析符号层级（允许空值）
+            symbols = [s for s in symbols_part.split(",") if s]
+        else:
+            # 没有斜杠时整个作为文件路径
+            file_path = remaining
+    current_prefix = symbols[-1] if symbols else (file_path.split("/")[-1] if file_path else "")
+    if symbols_part:
+        current_prefix = f"symbol:{remaining[:slash_idx+1]}" + current_prefix
     # 检查并更新前缀树
-    updated = update_trie_if_needed(prefix, trie, file_mtime_cache)
+    updated = update_trie_if_needed(f"symbol:{file_path}", trie, file_mtime_cache) if file_path else False
 
-    # 搜索前缀
-    results = trie.search_prefix(prefix, max_results=max_results)
+    # 搜索前缀（仅使用最后层级的符号）
+    results = trie.search_prefix(current_prefix, max_results=max_results) if file_path else []
 
-    # 如果没有找到结果，尝试强制更新并重新搜索
-    if not results and not updated:
-        if update_trie_if_needed(prefix, trie, file_mtime_cache):
-            results = trie.search_prefix(prefix, max_results)
+    # 强制更新后重试
+    if not results and file_path and not updated:
+        if update_trie_if_needed(f"symbol:{file_path}", trie, file_mtime_cache):
+            results = trie.search_prefix(current_prefix, max_results)
 
-    return PlainTextResponse("\n".join(result["name"] for result in results))
+    # 构建层级补全结果
+    completions = []
+    base_path = f"symbol:{file_path}/" if file_path else "symbol:"
+    if symbols:
+        base_path += ",".join(symbols[:-1]) + ("," if symbols[:-1] else "")
+    for result in results:
+        # 获取符号名中最后一个逗号后的部分
+        symbol_name = result["name"]
+        last_comma_idx = symbol_name.rfind("/")
+        if last_comma_idx != -1:
+            symbol_name = symbol_name[last_comma_idx + 1 :]
+
+        completion = f"{base_path}{symbol_name}"
+        # 处理多层符号拼接
+        if symbols and len(symbols) > 1:
+            completion = f"symbol:{file_path}/" + ",".join(symbols[:-1] + [symbol_name])
+        completions.append(completion)
+
+    return PlainTextResponse("\n".join(completions))
 
 
 @app.get("/complete_simple")

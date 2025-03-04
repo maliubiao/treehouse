@@ -3,8 +3,10 @@ import tempfile
 import unittest
 from textwrap import dedent
 
+from fastapi.testclient import TestClient
+
 # Import the implemented classes
-from tree import BlockPatch, ParserLoader, ParserUtil, SourceSkeleton
+from tree import BlockPatch, ParserLoader, ParserUtil, SourceSkeleton, SymbolTrie, app
 
 
 class TestSourceFrameworkParser(unittest.TestCase):
@@ -53,12 +55,12 @@ class TestSourceFrameworkParser(unittest.TestCase):
         code = dedent(
             """
         \"\"\"Module docstring\"\"\"
-        
+
         import os
         from sys import path
-        
+
         VALUE = 100
-        
+
         @class_decorator
         class MyClass:
             pass
@@ -112,7 +114,7 @@ class TestBlockPatch(unittest.TestCase):
             """
             def foo():
                 return 1
-            
+
             def bar():
                 return 2
             """
@@ -147,7 +149,7 @@ class TestBlockPatch(unittest.TestCase):
             """
             def foo():
                 return 1
-            
+
             def bar():
                 return 2
             """
@@ -414,6 +416,156 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("import os", import_entry["code"])
         self.assertIn("from sys import version", import_entry["code"])
         self.assertIn("import sys as sys1", import_entry["code"])
+
+
+class TestSymbolsComplete(unittest.TestCase):
+    """
+    symbol:a.c/main,d 可补全symbol:a.c/main,debug
+    symbol:a.c/m 可补全symbol:a.c/main
+    symbol:a.c/main,debug,pr 可补全symbol:a.c/main,debug,print
+    symbol:a.c/symbol_a,symbol_ 可补全symbol:a.c/symbol_a,symbol_b
+    symbol:multi/level,path,test_ 可补全symbol:multi/level,path,test_case
+    """
+
+    def setUp(self):
+        """初始化测试环境"""
+        # 初始化测试数据
+        symbols_dict = {
+            "symbol:a.c/debug": [("/a.c", "debug()", "debug_hash")],
+            "symbol:a.c/main": [("/a.c", "main()", "main_hash")],
+            "symbol:a.c/print": [("/a.c", "print()", "print_hash")],
+            "symbol:a.c/symbol_a": [("/a.c", "symbol_a", "symbol_b_hash")],
+            "symbol:a.c/symbol_b": [("/a.c", "symbol_b", "symbol_b_hash")],
+        }
+        app.state.file_symbol_trie = SymbolTrie.from_symbols(symbols_dict)
+        app.state.symbol_trie = SymbolTrie.from_symbols({})
+        app.state.file_mtime_cache = {}
+
+    def test_complete_debug_from_main_d(self):
+        prefix = "symbol:a.c/main,d"
+        expected = "symbol:a.c/main,debug"
+        results = self._get_completions(prefix)
+        self.assertIn(expected, results)
+
+    def test_complete_main_from_m(self):
+        prefix = "symbol:a.c/m"
+        expected = "symbol:a.c/main"
+        results = self._get_completions(prefix)
+        self.assertIn(expected, results)
+
+    def test_complete_print_in_multi_symbol_context(self):
+        prefix = "symbol:a.c/main,debug,pr"
+        expected = "symbol:a.c/main,debug,print"
+        results = self._get_completions(prefix)
+        self.assertIn(expected, results)
+
+    def test_complete_symbol_b_after_symbol_a(self):
+        prefix = "symbol:a.c/symbol_a,symbol_"
+        expected = "symbol:a.c/symbol_a,symbol_b"
+        results = self._get_completions(prefix)
+        self.assertIn(expected, results)
+
+    # 新增get_symbol_content测试用例
+    def test_get_valid_symbol_content(self):
+        """测试正常获取符号内容"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
+            tmp.write("void main() {\n  // main function\n}\n")
+            tmp.flush()
+            tmp.seek(0)
+
+            # 更新符号位置信息
+            app.state.file_symbol_trie.insert(
+                "symbol:a.c/main",
+                {
+                    "file_path": tmp.name,
+                    "location": ((1, 0), (3, 1), (0, len(tmp.read()))),
+                },
+            )
+
+            test_client = TestClient(app)
+            response = test_client.get(f"/symbol_content?symbol_path=symbol:a.c/main")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("void main()", response.text)
+
+    def test_get_multiple_symbols_content(self):
+        """测试获取多个符号内容"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
+            tmp.write("void main() {}\nvoid debug() {}\n")
+            tmp.flush()
+
+            # 插入两个符号的位置信息
+            app.state.file_symbol_trie.insert(
+                "symbol:a.c/main",
+                {
+                    "file_path": tmp.name,
+                    "location": ((1, 0), (1, 13), (0, 13)),
+                },
+            )
+            app.state.file_symbol_trie.insert(
+                "symbol:a.c/debug",
+                {
+                    "file_path": tmp.name,
+                    "location": ((2, 0), (2, 14), (14, 28)),
+                },
+            )
+
+            test_client = TestClient(app)
+            response = test_client.get("/symbol_content?symbol_path=symbol:a.c/main,debug")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.text.count("\n\n"), 1)
+            self.assertIn("void main()", response.text)
+            self.assertIn("void debug()", response.text)
+
+    def test_json_response_format(self):
+        """测试JSON响应格式"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
+            tmp.write("void main() {\n  // test json\n}\n")
+            tmp.flush()
+            tmp.seek(0)
+            # 设置精确的代码块范围
+            full_content = tmp.read()
+            start = 0
+            end = len(full_content)
+            app.state.file_symbol_trie.insert(
+                "symbol:a.c/main",
+                {
+                    "file_path": tmp.name,
+                    "location": ((1, 0), (3, 1), (start, end)),
+                },
+            )
+
+            test_client = TestClient(app)
+            response = test_client.get("/symbol_content?symbol_path=symbol:a.c/main&json=true")
+            self.assertEqual(response.status_code, 200)
+            json_data = response.json()
+            self.assertEqual(json_data[0]["location"]["start_line"], 1)
+            self.assertEqual(json_data[0]["location"]["end_line"], 3)
+            self.assertIn("void main()", json_data[0]["content"])
+
+    def test_invalid_symbol_path_format(self):
+        """测试无效符号路径格式"""
+        test_client = TestClient(app)
+        response = test_client.get("/symbol_content?symbol_path=invalidpath")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("格式错误", response.text)
+
+    def test_nonexistent_symbol(self):
+        """测试不存在的符号"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
+            tmp.write("void existing_func() {}\n")
+            tmp.flush()
+
+            # 确保Trie中没有该符号
+            test_client = TestClient(app)
+            response = test_client.get("/symbol_content?symbol_path=a.c/nonexist")
+            self.assertEqual(response.status_code, 404)
+            self.assertIn("未找到符号", response.text)
+
+    def _get_completions(self, prefix: str) -> list:
+        # 模拟请求上下文并调用补全接口
+        test_client = TestClient(app)
+        response = test_client.get(f"/complete_realtime?prefix={prefix}")
+        return response.text.splitlines()
 
 
 if __name__ == "__main__":
