@@ -355,6 +355,22 @@ class TestParserUtil(unittest.TestCase):
             self.assertIn("start_line", code_map[path_key])
             self.assertIn("end_line", code_map[path_key])
 
+    def test_main_block_detection(self):
+        code = dedent(
+            """
+            if __name__ == "__main__":
+                print("Hello World")
+            """
+        )
+        path = self.create_temp_file(code)
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("__main__", paths)
+        self.assertIn("__main__", code_map)
+        self.assertIn("code", code_map["__main__"])
+        self.assertEqual(code_map["__main__"]["code"].strip(), 'if __name__ == "__main__":\n    print("Hello World")')
+
 
 if __name__ == "__main__":
     unittest.main()

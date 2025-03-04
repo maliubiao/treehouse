@@ -435,7 +435,22 @@ class ParserUtil:
             return ParserUtil._get_function_name(node)
         elif node.type == "assignment":
             return ParserUtil._get_assignment_name(node)
+        elif node.type == "if_statement" and ParserUtil._is_main_block(node):
+            return "__main__"
         return None
+
+    @staticmethod
+    def _is_main_block(node):
+        """判断是否是__main__块"""
+        # 查找if语句的条件部分
+        condition = ParserUtil._find_child_by_type(node, "comparison_operator")
+        if condition:
+            # 检查条件是否为__name__ == "__main__"
+            left = ParserUtil._find_child_by_type(condition, "identifier")
+            right = ParserUtil._find_child_by_type(condition, "string")
+            if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
+                return True
+        return False
 
     @staticmethod
     def _get_class_name(node):

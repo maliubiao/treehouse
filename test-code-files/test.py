@@ -136,3 +136,7 @@ async def async_for_example():
         with open(item, encoding="utf-8") as file:
             content = file.read()
             print(content.splitlines())
+
+
+if __name__ == "__main__":
+    pass
