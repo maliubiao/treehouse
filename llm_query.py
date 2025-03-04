@@ -961,16 +961,19 @@ def read_last_query(_):
         return ""
 
 
-def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
+def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ranges=None):
     """生成多符号补丁提示词字符串
 
     参数:
         symbol_names: 符号名称列表
         symbol_map: 包含符号信息的字典，key为符号名称，value为补丁信息字典
         patch_require: 是否需要生成修改指令
+        file_ranges: 文件范围字典 {文件路径: {"range": 范围描述, "content": 字节内容}}
 
-    返回:
-        格式化后的提示词字符串
+    输入假设:
+        1. symbol_map中的文件路径必须真实存在
+        2. file_ranges中的content字段必须可utf-8解码
+        3. 当patch_require=True时用户会提供具体修改要求
     """
     prompt = ""
 
@@ -991,27 +994,66 @@ def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
 3. 修改时必须包含完整文件内容，不得省略任何代码
 4. 保持原有缩进和代码风格，仅添加必要注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
-6. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
-7. 只输出你修改的那个符号块
 """
     if not patch_require:
-        prompt += "现有代码库里的符号:\n"
-    # 添加每个符号的信息
-    for symbol_name in symbol_names.args:
+        prompt += "现有代码库里的符号和文件范围:\n"
+    if symbol_name.args:
+        prompt += """\
+6. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
+7. 只输出你修改的那个符号
+"""
+    # 添加符号信息
+    for symbol_name in symbol_name.args:
         patch_dict = symbol_map[symbol_name]
         prompt += f"""
 [SYMBOL START]
 符号名称: {symbol_name}
 文件路径: {patch_dict["file_path"]}
-[SYMBOL END]
 
 [CONTENT START]
 {patch_dict["block_content"].decode('utf-8')}
 [CONTENT END]
+
+[SYMBOL END]
+"""
+
+    # 添加文件范围信息
+    if file_ranges:
+        prompt += """\
+6. 可以修改任意块，一个或者多个，但必须返回块的完整路径，做为区分
+7. 只输出你修改的那个块
+"""
+        for file_path, range_info in file_ranges.items():
+            prompt += f"""
+[FILE RANGE START]
+文件路径: {file_path}:{range_info['range'][0]}-{range_info['range'][1]}
+
+[CONTENT START]
+{range_info['content'].decode('utf-8') if isinstance(range_info['content'], bytes) else range_info['content']}
+[CONTENT END]
+
+[FILE RANGE END]
 """
 
     if patch_require:
-        prompt += """
+        prompt += (
+            """
+# 响应格式
+[modified block]: 块路径
+[source code start]
+完整文件内容
+[source code end]
+
+或（无修改时）:
+[modified block]: 块路径
+[source code start]
+完整原始内容
+[source code end]
+
+用户的要求如下:
+"""
+            if file_ranges
+            else """
 # 响应格式
 [modified symbol]: 符号路径
 [source code start]
@@ -1026,6 +1068,7 @@ def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
 
 用户的要求如下:
 """
+        )
     return prompt
 
 
@@ -1038,32 +1081,36 @@ class BlockPatchResponse:
     def parse(self, response_text):
         """
         解析大模型返回的响应内容
-        返回格式: [(symbol_name, source_code), ...]
+        返回格式: [(identifier, source_code), ...]
         """
-        # 基础格式校验
-        if "[source code start]" not in response_text or "[source code end]" not in response_text:
-            raise ValueError("响应缺少必要的代码块标签")
+        import re
 
-        # 提取所有修改的符号和代码
         results = []
-        sections = response_text.split("[modified symbol]:")
-        for section in sections[1:]:  # 跳过第一个空的部分
-            # 提取符号名称
-            symbol_end = section.find("\n")
-            symbol_name = section[:symbol_end].strip()
 
-            # 验证符号名称是否在预期列表中
-            if self.symbol_names and symbol_name not in self.symbol_names:
-                raise ValueError(f"返回的符号 {symbol_name} 不在预期符号列表中")
+        # 匹配两种响应格式
+        pattern = re.compile(
+            r"\[modified (symbol|block)\]:\s*([^\n]+)\s*" r"\[source code start\](.*?)\[source code end\]", re.DOTALL
+        )
 
-            # 提取源代码
-            source_code = self._extract_source_code(section)
-            results.append((symbol_name, source_code))
+        for match in pattern.finditer(response_text):
+            section_type, identifier, source_code = match.groups()
+            identifier = identifier.strip()
+            source_code = source_code.strip()
+
+            # 符号类型校验
+            if section_type == "symbol" and self.symbol_names and identifier not in self.symbol_names:
+                raise ValueError(f"返回的符号 {identifier} 不在预期符号列表中")
+
+            results.append((identifier, source_code))
+
+        # 兼容旧格式校验
+        if not results and ("[source code start]" in response_text or "[source code end]" in response_text):
+            raise ValueError("响应包含代码块标签但格式不正确，请使用[modified symbol/block]:标签")
 
         return results
 
     def _extract_source_code(self, text):
-        """提取源代码内容"""
+        """提取源代码内容（保留旧方法兼容异常处理）"""
         start_tag = "[source code start]"
         end_tag = "[source code end]"
 
@@ -1101,6 +1148,7 @@ def process_patch_response(response_text, symbol_detail):
     with open("diff_test.json", "wb") as f:  # 使用'wb'模式确保二进制写入
         marshal.dump((response_text, symbol_detail), f)
     # 解析大模型响应
+
     results = parse_llm_response(response_text, symbol_detail.keys())
 
     # 准备BlockPatch参数

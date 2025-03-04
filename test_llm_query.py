@@ -12,6 +12,7 @@ from unittest.mock import patch
 import llm_query
 from llm_query import (
     MAX_PROMPT_SIZE,
+    BlockPatchResponse,
     CmdNode,
     GPTContextProcessor,
     _fetch_symbol_data,
@@ -344,6 +345,24 @@ class TestSymbolLocation(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["block_range"], self.block_range)
         self.assertEqual(result["code_range"], self.code_range)
+
+
+class TestFileRange(unittest.TestCase):
+    def test_file_range_patch(self):
+        """测试文件范围补丁解析"""
+        # 模拟包含文件范围的响应内容
+        response = """
+[modified block]: example.py:10-20
+[source code start]
+def new_function():
+    print("Added by patch")
+[source code end]
+        """
+        parser = BlockPatchResponse()
+        results = parser.parse(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "example.py:10-20")
+        self.assertIn("new_function", results[0][1])
 
 
 if __name__ == "__main__":
