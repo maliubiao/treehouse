@@ -296,7 +296,7 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
         }
 
         $prompts = @(Get-PromptFiles | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" })
-        $special = @('clipboard', 'tree', 'treefull', 'read', 'listen', 'symbol:', 'glow', 'last') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
+        $special = @('clipboard', 'tree', 'treefull', 'read', 'listen', 'symbol:', 'glow', 'last', 'patch', 'edit') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
         $files = Get-ChildItem -File -Filter "$search*" | Select-Object -ExpandProperty Name | ForEach-Object { "\@$_" }
         
         # 添加API补全支持

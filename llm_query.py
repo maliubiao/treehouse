@@ -943,7 +943,7 @@ def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
 # 代码编写规范:
 1. 如果语言支持，就总是使用强类型
 2. 保持简洁，减少重复片段
-3. 便于编写单元测试
+3. 接口要便于编写单元测试
 4. 在doc string里列出可能的输入假设, 不符合要打日志，退出流程
 5. 函数参数不超过5个,太多则用kwargs或者class, struct等结构传递
 6. 实现类时, 需要实现toString, __str__等这样的设施便于调试

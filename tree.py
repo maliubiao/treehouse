@@ -46,7 +46,7 @@ SUPPORTED_LANGUAGES = {
 # 各语言的查询语句映射
 LANGUAGE_QUERIES = {
     "c": r"""
-[    
+[
     (function_definition
         type: _ @function.return_type
         declarator: (function_declarator
@@ -64,7 +64,7 @@ LANGUAGE_QUERIES = {
             )
         )
         body: (compound_statement) @function.body
-    )  
+    )
 ]
 (
     (call_expression
@@ -86,7 +86,7 @@ LANGUAGE_QUERIES = {
 (class_definition
 	name: (identifier) @class-name
     superclasses: (argument_list) ?
-    body: (block 
+    body: (block
         [(decorated_definition
             _ * @method.decorator
             (function_definition
@@ -95,7 +95,7 @@ LANGUAGE_QUERIES = {
                 name: _ @method.name
                 parameters: _ @method.params
                 body: _ @method.body
-            ) 
+            )
         )
         (function_definition
                 "async"? @method.async
@@ -103,7 +103,7 @@ LANGUAGE_QUERIES = {
                 name: _ @method.name
                 parameters: _ @method.params
                 body: _ @method.body
-            ) 
+            )
         ]*  @functions
     ) @class-body
 ) @class
@@ -133,7 +133,7 @@ LANGUAGE_QUERIES = {
 ) @function-full
 )
 ]
-(call 
+(call
     function: [
         (identifier) @called_function
         (attribute attribute: (identifier) @called_function)
@@ -422,47 +422,112 @@ class ParserUtil:
 
     @staticmethod
     def get_symbol_name(node):
-        """提取节点的符号名称"""
-        if node.type == "class_definition":
-            for child in node.children:
-                if child.type == "identifier":
-                    return child.text.decode("utf8")
-
-        elif node.type == "function_definition":
-            # 首先查找pointer_declarator节点
-            pointer_declarator = None
-            for child in node.children:
-                if child.type == "pointer_declarator":
-                    pointer_declarator = child
-                    break
-
-            # 如果有pointer_declarator，则在其内部查找function_declarator
-            if pointer_declarator:
-                func_declarator = pointer_declarator.child_by_field_name("declarator")
-                if func_declarator and func_declarator.type == "function_declarator":
-                    # 在function_declarator中查找identifier
-                    for func_child in func_declarator.children:
-                        if func_child.type == "identifier":
-                            return func_child.text.decode("utf8")
-
-            # 如果没有pointer_declarator，直接查找function_declarator
-            for child in node.children:
-                if child.type == "function_declarator":
-                    # 在function_declarator中查找identifier节点
-                    for declarator_child in child.children:
-                        if declarator_child.type == "identifier":
-                            return declarator_child.text.decode("utf8")
-                elif child.type == "identifier":
-                    return child.text.decode("utf8")
+        """提取节点的符号名称
+        可能的输入假设: node必须是一个有效的语法树节点，且包含type字段
+        如果不符合假设，将返回None
+        """
+        if not hasattr(node, "type"):
             return None
+
+        if node.type == "class_definition":
+            return ParserUtil._get_class_name(node)
+        elif node.type == "function_definition":
+            return ParserUtil._get_function_name(node)
         elif node.type == "assignment":
-            for i in node.children:
-                if i.type == "identifier":
-                    return i.text.decode("utf8")
-            left = node.child_by_field_name("left")
-            if left and left.type == "identifier":
-                return left.text.decode("utf8")
+            return ParserUtil._get_assignment_name(node)
         return None
+
+    @staticmethod
+    def _get_class_name(node):
+        """从类定义节点中提取类名"""
+        for child in node.children:
+            if child.type == "identifier":
+                return child.text.decode("utf8")
+        return None
+
+    @staticmethod
+    def _get_function_name(node):
+        """从函数定义节点中提取函数名"""
+        # 首先查找pointer_declarator节点
+        pointer_declarator = ParserUtil._find_child_by_type(node, "pointer_declarator")
+
+        # 如果有pointer_declarator，则在其内部查找function_declarator
+        if pointer_declarator:
+            func_declarator = pointer_declarator.child_by_field_name("declarator")
+            if func_declarator and func_declarator.type == "function_declarator":
+                return ParserUtil._find_identifier_in_node(func_declarator)
+
+        # 如果没有pointer_declarator，直接查找function_declarator
+        func_declarator = ParserUtil._find_child_by_type(node, "function_declarator")
+        if func_declarator:
+            return ParserUtil._find_identifier_in_node(func_declarator)
+
+        # 如果都没有，直接查找identifier
+        return ParserUtil._find_identifier_in_node(node)
+
+    @staticmethod
+    def _get_assignment_name(node):
+        """从赋值节点中提取变量名"""
+        identifier = ParserUtil._find_child_by_type(node, "identifier")
+        if identifier:
+            return identifier.text.decode("utf8")
+
+        left = node.child_by_field_name("left")
+        if left and left.type == "identifier":
+            return left.text.decode("utf8")
+        return None
+
+    @staticmethod
+    def _find_child_by_type(node, target_type):
+        """在节点子节点中查找指定类型的节点"""
+        for child in node.children:
+            if child.type == target_type:
+                return child
+        return None
+
+    @staticmethod
+    def _find_identifier_in_node(node):
+        """在节点中查找identifier节点"""
+        for child in node.children:
+            if child.type == "identifier":
+                return child.text.decode("utf8")
+        return None
+
+    def _get_node_info(self, node):
+        """获取节点的代码和位置信息"""
+        # 处理装饰器情况：如果当前节点是function_definition且父节点是decorated_definition，则使用父节点范围
+        effective_node = node
+        if (
+            effective_node.type == "function_definition"
+            and effective_node.parent
+            and effective_node.parent.type == "decorated_definition"
+        ):
+            effective_node = effective_node.parent
+
+        # 获取字节位置
+        start_byte = effective_node.start_byte
+        end_byte = effective_node.end_byte
+
+        # 获取行号和列号（从0开始）
+        start_point = effective_node.start_point
+        end_point = effective_node.end_point
+
+        return {"start_byte": start_byte, "end_byte": end_byte, "start_point": start_point, "end_point": end_point}
+
+    def _extract_code(self, source_bytes, start_byte, end_byte):
+        """从源字节中提取代码"""
+        return source_bytes[start_byte:end_byte].decode("utf8")
+
+    def _build_code_map_entry(self, path_key, code, node_info):
+        """构建代码映射条目"""
+        return {
+            "code": code,
+            "block_range": (node_info["start_byte"], node_info["end_byte"]),
+            "start_line": node_info["start_point"][0],  # 起始行号（从0开始）
+            "start_col": node_info["start_point"][1],  # 起始列号（从0开始）
+            "end_line": node_info["end_point"][0],  # 结束行号（从0开始）
+            "end_col": node_info["end_point"][1],  # 结束列号（从0开始）
+        }
 
     def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
         """递归遍历语法树，记录符号节点的路径、代码和位置信息"""
@@ -474,38 +539,15 @@ class ParserUtil:
             added = True
 
             # 获取当前节点的路径、代码和位置信息
-            path_key = ">".join(current_symbols)
+            path_key = ".".join(current_symbols)
             current_node = current_nodes[-1]  # 当前新增的节点
 
-            # 处理装饰器情况：如果当前节点是function_definition且父节点是decorated_definition，则使用父节点范围
-            effective_node = current_node
-            if (
-                effective_node.type == "function_definition"
-                and effective_node.parent
-                and effective_node.parent.type == "decorated_definition"
-            ):
-                effective_node = effective_node.parent
-
-            # 获取字节位置
-            start_byte = effective_node.start_byte
-            end_byte = effective_node.end_byte
-
-            # 获取行号和列号（从0开始）
-            start_point = effective_node.start_point
-            end_point = effective_node.end_point
-
+            # 获取节点信息
+            node_info = self._get_node_info(current_node)
             # 提取代码内容
-            code = source_bytes[start_byte:end_byte].decode("utf8")
-
-            # 保存代码内容和位置信息
-            code_map[path_key] = {
-                "code": code,
-                "block_range": (start_byte, end_byte),
-                "start_line": start_point[0],  # 起始行号（从0开始）
-                "start_col": start_point[1],  # 起始列号（从0开始）
-                "end_line": end_point[0],  # 结束行号（从0开始）
-                "end_col": end_point[1],  # 结束列号（从0开始）
-            }
+            code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
+            # 构建代码映射条目
+            code_map[path_key] = self._build_code_map_entry(path_key, code, node_info)
 
             results.append(path_key)  # 添加完整路径到结果
 
@@ -902,9 +944,10 @@ class BlockPatch:
         """构建修改后的代码块数组"""
         # 验证所有块内容
         for (start_pos, end_pos), old_content, _ in replacements:
-            selected = original_code[start_pos:end_pos]
-            if selected.decode("utf8").strip() != old_content.strip():
-                raise ValueError(f"内容不匹配\n选中内容：{selected}\n传入内容：{old_content}")
+            if start_pos != end_pos:  # 仅对非插入操作进行验证
+                selected = original_code[start_pos:end_pos]
+                if selected.decode("utf8").strip() != old_content.strip():
+                    raise ValueError(f"内容不匹配\n选中内容：{selected}\n传入内容：{old_content}")
 
         # 检查替换区间是否有重叠
         self._validate_ranges([(start_pos, end_pos) for (start_pos, end_pos), _, _ in replacements])
@@ -1549,9 +1592,9 @@ def init_symbol_database(db_path: Union[str, sqlite3.Connection] = "symbols.db")
         CREATE TABLE IF NOT EXISTS file_metadata (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_path TEXT NOT NULL UNIQUE,
-            last_modified REAL NOT NULL,  
-            file_hash TEXT NOT NULL,      
-            total_symbols INTEGER DEFAULT 0 
+            last_modified REAL NOT NULL,
+            file_hash TEXT NOT NULL,
+            total_symbols INTEGER DEFAULT 0
         )
     """
     )
@@ -1559,19 +1602,19 @@ def init_symbol_database(db_path: Union[str, sqlite3.Connection] = "symbols.db")
     # 创建索引以优化查询性能
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_symbols_name 
+        CREATE INDEX IF NOT EXISTS idx_symbols_name
         ON symbols(name)
     """
     )
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_symbols_file 
+        CREATE INDEX IF NOT EXISTS idx_symbols_file
         ON symbols(file_path)
     """
     )
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_file_metadata_path 
+        CREATE INDEX IF NOT EXISTS idx_file_metadata_path
         ON file_metadata(file_path)
     """
     )
@@ -1873,12 +1916,12 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
     placeholders = ",".join(["?"] * len(sorted_symbols))
     cursor.execute(
         f"""
-        SELECT name, file_path, full_definition 
-        FROM symbols 
+        SELECT name, file_path, full_definition
+        FROM symbols
         WHERE name IN ({placeholders})
-        ORDER BY CASE 
-            WHEN file_path = ? THEN 0 
-            ELSE 1 
+        ORDER BY CASE
+            WHEN file_path = ? THEN 0
+            ELSE 1
         END, name
         """,
         sorted_symbols + [file_path] if file_path else sorted_symbols,
@@ -2702,7 +2745,7 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
             if filtered_data:
                 conn.executemany(
                     """
-                    INSERT OR REPLACE INTO symbols 
+                    INSERT OR REPLACE INTO symbols
                     (id, name, file_path, type, signature, body, full_definition, full_definition_hash, calls)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -2719,7 +2762,7 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO file_metadata 
+            INSERT OR REPLACE INTO file_metadata
             (file_path, last_modified, file_hash, total_symbols)
             VALUES (?, ?, ?, ?)
             """,

@@ -4,7 +4,7 @@ import unittest
 from textwrap import dedent
 
 # Import the implemented classes
-from tree import BlockPatch, ParserLoader, SourceSkeleton
+from tree import BlockPatch, ParserLoader, ParserUtil, SourceSkeleton
 
 
 class TestSourceFrameworkParser(unittest.TestCase):
@@ -289,6 +289,71 @@ class TestBlockPatch(unittest.TestCase):
         self.assertIn(file2, patched_files)
         self.assertIn(b"return 10", patched_files[file1])
         self.assertIn(b"return 20", patched_files[file2])
+
+    def test_insert_patch(self):
+        code = dedent(
+            """
+            def foo():
+                return 1
+            """
+        )
+        file_path = self.create_temp_file(code)
+
+        # 通过字符串查找确定插入位置
+        with open(file_path, "rb") as f:
+            content = f.read()
+            insert_pos = content.find(b"return 1")
+
+        # 测试插入补丁
+        patch = BlockPatch(
+            file_paths=[file_path],
+            patch_ranges=[(insert_pos, insert_pos)],  # 插入位置
+            block_contents=[b""],  # 空内容
+            update_contents=[b"print('inserted')\n    "],  # 插入内容
+        )
+
+        # 验证差异生成
+        diff = patch.generate_diff()
+        self.assertIn("+    print('inserted')", diff)
+
+        # 验证补丁应用
+        patched_files = patch.apply_patch()
+        self.assertIn(file_path, patched_files)
+        self.assertIn(b"print('inserted')", patched_files[file_path])
+        self.assertIn(b"return 1", patched_files[file_path])  # 原有内容保持不变
+
+
+class TestParserUtil(unittest.TestCase):
+    def setUp(self):
+        self.parser_loader = ParserLoader()
+        self.parser_util = ParserUtil(self.parser_loader)
+
+    def create_temp_file(self, code: str) -> str:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".py") as f:
+            f.write(code)
+            return f.name
+
+    def test_get_symbol_paths(self):
+        code = dedent(
+            """
+            class MyClass:
+                def my_method(self):
+                    pass
+            """
+        )
+        path = self.create_temp_file(code)
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        expected_paths = ["MyClass", "MyClass.my_method"]
+        self.assertEqual(sorted(paths), sorted(expected_paths))
+
+        for path_key in expected_paths:
+            self.assertIn(path_key, code_map)
+            self.assertIn("code", code_map[path_key])
+            self.assertIn("block_range", code_map[path_key])
+            self.assertIn("start_line", code_map[path_key])
+            self.assertIn("end_line", code_map[path_key])
 
 
 if __name__ == "__main__":
