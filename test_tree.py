@@ -371,6 +371,23 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("code", code_map["__main__"])
         self.assertEqual(code_map["__main__"]["code"].strip(), 'if __name__ == "__main__":\n    print("Hello World")')
 
+    def test_import_block_detection(self):
+        code = dedent(
+            """
+            # This is a comment
+            import os
+            import sys
+            """
+        )
+        path = self.create_temp_file(code)
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("__import__", paths)
+        self.assertIn("__import__", code_map)
+        self.assertIn("code", code_map["__import__"])
+        self.assertEqual(code_map["__import__"]["code"].strip(), "# This is a comment\nimport os\nimport sys")
+
 
 if __name__ == "__main__":
     unittest.main()

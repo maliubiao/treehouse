@@ -1,5 +1,11 @@
 # pylint: disable=undefined-variable,unnecessary-pass,unnecessary-comprehension,raise-missing-from,keyword-arg-before-vararg,redefined-outer-name,unspecified-encoding
 
+import os
+import sys
+import sys as sys1
+
+print(os.listdir("."))
+
 
 def n(arg):
     def decorator(func):
@@ -20,7 +26,7 @@ def decorator2(arg):
 
 
 def b():
-    pass
+    sys.exit(0)
 
 
 class SomeAsyncObj:

@@ -420,6 +420,15 @@ class ParserUtil:
         """初始化解析器工具类"""
         self.parser_loader = parser_loader
 
+    def _extract_import_block(self, node):
+        """提取文件开头的import块"""
+        import_block = []
+        current_node = node
+        while current_node and current_node.type in ("comment", "import_statement"):
+            import_block.append(current_node)
+            current_node = current_node.next_sibling
+        return import_block
+
     @staticmethod
     def get_symbol_name(node):
         """提取节点的符号名称
@@ -442,10 +451,8 @@ class ParserUtil:
     @staticmethod
     def _is_main_block(node):
         """判断是否是__main__块"""
-        # 查找if语句的条件部分
         condition = ParserUtil._find_child_by_type(node, "comparison_operator")
         if condition:
-            # 检查条件是否为__name__ == "__main__"
             left = ParserUtil._find_child_by_type(condition, "identifier")
             right = ParserUtil._find_child_by_type(condition, "string")
             if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
@@ -463,21 +470,16 @@ class ParserUtil:
     @staticmethod
     def _get_function_name(node):
         """从函数定义节点中提取函数名"""
-        # 首先查找pointer_declarator节点
         pointer_declarator = ParserUtil._find_child_by_type(node, "pointer_declarator")
-
-        # 如果有pointer_declarator，则在其内部查找function_declarator
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
             if func_declarator and func_declarator.type == "function_declarator":
                 return ParserUtil._find_identifier_in_node(func_declarator)
 
-        # 如果没有pointer_declarator，直接查找function_declarator
         func_declarator = ParserUtil._find_child_by_type(node, "function_declarator")
         if func_declarator:
             return ParserUtil._find_identifier_in_node(func_declarator)
 
-        # 如果都没有，直接查找identifier
         return ParserUtil._find_identifier_in_node(node)
 
     @staticmethod
@@ -510,7 +512,6 @@ class ParserUtil:
 
     def _get_node_info(self, node):
         """获取节点的代码和位置信息"""
-        # 处理装饰器情况：如果当前节点是function_definition且父节点是decorated_definition，则使用父节点范围
         effective_node = node
         if (
             effective_node.type == "function_definition"
@@ -519,15 +520,12 @@ class ParserUtil:
         ):
             effective_node = effective_node.parent
 
-        # 获取字节位置
-        start_byte = effective_node.start_byte
-        end_byte = effective_node.end_byte
-
-        # 获取行号和列号（从0开始）
-        start_point = effective_node.start_point
-        end_point = effective_node.end_point
-
-        return {"start_byte": start_byte, "end_byte": end_byte, "start_point": start_point, "end_point": end_point}
+        return {
+            "start_byte": effective_node.start_byte,
+            "end_byte": effective_node.end_byte,
+            "start_point": effective_node.start_point,
+            "end_point": effective_node.end_point,
+        }
 
     def _extract_code(self, source_bytes, start_byte, end_byte):
         """从源字节中提取代码"""
@@ -538,88 +536,96 @@ class ParserUtil:
         return {
             "code": code,
             "block_range": (node_info["start_byte"], node_info["end_byte"]),
-            "start_line": node_info["start_point"][0],  # 起始行号（从0开始）
-            "start_col": node_info["start_point"][1],  # 起始列号（从0开始）
-            "end_line": node_info["end_point"][0],  # 结束行号（从0开始）
-            "end_col": node_info["end_point"][1],  # 结束列号（从0开始）
+            "start_line": node_info["start_point"][0],
+            "start_col": node_info["start_point"][1],
+            "end_line": node_info["end_point"][0],
+            "end_col": node_info["end_point"][1],
         }
+
+    def _process_import_block(self, node, code_map, source_bytes, results):
+        """处理import块"""
+        import_block = self._extract_import_block(node.children[0])
+        if import_block:
+            first_node = import_block[0]
+            last_node = import_block[-1]
+            node_info = {
+                "start_byte": first_node.start_byte,
+                "end_byte": last_node.end_byte,
+                "start_point": first_node.start_point,
+                "end_point": last_node.end_point,
+            }
+            code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
+            code_map["__import__"] = self._build_code_map_entry("__import__", code, node_info)
+            results.append("__import__")
+
+    def _process_symbol_node(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
+        """处理符号节点"""
+        symbol_name = self.get_symbol_name(node)
+        if symbol_name is None:
+            return False
+
+        current_symbols.append(symbol_name)
+        current_nodes.append(node)
+
+        path_key = ".".join(current_symbols)
+        current_node = current_nodes[-1]
+
+        node_info = self._get_node_info(current_node)
+        code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
+        code_map[path_key] = self._build_code_map_entry(path_key, code, node_info)
+        results.append(path_key)
+
+        return True
 
     def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
         """递归遍历语法树，记录符号节点的路径、代码和位置信息"""
-        symbol_name = self.get_symbol_name(node)
-        added = False
-        if symbol_name is not None:
-            current_symbols.append(symbol_name)
-            current_nodes.append(node)
-            added = True
+        if node.type == "module" and len(node.children) != 0:
+            self._process_import_block(node, code_map, source_bytes, results)
 
-            # 获取当前节点的路径、代码和位置信息
-            path_key = ".".join(current_symbols)
-            current_node = current_nodes[-1]  # 当前新增的节点
+        added = self._process_symbol_node(node, current_symbols, current_nodes, code_map, source_bytes, results)
 
-            # 获取节点信息
-            node_info = self._get_node_info(current_node)
-            # 提取代码内容
-            code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
-            # 构建代码映射条目
-            code_map[path_key] = self._build_code_map_entry(path_key, code, node_info)
-
-            results.append(path_key)  # 添加完整路径到结果
-
-        # 遍历子节点
         for child in node.children:
             self.traverse(child, current_symbols, current_nodes, code_map, source_bytes, results)
 
-        # 回溯
         if added:
             current_symbols.pop()
             current_nodes.pop()
 
     def get_symbol_paths(self, file_path: str):
         """解析代码文件并返回所有符号路径及对应代码和位置信息"""
-        # 获取对应语言的解析器
         parser, _, _ = self.parser_loader.get_parser(file_path)
 
-        # 读取源代码文件
         with open(file_path, "rb") as f:
             source_code = f.read()
-        # 解析代码
         tree = parser.parse(source_code)
         root_node = tree.root_node
 
-        # 收集符号路径和代码
         results = []
         code_map = {}
         self.traverse(root_node, [], [], code_map, source_code, results)
         return results, code_map
 
-    def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
-        """
-        更新符号前缀树，将文件中的所有符号插入到前缀树中
+    def _build_symbol_info(self, info, file_path):
+        """构建符号信息字典"""
+        full_definition_hash = calculate_crc32_hash(info["code"])
+        location = (
+            (info["start_line"], info["start_col"]),
+            (info["end_line"], info["end_col"]),
+            info["block_range"],
+        )
+        return {
+            "file_path": file_path,
+            "signature": "",
+            "full_definition_hash": full_definition_hash,
+            "location": location,
+        }
 
-        参数：
-            file_path: 文件路径
-            symbol_trie: 要更新的符号前缀树
-        """
+    def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
+        """更新符号前缀树，将文件中的所有符号插入到前缀树中"""
         paths, code_map = self.get_symbol_paths(file_path)
         for path in paths:
             info = code_map[path]
-            # 计算代码的CRC32哈希值
-            full_definition_hash = calculate_crc32_hash(info["code"])
-            # 构建位置信息
-            location = (
-                (info["start_line"], info["start_col"]),
-                (info["end_line"], info["end_col"]),
-                info["block_range"],
-            )
-            # 构建符号信息字典
-            symbol_info = {
-                "file_path": file_path,
-                "signature": "",  # 可以根据需要添加签名信息
-                "full_definition_hash": full_definition_hash,
-                "location": location,
-            }
-            # 将符号插入前缀树
+            symbol_info = self._build_symbol_info(info, file_path)
             symbol_trie.insert(path, symbol_info)
 
     def print_symbol_paths(self, file_path: str):
