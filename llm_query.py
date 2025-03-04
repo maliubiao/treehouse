@@ -46,7 +46,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from tree import BlockPatch, ParserLoader, SourceSkeleton
+from tree import BlockPatch
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
@@ -274,97 +274,216 @@ def save_conversation_history(file_path, history):
 
 
 def query_gpt_api(
-    api_key,
-    prompt,
-    model="gpt-4",
+    api_key: str,
+    prompt: str,
+    model: str = "gpt-4",
     **kwargs,
-):
+) -> dict:
     """支持多轮对话的OpenAI API流式查询
 
     参数:
-        conversation_file (str): 对话历史存储文件路径
-        其他参数同上
+        api_key (str): OpenAI API密钥
+        prompt (str): 用户输入的提示词
+        model (str): 使用的模型名称，默认为gpt-4
+        kwargs: 其他可选参数，包括:
+            base_url (str): API基础URL
+            conversation_file (str): 对话历史存储文件路径
+            console: 控制台输出对象
+            temperature (float): 生成温度
+            proxies: 代理设置
+
+    返回:
+        dict: 包含API响应结果的字典
+
+    假设:
+        - api_key是有效的OpenAI API密钥
+        - prompt是非空字符串
+        - conversation_file路径可写
+        如果不符合上述假设，将记录错误并退出程序
     """
-    # proxies = kwargs.get('proxies')
-    base_url = kwargs.get("base_url")
-    conversation_file = kwargs.get("conversation_file", "conversation_history.json")
-    console = kwargs.get("console")
-
-    cid = os.environ.get("GPT_UUID_CONVERSATION")
-    if cid:
-        try:
-            conversation_file = get_conversation(cid)
-            # print("旧对话: %s\n" % conversation_file)
-        except FileNotFoundError:
-            conversation_file = new_conversation(cid)
-            # print("开新对话: %s\n" % conversation_file)
-
-    # 加载历史对话
-    history = load_conversation_history(conversation_file)
-
-    # 添加用户新提问到历史
-    history.append({"role": "user", "content": prompt})
-
-    # 初始化OpenAI客户端
-    client = OpenAI(api_key=api_key, base_url=base_url)
-
     try:
-        # 创建流式响应（使用完整对话历史）
-        stream = client.chat.completions.create(
-            model=model,
-            messages=history,
-            temperature=kwargs.get("temperature", 0.0),
-            max_tokens=MAX_PROMPT_SIZE,
-            top_p=0.8,
-            stream=True,
-        )
+        # 初始化对话历史
+        history = _initialize_conversation_history(kwargs)
 
-        content = ""
-        reasoning = ""
-        # 处理流式响应
-        for chunk in stream:
-            # 处理推理内容（仅打印不保存）
-            if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
-                if console:
-                    console.print(chunk.choices[0].delta.reasoning_content, end="", style="#00ff00")
-                else:
-                    print(chunk.choices[0].delta.reasoning_content, end="", flush=True)
-                reasoning += chunk.choices[0].delta.reasoning_content
+        # 添加用户新提问到历史
+        history.append({"role": "user", "content": prompt})
 
-            # 处理正式回复内容
-            if chunk.choices[0].delta.content:
-                if console:
-                    console.print(chunk.choices[0].delta.content, end="")
-                else:
-                    print(chunk.choices[0].delta.content, end="", flush=True)
-                content += chunk.choices[0].delta.content
+        # 获取API响应
+        response = _get_api_response(api_key, model, history, kwargs)
 
-        if console:
-            console.print()  # 换行
-        else:
-            print()  # 换行
-
-        # 将助理回复添加到历史（仅保存正式内容）
-        history.append({"role": "assistant", "content": content})
-
-        # 保存更新后的对话历史
-        save_conversation_history(conversation_file, history)
-
-        thinking_end_tag = "</think>\n\n"
-        if content and content.find(thinking_end_tag) != -1 and not content.strip().startswith("<think>"):
-            pos = content.find(thinking_end_tag)
-            reasoning = content[:pos]
-            content = content[pos + len(thinking_end_tag) :]
-
-        # 存储思维过程
-        if reasoning:
-            content = f"<think>\n{reasoning}\n</think>\n\n\n{content}"
-
-        return {"choices": [{"message": {"content": content}}]}
+        # 处理并保存响应
+        return _process_and_save_response(response, history, kwargs)
 
     except Exception as e:
         print(f"OpenAI API请求失败: {e}")
         sys.exit(1)
+
+
+def _initialize_conversation_history(kwargs: dict) -> list:
+    """初始化对话历史
+
+    参数:
+        kwargs (dict): 包含conversation_file等参数
+
+    返回:
+        list: 对话历史列表
+    """
+    conversation_file = kwargs.get("conversation_file", "conversation_history.json")
+    cid = os.environ.get("GPT_UUID_CONVERSATION")
+
+    if cid:
+        try:
+            conversation_file = get_conversation(cid)
+        except FileNotFoundError:
+            conversation_file = new_conversation(cid)
+
+    return load_conversation_history(conversation_file)
+
+
+def _get_api_response(
+    api_key: str,
+    model: str,
+    history: list,
+    kwargs: dict,
+):
+    """获取API流式响应
+
+    参数:
+        api_key (str): API密钥
+        model (str): 模型名称
+        history (list): 对话历史
+        kwargs (dict): 其他参数
+
+    返回:
+        Generator: 流式响应生成器
+    """
+    client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
+
+    return client.chat.completions.create(
+        model=model,
+        messages=history,
+        temperature=kwargs.get("temperature", 0.0),
+        max_tokens=MAX_PROMPT_SIZE,
+        top_p=0.8,
+        stream=True,
+    )
+
+
+def _process_and_save_response(
+    stream,
+    history: list,
+    kwargs: dict,
+) -> dict:
+    """处理并保存API响应
+
+    参数:
+        stream (Generator): 流式响应
+        history (list): 对话历史
+        kwargs (dict): 包含conversation_file等参数
+
+    返回:
+        dict: 处理后的响应结果
+    """
+    content, reasoning = _process_stream_response(stream, kwargs.get("console"))
+
+    # 将助理回复添加到历史
+    history.append({"role": "assistant", "content": content})
+
+    # 保存更新后的对话历史
+    save_conversation_history(kwargs.get("conversation_file", "conversation_history.json"), history)
+
+    # 处理think标签
+    content, reasoning = _handle_think_tags(content, reasoning)
+
+    # 存储思维过程
+    if reasoning:
+        content = f"<think>\n{reasoning}\n</think>\n\n\n{content}"
+
+    return {"choices": [{"message": {"content": content}}]}
+
+
+def _process_stream_response(stream, console) -> tuple:
+    """处理流式响应
+
+    参数:
+        stream (Generator): 流式响应
+        console: 控制台输出对象
+
+    返回:
+        tuple: (正式内容, 推理内容)
+    """
+    content = ""
+    reasoning = ""
+
+    for chunk in stream:
+        # 处理推理内容
+        if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
+            _print_content(chunk.choices[0].delta.reasoning_content, console, style="#00ff00")
+            reasoning += chunk.choices[0].delta.reasoning_content
+
+        # 处理正式回复内容
+        if chunk.choices[0].delta.content:
+            _print_content(chunk.choices[0].delta.content, console)
+            content += chunk.choices[0].delta.content
+
+    _print_newline(console)
+    return content, reasoning
+
+
+def _handle_think_tags(content: str, reasoning: str) -> tuple:
+    """处理think标签
+
+    参数:
+        content (str): 原始内容
+        reasoning (str): 推理内容
+
+    返回:
+        tuple: 处理后的内容和推理内容
+    """
+    thinking_end_tag = "</think>\n\n"
+    thinking_start_tag = "<think>"
+
+    if content and (content.find(thinking_end_tag) != -1 or content.find(thinking_start_tag) != -1):
+        if content.find(thinking_start_tag) != -1:
+            pos_start = content.find(thinking_start_tag)
+            pos_end = content.find(thinking_end_tag)
+            if pos_end != -1:
+                reasoning = content[pos_start + len(thinking_start_tag) : pos_end]
+                reasoning = reasoning.replace("\\n", "\n")
+                content = content[pos_end + len(thinking_end_tag) :]
+        else:
+            pos = content.find(thinking_end_tag)
+            reasoning = content[:pos]
+            reasoning = reasoning.replace("\\n", "\n")
+            content = content[pos + len(thinking_end_tag) :]
+
+    return content, reasoning
+
+
+def _print_content(content: str, console, style=None) -> None:
+    """打印内容到控制台
+
+    参数:
+        content (str): 要打印的内容
+        console: 控制台输出对象
+        style: 输出样式
+    """
+    if console:
+        console.print(content, end="", style=style)
+    else:
+        print(content, end="", flush=True)
+
+
+def _print_newline(console) -> None:
+    """打印换行符
+
+    参数:
+        console: 控制台输出对象
+    """
+    if console:
+        console.print()
+    else:
+        print()
 
 
 def _check_tool_installed(tool_name, install_url=None, install_commands=None):
@@ -821,6 +940,14 @@ def generate_patch_prompt(symbol_names, symbol_map, patch_require=False):
 
     if patch_require:
         prompt += """
+# 代码编写规范:
+1. 如果语言支持，就总是使用强类型
+2. 保持简洁，减少重复片段
+3. 便于编写单元测试
+4. 在doc string里列出可能的输入假设, 不符合要打日志，退出流程
+5. 函数参数不超过5个,太多则用kwargs或者class, struct等结构传递
+6. 实现类时, 需要实现toString, __str__等这样的设施便于调试
+
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
 2. 若无修改需求，请完整返回原始内容
@@ -973,7 +1100,7 @@ def process_patch_response(response_text, symbol_detail):
     if user_input == "y":
         file_map = patch.apply_patch()
         for file in file_map:
-            with open(file, "w+") as f:
+            with open(file, "wb+") as f:
                 f.write(file_map[file])
         print("补丁已成功应用")
     else:
@@ -1002,7 +1129,7 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
     for symbol_name in symbol_names.args:
         symbol = get_symbol_detail(symbol_name)
         symbol_map[symbol_name] = symbol
-    GPT_FLAGS[GPT_SYMBOL_PATCH] = symbol_map
+    GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH] = symbol_map
     return generate_patch_prompt(symbol_names, symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH))
 
 
@@ -1348,9 +1475,14 @@ class GPTContextProcessor:
 GPT_FLAG_GLOW = "glow"
 GPT_FLAG_EDIT = "edit"
 GPT_FLAG_PATCH = "patch"
-GPT_SYMBOL_PATCH = "0patch"
+GPT_SYMBOL_PATCH = "patch"
 
-GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False, GPT_SYMBOL_PATCH: False}
+GPT_FLAGS = {
+    GPT_FLAG_GLOW: False,
+    GPT_FLAG_EDIT: False,
+    GPT_FLAG_PATCH: False,
+}
+GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: False}
 
 
 def finalize_text(text):
@@ -1571,7 +1703,7 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
     if GPT_FLAGS.get(GPT_FLAG_EDIT):
         extract_and_diff_files(content)
     if GPT_FLAGS.get(GPT_FLAG_PATCH):
-        process_patch_response(content, GPT_FLAGS[GPT_SYMBOL_PATCH])
+        process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
 def validate_environment():
@@ -1634,7 +1766,7 @@ def handle_ask_mode(args, api_key, proxies):
         proxies=proxies,
         model=os.environ["GPT_MODEL"],
         base_url=base_url,
-        temperature=float(os.getenv("GPT_TEMPERATURE", 0.0)),
+        temperature=float(os.getenv("GPT_TEMPERATURE", "0.0")),
     )
     process_response(
         text,
@@ -1647,169 +1779,214 @@ def handle_ask_mode(args, api_key, proxies):
 
 
 # 定义UI样式
-class HackerStyle(PygmentsStyle):
-    styles = {
-        Token.Menu.Completions.Completion.Current: "bg:#00ff00 #000000",
-        Token.Menu.Completions.Completion: "bg:#008800 #ffffff",
-        Token.Scrollbar.Button: "bg:#003300",
-        Token.Scrollbar: "bg:#00ff00",
-        Token.Markdown.Heading: "#00ff00 bold",
-        Token.Markdown.Code: "#00ff00",
-        Token.Markdown.List: "#00ff00",
-    }
+class EyeCareStyle:
+    """护眼主题配色方案"""
+
+    def __init__(self):
+        self.styles = {
+            # 基础界面元素
+            "": "#4CAF50",  # 默认文本颜色
+            "prompt": "#4CAF50 bold",
+            "input": "#4CAF50",
+            "output": "#81C784",
+            "status": "#4CAF50",
+            # 自动补全菜单
+            "completion.current": "bg:#4CAF50 #ffffff",
+            "completion": "bg:#E8F5E9 #4CAF50",
+            "progress-button": "bg:#C8E6C9",
+            "progress-bar": "bg:#4CAF50",
+            # 滚动条
+            "scrollbar.button": "bg:#E8F5E9",
+            "scrollbar": "bg:#4CAF50",
+            # Markdown渲染
+            "markdown.heading": "#4CAF50 bold",
+            "markdown.code": "#4CAF50",
+            "markdown.list": "#4CAF50",
+            "markdown.blockquote": "#81C784",
+            "markdown.link": "#4CAF50 underline",
+            # GPT响应相关
+            "gpt.response": "#81C784",
+            "gpt.prefix": "#4CAF50 bold",
+            # 特殊符号
+            "special-symbol": "#4CAF50 italic",
+        }
+
+    def invalidation_hash(self):
+        """生成样式哈希值用于缓存失效检测"""
+        return hash(frozenset(self.styles.items()))
 
 
 class ChatbotUI:
-    """终端聊天机器人UI类，支持流式响应、Markdown渲染和自动补全"""
+    """终端聊天机器人UI类，支持流式响应、Markdown渲染和自动补全
 
-    def __init__(self):
-        """初始化UI组件和配置"""
-        self.style = Style.from_dict(
-            {
-                "prompt": "#00ff00",
-                "input": "#00ff00 bold",
-                "output": "#00ff00",
-                "status": "#00ff00 reverse",
-                "markdown.heading": "#00ff00 bold",
-                "markdown.code": "#00ff00",
-                "markdown.list": "#00ff00",
-                "gpt.response": "#00ff88",
-                "gpt.prefix": "#00ff00 bold",
-            }
-        )
+    输入假设:
+    - 环境变量GPT_KEY、GPT_MODEL、GPT_BASE_URL必须已正确配置
+    - 当使用@符号补全时，prompts目录需存在于GPT_PATH环境变量指定路径下
+    - 温度值设置命令参数应为0-1之间的浮点数
+    """
+
+    _COMMAND_HANDLERS = {
+        "clear": lambda self: os.system("clear"),
+        "help": lambda self: self.display_help(),
+        "exit": lambda self: sys.exit(0),
+        "temperature": lambda self, cmd: self.handle_temperature_command(cmd),
+    }
+
+    _SYMBOL_DESCRIPTIONS = [
+        ("@clipboard", "插入剪贴板内容"),
+        ("@tree", "显示当前目录结构"),
+        ("@treefull", "显示完整目录结构"),
+        ("@read", "读取文件内容"),
+        ("@listen", "语音输入"),
+        ("@symbol:", "插入特殊符号(如@symbol:check)"),
+    ]
+
+    _COMMAND_LIST = [
+        ("/clear", "清空屏幕内容", "/clear"),
+        ("/help", "显示本帮助信息", "/help"),
+        ("/exit", "退出程序", "/exit"),
+        ("/temperature", "设置生成温度(0-1)", "/temperature 0.8"),
+    ]
+
+    def __init__(self, gpt_processor: GPTContextProcessor = None):
+        """初始化UI组件和配置
+        Args:
+            gpt_processor: GPT上下文处理器实例，允许依赖注入便于测试
+        """
+        self.style = self._configure_style()
         self.session = PromptSession(style=self.style)
         self.bindings = self._setup_keybindings()
         self.console = Console()
-        self.temperature = 0.6  # 默认温度值
+        self.temperature = 0.6
+        self.gpt_processor = gpt_processor or GPTContextProcessor()
 
-    def _setup_keybindings(self):
+    def __str__(self) -> str:
+        return (
+            f"ChatbotUI(temperature={self.temperature}, "
+            f"style={self.style.styles}, "
+            f"gpt_processor={type(self.gpt_processor).__name__})"
+        )
+
+    def _configure_style(self) -> Style:
+        """配置终端样式为护眼风格"""
+        return Style.from_dict(EyeCareStyle().styles)
+
+    def _setup_keybindings(self) -> KeyBindings:
         """设置快捷键绑定"""
         bindings = KeyBindings()
-
-        @bindings.add("escape")
-        @bindings.add("c-c")
-        def _(event):
-            event.app.exit()
-
-        @bindings.add("c-l")
-        def _(event):
-            event.app.renderer.clear()
-
+        bindings.add("escape")(self._exit_handler)
+        bindings.add("c-c")(self._exit_handler)
+        bindings.add("c-l")(self._clear_screen_handler)
         return bindings
 
-    def handle_command(self, cmd):
-        """处理斜杠命令"""
-        commands = {
-            "clear": lambda: os.system("clear"),
-            "help": self._display_help,
-            "exit": lambda: sys.exit(0),
-            "temperature": self._handle_temperature_command,
-        }
-        if cmd.startswith("temperature"):
-            commands["temperature"](cmd)
-        elif cmd in commands:
-            commands[cmd]()
-        else:
-            print(f"未知命令: {cmd}")
+    def _exit_handler(self, event):
+        event.app.exit()
 
-    def _display_help(self):
+    def _clear_screen_handler(self, event):
+        event.app.renderer.clear()
+
+    def handle_command(self, cmd: str):
+        """处理斜杠命令
+        Args:
+            cmd: 用户输入的命令字符串，需以/开头
+        """
+        cmd_parts = cmd.split(maxsplit=1)
+        base_cmd = cmd_parts[0]
+
+        if base_cmd not in self._COMMAND_HANDLERS:
+            self.console.print(f"[red]未知命令: {cmd}[/]")
+            return
+
+        try:
+            if base_cmd == "temperature":
+                self._COMMAND_HANDLERS[base_cmd](self, cmd)
+            else:
+                self._COMMAND_HANDLERS[base_cmd](self)
+        except Exception as e:
+            self.console.print(f"[red]命令执行失败: {str(e)}[/]")
+
+    def display_help(self):
         """显示详细的帮助信息"""
+        self._print_command_help()
+        self._print_symbol_help()
 
-        # 创建帮助表格
-        table = Table(show_header=True, header_style="bold magenta", box=None)
-        table.add_column("命令", width=15)
-        table.add_column("描述")
-        table.add_column("示例", style="dim")
+    def _print_command_help(self):
+        """输出命令帮助表格"""
+        table = Table(show_header=True, header_style="bold #4CAF50", box=None)
+        table.add_column("命令", width=15, style="#4CAF50")
+        table.add_column("描述", style="#4CAF50")
+        table.add_column("示例", style="dim #4CAF50")
 
-        # 添加命令信息
-        commands = [
-            ("/clear", "清空屏幕内容", "/clear"),
-            ("/help", "显示本帮助信息", "/help"),
-            ("/exit", "退出程序", "/exit"),
-            ("/temperature", "设置生成温度(0-1)", "/temperature 0.8"),
-        ]
+        for cmd, desc, example in self._COMMAND_LIST:
+            table.add_row(Text(cmd, style="#4CAF50 bold"), desc, Text(example, style="#81C784"))
 
-        for cmd, desc, example in commands:
-            table.add_row(Text(cmd, style="cyan"), desc, Text(example, style="green"))
+        self.console.print("\n[bold #4CAF50]可用命令列表:[/]")
+        self.console.print(table)
 
-        # 添加特殊符号说明
-        self.console.print("\n[bold]常用特殊符号:[/]")
+    def _print_symbol_help(self):
+        """输出符号帮助表格"""
         symbol_table = Table(show_header=False, box=None, padding=(0, 1, 0, 0))
-        symbol_table.add_column("符号", style="cyan", width=12)
-        symbol_table.add_column("描述", style="white")
+        symbol_table.add_column("符号", style="#4CAF50 bold", width=12)
+        symbol_table.add_column("描述", style="#81C784")
 
-        symbols = [
-            ("@clipboard", "插入剪贴板内容"),
-            ("@tree", "显示当前目录结构"),
-            ("@treefull", "显示完整目录结构"),
-            ("@read", "读取文件内容"),
-            ("@listen", "语音输入"),
-            ("@symbol:", "插入特殊符号(如@symbol:check)"),
-        ]
-
-        for symbol, desc in symbols:
+        for symbol, desc in self._SYMBOL_DESCRIPTIONS:
             symbol_table.add_row(symbol, desc)
 
-        # 组合输出内容
-        self.console.print("\n[bold]可用命令列表:[/]")
-        self.console.print(table)
-        self.console.print("\n[bold]符号功能说明:[/]")
+        self.console.print("\n[bold #4CAF50]符号功能说明:[/]")
         self.console.print(symbol_table)
-        self.console.print("\n[dim]提示: 输入时使用Tab键触发自动补全，" "按Ctrl+L清屏，Esc键退出程序[/]")
+        self.console.print("\n[dim #4CAF50]提示: 输入时使用Tab键触发自动补全，按Ctrl+L清屏，Esc键退出程序[/]")
 
-    def _handle_temperature_command(self, cmd):
-        """处理温度设置命令"""
+    def handle_temperature_command(self, cmd: str):
+        """处理温度设置命令
+        Args:
+            cmd: 完整的温度设置命令字符串，例如'temperature 0.8'
+        """
         try:
             parts = cmd.split()
             if len(parts) == 1:
-                print(f"当前temperature: {self.temperature}")
+                self.console.print(f"当前temperature: {self.temperature}")
                 return
+
             temp = float(parts[1])
-            if 0 <= temp <= 1:
-                self.temperature = temp
-                print(f"temperature已设置为: {self.temperature}")
-            else:
-                print("temperature必须在0到1之间")
-        except ValueError:
-            print("temperature必须是一个数字")
+            if not 0 <= temp <= 1:
+                raise ValueError("temperature必须在0到1之间")
 
-    def get_completer(self):
+            self.temperature = temp
+            self.console.print(f"temperature已设置为: {self.temperature}", style="#4CAF50")
+
+        except (ValueError, IndexError) as e:
+            self.console.print(f"[red]参数错误: {str(e)}[/]")
+
+    def get_completer(self) -> WordCompleter:
         """获取自动补全器，支持@和/两种补全模式"""
-        special_items = ["@clipboard", "@tree", "@treefull", "@read", "@listen", "@symbol:"]
-        prompt_files = []
-        if os.path.exists(os.path.join(os.getenv("GPT_PATH"), "prompts")):
-            prompt_files = ["@" + f for f in os.listdir(os.path.join(os.getenv("GPT_PATH"), "prompts"))]
+        prompt_files = self._get_prompt_files()
+        all_items = [s[0] for s in self._SYMBOL_DESCRIPTIONS] + prompt_files + [c[0] for c in self._COMMAND_LIST]
 
-        commands = ["/clear", "/help", "/exit", "/temperature"]
-        all_items = special_items + prompt_files + commands
-
-        pattern = re.compile(r"(@|\/)\w*")
-        meta_dict = {
-            "@clipboard": "从剪贴板读取内容",
-            "@tree": "显示目录树",
-            "@treefull": "显示完整目录树",
-            "@read": "读取文件内容",
-            "@listen": "语音输入",
-            "@symbol:": "插入特殊符号",
-            "/clear": "清空屏幕",
-            "/help": "显示详细帮助信息",
-            "/exit": "退出程序",
-            "/temperature": "设置生成温度参数 (0-1)",
-        }
+        meta_dict = {**{s[0]: s[1] for s in self._SYMBOL_DESCRIPTIONS}, **{c[0]: c[1] for c in self._COMMAND_LIST}}
 
         return WordCompleter(
             words=all_items,
-            pattern=pattern,
+            pattern=re.compile(r"(?:^|\s)[@/]"),
             meta_dict=meta_dict,
             ignore_case=True,
         )
 
-    def stream_response(self, prompt):
-        """流式获取GPT响应并实时渲染Markdown"""
-        text = GPTContextProcessor().process_text_with_file_path(prompt)
+    def _get_prompt_files(self) -> list:
+        """获取提示文件列表"""
+        prompts_dir = os.path.join(os.getenv("GPT_PATH", ""), "prompts")
+        if os.path.exists(prompts_dir):
+            return ["@" + f for f in os.listdir(prompts_dir)]
+        return []
+
+    def stream_response(self, prompt: str):
+        """流式获取GPT响应并实时渲染Markdown
+        Args:
+            prompt: 用户输入的提示文本
+        """
+        processed_text = self.gpt_processor.process_text_with_file_path(prompt)
         return query_gpt_api(
             api_key=os.getenv("GPT_KEY"),
-            prompt=text,
+            prompt=processed_text,
             model=os.environ["GPT_MODEL"],
             base_url=os.getenv("GPT_BASE_URL"),
             stream=True,
@@ -1819,40 +1996,53 @@ class ChatbotUI:
 
     def run(self):
         """启动聊天机器人主循环"""
-        print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC退出")
+        self.console.print("欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC退出", style="#4CAF50")
 
         while True:
             try:
                 text = self.session.prompt(
-                    "> ",
+                    ">",
                     key_bindings=self.bindings,
                     completer=self.get_completer(),
                     complete_while_typing=True,
-                    bottom_toolbar=lambda: f"状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令] | temperature: {self.temperature}",
+                    bottom_toolbar=lambda: (
+                        f"状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令] | " f"temperature: {self.temperature}"
+                    ),
                     lexer=PygmentsLexer(MarkdownLexer),
                 )
 
-                if text and text.lower() == "q":
-                    print("已退出聊天。")
+                if not self._process_input(text):
                     break
 
-                if text and not text.strip():
-                    continue
-
-                if not text:
-                    break
-
-                if text.startswith("/"):
-                    self.handle_command(text[1:])
-                    continue
-
-                self.console.print("BOT:")
-                self.stream_response(text)
             except KeyboardInterrupt:
-                print("\n已退出聊天。")
+                self.console.print("\n已退出聊天。", style="#4CAF50")
+                break
+            except EOFError:
+                self.console.print("\n已退出聊天。", style="#4CAF50")
                 break
             except Exception as e:
-                print(f"\n发生错误: {str(e)}\n")
+                traceback.print_exc()
+                self.console.print(f"\n[red]发生错误: {str(e)}[/]\n")
+
+    def _process_input(self, text: str) -> bool:
+        """处理用户输入
+        Returns:
+            bool: 是否继续运行主循环
+        """
+        if not text:
+            return False
+        if text.strip().lower() == "q":
+            self.console.print("已退出聊天。", style="#4CAF50")
+            return False
+        if not text.strip():
+            return True
+        if text.startswith("/"):
+            self.handle_command(text[1:])
+            return True
+
+        self.console.print("BOT:", style="#4CAF50 bold")
+        self.stream_response(text)
+        return True
 
 
 def handle_code_analysis(args, api_key, proxies):
