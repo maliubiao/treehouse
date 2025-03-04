@@ -885,6 +885,19 @@ class BlockPatch:
                 return True
         return False
 
+    def _validate_ranges(self, ranges: list[tuple[int, int]]) -> None:
+        """验证范围列表是否有重叠"""
+        # 使用新列表存储已通过检测的range
+        checked_ranges = []
+        for current_range in ranges:
+            # 针对已通过检测的range做暴力检查
+            for checked_range in checked_ranges:
+                # 检查两个范围是否重叠
+                if not (current_range[1] <= checked_range[0] or checked_range[1] <= current_range[0]):
+                    raise ValueError(f"替换区间存在重叠：{current_range} 和 {checked_range}")
+            # 将当前range加入已通过检测的列表
+            checked_ranges.append(current_range)
+
     def _build_modified_blocks(self, original_code: str, replacements: list) -> list[str]:
         """构建修改后的代码块数组"""
         # 验证所有块内容
@@ -894,10 +907,7 @@ class BlockPatch:
                 raise ValueError(f"内容不匹配\n选中内容：{selected}\n传入内容：{old_content}")
 
         # 检查替换区间是否有重叠
-        sorted_ranges = sorted([(start_pos, end_pos) for (start_pos, end_pos), _, _ in replacements])
-        for i in range(1, len(sorted_ranges)):
-            if sorted_ranges[i][0] < sorted_ranges[i - 1][1]:
-                raise ValueError(f"替换区间存在重叠：{sorted_ranges[i-1]} 和 {sorted_ranges[i]}")
+        self._validate_ranges([(start_pos, end_pos) for (start_pos, end_pos), _, _ in replacements])
 
         # 按起始位置排序替换区间
         replacements.sort(key=lambda x: x[0][0])

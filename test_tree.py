@@ -100,6 +100,13 @@ class TestBlockPatch(unittest.TestCase):
             self.temp_files.append(f.name)
             return f.name
 
+    def _find_byte_range(self, content: bytes, target: bytes) -> tuple[int, int]:
+        """通过字符串查找确定字节范围"""
+        start = content.find(target)
+        if start == -1:
+            raise ValueError(f"未找到目标字符串: {target}")
+        return (start, start + len(target))
+
     def test_basic_patch(self):
         code = dedent(
             """
@@ -112,10 +119,15 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
+        # 通过字符串查找确定字节范围
+        with open(file_path, "rb") as f:
+            content = f.read()
+            patch_range = self._find_byte_range(content, b"return 1")
+
         # 测试基本补丁功能
         patch = BlockPatch(
             file_paths=[file_path],
-            patch_ranges=[(23, 32)],  # return 1
+            patch_ranges=[patch_range],  # return 1
             block_contents=[b"return 1"],
             update_contents=[b"return 10"],
         )
@@ -142,10 +154,16 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
+        # 通过字符串查找确定字节范围
+        with open(file_path, "rb") as f:
+            content = f.read()
+            patch_range1 = self._find_byte_range(content, b"return 1")
+            patch_range2 = self._find_byte_range(content, b"return 2")
+
         # 测试多个补丁
         patch = BlockPatch(
             file_paths=[file_path, file_path],
-            patch_ranges=[(23, 32), (52, 61)],  # return 1, return 2
+            patch_ranges=[patch_range1, patch_range2],  # return 1, return 2
             block_contents=[b"return 1", b"return 2"],
             update_contents=[b"return 10", b"return 20"],
         )
@@ -172,23 +190,30 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
+        # 通过字符串查找确定字节范围
+        with open(file_path, "rb") as f:
+            content = f.read()
+            patch_range = self._find_byte_range(content, b"return 1")
+
         # 测试无效补丁（内容不匹配）
+        patch = BlockPatch(
+            file_paths=[file_path],
+            patch_ranges=[patch_range],  # return 1
+            block_contents=[b"return 2"],  # 错误的内容
+            update_contents=[b"return 10"],
+        )
         with self.assertRaises(ValueError):
-            BlockPatch(
-                file_paths=[file_path],
-                patch_ranges=[(23, 32)],  # return 1
-                block_contents=[b"return 2"],  # 错误的内容
-                update_contents=[b"return 10"],
-            )
+            patch.generate_diff()
 
         # 测试无效补丁（范围重叠）
+        patch = BlockPatch(
+            file_paths=[file_path, file_path],
+            patch_ranges=[(patch_range[0], patch_range[1] - 2), (patch_range[0] + 2, patch_range[1])],  # 重叠范围
+            block_contents=[b"return 1", b"return 1"],
+            update_contents=[b"return 10", b"return 10"],
+        )
         with self.assertRaises(ValueError):
-            BlockPatch(
-                file_paths=[file_path, file_path],
-                patch_ranges=[(20, 30), (25, 35)],  # 重叠范围
-                block_contents=[b"return 1", b"return 1"],
-                update_contents=[b"return 10", b"return 10"],
-            )
+            patch.generate_diff()
 
     def test_no_changes(self):
         code = dedent(
@@ -199,10 +224,15 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
+        # 通过字符串查找确定字节范围
+        with open(file_path, "rb") as f:
+            content = f.read()
+            patch_range = self._find_byte_range(content, b"return 1")
+
         # 测试没有实际变化的补丁
         patch = BlockPatch(
             file_paths=[file_path],
-            patch_ranges=[(23, 32)],  # return 1
+            patch_ranges=[patch_range],  # return 1
             block_contents=[b"return 1"],
             update_contents=[b"return 1"],  # 内容相同
         )
@@ -229,10 +259,19 @@ class TestBlockPatch(unittest.TestCase):
         file1 = self.create_temp_file(code1)
         file2 = self.create_temp_file(code2)
 
+        # 通过字符串查找确定字节范围
+        with open(file1, "rb") as f:
+            content = f.read()
+            patch_range1 = self._find_byte_range(content, b"return 1")
+
+        with open(file2, "rb") as f:
+            content = f.read()
+            patch_range2 = self._find_byte_range(content, b"return 2")
+
         # 测试多文件补丁
         patch = BlockPatch(
             file_paths=[file1, file2],
-            patch_ranges=[(23, 32), (23, 32)],  # return 1, return 2
+            patch_ranges=[patch_range1, patch_range2],  # return 1, return 2
             block_contents=[b"return 1", b"return 2"],
             update_contents=[b"return 10", b"return 20"],
         )
