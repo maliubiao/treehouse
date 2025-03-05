@@ -17,6 +17,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Check for unstaged changes after first run
+if git diff --exit-code >/dev/null; then
+    exit 0
+fi
+
 # Stage changes
 git add -u
 
