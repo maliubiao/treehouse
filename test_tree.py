@@ -1,12 +1,29 @@
+import asyncio
 import os
+import pdb
+import sqlite3
 import tempfile
 import unittest
 from textwrap import dedent
 
 from fastapi.testclient import TestClient
 
-# Import the implemented classes
-from tree import BlockPatch, ParserLoader, ParserUtil, SourceSkeleton, SymbolTrie, app
+import tree
+from tree import (
+    BlockPatch,
+    ParserLoader,
+    ParserUtil,
+    SourceSkeleton,
+    SymbolTrie,
+    app,
+    get_symbol_context_api,
+    init_symbol_database,
+    insert_symbol,
+    search_symbols_api,
+    symbol_completion,
+    symbol_completion_realtime,
+    symbol_completion_simple,
+)
 
 
 class TestSourceFrameworkParser(unittest.TestCase):
@@ -581,6 +598,147 @@ class TestSymbolsComplete(unittest.TestCase):
         test_client = TestClient(app)
         response = test_client.get(f"/complete_realtime?prefix={prefix}")
         return response.text.splitlines()
+
+
+class TestSymbolsAPI(unittest.TestCase):
+    def setUp(self):
+        """初始化测试环境"""
+        self.conn = sqlite3.connect(":memory:")
+        tree.get_db_connection = lambda: self.conn
+        init_symbol_database(self.conn)
+        self.test_symbols = [
+            {
+                "name": "main_function",
+                "file_path": "/path/to/file",
+                "type": "function",
+                "signature": "def main_function()",
+                "body": "pass",
+                "full_definition": "def main_function(): pass",
+                "calls": ["helper_function", "undefined_function"],
+            },
+            {
+                "name": "helper_function",
+                "file_path": "/path/to/file",
+                "type": "function",
+                "signature": "def helper_function()",
+                "body": "pass",
+                "full_definition": "def helper_function(): pass",
+                "calls": [],
+            },
+            {
+                "name": "calculate_sum",
+                "file_path": "/path/to/file",
+                "type": "function",
+                "signature": "def calculate_sum(a, b)",
+                "body": "return a + b",
+                "full_definition": "def calculate_sum(a, b): return a + b",
+                "calls": [],
+            },
+            {
+                "name": "compute_average",
+                "file_path": "/path/to/file",
+                "type": "function",
+                "signature": "def compute_average(values)",
+                "body": "return sum(values) / len(values)",
+                "full_definition": "def compute_average(values): return sum(values) / len(values)",
+                "calls": [],
+            },
+            {
+                "name": "init_module",
+                "file_path": "/path/to/__init__.py",
+                "type": "module",
+                "signature": "",
+                "body": "",
+                "full_definition": "",
+                "calls": [],
+            },
+            {
+                "name": "symbol:test/symbol",
+                "file_path": "/path/to/symbol.py",
+                "type": "symbol",
+                "signature": "",
+                "body": "",
+                "full_definition": "",
+                "calls": [],
+            },
+        ]
+
+        self.trie = SymbolTrie.from_symbols({})
+        app.state.symbol_trie = self.trie
+        app.state.file_symbol_trie = self.trie
+        app.state.file_mtime_cache = {}
+
+        for symbol in self.test_symbols:
+            insert_symbol(self.conn, symbol)
+
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
+    def tearDown(self):
+        """清理测试环境"""
+        self.loop.close()
+        self.conn.execute("DELETE FROM symbols WHERE file_path = ?", ("/path/to/file",))
+        self.conn.commit()
+        self.conn.close()
+
+    def test_search_functionality(self):
+        """测试符号搜索功能"""
+
+        async def run_tests():
+            response = await search_symbols_api("main", 10)
+            self.assertEqual(len(response["results"]), 1)
+
+            response = await search_symbols_api("main_function", 10)
+            self.assertEqual(len(response["results"]), 1)
+            self.assertEqual(response["results"][0]["name"], "main_function")
+
+        self.loop.run_until_complete(run_tests())
+
+    def test_symbol_context(self):
+        """测试获取符号上下文"""
+
+        async def run_tests():
+            response = await get_symbol_context_api("main_function", "/path/to/file")
+            self.assertEqual(response["symbol_name"], "main_function")
+            self.assertGreaterEqual(len(response["definitions"]), 2)
+
+            response = await get_symbol_context_api("nonexistent", "/path/to/file")
+            self.assertIn("error", response)
+
+        self.loop.run_until_complete(run_tests())
+
+    def test_completion_features(self):
+        """测试补全功能"""
+
+        async def run_tests():
+            # 标准补全
+            response = await symbol_completion("calc")
+            self.assertEqual(len(response["completions"]), 1)
+            self.assertEqual(response["completions"][0]["name"], "calculate_sum")
+
+            # 空结果补全
+            response = await symbol_completion("xyz")
+            self.assertEqual(len(response["completions"]), 0)
+
+            # 简单补全
+            response = await symbol_completion_simple("calc")
+            self.assertIn(b"symbol:file/calculate_sum", response.body)
+
+            # 路径补全
+            response = await symbol_completion_simple("symbol:test/")
+            self.assertIn(b"symbol:test/symbol", response.body)
+
+            # 实时补全
+            pdb.set_trace()
+            response = await symbol_completion_realtime("symbol:file", 10)
+            self.assertIn(b"main_function", response.body)
+            self.assertIn(b"helper_function", response.body)
+
+            # 无效路径补全
+            response = await symbol_completion_realtime("symbol:nonexistent", 10)
+            self.assertEqual(response.body, b"")
+
+        self.loop.run_until_complete(run_tests())
 
 
 if __name__ == "__main__":

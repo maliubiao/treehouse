@@ -2230,7 +2230,6 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
 
     trie = app.state.file_symbol_trie
     max_results = clamp(max_results, 1, 50)
-    pdb.set_trace()
     file_path, symbols = parse_symbol_prefix(prefix)
 
     current_prefix = determine_current_prefix(file_path, symbols)
@@ -2264,7 +2263,7 @@ def determine_current_prefix(file_path: str | None, symbols: list[str]) -> str:
     if symbols:
         return f"symbol:{file_path}/{symbols[-1]}"
     if file_path:
-        return file_path.split("/")[-1]
+        return f"symbol:{file_path.split("/")[-1]}"
     return ""
 
 
@@ -2352,135 +2351,6 @@ async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), m
             output.append(f"symbol:{file_base}/{symbol_name}")
 
     return PlainTextResponse("\n".join(output))
-
-
-def test_symbols_api():
-    """测试符号相关API"""
-    globals()["GLOBAL_DB_CONN"] = sqlite3.connect(":memory:")
-    # 初始化内存数据库
-    test_conn = globals()["GLOBAL_DB_CONN"]
-    init_symbol_database(test_conn)
-
-    # 准备测试数据
-    test_symbols = [
-        {
-            "name": "main_function",
-            "file_path": "/path/to/file",
-            "type": "function",
-            "signature": "def main_function()",
-            "body": "pass",
-            "full_definition": "def main_function(): pass",
-            "calls": ["helper_function", "undefined_function"],
-        },
-        {
-            "name": "helper_function",
-            "file_path": "/path/to/file",
-            "type": "function",
-            "signature": "def helper_function()",
-            "body": "pass",
-            "full_definition": "def helper_function(): pass",
-            "calls": [],
-        },
-        {
-            "name": "calculate_sum",
-            "file_path": "/path/to/file",
-            "type": "function",
-            "signature": "def calculate_sum(a, b)",
-            "body": "return a + b",
-            "full_definition": "def calculate_sum(a, b): return a + b",
-            "calls": [],
-        },
-        {
-            "name": "compute_average",
-            "file_path": "/path/to/file",
-            "type": "function",
-            "signature": "def compute_average(values)",
-            "body": "return sum(values) / len(values)",
-            "full_definition": "def compute_average(values): return sum(values) / len(values)",
-            "calls": [],
-        },
-        {
-            "name": "init_module",
-            "file_path": "/path/to/__init__.py",
-            "type": "module",
-            "signature": "",
-            "body": "",
-            "full_definition": "",
-            "calls": [],
-        },
-        {
-            "name": "symbol:test/symbol",
-            "file_path": "/path/to/symbol.py",
-            "type": "symbol",
-            "signature": "",
-            "body": "",
-            "full_definition": "",
-            "calls": [],
-        },
-    ]
-    trie = SymbolTrie.from_symbols({})
-    app.state.symbol_trie = trie
-    app.state.file_symbol_trie = SymbolTrie.from_symbols({})
-    app.state.file_mtime_cache = {}
-    # 插入测试数据
-    for symbol in test_symbols:
-        insert_symbol(test_conn, symbol)
-
-    # 创建新的事件循环
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        # 测试搜索接口
-        response = loop.run_until_complete(search_symbols_api("main", 10))
-        assert len(response["results"]) == 1
-
-        # 测试获取符号信息接口
-        response = loop.run_until_complete(search_symbols_api("main_function", 10))
-        assert len(response["results"]) == 1
-        assert response["results"][0]["name"] == "main_function"
-
-        # 测试获取符号上下文接口
-        response = loop.run_until_complete(get_symbol_context_api("main_function", "/path/to/file"))
-        assert response["symbol_name"] == "main_function"
-        assert len(response["definitions"]) == 2
-
-        response = loop.run_until_complete(get_symbol_context_api("nonexistent", "/path/to/file"))
-        assert "error" in response
-
-        # 测试前缀搜索接口
-        response = loop.run_until_complete(symbol_completion("calc"))
-        assert len(response["completions"]) == 1
-        assert response["completions"][0]["name"] == "calculate_sum"
-
-        response = loop.run_until_complete(symbol_completion("xyz"))
-        assert len(response["completions"]) == 0
-
-        # 测试简化版符号补全接口
-        # 情况1：正常符号补全
-        response = loop.run_until_complete(symbol_completion_simple("calc"))
-        assert b"symbol:file/calculate_sum" in response.body
-
-        # 情况2：包含路径的符号补全
-        response = loop.run_until_complete(symbol_completion_simple("symbol:test/"))
-        assert b"symbol:test/symbol" in response.body
-
-        # 新增测试实时符号补全接口
-        # 情况1：测试存在的文件路径
-        response = loop.run_until_complete(symbol_completion_realtime("symbol:file", 10))
-        assert b"main_function" in response.body
-        assert b"helper_function" in response.body
-
-        # 情况2：测试不存在的文件路径
-        response = loop.run_until_complete(symbol_completion_realtime("symbol:nonexistent", 10))
-        assert response.body == b""
-
-    finally:
-        # 关闭事件循环
-        loop.close()
-        # 删除测试符号
-        test_conn.execute("DELETE FROM symbols WHERE file_path = ?", ("/path/to/file",))
-        test_conn.commit()
 
 
 def debug_tree_source_file(file_path: Path):
@@ -3108,7 +2978,6 @@ if __name__ == "__main__":
         logger.debug("进入演示模式")
         test_split_source_and_patch()
         demo_main()
-        test_symbols_api()
     elif args.debug_file:
         logger.debug("单文件调试模式，文件路径：%s", args.debug_file)
         debug_process_source_file(Path(args.debug_file), Path(args.project[0]))
