@@ -1000,6 +1000,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 3. 修改时必须包含完整文件内容，不得省略任何代码
 4. 保持原有缩进和代码风格，仅添加必要注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
+6. 允许在符号内容在前后添加新代码
 """
     if not patch_require:
         prompt += "现有代码库里的符号和文件范围:\n"
@@ -2189,9 +2190,12 @@ class ChatbotUI:
 
         return WordCompleter(
             words=all_items,
-            pattern=re.compile(r"(?:^|\s)[@/]"),
             meta_dict=meta_dict,
             ignore_case=True,
+            # 启用句子模式补全（允许部分匹配）
+            sentence=False,
+            match_middle=True,
+            WORD=False,
         )
 
     def _get_prompt_files(self) -> list:

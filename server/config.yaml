@@ -21,3 +21,6 @@ filters:
 - pattern: https://github.com/*/*
   selectors:
   - div > div > div.csrIcr
+- pattern: https://python-prompt-toolkit.readthedocs.io/en/stable/pages/*
+  selectors:
+  - div > div.nftt-page > article
