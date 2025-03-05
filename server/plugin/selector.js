@@ -153,7 +153,7 @@
   const generateCssQuery = (element) => {
     // 如果元素有ID，直接返回ID选择器
     if (element.id) {
-      return `#${element.id}`;
+      return [`#${element.id}`];
     }
 
     const levelsToCheck = 3; // 最大检查3层父元素
