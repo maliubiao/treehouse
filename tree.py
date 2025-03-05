@@ -2080,20 +2080,50 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), js
     """
     trie = app.state.file_symbol_trie
     file_mtime_cache = app.state.file_mtime_cache
-    # 解析符号路径
+
+    # 参数解析
+    parsed = parse_symbol_path(symbol_path)
+    if isinstance(parsed, PlainTextResponse):
+        return parsed
+    file_path_part, symbols = parsed
+
+    # 符号查找
+    symbol_results = validate_and_lookup_symbols(file_path_part, symbols, trie, file_mtime_cache)
+    if isinstance(symbol_results, PlainTextResponse):
+        return symbol_results
+
+    # 读取源代码
+    source_code = read_source_code(symbol_results[0]["file_path"])
+    if isinstance(source_code, PlainTextResponse):
+        return source_code
+
+    # 内容提取
+    contents = extract_contents(source_code, symbol_results)
+
+    # 构建响应
+    return build_json_response(symbol_results, contents) if json else build_plaintext_response(contents)
+
+
+def parse_symbol_path(symbol_path: str) -> tuple[str, list] | PlainTextResponse:
+    """解析符号路径参数"""
     if "/" not in symbol_path:
         return PlainTextResponse("符号路径格式错误，应为文件路径/符号1,符号2,...", status_code=400)
+
     last_slash_index = symbol_path.rfind("/", 1)
     file_path_part = symbol_path[:last_slash_index]
     symbols_part = symbol_path[last_slash_index + 1 :]
     symbols = [s.strip() for s in symbols_part.split(",") if s.strip()]
+
     if not symbols:
         return PlainTextResponse("至少需要一个符号", status_code=400)
 
-    # 检查并更新前缀树
+    return (file_path_part, symbols)
+
+
+def validate_and_lookup_symbols(file_path_part: str, symbols: list, trie, file_mtime_cache) -> list | PlainTextResponse:
+    """验证并查找符号"""
     update_trie_if_needed(file_path_part, trie, file_mtime_cache)
 
-    # 收集所有符号的结果
     symbol_results = []
     for symbol in symbols:
         full_symbol_path = f"{file_path_part}/{symbol}"
@@ -2101,45 +2131,46 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), js
         if not result:
             return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
         symbol_results.append(result)
+    return symbol_results
 
-    # 读取源代码文件（假设所有符号属于同一文件）
-    file_path = symbol_results[0]["file_path"]
+
+def read_source_code(file_path: str) -> bytes | PlainTextResponse:
+    """读取源代码文件"""
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            source_code = f.read()
+        with open(file_path, "rb") as f:
+            return f.read()
     except Exception as e:
         return PlainTextResponse(f"无法读取文件: {str(e)}", status_code=500)
 
-    # 提取每个符号的内容
-    contents = []
-    for result in symbol_results:
-        block_range = result["location"][2]
-        content = source_code[block_range[0] : block_range[1]]
-        contents.append(content)
 
-    if json:
-        # 构建JSON响应
-        response_data = []
-        for result, content in zip(symbol_results, contents):
-            loc = result["location"]
-            response_data.append(
-                {
-                    "file_path": result["file_path"],
-                    "content": content,
-                    "location": {
-                        "start_line": loc[0][0],
-                        "start_col": loc[0][1],
-                        "end_line": loc[1][0],
-                        "end_col": loc[1][1],
-                        "block_range": loc[2],
-                    },
-                }
-            )
-        return response_data
-    else:
-        # 返回拼接的纯文本
-        combined_content = "\n\n".join(contents)
-        return PlainTextResponse(combined_content)
+def extract_contents(source_code: bytes, symbol_results: list) -> list[str]:
+    """提取符号内容"""
+    return [
+        source_code[result["location"][2][0] : result["location"][2][1]].decode("utf8") for result in symbol_results
+    ]
+
+
+def build_json_response(symbol_results: list, contents: list) -> list:
+    """构建JSON响应"""
+    return [
+        {
+            "file_path": result["file_path"],
+            "content": content,
+            "location": {
+                "start_line": result["location"][0][0],
+                "start_col": result["location"][0][1],
+                "end_line": result["location"][1][0],
+                "end_col": result["location"][1][1],
+                "block_range": result["location"][2],
+            },
+        }
+        for result, content in zip(symbol_results, contents)
+    ]
+
+
+def build_plaintext_response(contents: list) -> PlainTextResponse:
+    """构建纯文本响应"""
+    return PlainTextResponse("\n\n".join(contents))
 
 
 def update_trie_if_needed(prefix: str, trie, file_mtime_cache) -> bool:
@@ -2156,16 +2187,18 @@ def update_trie_if_needed(prefix: str, trie, file_mtime_cache) -> bool:
     if not prefix.startswith("symbol:"):
         return False
 
-    # 匹配带扩展名的文件路径（支持多级目录）
-    pattern = r"symbol:((?:[^,/]+/)*[^/,]+?\.(?:{}))(?:/|,|$)".format(
-        "|".join(re.escape(ext) for ext in SUPPORTED_LANGUAGES.keys())
-    )
-    match = re.search(pattern, prefix)
-    if not match:
-        return False
+    # 使用rfind找到最后一个/的位置
+    last_slash_idx = prefix.rfind("/")
+    if last_slash_idx == -1:
+        # 没有斜杠时，直接去掉'symbol:'前缀
+        file_path = prefix[len("symbol:") :]
+    else:
+        # 提取从'symbol:'到最后一个/之间的部分作为文件路径
+        file_path = prefix[len("symbol:") : last_slash_idx]
 
-    file_path = match.group(1)
-    if not os.path.exists(file_path):
+    # 检查文件扩展名是否在支持的语言中
+    ext = os.path.splitext(file_path)[1]  # 去掉点号
+    if ext not in SUPPORTED_LANGUAGES:
         return False
 
     current_mtime = os.path.getmtime(file_path)
@@ -2193,60 +2226,84 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
     Returns:
         纯文本格式的补全列表，每行一个补全结果
     """
+    print(f"[INFO] 处理实时补全请求: {prefix[:50]}...")
+
     trie = app.state.file_symbol_trie
-    max_results = max(1, min(50, int(max_results)))
-    file_mtime_cache = app.state.file_mtime_cache
+    max_results = clamp(max_results, 1, 50)
+    pdb.set_trace()
+    file_path, symbols = parse_symbol_prefix(prefix)
 
-    # 解析文件路径和符号层级
-    symbols_part = None
-    file_path, symbols = None, []
-    if prefix.startswith("symbol:"):
-        # 分割路径和符号层级
-        remaining = prefix[len("symbol:") :]
-        slash_idx = remaining.find("/")
+    current_prefix = determine_current_prefix(file_path, symbols)
+    updated = update_trie_for_completion(file_path, trie, app.state.file_mtime_cache)
 
-        if slash_idx != -1:
-            # 分离文件路径和符号部分
-            file_path = remaining[:slash_idx]
-            symbols_part = remaining[slash_idx + 1 :]
-            # 解析符号层级（允许空值）
-            symbols = [s for s in symbols_part.split(",") if s]
-        else:
-            # 没有斜杠时整个作为文件路径
-            file_path = remaining
-    current_prefix = symbols[-1] if symbols else (file_path.split("/")[-1] if file_path else "")
-    if symbols_part:
-        current_prefix = f"symbol:{remaining[:slash_idx+1]}" + current_prefix
-    # 检查并更新前缀树
-    updated = update_trie_if_needed(f"symbol:{file_path}", trie, file_mtime_cache) if file_path else False
+    results = perform_trie_search(trie, current_prefix, max_results, file_path, updated)
+    completions = build_completion_results(file_path, symbols, results)
 
-    # 搜索前缀（仅使用最后层级的符号）
-    results = trie.search_prefix(current_prefix, max_results=max_results) if file_path else []
-
-    # 强制更新后重试
-    if not results and file_path and not updated:
-        if update_trie_if_needed(f"symbol:{file_path}", trie, file_mtime_cache):
-            results = trie.search_prefix(current_prefix, max_results)
-
-    # 构建层级补全结果
-    completions = []
-    base_path = f"symbol:{file_path}/" if file_path else "symbol:"
-    if symbols:
-        base_path += ",".join(symbols[:-1]) + ("," if symbols[:-1] else "")
-    for result in results:
-        # 获取符号名中最后一个逗号后的部分
-        symbol_name = result["name"]
-        last_comma_idx = symbol_name.rfind("/")
-        if last_comma_idx != -1:
-            symbol_name = symbol_name[last_comma_idx + 1 :]
-
-        completion = f"{base_path}{symbol_name}"
-        # 处理多层符号拼接
-        if symbols and len(symbols) > 1:
-            completion = f"symbol:{file_path}/" + ",".join(symbols[:-1] + [symbol_name])
-        completions.append(completion)
-
+    print(f"[INFO] 返回 {len(completions)} 个补全结果")
     return PlainTextResponse("\n".join(completions))
+
+
+def parse_symbol_prefix(prefix: str) -> tuple[str | None, list[str]]:
+    """解析符号前缀为文件路径和符号层级"""
+    if not prefix.startswith("symbol:"):
+        return None, []
+
+    remaining = prefix[len("symbol:") :]
+    slash_idx = remaining.rfind("/")
+
+    if slash_idx == -1:
+        return remaining, []
+
+    file_path = remaining[:slash_idx]
+    symbols = [s for s in remaining[slash_idx + 1 :].split(",") if s]
+    return file_path, symbols
+
+
+def determine_current_prefix(file_path: str | None, symbols: list[str]) -> str:
+    """确定当前搜索前缀"""
+    if symbols:
+        return f"symbol:{file_path}/{symbols[-1]}"
+    if file_path:
+        return file_path.split("/")[-1]
+    return ""
+
+
+def update_trie_for_completion(file_path: str | None, trie: Any, mtime_cache: Any) -> bool:
+    """更新前缀树数据"""
+    if not file_path:
+        return False
+    return update_trie_if_needed(f"symbol:{file_path}", trie, mtime_cache)
+
+
+def perform_trie_search(trie: Any, prefix: str, max_results: int, file_path: str | None, updated: bool) -> list:
+    """执行前缀树搜索"""
+    results = trie.search_prefix(prefix, max_results=max_results) if file_path else []
+
+    if not results and file_path and not updated:
+        if update_trie_if_needed(f"symbol:{file_path}", trie, app.state.file_mtime_cache):
+            return trie.search_prefix(prefix, max_results)
+
+    return results
+
+
+def build_completion_results(file_path: str | None, symbols: list[str], results: list) -> list[str]:
+    """构建补全结果列表"""
+
+    base_str = f"symbol:{file_path}/"
+    symbol_prefix = ",".join(symbols[:-1]) + "," if len(symbols) > 1 else ""
+
+    completions = []
+    for result in results:
+        symbol_name = result["name"][result["name"].rfind("/") + 1 :]
+        full_path = f"{base_str}{symbol_prefix}{symbol_name}"
+        completions.append(full_path.replace("//", "/"))
+
+    return completions
+
+
+def clamp(value: int, min_val: int, max_val: int) -> int:
+    """限制数值范围"""
+    return max(min_val, min(max_val, value))
 
 
 @app.get("/complete_simple")

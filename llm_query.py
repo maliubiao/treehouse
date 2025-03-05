@@ -979,6 +979,12 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 
     if patch_require:
         prompt += """
+# 任务说明
+1. 积极帮助用户处理遇到的问题
+2. 主要是处理代码修改任务
+3. 主要目标是: 消除bug, 增加新功能，重构，或者其它
+4. 修改完代码要验证是否正确的完成了任务
+
 # 代码编写规范:
 1. 如果语言支持，就总是使用强类型
 2. 保持简洁，减少重复片段
@@ -1262,63 +1268,87 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
     """
     symbol_map = {}
     for symbol_name in symbol_names.args:
-        symbol = get_symbol_detail(symbol_name)
-        symbol_name = symbol.get("symbol_name", symbol_name)
-        symbol_map[symbol_name] = symbol
+        symbol_result = get_symbol_detail(symbol_name.split(","))
+        if len(symbol_result) == 1:
+            symbol_name = symbol_result[0].get("symbol_name", symbol_name)
+            symbol_map[symbol_name] = symbol_result[0]
+        else:
+            for symbol in symbol_result:
+                symbol_map[symbol["symbol_name"]] = symbol
     GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH] = symbol_map
-    return generate_patch_prompt(symbol_names, symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH))
+    return generate_patch_prompt(
+        CmdNode(command="symbol", args=list(symbol_map.keys())), symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH)
+    )
 
 
-def get_symbol_detail(symbol_name):
+def get_symbol_detail(symbol_names):
     """使用公共http函数请求符号补丁并生成BlockPatch对象
     输入假设:
-    - symbol_name: 字符串，可能包含特殊标记^或$
+    - symbol_names: 字符串列表，元素可能包含特殊标记^或$
     - 环境变量GPT_SYMBOL_API_URL存在，否则使用默认值
     - 返回的symbol_data包含content, location, file_path等字段
     - 当存在特殊标记时才会验证文件内容一致性
     """
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
+    results = []
 
-    # 处理符号名称中的特殊标记
-    flags = {}
-    if symbol_name.endswith("^"):
-        flags["position"] = "before"
-        symbol_name = symbol_name[:-1]
-    elif symbol_name.endswith("$"):
-        flags["position"] = "after"
-        symbol_name = symbol_name[:-1]
+    # 预处理所有符号名称
+    processed_symbols = []
+    flags_list = []
+    for symbol in symbol_names:
+        flags = {}
+        clean_symbol = symbol
+        if symbol.endswith("^"):
+            flags["position"] = "before"
+            clean_symbol = symbol[:-1]
+        elif symbol.endswith("$"):
+            flags["position"] = "after"
+            clean_symbol = symbol[:-1]
+        processed_symbols.append(clean_symbol)
+        flags_list.append(flags)
 
-    encoded_symbol = requests.utils.quote(symbol_name)
-    url = f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbol}&json=true"
-    symbol_data = _send_http_request(url)
+    # 构造批量请求URL
+    encoded_symbols = ",".join([requests.utils.quote(s) for s in processed_symbols])
+    url = f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json=true"
+    batch_response = _send_http_request(url)
 
-    content = symbol_data["content"]
-    location = symbol_data["location"]
-    file_path = symbol_data["file_path"]
+    # 处理批量响应
+    for idx, symbol_data in enumerate(batch_response):
+        original_symbol = symbol_names[idx]
+        flags = flags_list[idx]
 
-    # 处理标记相关逻辑
-    if flags:
-        flags = _process_symbol_flags(
-            file_path=file_path,
-            symbol_name=symbol_name,
-            content=content,
-            block_range=location["block_range"],
-            flags=flags,
+        content = symbol_data["content"]
+        location = symbol_data["location"]
+        file_path = symbol_data["file_path"]
+
+        # 处理标记验证
+        processed_flags = None
+        if flags:
+            processed_flags = _process_symbol_flags(
+                file_path=file_path,
+                symbol_name=processed_symbols[idx],
+                content=content,
+                block_range=location["block_range"],
+                flags=flags,
+            )
+            if not processed_flags:
+                continue
+
+        code_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
+        block_content = content.encode("utf-8")
+
+        results.append(
+            {
+                "symbol_name": processed_symbols[idx],
+                "file_path": file_path,
+                "code_range": code_range,
+                "block_range": location["block_range"],
+                "block_content": block_content,
+                "flags": processed_flags if processed_flags else None,
+            }
         )
-        if not flags:
-            return None
 
-    code_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
-    block_content = content.encode("utf-8")
-
-    return {
-        "symbol_name": symbol_name,
-        "file_path": file_path,
-        "code_range": code_range,
-        "block_range": location["block_range"],
-        "block_content": block_content,
-        "flags": flags if flags else None,
-    }
+    return results
 
 
 def _process_symbol_flags(file_path, symbol_name, content, block_range, flags):

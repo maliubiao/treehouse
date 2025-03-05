@@ -163,12 +163,14 @@ class TestGPTContextProcessor(unittest.TestCase):
         # 测试单个符号
         symbol_names = MockCmdNode(["test_symbol"])
         with patch("llm_query.get_symbol_detail") as mock_get_detail:
-            mock_get_detail.return_value = {
-                "file_path": "test.py",
-                "code_range": ((1, 0), (10, 0)),
-                "block_range": "1-10",
-                "block_content": b"test content",
-            }
+            mock_get_detail.return_value = [
+                {
+                    "file_path": "test.py",
+                    "code_range": ((1, 0), (10, 0)),
+                    "block_range": "1-10",
+                    "block_content": b"test content",
+                }
+            ]
             result = patch_symbol_with_prompt(symbol_names)
             self.assertIn("test_symbol", result)
             self.assertIn("test.py", result)
@@ -178,18 +180,22 @@ class TestGPTContextProcessor(unittest.TestCase):
         symbol_names = MockCmdNode(["symbol1", "symbol2"])
         with patch("llm_query.get_symbol_detail") as mock_get_detail:
             mock_get_detail.side_effect = [
-                {
-                    "file_path": "file1.py",
-                    "code_range": ((1, 0), (5, 0)),
-                    "block_range": "1-5",
-                    "block_content": b"content1",
-                },
-                {
-                    "file_path": "file2.py",
-                    "code_range": ((10, 0), (15, 0)),
-                    "block_range": "10-15",
-                    "block_content": b"content2",
-                },
+                [
+                    {
+                        "file_path": "file1.py",
+                        "code_range": ((1, 0), (5, 0)),
+                        "block_range": "1-5",
+                        "block_content": b"content1",
+                    }
+                ],
+                [
+                    {
+                        "file_path": "file2.py",
+                        "code_range": ((10, 0), (15, 0)),
+                        "block_range": "10-15",
+                        "block_content": b"content2",
+                    }
+                ],
             ]
             result = patch_symbol_with_prompt(symbol_names)
             self.assertIn("symbol1", result)
@@ -200,15 +206,17 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_get_symbol_detail(self):
         """测试获取符号详细信息"""
         with patch("llm_query._send_http_request") as mock_request:
-            mock_request.return_value = {
-                "content": "test content",
-                "location": {"start_line": 1, "start_col": 0, "end_line": 10, "end_col": 0, "block_range": "1-10"},
-                "file_path": "test.py",
-            }
+            mock_request.return_value = [
+                {
+                    "content": "test content",
+                    "location": {"start_line": 1, "start_col": 0, "end_line": 10, "end_col": 0, "block_range": "1-10"},
+                    "file_path": "test.py",
+                }
+            ]
             result = get_symbol_detail("test_symbol")
-            self.assertEqual(result["file_path"], "test.py")
-            self.assertEqual(result["code_range"], ((1, 0), (10, 0)))
-            self.assertEqual(result["block_content"], b"test content")
+            self.assertEqual(result[0]["file_path"], "test.py")
+            self.assertEqual(result[0]["code_range"], ((1, 0), (10, 0)))
+            self.assertEqual(result[0]["block_content"], b"test content")
 
     def test_fetch_symbol_data(self):
         """测试获取符号上下文数据"""
@@ -241,9 +249,9 @@ class TestSymbolLocation(unittest.TestCase):
             "file_path": self.file_path,
         }
 
-        # 模拟http请求
+        # 模拟http请求（修复响应数据结构为列表）
         self.original_send_http_request = llm_query._send_http_request
-        llm_query._send_http_request = lambda url: self.symbol_data
+        llm_query._send_http_request = lambda url: [self.symbol_data]  # 包装为列表
 
     def tearDown(self):
         # 删除测试文件
@@ -253,36 +261,40 @@ class TestSymbolLocation(unittest.TestCase):
         # 恢复原始http请求函数
         llm_query._send_http_request = self.original_send_http_request
 
+    # 以下测试方法保持原样不变...
     def test_basic_symbol(self):
-        result = llm_query.get_symbol_detail(self.symbol_name)
+        result = llm_query.get_symbol_detail([self.symbol_name])
         self.assertIsNotNone(result)
-        self.assertEqual(result["symbol_name"], self.symbol_name)
-        self.assertEqual(result["file_path"], self.file_path)
-        self.assertEqual(result["code_range"], self.code_range)
-        self.assertEqual(result["block_range"], self.block_range)
-        self.assertEqual(result["block_content"], self.content.encode("utf-8"))
-        self.assertIsNone(result["flags"])
+        self.assertGreaterEqual(len(result), 1)
+        self.assertEqual(result[0]["symbol_name"], self.symbol_name)
+        self.assertEqual(result[0]["file_path"], self.file_path)
+        self.assertEqual(result[0]["code_range"], self.code_range)
+        self.assertEqual(result[0]["block_range"], self.block_range)
+        self.assertEqual(result[0]["block_content"], self.content.encode("utf-8"))
+        self.assertIsNone(result[0]["flags"])
 
     def test_symbol_with_before_flag(self):
         self.symbol_name = "test_symbol^"
-        result = llm_query.get_symbol_detail(self.symbol_name)
+        result = llm_query.get_symbol_detail([self.symbol_name])
         self.assertIsNotNone(result)
-        self.assertEqual(result["symbol_name"], "test_symbol")
-        self.assertIsNotNone(result["flags"])
-        self.assertEqual(result["flags"]["position"], "before")
+        self.assertGreaterEqual(len(result), 1)
+        self.assertEqual(result[0]["symbol_name"], "test_symbol")
+        self.assertIsNotNone(result[0]["flags"])
+        self.assertEqual(result[0]["flags"]["position"], "before")
         # 动态查找换行符位置
-        self.assertEqual(result["flags"]["newline_pos"], 1)
+        self.assertEqual(result[0]["flags"]["newline_pos"], 1)
 
     def test_symbol_with_after_flag(self):
         self.symbol_name = "test_symbol$"
-        result = llm_query.get_symbol_detail(self.symbol_name)
+        result = llm_query.get_symbol_detail([self.symbol_name])
         self.assertIsNotNone(result)
-        self.assertEqual(result["symbol_name"], "test_symbol")
-        self.assertIsNotNone(result["flags"])
-        self.assertEqual(result["flags"]["position"], "after")
+        self.assertGreaterEqual(len(result), 1)
+        self.assertEqual(result[0]["symbol_name"], "test_symbol")
+        self.assertIsNotNone(result[0]["flags"])
+        self.assertEqual(result[0]["flags"]["position"], "after")
         # 动态查找换行符位置
         expected_newline_pos = self.whole_content.rfind("\n", 0)
-        self.assertEqual(result["flags"]["newline_pos"], expected_newline_pos)
+        self.assertEqual(result[0]["flags"]["newline_pos"], expected_newline_pos)
 
     def test_file_content_mismatch(self):
         self.symbol_name = "test_symbol^"  # 添加标志触发文件验证
@@ -290,20 +302,20 @@ class TestSymbolLocation(unittest.TestCase):
         with open(self.file_path, "w") as f:
             f.write("modified content")
 
-        result = llm_query.get_symbol_detail(self.symbol_name)
-        self.assertIsNone(result)
+        result = llm_query.get_symbol_detail([self.symbol_name])
+        self.assertEqual(len(result), 0)
 
     def test_missing_file(self):
         self.symbol_name = "test_symbol^"  # 添加标志触发文件验证
         os.remove(self.file_path)
-        result = llm_query.get_symbol_detail(self.symbol_name)
-        self.assertIsNone(result)
+        result = llm_query.get_symbol_detail([self.symbol_name])
+        self.assertEqual(len(result), 0)
 
     def test_invalid_symbol_data(self):
-        # 模拟无效的symbol_data
+        # 模拟无效的symbol_data（保持列表结构）
         self.symbol_data["content"] = "invalid content"
-        result = llm_query.get_symbol_detail(self.symbol_name + "$")
-        self.assertIsNone(result)
+        result = llm_query.get_symbol_detail([self.symbol_name + "$"])
+        self.assertEqual(len(result), 0)
 
     def test_multiline_symbol(self):
         # 测试多行符号
@@ -315,15 +327,16 @@ class TestSymbolLocation(unittest.TestCase):
         with open(self.file_path, "w") as f:
             f.write(self.content)
 
-        # 更新模拟数据
+        # 更新模拟数据（保持列表结构）
         self.symbol_data["content"] = self.content
         self.symbol_data["location"]["block_range"] = self.block_range
         self.symbol_data["location"]["end_line"] = 3
 
-        result = llm_query.get_symbol_detail(self.symbol_name)
+        result = llm_query.get_symbol_detail([self.symbol_name])
         self.assertIsNotNone(result)
-        self.assertEqual(result["block_range"], self.block_range)
-        self.assertEqual(result["code_range"], self.code_range)
+        self.assertGreaterEqual(len(result), 1)
+        self.assertEqual(result[0]["block_range"], self.block_range)
+        self.assertEqual(result[0]["code_range"], self.code_range)
 
     def test_empty_symbol(self):
         # 测试空符号
@@ -335,16 +348,17 @@ class TestSymbolLocation(unittest.TestCase):
         with open(self.file_path, "w") as f:
             f.write(self.content)
 
-        # 更新模拟数据
+        # 更新模拟数据（保持列表结构）
         self.symbol_data["content"] = self.content
         self.symbol_data["location"]["block_range"] = self.block_range
         self.symbol_data["location"]["end_line"] = 1
         self.symbol_data["location"]["end_col"] = 0  # 修复结束列位置
 
-        result = llm_query.get_symbol_detail(self.symbol_name)
+        result = llm_query.get_symbol_detail([self.symbol_name])
         self.assertIsNotNone(result)
-        self.assertEqual(result["block_range"], self.block_range)
-        self.assertEqual(result["code_range"], self.code_range)
+        self.assertGreaterEqual(len(result), 1)
+        self.assertEqual(result[0]["block_range"], self.block_range)
+        self.assertEqual(result[0]["code_range"], self.code_range)
 
 
 class TestFileRange(unittest.TestCase):
