@@ -4,6 +4,7 @@ import pdb
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 from textwrap import dedent
 
 from fastapi.testclient import TestClient
@@ -609,7 +610,7 @@ class TestSymbolsAPI(unittest.TestCase):
         self.test_symbols = [
             {
                 "name": "main_function",
-                "file_path": "/path/to/file",
+                "file_path": "file",  # 修改为相对路径
                 "type": "function",
                 "signature": "def main_function()",
                 "body": "pass",
@@ -618,7 +619,7 @@ class TestSymbolsAPI(unittest.TestCase):
             },
             {
                 "name": "helper_function",
-                "file_path": "/path/to/file",
+                "file_path": "file",  # 修改为相对路径
                 "type": "function",
                 "signature": "def helper_function()",
                 "body": "pass",
@@ -627,7 +628,7 @@ class TestSymbolsAPI(unittest.TestCase):
             },
             {
                 "name": "calculate_sum",
-                "file_path": "/path/to/file",
+                "file_path": "file",  # 修改为相对路径
                 "type": "function",
                 "signature": "def calculate_sum(a, b)",
                 "body": "return a + b",
@@ -636,7 +637,7 @@ class TestSymbolsAPI(unittest.TestCase):
             },
             {
                 "name": "compute_average",
-                "file_path": "/path/to/file",
+                "file_path": "file",  # 修改为相对路径
                 "type": "function",
                 "signature": "def compute_average(values)",
                 "body": "return sum(values) / len(values)",
@@ -645,7 +646,7 @@ class TestSymbolsAPI(unittest.TestCase):
             },
             {
                 "name": "init_module",
-                "file_path": "/path/to/__init__.py",
+                "file_path": "file",  # 修改为相对路径
                 "type": "module",
                 "signature": "",
                 "body": "",
@@ -654,7 +655,7 @@ class TestSymbolsAPI(unittest.TestCase):
             },
             {
                 "name": "symbol:test/symbol",
-                "file_path": "/path/to/symbol.py",
+                "file_path": "symbol.py",  # 修改为相对路径
                 "type": "symbol",
                 "signature": "",
                 "body": "",
@@ -677,7 +678,7 @@ class TestSymbolsAPI(unittest.TestCase):
     def tearDown(self):
         """清理测试环境"""
         self.loop.close()
-        self.conn.execute("DELETE FROM symbols WHERE file_path = ?", ("/path/to/file",))
+        self.conn.execute("DELETE FROM symbols WHERE file_path = ?", ("file",))  # 同步修改清理路径
         self.conn.commit()
         self.conn.close()
 
@@ -698,11 +699,11 @@ class TestSymbolsAPI(unittest.TestCase):
         """测试获取符号上下文"""
 
         async def run_tests():
-            response = await get_symbol_context_api("main_function", "/path/to/file")
+            response = await get_symbol_context_api("main_function", "file")  # 同步修改路径参数
             self.assertEqual(response["symbol_name"], "main_function")
             self.assertGreaterEqual(len(response["definitions"]), 2)
 
-            response = await get_symbol_context_api("nonexistent", "/path/to/file")
+            response = await get_symbol_context_api("nonexistent", "file")
             self.assertIn("error", response)
 
         self.loop.run_until_complete(run_tests())
@@ -729,7 +730,6 @@ class TestSymbolsAPI(unittest.TestCase):
             self.assertIn(b"symbol:test/symbol", response.body)
 
             # 实时补全
-            pdb.set_trace()
             response = await symbol_completion_realtime("symbol:file", 10)
             self.assertIn(b"main_function", response.body)
             self.assertIn(b"helper_function", response.body)
@@ -739,6 +739,34 @@ class TestSymbolsAPI(unittest.TestCase):
             self.assertEqual(response.body, b"")
 
         self.loop.run_until_complete(run_tests())
+
+
+class TestExtractIdentifiablePath(unittest.TestCase):
+    def setUp(self):
+        self.cur_dir = os.path.dirname(os.path.abspath(__file__))
+
+    def test_relative_within_current_dir(self):
+        rel_path = "test_data/sample.py"
+        result = tree.extract_identifiable_path(rel_path)
+        self.assertEqual(result, rel_path)
+
+    def test_absolute_within_current_dir(self):
+        abs_path = os.path.join(self.cur_dir, "utils/helper.py")
+        expected = os.path.join("utils", "helper.py")
+        self.assertEqual(tree.extract_identifiable_path(abs_path), expected)
+
+    def test_relative_outside_current_dir(self):
+        rel_path = "../../external/module.py"
+        expected = os.path.abspath(os.path.join(self.cur_dir, rel_path))
+        self.assertEqual(tree.extract_identifiable_path(rel_path), expected)
+
+    def test_absolute_outside_current_dir(self):
+        abs_path = "/tmp/another_project/main.py"
+        self.assertEqual(tree.extract_identifiable_path(abs_path), abs_path)
+
+    def test_init_py_normal_handling(self):
+        rel_path = "package/__init__.py"
+        self.assertEqual(tree.extract_identifiable_path(rel_path), rel_path)
 
 
 if __name__ == "__main__":

@@ -981,7 +981,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 # 任务说明
 1. 积极帮助用户处理遇到的问题
 2. 主要是处理代码修改任务
-3. 主要目标是: 消除bug, 增加新功能，重构，或者其它
+3. 主要目标是: 消除bug, 增加新功能，重构，或者用户要求的其它修改
 4. 修改完代码要验证是否正确的完成了任务
 
 # 代码编写规范:
@@ -991,7 +991,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 4. 在doc string里列出可能的输入假设, 不符合要打日志，退出流程
 5. 函数参数不超过5个,太多则用kwargs或者class, struct等结构传递
 6. 实现类时, 需要实现toString, __str__等这样的设施便于调试
-7. 不必实现import include等这样的包引用, 用户会自行处理
+7. 如果用户没提供import的代码块, 不必实现import include等这样的包引用, 用户会自行处理
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式

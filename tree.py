@@ -2044,24 +2044,30 @@ async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_resu
 
 def extract_identifiable_path(file_path: str) -> str:
     """提取路径中易于识别的部分
-    如果是__init__.py文件，尝试提取上一级目录名
-    否则直接返回文件名
+    检测输入路径是否相对于当前文件的目录，如果不是则返回绝对路径
 
     Args:
-        file_path: 文件路径
+        file_path: 文件路径（相对或绝对路径）
 
     Returns:
-        易于识别的路径部分
+        相对路径（如果在当前文件目录下）或绝对路径
     """
-    # 使用os.path处理路径，确保跨平台兼容性
-    base_name = os.path.basename(file_path)
-    if base_name == "__init__.py":
-        # 获取上一级目录名
-        dir_name = os.path.basename(os.path.dirname(file_path))
-        if dir_name:
-            # 使用os.path.join确保路径分隔符正确
-            return os.path.join(dir_name, base_name)
-    return base_name
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 转换为绝对路径
+    if os.path.isabs(file_path):
+        abs_path = file_path
+    else:
+        # 将相对路径视为相对于当前文件目录解析
+        abs_path = os.path.abspath(os.path.join(current_dir, file_path))
+
+    # 检查是否在当前文件目录下
+    if abs_path.startswith(current_dir):
+        # 返回相对于当前目录的路径
+        return os.path.relpath(abs_path, current_dir)
+
+    # 返回绝对路径（当路径不在当前目录下时）
+    return abs_path
 
 
 import pdb
