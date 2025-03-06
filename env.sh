@@ -235,6 +235,10 @@ askgpt() {
     $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --ask "$*"
 }
 
+codegpt() {
+    askgpt @edit @edit-file $@
+}
+
 # 补全功能辅助函数
 _get_prompt_files() {
     find "$GPT_PROMPTS_DIR" -maxdepth 1 -type f -exec basename {} \; 2>/dev/null
@@ -289,7 +293,7 @@ _zsh_completion_setup() {
         _alternative "providers:可用模型:(${providers[@]})"
     }
 
-    compdef _zsh_at_complete askgpt naskgpt
+    compdef _zsh_at_complete askgpt naskgpt codegpt
     compdef _zsh_usegpt_complete usegpt
 }
 

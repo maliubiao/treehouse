@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 import atexit
 import json
@@ -7,16 +6,6 @@ import subprocess
 import threading
 from logging import getLogger
 from urllib.parse import unquote, urlparse
-
-from prompt_toolkit import PromptSession
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.history import FileHistory
-from rich.console import Console
-from rich.panel import Panel
-from rich.syntax import Syntax
-from rich.table import Table
-from rich.text import Text
 
 logger = getLogger(__name__)
 
@@ -38,7 +27,7 @@ class GenericLSPClient:
     def start(self):
         """启动LSP服务器进程"""
         try:
-            self.process = subprocess.Popen(
+            self.process = subprocess.Popen(  # pylint: disable=consider-using-with
                 self.lsp_command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -293,183 +282,3 @@ class GenericLSPClient:
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get definition: %s", str(e))
             return None
-
-
-class LSPCompleter(Completer):
-    def __init__(self, lsp_client):
-        self.lsp_client = lsp_client
-        self.commands = {
-            "definition": ["file_path", "line", "character"],
-            "hover": ["file_path", "line", "character"],
-            "completion": ["file_path", "line", "character"],
-            "symbols": ["file_path"],
-        }
-
-    def get_completions(self, document, complete_event):
-        text = document.text_before_cursor.split()
-        if not text:
-            return
-
-        if len(text) == 1:
-            for cmd in self.commands:
-                if cmd.startswith(text[0].lower()):
-                    yield Completion(
-                        cmd, start_position=-len(text[0]), display_meta=f"参数: {' '.join(self.commands[cmd])}"
-                    )
-            return
-
-        cmd = text[0].lower()
-        if cmd not in self.commands:
-            return
-
-        param_index = len(text) - 2
-        if param_index >= len(self.commands[cmd]):
-            return
-
-        param_name = self.commands[cmd][param_index]
-
-        if param_name == "file_path":
-            cwd = os.getcwd()
-            for f in os.listdir(cwd):
-                if f.startswith(text[-1]):
-                    yield Completion(
-                        f, start_position=-len(text[-1]), display_meta="文件" if os.path.isfile(f) else "目录"
-                    )
-
-
-def format_completion_item(item):
-    return {
-        "label": item.get("label"),
-        "kind": item.get("kind"),
-        "detail": item.get("detail") or "",
-        "documentation": item.get("documentation") or "",
-        "parameters": item.get("parameters", []),
-        "text_edit": item.get("textEdit"),
-    }
-
-
-async def debug_console(lsp_client):
-    console = Console()
-    session = PromptSession(
-        history=FileHistory(".lsp_debug_history"),
-        auto_suggest=AutoSuggestFromHistory(),
-        completer=LSPCompleter(lsp_client),
-    )
-
-    help_text = """\n可用命令：
-    definition <file_path> <line> <character>  获取符号定义
-    hover <file_path> <line> <character>       获取悬停信息
-    symbols <file_path>                        获取文档符号
-    completion <file_path> <line> <character>  获取代码补全
-    exit                                       退出
-    """
-
-    console.print(Panel(Text("LSP 调试控制台", style="bold blue"), width=80))
-    console.print(Panel(help_text, title="帮助", border_style="green"))
-
-    while True:
-        try:
-            text = await session.prompt_async("LSP> ")
-            parts = text.strip().split()
-            if not parts:
-                continue
-
-            cmd = parts[0].lower()
-
-            if cmd == "exit":
-                await lsp_client.shutdown()
-                break
-
-            if cmd == "help":
-                console.print(Panel(help_text, title="帮助", border_style="green"))
-                continue
-
-            if cmd in ("definition", "hover", "completion"):
-                if len(parts) != 4:
-                    console.print("[red]参数错误，需要: <file_path> <line> <character>[/red]")
-                    continue
-
-                _, file_path, line, char = parts
-                try:
-                    line = int(line)
-                    char = int(char)
-                except ValueError:
-                    console.print("[red]行号和列号必须是数字[/red]")
-                    continue
-
-                method = {
-                    "definition": lsp_client.get_definition,
-                    "hover": lsp_client.get_hover_info,
-                    "completion": lsp_client.get_completion,
-                }[cmd]
-
-                result = await method(file_path, line, char)
-                if cmd == "completion" and isinstance(result, dict):
-                    items = result.get("items", [])
-                    formatted = [format_completion_item(item) for item in items]
-
-                    table = Table(title="补全建议", show_header=True, header_style="bold magenta")
-                    table.add_column("标签", style="cyan")
-                    table.add_column("类型", style="green")
-                    table.add_column("详情")
-                    table.add_column("文档")
-
-                    for item in formatted:
-                        table.add_row(item["label"], str(item["kind"]), item["detail"], item["documentation"])
-                    console.print(table)
-                else:
-                    console.print(
-                        Panel(
-                            Syntax(json.dumps(result, indent=2, ensure_ascii=False), "json"),
-                            title="结果",
-                            border_style="blue",
-                        )
-                    )
-
-            elif cmd == "symbols":
-                if len(parts) != 2:
-                    console.print("[red]参数错误，需要: <file_path>[/red]")
-                    continue
-
-                result = await lsp_client.get_document_symbols(parts[1])
-                console.print(
-                    Panel(
-                        Syntax(json.dumps(result, indent=2, ensure_ascii=False), "json"),
-                        title="文档符号",
-                        border_style="yellow",
-                    )
-                )
-
-            else:
-                console.print(f"[red]未知命令: {cmd}，输入help查看帮助[/red]")
-
-        except (KeyboardInterrupt, EOFError):
-            await lsp_client.shutdown()
-            break
-        except Exception as e:
-            console.print(f"[red]错误: {str(e)}[/red]")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="LSP调试工具")
-    parser.add_argument("--lsp", required=True, help="LSP服务器启动命令，例如：pylsp")
-    parser.add_argument("--workspace", default=".", help="工作区路径（默认当前目录）")
-    args = parser.parse_args()
-
-    lsp_client = GenericLSPClient(lsp_command=args.lsp.split(), workspace_path=args.workspace)
-    lsp_client.start()
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        loop.run_until_complete(debug_console(lsp_client))
-    except KeyboardInterrupt:
-        pass
-    finally:
-        loop.run_until_complete(lsp_client.shutdown())
-        loop.close()
-
-
-if __name__ == "__main__":
-    main()
