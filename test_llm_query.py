@@ -263,7 +263,7 @@ class TestSymbolLocation(unittest.TestCase):
 
     # 以下测试方法保持原样不变...
     def test_basic_symbol(self):
-        result = llm_query.get_symbol_detail([self.symbol_name])
+        result = llm_query.get_symbol_detail(self.symbol_name)
         self.assertIsNotNone(result)
         self.assertGreaterEqual(len(result), 1)
         self.assertEqual(result[0]["symbol_name"], self.symbol_name)
@@ -271,51 +271,6 @@ class TestSymbolLocation(unittest.TestCase):
         self.assertEqual(result[0]["code_range"], self.code_range)
         self.assertEqual(result[0]["block_range"], self.block_range)
         self.assertEqual(result[0]["block_content"], self.content.encode("utf-8"))
-        self.assertIsNone(result[0]["flags"])
-
-    def test_symbol_with_before_flag(self):
-        self.symbol_name = "test_symbol^"
-        result = llm_query.get_symbol_detail([self.symbol_name])
-        self.assertIsNotNone(result)
-        self.assertGreaterEqual(len(result), 1)
-        self.assertEqual(result[0]["symbol_name"], "test_symbol")
-        self.assertIsNotNone(result[0]["flags"])
-        self.assertEqual(result[0]["flags"]["position"], "before")
-        # 动态查找换行符位置
-        self.assertEqual(result[0]["flags"]["newline_pos"], 1)
-
-    def test_symbol_with_after_flag(self):
-        self.symbol_name = "test_symbol$"
-        result = llm_query.get_symbol_detail([self.symbol_name])
-        self.assertIsNotNone(result)
-        self.assertGreaterEqual(len(result), 1)
-        self.assertEqual(result[0]["symbol_name"], "test_symbol")
-        self.assertIsNotNone(result[0]["flags"])
-        self.assertEqual(result[0]["flags"]["position"], "after")
-        # 动态查找换行符位置
-        expected_newline_pos = self.whole_content.rfind("\n", 0)
-        self.assertEqual(result[0]["flags"]["newline_pos"], expected_newline_pos)
-
-    def test_file_content_mismatch(self):
-        self.symbol_name = "test_symbol^"  # 添加标志触发文件验证
-        # 修改文件内容
-        with open(self.file_path, "w") as f:
-            f.write("modified content")
-
-        result = llm_query.get_symbol_detail([self.symbol_name])
-        self.assertEqual(len(result), 0)
-
-    def test_missing_file(self):
-        self.symbol_name = "test_symbol^"  # 添加标志触发文件验证
-        os.remove(self.file_path)
-        result = llm_query.get_symbol_detail([self.symbol_name])
-        self.assertEqual(len(result), 0)
-
-    def test_invalid_symbol_data(self):
-        # 模拟无效的symbol_data（保持列表结构）
-        self.symbol_data["content"] = "invalid content"
-        result = llm_query.get_symbol_detail([self.symbol_name + "$"])
-        self.assertEqual(len(result), 0)
 
     def test_multiline_symbol(self):
         # 测试多行符号
@@ -331,8 +286,7 @@ class TestSymbolLocation(unittest.TestCase):
         self.symbol_data["content"] = self.content
         self.symbol_data["location"]["block_range"] = self.block_range
         self.symbol_data["location"]["end_line"] = 3
-
-        result = llm_query.get_symbol_detail([self.symbol_name])
+        result = llm_query.get_symbol_detail(self.symbol_name)
         self.assertIsNotNone(result)
         self.assertGreaterEqual(len(result), 1)
         self.assertEqual(result[0]["block_range"], self.block_range)
@@ -354,7 +308,7 @@ class TestSymbolLocation(unittest.TestCase):
         self.symbol_data["location"]["end_line"] = 1
         self.symbol_data["location"]["end_col"] = 0  # 修复结束列位置
 
-        result = llm_query.get_symbol_detail([self.symbol_name])
+        result = llm_query.get_symbol_detail(self.symbol_name)
         self.assertIsNotNone(result)
         self.assertGreaterEqual(len(result), 1)
         self.assertEqual(result[0]["block_range"], self.block_range)

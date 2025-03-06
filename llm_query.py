@@ -20,11 +20,12 @@ import sys
 import tempfile
 import threading
 import time
+import trace
 import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -38,8 +39,6 @@ from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
 from pygments.lexers.markup import MarkdownLexer
-from pygments.style import Style as PygmentsStyle
-from pygments.token import Token
 
 # 初始化Markdown渲染器
 from rich.console import Console
@@ -104,6 +103,7 @@ def parse_arguments():
         default=os.environ.get("GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")),
         help="Obsidian文档备份目录路径",
     )
+    parser.add_argument("--trace", action="store_true", help="启用详细的执行跟踪")
     return parser.parse_args()
 
 
@@ -742,9 +742,8 @@ class ClipboardMonitor:
                     result += f"\n[clipboard content start]\n{content}\n[clipboard content end]\n"
                 self._debug_print(f"返回 {len(self.collected_contents)} 段内容")
                 return result
-            else:
-                self._debug_print("未捕获到任何内容")
-                return "未捕获到任何剪贴板内容"
+            self._debug_print("未捕获到任何内容")
+            return "未捕获到任何剪贴板内容"
 
 
 def monitor_clipboard(_, debug=False):
@@ -1155,7 +1154,6 @@ def process_patch_response(response_text, symbol_detail):
     with open("diff_test.json", "wb") as f:  # 使用'wb'模式确保二进制写入
         marshal.dump((response_text, symbol_detail), f)
     # 解析大模型响应
-
     results = parse_llm_response(response_text, symbol_detail.keys())
 
     # 准备BlockPatch参数
@@ -1269,7 +1267,7 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
     """
     symbol_map = {}
     for symbol_name in symbol_names.args:
-        symbol_result = get_symbol_detail(symbol_name.split(","))
+        symbol_result = get_symbol_detail(symbol_name)
         if len(symbol_result) == 1:
             symbol_name = symbol_result[0].get("symbol_name", symbol_name)
             symbol_map[symbol_name] = symbol_result[0]
@@ -1285,107 +1283,48 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
 def get_symbol_detail(symbol_names):
     """使用公共http函数请求符号补丁并生成BlockPatch对象
     输入假设:
-    - symbol_names: 字符串列表，元素可能包含特殊标记^或$
+    - symbol_names: file.c/a,b,c 多符号， 或者file.c/a 单符号
     - 环境变量GPT_SYMBOL_API_URL存在，否则使用默认值
     - 返回的symbol_data包含content, location, file_path等字段
     - 当存在特殊标记时才会验证文件内容一致性
     """
+    symbol_list = []
+    if "/" in symbol_names and "," in symbol_names:
+        pos = symbol_names.rfind("/")
+        if pos < 0:
+            raise ValueError("bad symbol name")
+        prefix = symbol_names[: pos + 1]
+        for symbol in symbol_names[pos + 1 :].split(","):
+            symbol_list.append(prefix + symbol)
+    else:
+        symbol_list.append(symbol_names)
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
     results = []
-
-    # 预处理所有符号名称
-    processed_symbols = []
-    flags_list = []
-    for symbol in symbol_names:
-        flags = {}
-        clean_symbol = symbol
-        if symbol.endswith("^"):
-            flags["position"] = "before"
-            clean_symbol = symbol[:-1]
-        elif symbol.endswith("$"):
-            flags["position"] = "after"
-            clean_symbol = symbol[:-1]
-        processed_symbols.append(clean_symbol)
-        flags_list.append(flags)
-
     # 构造批量请求URL
-    encoded_symbols = ",".join([requests.utils.quote(s) for s in processed_symbols])
-    url = f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json=true"
+    url = f"{api_url}/symbol_content?symbol_path=symbol:{requests.utils.quote(symbol_names)}&json=true"
     batch_response = _send_http_request(url)
 
     # 处理批量响应
     for idx, symbol_data in enumerate(batch_response):
-        original_symbol = symbol_names[idx]
-        flags = flags_list[idx]
 
         content = symbol_data["content"]
         location = symbol_data["location"]
         file_path = symbol_data["file_path"]
-
-        # 处理标记验证
-        processed_flags = None
-        if flags:
-            processed_flags = _process_symbol_flags(
-                file_path=file_path,
-                symbol_name=processed_symbols[idx],
-                content=content,
-                block_range=location["block_range"],
-                flags=flags,
-            )
-            if not processed_flags:
-                continue
 
         code_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
         block_content = content.encode("utf-8")
 
         results.append(
             {
-                "symbol_name": processed_symbols[idx],
+                "symbol_name": symbol_list[idx],
                 "file_path": file_path,
                 "code_range": code_range,
                 "block_range": location["block_range"],
                 "block_content": block_content,
-                "flags": processed_flags if processed_flags else None,
             }
         )
 
     return results
-
-
-def _process_symbol_flags(file_path, symbol_name, content, block_range, flags):
-    """处理符号标记相关的文件验证和位置计算
-    输入假设:
-    - file_path: 符号所在的物理文件路径
-    - content: API返回的符号预期内容
-    - block_range: 文件中的字节范围元组(start, end)
-    - flags: 包含位置标记的字典
-    不符合假设时返回None并记录日志
-    """
-    try:
-        with open(file_path, "rb") as f:
-            file_content = f.read()
-
-        block_start, block_end = block_range
-        file_block_content = file_content[block_start:block_end].decode("utf8")
-
-        if file_block_content != content:
-            print(f"Error: File content has changed for symbol {symbol_name}")
-            return None
-
-        # 计算换行符位置
-        if flags["position"] == "before":
-            start_pos = block_start
-            newline_pos = find_nearest_newline(start_pos, file_content, "backward")
-        else:
-            end_pos = block_end
-            newline_pos = find_nearest_newline(end_pos, file_content, "forward")
-
-        flags["newline_pos"] = newline_pos
-        return flags
-
-    except Exception as e:
-        print(f"Error processing file {file_path}: {str(e)}")
-        return None
 
 
 def _fetch_symbol_data(symbol_name, file_path=None):
@@ -1952,15 +1891,15 @@ def validate_environment():
         sys.exit(1)
 
 
-def validate_files(args):
+def validate_files(program_args):
     """验证输入文件是否存在"""
-    if not args.ask and not args.chatbot:  # 仅在未使用--ask参数时检查文件
-        if not os.path.isfile(args.file):
-            print(f"错误：源代码文件不存在 {args.file}")
+    if not program_args.ask and not program_args.chatbot:  # 仅在未使用--ask参数时检查文件
+        if not os.path.isfile(program_args.file):
+            print(f"错误：源代码文件不存在 {program_args.file}")
             sys.exit(1)
 
-        if not os.path.isfile(args.prompt_file):
-            print(f"错误：提示词文件不存在 {args.prompt_file}")
+        if not os.path.isfile(program_args.prompt_file):
+            print(f"错误：提示词文件不存在 {program_args.prompt_file}")
             sys.exit(1)
 
 
@@ -1978,11 +1917,11 @@ def print_proxy_info(proxies, proxy_sources):
         print("ℹ️ 未检测到代理配置")
 
 
-def handle_ask_mode(args, api_key, proxies):
+def handle_ask_mode(program_args, api_key, proxies):
     """处理--ask模式"""
     base_url = os.getenv("GPT_BASE_URL")
     context_processor = GPTContextProcessor()
-    text = context_processor.process_text_with_file_path(args.ask)
+    text = context_processor.process_text_with_file_path(program_args.ask)
     print(text)
     response_data = query_gpt_api(
         api_key,
@@ -1997,8 +1936,8 @@ def handle_ask_mode(args, api_key, proxies):
         response_data,
         os.path.join(os.path.dirname(__file__), ".lastgptanswer"),
         save=True,
-        obsidian_doc=args.obsidian_doc,
-        ask_param=args.ask,
+        obsidian_doc=program_args.obsidian_doc,
+        ask_param=program_args.ask,
     )
 
 
@@ -2272,26 +2211,26 @@ class ChatbotUI:
         return True
 
 
-def handle_code_analysis(args, api_key, proxies):
+def handle_code_analysis(program_args, api_key, proxies):
     """处理代码分析模式"""
     try:
-        with open(args.prompt_file, "r", encoding="utf-8") as f:
+        with open(program_args.prompt_file, "r", encoding="utf-8") as f:
             prompt_template = f.read().strip()
-        with open(args.file, "r", encoding="utf-8") as f:
+        with open(program_args.file, "r", encoding="utf-8") as f:
             code_content = f.read()
 
-        if len(code_content) > args.chunk_size:
-            response_data = handle_large_code(args, code_content, prompt_template, api_key, proxies)
+        if len(code_content) > program_args.chunk_size:
+            response_data = handle_large_code(program_args, code_content, prompt_template, api_key, proxies)
         else:
-            response_data = handle_small_code(args, code_content, prompt_template, api_key, proxies)
+            response_data = handle_small_code(program_args, code_content, prompt_template, api_key, proxies)
 
         process_response(
             "",
             response_data,
             "",
             save=False,
-            obsidian_doc=args.obsidian_doc,
-            ask_param=args.file,
+            obsidian_doc=program_args.obsidian_doc,
+            ask_param=program_args.file,
         )
 
     except Exception as e:
@@ -2299,16 +2238,16 @@ def handle_code_analysis(args, api_key, proxies):
         sys.exit(1)
 
 
-def handle_large_code(args, code_content, prompt_template, api_key, proxies):
+def handle_large_code(program_args, code_content, prompt_template, api_key, proxies):
     """处理大文件分块分析"""
-    code_chunks = split_code(code_content, args.chunk_size)
+    code_chunks = split_code(code_content, program_args.chunk_size)
     responses = []
     total_chunks = len(code_chunks)
     base_url = os.getenv("GPT_BASE_URL")
     for i, chunk in enumerate(code_chunks, 1):
         pager = f"这是代码的第 {i}/{total_chunks} 部分：\n\n"
         print(pager)
-        chunk_prompt = prompt_template.format(path=args.file, pager=pager, code=chunk)
+        chunk_prompt = prompt_template.format(path=program_args.file, pager=pager, code=chunk)
         response_data = query_gpt_api(
             api_key,
             chunk_prompt,
@@ -2334,9 +2273,7 @@ def handle_small_code(args, code_content, prompt_template, api_key, proxies):
     )
 
 
-def main():
-    # test_patch_response()
-    args = parse_arguments()
+def main(args):
     shadowroot.mkdir(parents=True, exist_ok=True)
 
     validate_environment()
@@ -2353,4 +2290,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_arguments()
+    if args.trace:
+        tracer = trace.Trace(trace=1)
+        tracer.runfunc(main, args)
+    else:
+        main(args)

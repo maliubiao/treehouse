@@ -236,7 +236,7 @@ askgpt() {
 }
 
 codegpt() {
-    askgpt @edit @edit-file $@
+    askgpt @edit @edit-file @tree $@
 }
 
 # 补全功能辅助函数
