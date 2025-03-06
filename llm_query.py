@@ -1280,51 +1280,64 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
     )
 
 
-def get_symbol_detail(symbol_names):
+def get_symbol_detail(symbol_names: str) -> list:
     """使用公共http函数请求符号补丁并生成BlockPatch对象
+
     输入假设:
-    - symbol_names: file.c/a,b,c 多符号， 或者file.c/a 单符号
+    - symbol_names格式应为以下两种形式之一:
+        - 多符号: "file.c/a,b,c" (使用逗号分隔多个符号)
+        - 单符号: "file.c/a"
     - 环境变量GPT_SYMBOL_API_URL存在，否则使用默认值
-    - 返回的symbol_data包含content, location, file_path等字段
+    - API响应包含完整的symbol_data字段(content, location, file_path等)
     - 当存在特殊标记时才会验证文件内容一致性
+
+    返回:
+        list: 包含处理结果的字典列表，每个元素包含symbol详细信息
     """
-    symbol_list = []
+    symbol_list = _parse_symbol_names(symbol_names)
+    api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
+    batch_response = _send_http_request(_build_api_url(api_url, symbol_names))
+
+    return [_process_symbol_data(symbol_data, symbol_list[idx]) for idx, symbol_data in enumerate(batch_response)]
+
+
+def _parse_symbol_names(symbol_names: str) -> list:
+    """解析符号名称字符串为规范的符号列表
+
+    输入假设:
+    - 多符号格式必须包含'/'和','分隔符 (如file.c/a,b,c)
+    - 单符号格式可以没有逗号分隔符
+    - 非法格式会抛出ValueError异常
+    """
     if "/" in symbol_names and "," in symbol_names:
         pos = symbol_names.rfind("/")
         if pos < 0:
-            raise ValueError("bad symbol name")
-        prefix = symbol_names[: pos + 1]
-        for symbol in symbol_names[pos + 1 :].split(","):
-            symbol_list.append(prefix + symbol)
-    else:
-        symbol_list.append(symbol_names)
-    api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
-    results = []
-    # 构造批量请求URL
-    url = f"{api_url}/symbol_content?symbol_path=symbol:{requests.utils.quote(symbol_names)}&json=true"
-    batch_response = _send_http_request(url)
+            raise ValueError(f"Invalid symbol format: {symbol_names}")
+        return [f"{symbol_names[:pos+1]}{symbol}" for symbol in symbol_names[pos + 1 :].split(",")]
+    return [symbol_names]
 
-    # 处理批量响应
-    for idx, symbol_data in enumerate(batch_response):
 
-        content = symbol_data["content"]
-        location = symbol_data["location"]
-        file_path = symbol_data["file_path"]
+def _build_api_url(api_url: str, symbol_names: str) -> str:
+    """构造批量请求的API URL"""
+    encoded_symbols = requests.utils.quote(symbol_names)
+    return f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json=true"
 
-        code_range = ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"]))
-        block_content = content.encode("utf-8")
 
-        results.append(
-            {
-                "symbol_name": symbol_list[idx],
-                "file_path": file_path,
-                "code_range": code_range,
-                "block_range": location["block_range"],
-                "block_content": block_content,
-            }
-        )
+def _process_symbol_data(symbol_data: dict, symbol_name: str) -> dict:
+    """处理单个symbol的响应数据为规范格式
 
-    return results
+    输入假设:
+    - symbol_data必须包含content, location, file_path字段
+    - location字段必须包含start_line/start_col和end_line/end_col
+    """
+    location = symbol_data["location"]
+    return {
+        "symbol_name": symbol_name,
+        "file_path": symbol_data["file_path"],
+        "code_range": ((location["start_line"], location["start_col"]), (location["end_line"], location["end_col"])),
+        "block_range": location["block_range"],
+        "block_content": symbol_data["content"].encode("utf-8"),
+    }
 
 
 def _fetch_symbol_data(symbol_name, file_path=None):
