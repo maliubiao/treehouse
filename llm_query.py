@@ -9,7 +9,9 @@ LLM 查询工具模块
 import argparse
 import datetime
 import difflib
+import fnmatch
 import json
+import logging
 import marshal
 import os
 import platform
@@ -901,47 +903,149 @@ def _handle_prompt_file(match: CmdNode) -> str:
 
 def _handle_local_file(match: CmdNode) -> str:
     """处理本地文件路径"""
-    expanded_path = os.path.abspath(os.path.expanduser(match.command))
-    line_range = re.findall(r"(:(\d+)?-(\d+)?)$", match.command)
-    if line_range:
-        right_match = line_range[0][0]
-        expanded_path = expanded_path[: -len(right_match)]
+    expanded_path, line_range_match = _expand_file_path(match.command)
+
     if os.path.isfile(expanded_path):
-        # 如果是文件，读取内容
-        with open(expanded_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            # 如果有行号范围，按行号截取
-            if line_range:
-                _, start_str, end_str = line_range[0]
-                # 处理开始行号
-                start = int(start_str) if start_str else 0
-                start = max(0, start)
-                # 处理结束行号
-                end = int(end_str) if end_str else len(lines)
-                end = min(len(lines), end)
-                content = "".join(lines[start:end])
-            else:
-                content = "".join(lines)
-            replacement = f"\n\n[file name]: {expanded_path}\n[file content begin]\n{content}"
-            replacement += "\n[file content end]\n\n"
-            return replacement
+        return _process_single_file(expanded_path, line_range_match)
     elif os.path.isdir(expanded_path):
-        # 如果是目录，读取目录下所有文件
-        replacement = f"\n\n[directory]: {expanded_path}\n"
-        for root, _, files in os.walk(expanded_path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        replacement += f"[file name]: {file_path}\n[file content begin]\n{content}"
-                        replacement += "\n[file content end]\n\n"
-                except Exception as e:
-                    replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
-        replacement += f"[directory end]: {expanded_path}\n\n"  # 添加目录结束标志
-        return replacement
+        return _process_directory(expanded_path)
     else:
         return f"\n\n[error]: 路径不存在 {expanded_path}\n\n"
+
+
+def _expand_file_path(command: str) -> tuple:
+    """展开文件路径并解析行号范围"""
+    line_range_match = re.search(r":(\d+)?-(\d+)?$", command)
+    expanded_path = os.path.abspath(
+        os.path.expanduser(command[: line_range_match.start()] if line_range_match else command)
+    )
+    return expanded_path, line_range_match
+
+
+def _process_single_file(file_path: str, line_range_match: re.Match) -> str:
+    """处理单个文件内容"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = _read_file_content(f, line_range_match)
+    except UnicodeDecodeError:
+        content = "二进制文件或无法解码"
+    except Exception as e:
+        return f"\n\n[error]: 无法读取文件 {file_path}: {str(e)}\n\n"
+
+    return _format_file_content(file_path, content)
+
+
+def _read_file_content(file_obj, line_range_match: re.Match) -> str:
+    """读取文件内容并处理行号范围"""
+    lines = file_obj.readlines()
+    if not line_range_match:
+        return "".join(lines)
+
+    start_str = line_range_match.group(1)
+    end_str = line_range_match.group(2)
+    start = int(start_str) - 1 if start_str else 0
+    end = int(end_str) if end_str else len(lines)
+    start = max(0, start)
+    end = min(len(lines), end)
+    return "".join(lines[start:end])
+
+
+def _format_file_content(file_path: str, content: str) -> str:
+    """格式化文件内容输出"""
+    return f"\n\n[file name]: {file_path}\n[file content begin]\n{content}\n[file content end]\n\n"
+
+
+def _process_directory(dir_path: str) -> str:
+    """处理目录内容"""
+    gitignore_path = _find_gitignore(dir_path)
+    root_dir = os.path.dirname(gitignore_path) if gitignore_path else dir_path
+    is_ignored = _parse_gitignore(gitignore_path, root_dir)
+
+    replacement = f"\n\n[directory]: {dir_path}\n"
+    for root, dirs, files in os.walk(dir_path):
+        dirs[:] = [d for d in dirs if not is_ignored(os.path.join(root, d))]
+        for file in files:
+            file_path = os.path.join(root, file)
+            if is_ignored(file_path):
+                continue
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    replacement += _format_file_content(file_path, content)
+            except UnicodeDecodeError:
+                replacement += (
+                    f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
+                )
+            except Exception as e:
+                replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
+    replacement += f"[directory end]: {dir_path}\n\n"
+    return replacement
+
+
+def _find_gitignore(path: str) -> str:
+    """向上查找最近的.gitignore文件"""
+    current = os.path.abspath(path)
+    while True:
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        gitignore = os.path.join(parent, ".gitignore")
+        if os.path.isfile(gitignore):
+            return gitignore
+        current = parent
+
+
+def _parse_gitignore(gitignore_path: str, root_dir: str) -> callable:
+    """解析.gitignore文件生成过滤函数"""
+    patterns = []
+    if gitignore_path and os.path.isfile(gitignore_path):
+        try:
+            with open(gitignore_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        patterns.append(line)
+        except Exception as e:
+            logging.warning(f"解析.gitignore失败: {str(e)}")
+
+    default_patterns = [
+        "__pycache__/",
+        "node_modules/",
+        "venv/",
+        "dist/",
+        "build/",
+        "*.py[cod]",
+        "*.so",
+        "*.egg-info",
+        "*.jpg",
+        "*.jpeg",
+        "*.png",
+        "*.gif",
+        "*.pdf",
+        "*.zip",
+        ".*",
+    ]
+    patterns.extend(default_patterns)
+
+    def _is_ignored(file_path: str) -> bool:
+        """判断文件路径是否被忽略"""
+        try:
+            rel_path = os.path.relpath(file_path, root_dir)
+            rel_posix = rel_path.replace(os.sep, "/")
+
+            for pattern in patterns:
+                pattern = pattern.rstrip("/")
+                if (
+                    fnmatch.fnmatch(rel_posix, pattern)
+                    or fnmatch.fnmatch(rel_posix, f"{pattern}/*")
+                    or fnmatch.fnmatch(os.path.basename(file_path), pattern)
+                ):
+                    return True
+        except ValueError:
+            pass
+        return False
+
+    return _is_ignored
 
 
 def _handle_url(match: CmdNode) -> str:
@@ -983,15 +1087,19 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 2. 主要是处理代码修改任务
 3. 主要目标是: 消除bug, 增加新功能，重构，或者用户要求的其它修改
 4. 修改完代码要验证是否正确的完成了任务
+7. 根据你的需要增加，删除，改写原来的符号或者块
 
 # 代码编写规范:
-1. 如果语言支持，就总是使用强类型
-2. 保持简洁，减少重复片段
-3. 接口要便于编写单元测试
-4. 在doc string里列出可能的输入假设, 不符合要打日志，退出流程
-5. 函数参数不超过5个,太多则用kwargs或者class, struct等结构传递
-6. 实现类时, 需要实现toString, __str__等这样的设施便于调试
-7. 如果用户没提供import的代码块, 不必实现import include等这样的包引用, 用户会自行处理
+1. 编写符合工业标准的高质量代码
+2. 如果语言支持，就总是使用强类型
+3. 多使用有意义的小函数，减少重复片段
+4. 接口要便于编写单元测试
+5. 在doc string里列出可能的输入假设, 不符合要打日志，退出流程
+6. 函数参数不超过5个,太多则用kwargs或者class, struct等结构传递
+7. 实现类时, 需要实现toString, __str__等这样的设施便于调试
+8. 如果用户没提供import的代码块, 不必实现import include等这样的包引用, 用户会自行处理
+9. 能用标准库就不手写
+10. 不允许在函数里套函数，除非有必要
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
@@ -1152,18 +1260,18 @@ def process_patch_response(response_text, symbol_detail):
     处理大模型的补丁响应，生成差异并应用补丁
 
     参数:
-        response_text: 大模型返回的响应文本
+        response_text: 大模型返回的响应文本（可能包含<thinking>标签）
         symbol_detail: 要处理的符号
 
     返回:
         如果用户确认应用补丁，则返回修改后的代码(bytes)
         否则返回None
     """
-    # 将响应文本和符号详情写入临时文件，用于调试和测试
-    with open("diff_test.json", "wb") as f:  # 使用'wb'模式确保二进制写入
-        marshal.dump((response_text, symbol_detail), f)
+    # 过滤掉<thinking>标签内容（包含多行情况）
+    filtered_response = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
+
     # 解析大模型响应
-    results = parse_llm_response(response_text, symbol_detail.keys())
+    results = parse_llm_response(filtered_response, symbol_detail.keys())
 
     # 准备BlockPatch参数
     file_paths = []

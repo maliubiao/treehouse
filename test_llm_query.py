@@ -7,7 +7,7 @@ import os
 import pdb
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import llm_query
 from llm_query import (
@@ -16,6 +16,8 @@ from llm_query import (
     CmdNode,
     GPTContextProcessor,
     _fetch_symbol_data,
+    _find_gitignore,
+    _handle_local_file,
     get_symbol_detail,
     patch_symbol_with_prompt,
 )
@@ -378,6 +380,76 @@ c = 3
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][1].strip(), "a = 1\nb = 2\nc = 3")
+
+
+class TestGitignoreFunctions(unittest.TestCase):
+    """测试.gitignore相关功能"""
+
+    def setUp(self):
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.root = self.test_dir.name
+        self.gitignore_path = os.path.join(self.root, ".gitignore")
+
+    def tearDown(self):
+        self.test_dir.cleanup()
+
+    def test_find_gitignore(self):
+        """测试.gitignore文件查找逻辑"""
+        # 在当前目录创建.gitignore
+        with open(self.gitignore_path, "w") as f:
+            f.write("*.tmp")
+        found = _find_gitignore(os.path.join(self.root, "subdir"))
+        self.assertEqual(found, self.gitignore_path)
+
+        # 在父目录查找
+        parent_gitignore = os.path.join(os.path.dirname(self.root), ".gitignore")
+        with open(parent_gitignore, "w") as f:
+            f.write("*.log")
+        found = _find_gitignore(self.root)
+        self.assertEqual(found, parent_gitignore)
+        os.remove(parent_gitignore)
+
+
+class TestFileHandling(unittest.TestCase):
+    """测试文件处理功能"""
+
+    def test_file_with_line_range(self):
+        """测试带行号范围的文件读取"""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            f.write("line1\nline2\nline3\nline4")
+            path = f.name
+
+        match = MagicMock(command=f"{path}:2-3")
+        result = _handle_local_file(match)
+        self.assertIn("line2\nline3", result)
+        os.remove(path)
+
+    def test_binary_file_handling(self):
+        """测试二进制文件处理"""
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00")
+            path = f.name
+
+        match = MagicMock(command=path)
+        result = _handle_local_file(match)
+        self.assertIn("二进制文件或无法解码", result)
+        os.remove(path)
+
+
+class TestDirectoryHandling(unittest.TestCase):
+    """测试目录处理功能"""
+
+    def test_directory_ignore_patterns(self):
+        """测试目录忽略模式"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 创建测试目录结构
+            os.makedirs(os.path.join(tmpdir, "node_modules"))
+            with open(os.path.join(tmpdir, "node_modules", "test.txt"), "w") as f:
+                f.write("should be ignored")
+
+            match = MagicMock(command=tmpdir)
+            result = _handle_local_file(match)
+            self.assertNotIn("node_modules", result)
 
 
 if __name__ == "__main__":
