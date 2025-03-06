@@ -332,6 +332,53 @@ def new_function():
         self.assertEqual(results[0][0], "example.py:10-20")
         self.assertIn("new_function", results[0][1])
 
+    def test_symbol_attachment(self):
+        """测试未注册符号内容附加到最近合法符号"""
+        # 模拟包含非法符号的响应
+        response = """
+[modified symbol]: invalid_symbol
+[source code start]
+print("Should attach to next valid")
+[source code end]
+
+[modified symbol]: valid_symbol
+[source code start]
+def valid_func():
+    pass
+[source code end]
+        """
+        parser = BlockPatchResponse(symbol_names=["valid_symbol"])
+        results = parser.parse(response)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0], "valid_symbol")
+        self.assertIn("valid_func", results[0][1])
+        self.assertIn('print("Should attach', results[0][1])
+
+    def test_multiple_attachments(self):
+        """测试多个非法符号连续附加"""
+        response = """
+[modified symbol]: invalid1
+[source code start]
+a = 1
+[source code end]
+
+[modified symbol]: invalid2
+[source code start]
+b = 2
+[source code end]
+
+[modified symbol]: valid
+[source code start]
+c = 3
+[source code end]
+        """
+        parser = BlockPatchResponse(symbol_names=["valid"])
+        results = parser.parse(response)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][1].strip(), "a = 1\nb = 2\nc = 3")
+
 
 if __name__ == "__main__":
     unittest.main()

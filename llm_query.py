@@ -1092,6 +1092,7 @@ class BlockPatchResponse:
         import re
 
         results = []
+        pending_code = []  # 暂存未注册符号的代码片段
 
         # 匹配两种响应格式
         pattern = re.compile(
@@ -1103,11 +1104,19 @@ class BlockPatchResponse:
             identifier = identifier.strip()
             source_code = source_code.strip()
 
-            # 符号类型校验
-            if section_type == "symbol" and self.symbol_names and identifier not in self.symbol_names:
-                raise ValueError(f"返回的符号 {identifier} 不在预期符号列表中")
+            if section_type == "symbol":
+                # 处理未注册符号的暂存逻辑
+                if self.symbol_names is not None and identifier not in self.symbol_names:
+                    pending_code.append(source_code)
+                    continue
 
-            results.append((identifier, source_code))
+                # 合并暂存代码到当前合法符号
+                combined_source = "\n".join(pending_code + [source_code]) if pending_code else source_code
+                pending_code = []
+                results.append((identifier, combined_source))
+            else:
+                # 块类型直接添加不处理暂存
+                results.append((identifier, source_code))
 
         # 兼容旧格式校验
         if not results and ("[source code start]" in response_text or "[source code end]" in response_text):
