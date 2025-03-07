@@ -330,7 +330,9 @@ def _initialize_conversation_history(kwargs: dict) -> list:
     返回:
         list: 对话历史列表
     """
-    conversation_file = kwargs.get("conversation_file", "conversation_history.json")
+    conversation_file = kwargs.get(
+        "conversation_file", os.path.join(os.path.dirname(__file__), "conversation_history.json")
+    )
     cid = os.environ.get("GPT_UUID_CONVERSATION")
 
     if cid:
@@ -1083,27 +1085,26 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
     if patch_require:
         prompt += """
 # 任务说明
-1. 积极帮助用户处理遇到的问题
-2. 主要是处理代码修改任务
-3. 主要目标是: 消除bug, 增加新功能，重构，或者用户要求的其它修改
-4. 修改完代码要验证是否正确的完成了任务
-7. 根据你的需要增加，删除，改写原来的符号或者块
+1. 积极帮助用户处理遇到的问题，提供超预期的解决方案
+2. 主要是处理代码, 消除bug, 增加新功能，重构，或者用户要求的其它修改
+3. 修改完代码要验证是否正确的解决了问题
+4. 根据任务的需要增加，删除，拼接，改写原来的符号或者块
 
-# 代码编写规范:
+# 代码编写规范
 1. 编写符合工业标准的高质量代码
 2. 如果语言支持，就总是使用强类型
-3. 多使用有意义的小函数，减少重复片段
-4. 接口要便于编写单元测试
-5. 在doc string里列出可能的输入假设, 不符合要打日志，退出流程
-6. 函数参数不超过5个,太多则用kwargs或者class, struct等结构传递
-7. 实现类时, 需要实现toString, __str__等这样的设施便于调试
-8. 如果用户没提供import的代码块, 不必实现import include等这样的包引用, 用户会自行处理
-9. 能用标准库就不手写
-10. 不允许在函数里套函数，除非有必要
+3. 高内聚，低耦合，易扩展
+4. 多使用有意义的小函数，减少重复片段
+5. 接口要便于编写单元测试
+6. 在doc string里列出可能的输入假设，不符合要打日志，退出流程
+7. 能复用就不手写
+8. 函数参数不要太长，参数不要太多
+9. 实现类时需要便于调试
+10. 不必实现包导入语句，用户会自行处理
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
-2. 若无修改需求，请完整返回原始内容
+2. 若无修改需求，则忽视传入的符号或者块
 3. 修改时必须包含完整文件内容，不得省略任何代码
 4. 保持原有缩进和代码风格，不添注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
@@ -1129,6 +1130,8 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 [CONTENT END]
 
 [SYMBOL END]
+[NEIGHBOUR SYMBOL NAME START]
+[NEIGHBOUR SYMBOL NAME END]
 """
 
     # 添加文件范围信息

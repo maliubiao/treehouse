@@ -240,8 +240,28 @@ codegpt() {
 }
 
 # 补全功能辅助函数
+
 _get_prompt_files() {
-    find "$GPT_PROMPTS_DIR" -maxdepth 1 -type f -exec basename {} \; 2>/dev/null
+    local dir="${GPT_PROMPTS_DIR:-}"
+    local files=()
+
+    if [[ -d "$dir" ]]; then
+        # 设置 Shell 选项（兼容 Bash/Zsh）
+        if [[ -n "$BASH_VERSION" ]]; then
+            shopt -s nullglob
+            files=( "$dir"/* )
+            shopt -u nullglob
+        else
+            setopt local_options nullglob  # Zsh 的 null_glob 选项
+            files=( "$dir"/* )
+        fi
+
+        # 移除路径前缀（兼容数组操作）
+        files=( "${files[@]##*/}" )
+    fi
+
+    # 输出结果供其他函数使用
+    printf '%s\n' "${files[@]}"
 }
 
 _get_api_completions() {
