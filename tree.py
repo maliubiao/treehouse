@@ -2260,7 +2260,7 @@ def parse_symbol_prefix(prefix: str) -> tuple[str | None, list[str]]:
         return remaining, []
 
     file_path = remaining[:slash_idx]
-    symbols = [s for s in remaining[slash_idx + 1 :].split(",") if s]
+    symbols = [s for s in remaining[slash_idx + 1 :].split(",")]
     return file_path, symbols
 
 
