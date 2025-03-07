@@ -306,8 +306,7 @@ _zsh_completion_setup() {
             'prompts:提示词文件:(${prompt_files[@]})' \
             'api:API补全:(${api_completions[@]})' \
             'symbols:本地符号:(${symbol_items[@]})' \
-            'files:文件名:_files' \
-            -S ''
+            'files:文件名:_files'
 
         PREFIX=$orig_prefix
         IPREFIX=""
