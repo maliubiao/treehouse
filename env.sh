@@ -258,6 +258,8 @@ _get_prompt_files() {
 
         # 移除路径前缀（兼容数组操作）
         files=( "${files[@]##*/}" )
+        # 将文件名中的:替换为_
+        files=( "${files[@]//:/_}" )
     fi
 
     # 输出结果供其他函数使用
@@ -266,20 +268,22 @@ _get_prompt_files() {
 
 _get_api_completions() {
     local prefix="$1"
-    [[ -z "$GPT_API_SERVER" || "$prefix" != symbol:* ]] && return
+    [[ -z "$GPT_API_SERVER" || "$prefix" != symbol_* ]] && return
 
-    local symbol_prefix="${prefix#symbol:}"
-    if [[ "$symbol_prefix" != *.* ]]; then
+    local symbol_prefix="${prefix#symbol_}"
+    if [[ "$symbol_prefix" != *_* ]]; then
         # 兼容zsh和bash的文件补全
         if type compgen &>/dev/null; then
             # bash环境使用compgen
-            compgen -f "$symbol_prefix" | sed 's/^/symbol:/'
+            compgen -f "$symbol_prefix" | sed 's/^/symbol_/'
         else
             # zsh环境使用ls
-            ls -p "$symbol_prefix"* 2>/dev/null | grep -v / | sed 's/^/symbol:/'
+            ls -p "$symbol_prefix"* 2>/dev/null | grep -v / | sed 's/^/symbol_/'
         fi
     else
-        curl -s --noproxy "*" "${GPT_API_SERVER}complete_realtime?prefix=${prefix}"
+        # 将symbol_后的_替换为:
+        local api_prefix="${prefix//symbol_/symbol:}"
+        curl -s --noproxy "*" "${GPT_API_SERVER}complete_realtime?prefix=${api_prefix}" | sed 's/symbol:/symbol_/g'
     fi
 }
 
@@ -295,14 +299,15 @@ _zsh_completion_setup() {
 
         local prompt_files=($(_get_prompt_files))
         local api_completions=($(_get_api_completions "$search_prefix"))
-        local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol:/'))
+        local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol_/'))
 
         _alternative \
-            'special:特殊选项:(clipboard tree treefull read listen symbol: glow last edit patch)' \
+            'special:特殊选项:(clipboard tree treefull read listen symbol_ glow last edit patch)' \
             'prompts:提示词文件:(${prompt_files[@]})' \
             'api:API补全:(${api_completions[@]})' \
             'symbols:本地符号:(${symbol_items[@]})' \
-            'files:文件名:_files'
+            'files:文件名:_files' \
+            -S ''
 
         PREFIX=$orig_prefix
         IPREFIX=""
@@ -323,15 +328,19 @@ _bash_completion_setup() {
         [[ "$cur" != @* ]] && return
 
         local search_prefix=${cur#@}
+        _debug_print "[$search_prefix]"
         local prompt_files=($(_get_prompt_files))
         local api_completions=($(_get_api_completions "$search_prefix"))
-        local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol:/'))
+        local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol_/'))
 
         COMPREPLY=()
+        # 当search_prefix以symbol_开头时，只考虑api和symbol
         COMPREPLY+=(${symbol_items[@]/#/@})
-        COMPREPLY+=(${prompt_files[@]/#/@})
         COMPREPLY+=(${api_completions[@]/#/@})
-        COMPREPLY+=($(compgen -f -- "$search_prefix" | sed 's/^/@/'))
+        if [[ "$search_prefix" != symbol_* ]]; then
+            COMPREPLY+=(${prompt_files[@]/#/@})
+            COMPREPLY+=($(compgen -f -- "$search_prefix" | sed 's/^/@/'))
+        fi
         COMPREPLY=($(compgen -W "${COMPREPLY[*]}" -- "$cur"))
     }
 

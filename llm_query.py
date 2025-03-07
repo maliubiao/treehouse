@@ -2052,6 +2052,8 @@ def print_proxy_info(proxies, proxy_sources):
 
 def handle_ask_mode(program_args, api_key, proxies):
     """处理--ask模式"""
+    program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
+
     base_url = os.getenv("GPT_BASE_URL")
     context_processor = GPTContextProcessor()
     text = context_processor.process_text_with_file_path(program_args.ask)

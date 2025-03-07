@@ -101,10 +101,10 @@ naskgpt @script.sh
 #符号补丁，借助tree.py支持符号查找, 可以自动编辑某个函数, 根据diff的结果自主决定是否patch
 #tree.py 的启动样本 python  tree.py --project . --excludes "*/.venv/*" "*/node/*" --port 9050 --db-path local.sqlite
 #@patch表示响应中有要patch的符号
-askgpt @patch @symbol:tree.py/ParserUtil traverse在遇到function_definition这样的节点时,要额外考虑,它是父节点是否decorated_definition, 如果是,则需要用父节点　的全文,　以包括装饰器
+askgpt @patch @symbol_tree.py/ParserUtil traverse在遇到function_definition这样的节点时,要额外考虑,它是父节点是否decorated_definition, 如果是,则需要用父节点　的全文,　以包括装饰器
 
-#符号补全, 支持bash,zsh,powershell在输入到@symbol:后补前当前文件，当前文件里的符号，得tree.py支持了语言才行
-askgpt @symbol:file/symbol 
+#符号补全, 支持bash,zsh,powershell在输入到@symbol_后补前当前文件，当前文件里的符号，得tree.py支持了语言才行
+askgpt @symbol_file/symbol 
 
 # 修改代码的bug,会生成一个diff, 看你要不要使用patch, @edit表示响应中有要patch的内容, @edit-file是在规定输出些什么
 askgpt @edit @edit-file @main.py 找到其中可能的bug，并加以修复
