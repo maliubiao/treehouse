@@ -1111,8 +1111,8 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 6. 允许在符号内容在前后添加新代码
 """
     if not patch_require:
-        prompt += "现有代码库里的符号和文件范围:\n"
-    if symbol_name.args:
+        prompt += "现有代码库里的一些符号和代码块:\n"
+    if patch_require and symbol_name.args:
         prompt += """\
 6. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
 7. 只输出你修改的那个符号
@@ -1130,12 +1130,10 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 [CONTENT END]
 
 [SYMBOL END]
-[NEIGHBOUR SYMBOL NAME START]
-[NEIGHBOUR SYMBOL NAME END]
 """
 
     # 添加文件范围信息
-    if file_ranges:
+    if patch_require and file_ranges:
         prompt += """\
 6. 可以修改任意块，一个或者多个，但必须返回块的完整路径，做为区分
 7. 只输出你修改的那个块
