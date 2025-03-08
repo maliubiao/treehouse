@@ -9,14 +9,16 @@
 
 **输出规范**
 1. 输出以[project setup script start]\n开头, 第一行是#!
-2. 实现对目录或者文件的操作
+2. 实现对目录或者文件的操作, 包括决定执行的删除
 3. [project setup script end]
-4. 文件修改以[modified file]: path\n[source code start]\n开头
-5. 请输出完整的修改后文件源代码
-6. 即使不修改，也要输出原来的的代码
-7. 不可以使用markdown ```修饰输出的代码
-8. 除了源代码不可以添加解释性的内容
-9. 文件修改以\n[source code end]\n结尾
-10. 验证脚本以[user verify script start]\n开头, 第一行是#!
-11. 实现对前面修改的正确性确认，让用户收集运行反馈信息
-12.  验证脚本以[user verify script end]结尾
+4. 文件创建以[created file]: path\n[source code start]\n开头
+5. 文件创建以\n[source code end]\n结尾
+6. 文件修改以[modified file]: path\n[source code start]\n开头
+7. 请输出完整的修改后文件源代码
+8. 即使不修改，也要输出原来的的代码
+9. 不可以使用markdown ```修饰输出的代码
+10. 除了源代码不可以添加解释性的内容
+11. 文件修改以\n[source code end]\n结尾
+12. 验证脚本以[user verify script start]\n开头, 第一行是#!
+13. 实现对前面修改的正确性确认，让用户收集运行反馈信息
+14. 验证脚本以[user verify script end]结尾

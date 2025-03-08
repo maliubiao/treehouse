@@ -1100,7 +1100,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 7. 能复用就不手写
 8. 函数参数不要太长，参数不要太多
 9. 实现类时需要便于调试
-10. 不必实现包导入语句，用户会自行处理
+10. 如果提供了__import__符号则可在此加入包导入语句, 否则不加入包导入语句，用户会自行处理
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
@@ -1109,13 +1109,14 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 4. 保持原有缩进和代码风格，不添注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
 6. 允许在符号内容在前后添加新代码
+7. 在非正式输出部分使用[modified symbol]需要转义成[modify symbol]
 """
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
     if patch_require and symbol_name.args:
         prompt += """\
-6. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
-7. 只输出你修改的那个符号
+8. 可以修改任意符号，一个或者多个，但必须返回符号的完整路径，做为区分
+9. 只输出你修改的那个符号
 """
     # 添加符号信息
     for symbol_name in symbol_name.args:
@@ -1135,8 +1136,8 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
     # 添加文件范围信息
     if patch_require and file_ranges:
         prompt += """\
-6. 可以修改任意块，一个或者多个，但必须返回块的完整路径，做为区分
-7. 只输出你修改的那个块
+8. 可以修改任意块，一个或者多个，但必须返回块的完整路径，做为区分
+9. 只输出你修改的那个块
 """
         for file_path, range_info in file_ranges.items():
             prompt += f"""
@@ -1205,7 +1206,7 @@ class BlockPatchResponse:
 
         # 匹配两种响应格式
         pattern = re.compile(
-            r"\[modified (symbol|block)\]:\s*([^\n]+)\s*" r"\[source code start\](.*?)\[source code end\]", re.DOTALL
+            r"\[modified (symbol|block)\]:\s*([^\n]+)\s*\[source code start\](.*?)\[source code end\]", re.DOTALL
         )
 
         for match in pattern.finditer(response_text):
@@ -1827,6 +1828,7 @@ shadowroot = Path(os.path.expanduser("~/.shadowroot"))
 def _save_response_content(content):
     """保存原始响应内容到response.md"""
     response_path = shadowroot / Path("response.md")
+    response_path.parent.mkdir(parents=True, exist_ok=True)
     with open(response_path, "w+", encoding="utf-8") as dst:
         dst.write(content)
     return response_path
@@ -1834,7 +1836,9 @@ def _save_response_content(content):
 
 def _extract_file_matches(content):
     """从内容中提取文件匹配项"""
-    return re.findall(r"\[modified file\]: (.*?)\n\[source code start\] *?\n(.*?)\n\[source code end\]", content, re.S)
+    return re.findall(
+        r"\[(?:modified|created) file\]: (.*?)\n\[source code start\] *?\n(.*?)\n\[source code end\]", content, re.S
+    )
 
 
 def _process_file_path(file_path):
@@ -1875,7 +1879,7 @@ def _save_diff_content(diff_content):
     return None
 
 
-def _display_and_apply_diff(diff_file):
+def _display_and_apply_diff(diff_file, auto_apply=False):
     """显示并应用diff"""
     if diff_file.exists():
         with open(diff_file, "r", encoding="utf-8") as f:
@@ -1884,17 +1888,26 @@ def _display_and_apply_diff(diff_file):
             print("\n高亮显示的diff内容：")
             print(highlighted_diff)
 
-        print(f"\n申请变更文件，是否应用 {diff_file}？")
-        apply = input("输入 y 应用，其他键跳过: ").lower()
-        if apply == "y":
-            try:
-                subprocess.run(["patch", "-p0", "-i", str(diff_file)], check=True)
-                print("已成功应用变更")
-            except subprocess.CalledProcessError as e:
-                print(f"应用变更失败: {e}")
+        if auto_apply:
+            print("自动应用变更...")
+            _apply_patch(diff_file)
+        else:
+            print(f"\n申请变更文件，是否应用 {diff_file}？")
+            apply = input("输入 y 应用，其他键跳过: ").lower()
+            if apply == "y":
+                _apply_patch(diff_file)
 
 
-def extract_and_diff_files(content):
+def _apply_patch(diff_file):
+    """应用patch的公共方法"""
+    try:
+        subprocess.run(["patch", "-p0", "-i", str(diff_file)], check=True)
+        print("已成功应用变更")
+    except subprocess.CalledProcessError as e:
+        print(f"应用变更失败: {e}")
+
+
+def extract_and_diff_files(content, auto_apply=False):
     """从内容中提取文件并生成diff"""
     _save_response_content(content)
     matches = _extract_file_matches(content)
@@ -1912,6 +1925,7 @@ def extract_and_diff_files(content):
         shadow_file_path = shadowroot / file_path
         _save_file_to_shadowroot(shadow_file_path, file_content)
         original_content = ""
+        print("debug", old_file_path)
         with open(old_file_path, "r", encoding="utf8") as f:
             original_content = f.read()
         diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
@@ -1919,7 +1933,7 @@ def extract_and_diff_files(content):
 
     diff_file = _save_diff_content(diff_content)
     if diff_file:
-        _display_and_apply_diff(diff_file)
+        _display_and_apply_diff(diff_file, auto_apply=auto_apply)
 
 
 def process_response(prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
@@ -2393,9 +2407,9 @@ def handle_large_code(program_args, code_content, prompt_template, api_key, prox
     return {"choices": [{"message": {"content": "\n\n".join(responses)}}]}
 
 
-def handle_small_code(args, code_content, prompt_template, api_key, proxies):
+def handle_small_code(program_args, code_content, prompt_template, api_key, proxies):
     """处理小文件分析"""
-    full_prompt = prompt_template.format(path=args.file, pager="", code=code_content)
+    full_prompt = prompt_template.format(path=program_args.file, pager="", code=code_content)
     base_url = os.getenv("GPT_BASE_URL")
     return query_gpt_api(
         api_key,
