@@ -50,10 +50,73 @@ class GenericLSPClient:
 
     def initialize(self):
         """发送初始化请求"""
+        default_capabilities = {
+            "textDocument": {
+                "synchronization": {
+                    "dynamicRegistration": False,
+                    "willSave": True,
+                    "willSaveWaitUntil": False,
+                    "didSave": True,
+                },
+                "hover": {"contentFormat": ["markdown", "plaintext"]},
+                "documentSymbol": {
+                    "hierarchicalDocumentSymbolSupport": True,
+                    "symbolKind": {
+                        "valueSet": [
+                            1,
+                            2,
+                            3,
+                            4,
+                            5,
+                            6,
+                            7,
+                            8,
+                            9,
+                            10,
+                            11,
+                            12,
+                            13,
+                            14,
+                            15,
+                            16,
+                            17,
+                            18,
+                            19,
+                            20,
+                            21,
+                            22,
+                            23,
+                            24,
+                            25,
+                            26,
+                        ]
+                    },
+                },
+                "completion": {
+                    "completionItem": {
+                        "snippetSupport": False,
+                        "commitCharactersSupport": True,
+                        "documentationFormat": ["markdown", "plaintext"],
+                    },
+                    "contextSupport": True,
+                },
+                "definition": {"linkSupport": True},
+                "typeDefinition": {"linkSupport": True},
+            },
+            "workspace": {
+                "workspaceFolders": True,
+                "fileOperations": {"didCreateFiles": True, "didDeleteFiles": True, "didRenameFiles": True},
+            },
+        }
+
         init_params = {
             "processId": os.getpid(),
             "rootUri": f"file://{self.workspace_path}",
-            "capabilities": {"textDocument": {"hover": {"contentFormat": ["markdown", "plaintext"]}}},
+            "capabilities": default_capabilities,
+            "initializationOptions": {
+                "hover": {"show": {"computations": True, "debug": False}},
+                "completion": {"resolveTriggerCharacters": [".", ":", "@"]},
+            },
             **self.init_params,
         }
         self.send_request("initialize", init_params)

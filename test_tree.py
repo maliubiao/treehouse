@@ -435,6 +435,37 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("from sys import version", import_entry["code"])
         self.assertIn("import sys as sys1", import_entry["code"])
 
+    def test_function_call_extraction(self):
+        code = dedent(
+            """
+            class MyClass:
+                @a()
+                def my_method(self):
+                    a.b.f()
+                    self.other_method()
+                    some_function()
+            """
+        )
+        path = self.create_temp_file(code)
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        expected_paths = ["MyClass", "MyClass.my_method"]
+        expected_calls = ["a", "a.b.f", "self.other_method", "some_function"]
+
+        # 验证符号路径
+        self.assertEqual(sorted(paths), sorted(expected_paths))
+
+        # 验证调用列表
+        method_entry = code_map["MyClass.my_method"]
+        self.assertEqual(sorted(method_entry["calls"]), sorted(expected_calls))
+
+        # 验证调用代码内容
+        method_code = method_entry["code"]
+        self.assertIn("a.b.f()", method_code)
+        self.assertIn("self.other_method()", method_code)
+        self.assertIn("some_function()", method_code)
+
 
 class TestSymbolsComplete(unittest.TestCase):
     """

@@ -269,10 +269,10 @@ _get_prompt_files() {
 _get_api_completions() {
     local prefix="$1"
     [[ -z "$GPT_API_SERVER" || "$prefix" != symbol_* ]] && return
-
-    local symbol_prefix="${prefix#symbol_}"
-    if [[ "$symbol_prefix" != *_* ]]; then
+    
+    if [[ "$prefix" != *_* ]]; then
         # 兼容zsh和bash的文件补全
+        local symbol_prefix="${prefix#symbol_}"
         if type compgen &>/dev/null; then
             # bash环境使用compgen
             compgen -f "$symbol_prefix" | sed 's/^/symbol_/'

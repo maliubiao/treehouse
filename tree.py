@@ -516,16 +516,15 @@ class ParserUtil:
                 return child.text.decode("utf8")
         return None
 
+    def _get_effective_node(self, node):
+        """获取有效的语法树节点（处理装饰器情况）"""
+        if node.type == "function_definition" and node.parent and node.parent.type == "decorated_definition":
+            return node.parent
+        return node
+
     def _get_node_info(self, node):
         """获取节点的代码和位置信息"""
-        effective_node = node
-        if (
-            effective_node.type == "function_definition"
-            and effective_node.parent
-            and effective_node.parent.type == "decorated_definition"
-        ):
-            effective_node = effective_node.parent
-
+        effective_node = self._get_effective_node(node)
         return {
             "start_byte": effective_node.start_byte,
             "end_byte": effective_node.end_byte,
@@ -546,6 +545,7 @@ class ParserUtil:
             "start_col": node_info["start_point"][1],
             "end_line": node_info["end_point"][0],
             "end_col": node_info["end_point"][1],
+            "calls": set(),  # 新增calls属性用于存储调用信息
         }
 
     def _process_import_block(self, node, code_map, source_bytes, results):
@@ -565,13 +565,14 @@ class ParserUtil:
             results.append("__import__")
 
     def _process_symbol_node(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
-        """处理符号节点"""
+        """处理符号节点，返回处理后的有效节点或None"""
         symbol_name = self.get_symbol_name(node)
         if symbol_name is None:
-            return False
+            return None
 
+        effective_node = self._get_effective_node(node)
         current_symbols.append(symbol_name)
-        current_nodes.append(node)
+        current_nodes.append(effective_node)
 
         path_key = ".".join(current_symbols)
         current_node = current_nodes[-1]
@@ -581,16 +582,53 @@ class ParserUtil:
         code_map[path_key] = self._build_code_map_entry(path_key, code, node_info)
         results.append(path_key)
 
-        return True
+        return effective_node
+
+    @staticmethod
+    def _get_full_attribute_name(node):
+        """递归获取属性调用的完整名称"""
+        if node.type == "identifier":
+            return node.text.decode("utf8")
+        elif node.type == "attribute":
+            obj_part = ParserUtil._get_full_attribute_name(node.child_by_field_name("object"))
+            attr_part = node.child_by_field_name("attribute").text.decode("utf8")
+            # 处理self.xxx的情况
+            # if obj_part == "self":
+            #     return attr_part
+            return f"{obj_part}.{attr_part}"
+        return ""
+
+    @staticmethod
+    def _get_function_name_from_call(function_node):
+        """从函数调用节点中提取函数名"""
+        if function_node.type == "identifier":
+            return function_node.text.decode("utf8")
+        elif function_node.type == "attribute":
+            return ParserUtil._get_full_attribute_name(function_node)
+        return None
+
+    def _extract_function_calls(self, node, current_symbols, code_map):
+        """提取函数调用信息并添加到当前符号的calls集合"""
+        if node.type == "call":
+            function_node = node.child_by_field_name("function")
+            if function_node:
+                func_name = self._get_function_name_from_call(function_node)
+                if func_name and current_symbols:
+                    current_path = ".".join(current_symbols)
+                    if current_path in code_map:
+                        code_map[current_path]["calls"].add(func_name)
+        for child in node.children:
+            self._extract_function_calls(child, current_symbols, code_map)
 
     def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
-
-        added = self._process_symbol_node(node, current_symbols, current_nodes, code_map, source_bytes, results)
-
+        processed_node = self._process_symbol_node(
+            node, current_symbols, current_nodes, code_map, source_bytes, results
+        )
+        if processed_node:
+            self._extract_function_calls(processed_node, current_symbols.copy(), code_map)
         for child in node.children:
-            self.traverse(child, current_symbols, current_nodes, code_map, source_bytes, results)
-
-        if added:
+            self.traverse(child, current_symbols.copy(), current_nodes.copy(), code_map, source_bytes, results)
+        if processed_node:
             current_symbols.pop()
             current_nodes.pop()
 
@@ -611,6 +649,11 @@ class ParserUtil:
         if node.type == "module" and len(node.children) != 0:
             self._process_import_block(node, code_map, source_bytes, results)
         self.traverse(root_node, [], [], code_map, source_code, results)
+
+        # 转换set为list并去重
+        for entry in code_map.values():
+            entry["calls"] = list(entry["calls"])
+
         return results, code_map
 
     def _build_symbol_info(self, info, file_path):
@@ -626,6 +669,7 @@ class ParserUtil:
             "signature": "",
             "full_definition_hash": full_definition_hash,
             "location": location,
+            "calls": info["calls"],  # 添加calls信息
         }
 
     def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
@@ -645,6 +689,7 @@ class ParserUtil:
                 f"{path}:\n"
                 f"代码位置: 第{info['start_line']+1}行{info['start_col']+1}列 "
                 f"到 第{info['end_line']+1}行{info['end_col']+1}列\n"
+                f"调用列表: {info['calls']}\n"  # 添加调用列表输出
                 f"代码内容:\n{info['code']}\n"
             )
 
