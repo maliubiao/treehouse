@@ -246,14 +246,13 @@ function global:chatagain {
     chat
 }
 
-
 function global:askgpt {
     param([Parameter(ValueFromRemainingArguments)]$Question)
     if (-not $Question) { throw "问题不能为空" }
+    # 将Question中的\@替换为@
+    $Question = $Question -replace '\\@', '@'
     & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask $Question
 }
-
-
 
 # 补全支持
 function global:Get-PromptFiles {
@@ -296,25 +295,25 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
         }
 
         $prompts = @(Get-PromptFiles | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" })
-        $special = @('clipboard', 'tree', 'treefull', 'read', 'listen', 'symbol:', 'glow', 'last', 'patch', 'edit') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
+        $special = @('clipboard', 'tree', 'treefull', 'read', 'listen', 'symbol_', 'glow', 'last', 'patch', 'edit') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
         $files = Get-ChildItem -File -Filter "$search*" | Select-Object -ExpandProperty Name | ForEach-Object { "\@$_" }
         
         # 添加API补全支持
         $apiCompletions = @()
-        if ($env:GPT_API_SERVER -and $search -like "symbol:*") {
-            $symbolPrefix = $search.Substring(7)  # 去掉"symbol:"
+        if ($env:GPT_API_SERVER -and $search -like "symbol_*") {
+            $symbolPrefix = $search.Substring(7)  # 去掉"symbol_"
             if ($symbolPrefix -notmatch "\.") {
                 # 本地文件补全
                 $apiCompletions = Get-ChildItem -File -Filter "$symbolPrefix*" | 
                     Select-Object -ExpandProperty Name | 
-                    ForEach-Object { "\@symbol:$_" }
+                    ForEach-Object { "\@symbol_$_" }
             }
             else {
                 # 远程API补全
                 try {
                     $apiServer = $env:GPT_API_SERVER.TrimEnd('/')
-                    $response = Invoke-RestMethod -Uri "$apiServer/complete_realtime?prefix=$search" -UseBasicParsing
-                    $apiCompletions = $response -split "`n" | ForEach-Object { "\@$_" }
+                    $response = Invoke-RestMethod -Uri "$apiServer/complete_realtime?prefix=symbol:$symbolPrefix" -UseBasicParsing
+                    $apiCompletions = $response -split "`n" | ForEach-Object { "\@$_" -replace 'symbol:', 'symbol_' }
                 }
                 catch {
                     Write-Debug "API补全请求失败: $_"
