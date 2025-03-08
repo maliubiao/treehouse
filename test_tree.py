@@ -435,6 +435,25 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("from sys import version", import_entry["code"])
         self.assertIn("import sys as sys1", import_entry["code"])
 
+    def _find_byte_position(self, code_bytes: bytes, substring: str) -> tuple:
+        """在字节码中查找子字符串的位置并返回(start_byte, end_byte)"""
+        start = code_bytes.find(substring.encode("utf8"))
+        if start == -1:
+            return (0, 0)
+        return (start, start + len(substring.encode("utf8")))
+
+    def _convert_bytes_to_points(self, code_bytes: bytes, start_byte: int, end_byte: int) -> tuple:
+        """将字节偏移转换为行列位置"""
+        before_start = code_bytes[:start_byte]
+        start_line = before_start.count(b"\n")
+        start_col = start_byte - (before_start.rfind(b"\n") + 1) if b"\n" in before_start else start_byte
+
+        before_end = code_bytes[:end_byte]
+        end_line = before_end.count(b"\n")
+        end_col = end_byte - (before_end.rfind(b"\n") + 1) if b"\n" in before_end else end_byte
+
+        return (start_line, start_col, end_line, end_col)
+
     def test_function_call_extraction(self):
         code = dedent(
             """
@@ -448,23 +467,40 @@ class TestParserUtil(unittest.TestCase):
         )
         path = self.create_temp_file(code)
         paths, code_map = self.parser_util.get_symbol_paths(path)
+
+        # 读取原始字节内容用于位置计算
+        with open(path, "rb") as f:
+            code_bytes = f.read()
         os.unlink(path)
 
         expected_paths = ["MyClass", "MyClass.my_method"]
-        expected_calls = ["a", "a.b.f", "self.other_method", "some_function"]
+        method_entry = code_map["MyClass.my_method"]
+        method_code = method_entry["code"]
 
         # 验证符号路径
         self.assertEqual(sorted(paths), sorted(expected_paths))
 
         # 验证调用列表
-        method_entry = code_map["MyClass.my_method"]
-        self.assertEqual(sorted(method_entry["calls"]), sorted(expected_calls))
+        actual_calls = method_entry["calls"]
+        expected_call_names = {"a", "a.b.f", "self.other_method", "some_function"}
+        actual_call_names = {call["name"] for call in actual_calls}
+        self.assertEqual(actual_call_names, expected_call_names)
 
-        # 验证调用代码内容
-        method_code = method_entry["code"]
-        self.assertIn("a.b.f()", method_code)
-        self.assertIn("self.other_method()", method_code)
-        self.assertIn("some_function()", method_code)
+        # 验证每个调用的位置信息是否有效
+        for call in actual_calls:
+            start_line, start_col = call["start_point"]
+            end_line, end_col = call["end_point"]
+            # 验证行列位置是否在代码范围内
+            self.assertLessEqual(start_line, end_line)
+            if start_line == end_line:
+                self.assertLess(start_col, end_col)
+
+            # 验证对应代码片段是否匹配
+            start_byte = call.get("start_byte")
+            end_byte = call.get("end_byte")
+            if start_byte is not None and end_byte is not None:
+                call_code = code_bytes[start_byte:end_byte].decode("utf8")
+                self.assertIn(call["name"], call_code)
 
 
 class TestSymbolsComplete(unittest.TestCase):

@@ -545,7 +545,7 @@ class ParserUtil:
             "start_col": node_info["start_point"][1],
             "end_line": node_info["end_point"][0],
             "end_col": node_info["end_point"][1],
-            "calls": set(),  # 新增calls属性用于存储调用信息
+            "calls": [],  # 修改为列表存储带位置信息的调用
         }
 
     def _process_import_block(self, node, code_map, source_bytes, results):
@@ -592,9 +592,6 @@ class ParserUtil:
         elif node.type == "attribute":
             obj_part = ParserUtil._get_full_attribute_name(node.child_by_field_name("object"))
             attr_part = node.child_by_field_name("attribute").text.decode("utf8")
-            # 处理self.xxx的情况
-            # if obj_part == "self":
-            #     return attr_part
             return f"{obj_part}.{attr_part}"
         return ""
 
@@ -616,7 +613,14 @@ class ParserUtil:
                 if func_name and current_symbols:
                     current_path = ".".join(current_symbols)
                     if current_path in code_map:
-                        code_map[current_path]["calls"].add(func_name)
+                        start_line, start_col = function_node.start_point
+                        end_line, end_col = function_node.end_point
+                        call_info = {
+                            "name": func_name,
+                            "start_point": (start_line, start_col),
+                            "end_point": (end_line, end_col),
+                        }
+                        code_map[current_path]["calls"].append(call_info)
         for child in node.children:
             self._extract_function_calls(child, current_symbols, code_map)
 
@@ -625,9 +629,9 @@ class ParserUtil:
             node, current_symbols, current_nodes, code_map, source_bytes, results
         )
         if processed_node:
-            self._extract_function_calls(processed_node, current_symbols.copy(), code_map)
+            self._extract_function_calls(processed_node, current_symbols, code_map)
         for child in node.children:
-            self.traverse(child, current_symbols.copy(), current_nodes.copy(), code_map, source_bytes, results)
+            self.traverse(child, current_symbols, current_nodes, code_map, source_bytes, results)
         if processed_node:
             current_symbols.pop()
             current_nodes.pop()
@@ -649,10 +653,6 @@ class ParserUtil:
         if node.type == "module" and len(node.children) != 0:
             self._process_import_block(node, code_map, source_bytes, results)
         self.traverse(root_node, [], [], code_map, source_code, results)
-
-        # 转换set为list并去重
-        for entry in code_map.values():
-            entry["calls"] = list(entry["calls"])
 
         return results, code_map
 
@@ -689,7 +689,7 @@ class ParserUtil:
                 f"{path}:\n"
                 f"代码位置: 第{info['start_line']+1}行{info['start_col']+1}列 "
                 f"到 第{info['end_line']+1}行{info['end_col']+1}列\n"
-                f"调用列表: {info['calls']}\n"  # 添加调用列表输出
+                f"调用列表: {[call['name'] for call in info['calls']]}\n"
                 f"代码内容:\n{info['code']}\n"
             )
 
