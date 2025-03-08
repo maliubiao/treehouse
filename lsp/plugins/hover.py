@@ -1,10 +1,5 @@
-import json
-
-from rich.panel import Panel
-from rich.syntax import Syntax
-
 from ..utils import _validate_args
-from . import LSPCommandPlugin
+from . import LSPCommandPlugin, format_response_panel
 
 
 class HoverPlugin(LSPCommandPlugin):
@@ -26,10 +21,7 @@ class HoverPlugin(LSPCommandPlugin):
 
         result = await lsp_client.get_hover_info(file_path, line, char)
         if result:
-            console.print(
-                Panel(
-                    Syntax(json.dumps(result, indent=2, ensure_ascii=False), "json"),
-                    title="悬停信息",
-                    border_style="green",
-                )
-            )
+            console.print(format_response_panel(result, "悬停信息", "green"))
+
+    def __str__(self):
+        return f"{self.command_name}: {self.description}"
