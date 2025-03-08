@@ -1,6 +1,7 @@
 from urllib.parse import unquote, urlparse
 
 from rich.table import Table
+from rich.tree import Tree
 
 
 def format_completion_item(item):
@@ -22,9 +23,18 @@ def _build_symbol_tree(symbol, tree_node):
     )
     node = tree_node.add(f"{deprecated}[bold]{name}[/] ({_symbol_kind_name(symbol['kind'])})")
 
+    # 处理不同符号类型的范围信息
+    symbol_range = symbol.get("range")
+    if not symbol_range and "location" in symbol:
+        symbol_range = symbol["location"]["range"]
+
+    if symbol_range:
+        node.add(f"[blue]范围: {_format_range(symbol_range)}[/]")
+    else:
+        node.add("[yellow]范围: 未知[/]")
+
     if symbol.get("detail"):
         node.add(f"[dim]详情: {symbol['detail']}[/]")
-    node.add(f"[blue]范围: {_format_range(symbol['range'])}[/]")
 
     if symbol.get("tags"):
         tags = ", ".join(["Deprecated" if t == 1 else f"Unknown({t})" for t in symbol["tags"]])
@@ -135,3 +145,26 @@ async def _dispatch_command(console, lsp_client, plugin_manager, text):
         await handler(console, lsp_client, parts)
         return True
     return False
+
+
+def _build_container_tree(symbols):
+    """根据containerName构建符号树"""
+    container_map = {}
+    for sym in symbols:
+        container = sym.get("containerName", "")
+        if container not in container_map:
+            container_map[container] = []
+        container_map[container].append(sym)
+
+    tree = Tree("📂 符号容器树", highlight=True, guide_style="dim")
+    for container, symbols_in_container in container_map.items():
+        if container:
+            node = tree.add(f"[bold]{container}[/]")
+        else:
+            node = tree
+        for sym in symbols_in_container:
+            # 添加location到符号数据以兼容处理
+            if "location" not in sym and "range" in sym:
+                sym["location"] = {"uri": "", "range": sym["range"]}
+            _build_symbol_tree(sym, node)
+    return tree

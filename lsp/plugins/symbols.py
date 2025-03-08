@@ -4,6 +4,7 @@ from rich.panel import Panel
 from rich.tree import Tree
 
 from ..utils import (
+    _build_container_tree,
     _build_symbol_tree,
     _create_symbol_table,
     _validate_args,
@@ -14,7 +15,7 @@ from . import LSPCommandPlugin
 class SymbolsPlugin(LSPCommandPlugin):
     command_name = "symbols"
     command_params = ["file_path"]
-    description = "获取文档符号列表（支持层次结构/扁平列表）"
+    description = "获取文档符号列表（支持层次结构/扁平列表/容器树）"
 
     @staticmethod
     async def handle_command(console, lsp_client, parts):
@@ -36,16 +37,30 @@ class SymbolsPlugin(LSPCommandPlugin):
 
         if isinstance(result, list) and len(result) > 0:
             # 判断是DocumentSymbol还是SymbolInformation
-            if "location" in result[0]:
-                console.print(
-                    Panel(
-                        _create_symbol_table(result),
-                        title="📋 符号列表（扁平结构）",
-                        border_style="yellow",
-                        subtitle=f"共 {len(result)} 个符号",
+            first_symbol = result[0]
+            if hasattr(first_symbol, "location") or (isinstance(first_symbol, dict) and "location" in first_symbol):
+                if any(getattr(sym, "containerName", None) or sym.get("containerName") for sym in result):
+                    # 构建容器树
+                    console.print(
+                        Panel(
+                            _build_container_tree(result),
+                            title="📂 符号容器树",
+                            border_style="cyan",
+                            subtitle=f"共 {len(result)} 个符号",
+                        )
                     )
-                )
+                else:
+                    # 显示扁平列表
+                    console.print(
+                        Panel(
+                            _create_symbol_table(result),
+                            title="📋 符号列表（扁平结构）",
+                            border_style="yellow",
+                            subtitle=f"共 {len(result)} 个符号",
+                        )
+                    )
             else:
+                # 构建层次结构树
                 tree = Tree("📂 文档符号层次结构", highlight=True, guide_style="dim")
                 total_count = 0
                 for sym in result:
@@ -62,6 +77,7 @@ class SymbolsPlugin(LSPCommandPlugin):
 def _count_symbols(symbol):
     """递归统计符号数量"""
     count = 1
-    for child in symbol.get("children", []):
+    children = getattr(symbol, "children", []) if not isinstance(symbol, dict) else symbol.get("children", [])
+    for child in children:
         count += _count_symbols(child)
     return count
