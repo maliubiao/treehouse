@@ -1,6 +1,7 @@
 # 包初始化文件
 import os
 from typing import Callable, Dict, List, Optional, Type
+from urllib.parse import unquote, urlparse
 
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -82,12 +83,13 @@ def parse_position_args(console, parts):
         return None, None, None
 
 
-def format_response_panel(response, title, border_style="blue", syntax="json"):
+def format_response_panel(response, title, border_style="blue", syntax="json", line_numbers=False):
     """格式化响应面板"""
     return Panel(
-        Syntax(str(response), syntax),
+        Syntax(str(response), syntax, theme="monokai", line_numbers=line_numbers, word_wrap=True),
         title=title,
         border_style=border_style,
+        expand=False,
     )
 
 
