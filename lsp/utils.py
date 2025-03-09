@@ -1,7 +1,44 @@
 from urllib.parse import unquote, urlparse
 
+from rich.markdown import Markdown
 from rich.table import Table
 from rich.tree import Tree
+
+
+def format_response_panel(data, title, color):
+    """格式化LSP响应数据为带边框的面板"""
+    from rich.panel import Panel
+
+    content = _parse_hover_content(data.get("contents", {}))
+    return Panel(
+        Markdown(content) if "```" in content else content,
+        title=title,
+        border_style=color,
+        expand=False,
+    )
+
+
+def _parse_hover_content(contents):
+    """解析hover返回的contents字段"""
+    if isinstance(contents, dict):
+        # MarkupContent类型
+        return contents.get("value", "")
+    if isinstance(contents, list):
+        # MarkedString数组
+        return "\n".join([_parse_marked_string(item) for item in contents])
+    # 单个MarkedString
+    return _parse_marked_string(contents)
+
+
+def _parse_marked_string(marked):
+    """解析MarkedString类型"""
+    if isinstance(marked, dict):
+        # 代码块类型
+        lang = marked.get("language", "")
+        code = marked.get("value", "")
+        return f"```{lang}\n{code}\n```" if lang else code
+    # 纯字符串类型
+    return str(marked)
 
 
 def _get_symbol_attr(symbol, attr, default=None):
