@@ -1,5 +1,7 @@
+import os
+
 from .. import GenericLSPClient
-from ..utils import _validate_args
+from ..utils import _create_json_table, _create_symbol_table, _validate_args
 from . import LSPCommandPlugin, format_response_panel
 
 
@@ -20,9 +22,15 @@ class DefinitionPlugin(LSPCommandPlugin):
             console.print("[red]行号和列号必须是数字[/red]")
             return
 
-        result = await lsp_client.get_definition(file_path, line, char)
+        abs_file_path = os.path.abspath(file_path)
+        result = await lsp_client.get_definition(abs_file_path, line, char)
         if result:
-            console.print(format_response_panel(result, "定义结果", "blue"))
+            if isinstance(result, list):
+                table = _create_symbol_table(result)
+                console.print(table)
+            else:
+                table = _create_json_table(result)
+                console.print(table)
 
     def __str__(self):
         return f"{self.command_name}: {self.description}"

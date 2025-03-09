@@ -1,3 +1,5 @@
+import os
+
 from rich.syntax import Syntax
 
 from .. import GenericLSPClient
@@ -26,7 +28,8 @@ class CompletionPlugin(LSPCommandPlugin):
             console.print("[red]行号和列号必须是数字[/red]")
             return
 
-        result = await lsp_client.get_completion(file_path, line, char)
+        abs_file_path = os.path.abspath(file_path)
+        result = await lsp_client.get_completion(abs_file_path, line, char)
         if result and isinstance(result, dict):
             items = result.get("items", [])
             formatted = [format_completion_item(item) for item in items]

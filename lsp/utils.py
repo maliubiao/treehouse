@@ -4,6 +4,13 @@ from rich.table import Table
 from rich.tree import Tree
 
 
+def _get_symbol_attr(symbol, attr, default=None):
+    """统一获取符号属性，兼容字典和对象"""
+    if isinstance(symbol, dict):
+        return symbol.get(attr, default)
+    return getattr(symbol, attr, default)
+
+
 def format_completion_item(item):
     return {
         "label": item.get("label"),
@@ -17,30 +24,32 @@ def format_completion_item(item):
 
 def _build_symbol_tree(symbol, tree_node):
     """递归构建符号树结构"""
-    name = symbol["name"]
+    name = _get_symbol_attr(symbol, "name", "未知名称")
     deprecated = (
-        "[strike red]DEPRECATED[/] " if symbol.get("deprecated") or (symbol.get("tags") and 1 in symbol["tags"]) else ""
+        "[strike red]DEPRECATED[/] "
+        if _get_symbol_attr(symbol, "deprecated") or (1 in _get_symbol_attr(symbol, "tags", []))
+        else ""
     )
-    node = tree_node.add(f"{deprecated}[bold]{name}[/] ({_symbol_kind_name(symbol['kind'])})")
+    kind_name = _symbol_kind_name(_get_symbol_attr(symbol, "kind"))
 
-    # 处理不同符号类型的范围信息
-    symbol_range = symbol.get("range")
-    if not symbol_range and "location" in symbol:
-        symbol_range = symbol["location"]["range"]
+    # 处理范围信息
+    symbol_range = _get_symbol_attr(symbol, "range")
+    location = _get_symbol_attr(symbol, "location")
+    if not symbol_range and location:
+        symbol_range = _get_symbol_attr(location, "range")
 
-    if symbol_range:
-        node.add(f"[blue]范围: {_format_range(symbol_range)}[/]")
-    else:
-        node.add("[yellow]范围: 未知[/]")
+    range_str = f"[blue]{_format_range(symbol_range)}[/]" if symbol_range else "[yellow]未知范围[/]"
+    node_line = f"{deprecated}[bold]{name}[/] ({kind_name}) ⏱️{range_str}"
+    node = tree_node.add(node_line)
 
-    if symbol.get("detail"):
-        node.add(f"[dim]详情: {symbol['detail']}[/]")
+    if _get_symbol_attr(symbol, "detail"):
+        node.add(f"[dim]详情: {_get_symbol_attr(symbol, 'detail')}[/]")
 
-    if symbol.get("tags"):
-        tags = ", ".join(["Deprecated" if t == 1 else f"Unknown({t})" for t in symbol["tags"]])
-        node.add(f"[yellow]标签: {tags}[/]")
+    if _get_symbol_attr(symbol, "tags"):
+        tags = ", ".join(["Deprecated" if t == 1 else f"Unknown({t})" for t in _get_symbol_attr(symbol, "tags")])
+        node.add(f"[yellow]标签: {tags}")
 
-    for child in symbol.get("children", []):
+    for child in _get_symbol_attr(symbol, "children", []):
         _build_symbol_tree(child, node)
 
 
@@ -77,9 +86,15 @@ def _symbol_kind_name(kind_code):
 
 
 def _format_range(range_dict):
-    start = range_dict["start"]
-    end = range_dict["end"]
-    return f"{start['line']+1}:{start['character']} - {end['line']+1}:{end['character']}"
+    start = _get_symbol_attr(range_dict, "start")
+    end = _get_symbol_attr(range_dict, "end")
+    if start and end:
+        start_line = _get_symbol_attr(start, "line", 0) + 1
+        start_char = _get_symbol_attr(start, "character", 0)
+        end_line = _get_symbol_attr(end, "line", 0) + 1
+        end_char = _get_symbol_attr(end, "character", 0)
+        return f"{start_line}:{start_char}→{end_line}:{end_char}"
+    return "无效范围"
 
 
 def _create_completion_table(items):
@@ -104,21 +119,21 @@ def _create_symbol_table(symbols):
     table.add_column("标签/状态", width=15)
 
     for sym in symbols:
-        loc = sym["location"]
-        uri = urlparse(loc["uri"]).path
-        position = f"{loc['range']['start']['line']+1}:{loc['range']['start']['character']}"
+        loc = _get_symbol_attr(sym, "location")
+        uri = urlparse(_get_symbol_attr(loc, "uri", "")).path
+        position = f"{_get_symbol_attr(loc['range']['start'], 'line', 0)+1}:{_get_symbol_attr(loc['range']['start'], 'character', 0)}"
 
         tags = []
-        if sym.get("tags"):
-            tags += ["Deprecated" if t == 1 else f"Unknown({t})" for t in sym["tags"]]
-        if sym.get("deprecated"):
+        if _get_symbol_attr(sym, "tags"):
+            tags += ["Deprecated" if t == 1 else f"Unknown({t})" for t in _get_symbol_attr(sym, "tags")]
+        if _get_symbol_attr(sym, "deprecated"):
             tags.append("Deprecated")
 
         table.add_row(
-            sym["name"],
-            _symbol_kind_name(sym["kind"]),
+            _get_symbol_attr(sym, "name"),
+            _symbol_kind_name(_get_symbol_attr(sym, "kind")),
             f"{unquote(uri)} {position}",
-            sym.get("containerName", ""),
+            _get_symbol_attr(sym, "containerName", ""),
             ", ".join(tags) or "N/A",
         )
     return table
@@ -151,7 +166,7 @@ def _build_container_tree(symbols):
     """根据containerName构建符号树"""
     container_map = {}
     for sym in symbols:
-        container = sym.get("containerName", "")
+        container = _get_symbol_attr(sym, "containerName", "")
         if container not in container_map:
             container_map[container] = []
         container_map[container].append(sym)
@@ -164,7 +179,20 @@ def _build_container_tree(symbols):
             node = tree
         for sym in symbols_in_container:
             # 添加location到符号数据以兼容处理
-            if "location" not in sym and "range" in sym:
-                sym["location"] = {"uri": "", "range": sym["range"]}
+            if not _get_symbol_attr(sym, "location") and _get_symbol_attr(sym, "range"):
+                sym["location"] = {"uri": "", "range": _get_symbol_attr(sym, "range")}
             _build_symbol_tree(sym, node)
     return tree
+
+
+def _create_json_table(data):
+    """将JSON数据美化成表格"""
+    table = Table(title="JSON 数据", show_header=True, header_style="bold blue", expand=True)
+    table.add_column("Key", style="cyan", no_wrap=True)
+    table.add_column("Value", style="green")
+
+    for key, value in data.items():
+        if isinstance(value, (dict, list)):
+            value = str(value)
+        table.add_row(key, str(value))
+    return table

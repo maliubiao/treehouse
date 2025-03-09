@@ -1,3 +1,5 @@
+import os
+
 from rich.panel import Panel
 
 from .. import GenericLSPClient
@@ -22,11 +24,12 @@ class CallHierarchyPlugin(LSPCommandPlugin):
             console.print("[red]行号和列号必须是数字[/red]")
             return
 
+        abs_file_path = os.path.abspath(file_path)
         # 准备调用层次结构
         prepare_result = await lsp_client.send_request(
             "textDocument/prepareCallHierarchy",
             {
-                "textDocument": {"uri": f"file://{file_path}"},
+                "textDocument": {"uri": f"file://{abs_file_path}"},
                 "position": {"line": line - 1, "character": char},
             },
         )
