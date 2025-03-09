@@ -3,6 +3,7 @@ import os
 from rich.panel import Panel
 from rich.tree import Tree
 
+from .. import GenericLSPClient
 from ..utils import (
     _build_container_tree,
     _build_symbol_tree,
@@ -18,7 +19,7 @@ class SymbolsPlugin(LSPCommandPlugin):
     description = "获取文档符号列表（支持层次结构/扁平列表/容器树）"
 
     @staticmethod
-    async def handle_command(console, lsp_client, parts):
+    async def handle_command(console, lsp_client: GenericLSPClient, parts):
         if not _validate_args(console, parts, 2):
             return
 

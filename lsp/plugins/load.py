@@ -3,6 +3,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from .. import GenericLSPClient
 from ..utils import _validate_args
 from . import LSPCommandPlugin
 
@@ -15,7 +16,7 @@ class LoadPlugin(LSPCommandPlugin):
     description = "加载源代码文件到LSP服务器"
 
     @staticmethod
-    async def handle_command(console: Console, lsp_client, parts: list):
+    async def handle_command(console: Console, lsp_client: GenericLSPClient, parts: list):
         if not _validate_args(console, parts, 2):
             return
 

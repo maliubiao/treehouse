@@ -1,3 +1,4 @@
+from .. import GenericLSPClient
 from ..utils import _validate_args
 from . import LSPCommandPlugin, format_response_panel
 
@@ -8,7 +9,7 @@ class DefinitionPlugin(LSPCommandPlugin):
     description = "获取符号定义位置"
 
     @staticmethod
-    async def handle_command(console, lsp_client, parts):
+    async def handle_command(console, lsp_client: GenericLSPClient, parts):
         if not _validate_args(console, parts, 4):
             return
         _, file_path, line, char = parts

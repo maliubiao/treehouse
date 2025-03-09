@@ -1,5 +1,6 @@
 from rich.panel import Panel
 
+from .. import GenericLSPClient
 from ..utils import _validate_args
 from . import LSPCommandPlugin, build_hierarchy_tree
 
@@ -10,7 +11,7 @@ class CallHierarchyPlugin(LSPCommandPlugin):
     description = "获取调用层次结构信息"
 
     @staticmethod
-    async def handle_command(console, lsp_client, parts):
+    async def handle_command(console, lsp_client: GenericLSPClient, parts):
         if not _validate_args(console, parts, 4):
             return
         _, file_path, line, char = parts
@@ -44,7 +45,7 @@ class CallHierarchyPlugin(LSPCommandPlugin):
         return f"{self.command_name}: {self.description}"
 
 
-def _build_call_hierarchy_tree(tree_node, item, lsp_client):
+def _build_call_hierarchy_tree(tree_node, item, lsp_client: GenericLSPClient):
     """递归构建调用层次结构树"""
     name = item["name"]
     kind = _symbol_kind_name(item["kind"])

@@ -1,5 +1,6 @@
 from rich.syntax import Syntax
 
+from .. import GenericLSPClient
 from ..utils import (
     _create_completion_table,
     _validate_args,
@@ -14,7 +15,7 @@ class CompletionPlugin(LSPCommandPlugin):
     description = "获取代码补全建议"
 
     @staticmethod
-    async def handle_command(console, lsp_client, parts):
+    async def handle_command(console, lsp_client: GenericLSPClient, parts):
         if not _validate_args(console, parts, 4):
             return
         _, file_path, line, char = parts
