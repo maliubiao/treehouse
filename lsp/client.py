@@ -7,6 +7,8 @@ import threading
 from logging import getLogger
 from urllib.parse import unquote, urlparse
 
+from .lsp_symbol_kind import SymbolKind
+
 logger = getLogger(__name__)
 
 
@@ -62,34 +64,7 @@ class GenericLSPClient:
                 "documentSymbol": {
                     "hierarchicalDocumentSymbolSupport": True,
                     "symbolKind": {
-                        "valueSet": [
-                            1,
-                            2,
-                            3,
-                            4,
-                            5,
-                            6,
-                            7,
-                            8,
-                            9,
-                            10,
-                            11,
-                            12,
-                            13,
-                            14,
-                            15,
-                            16,
-                            17,
-                            18,
-                            19,
-                            20,
-                            21,
-                            22,
-                            23,
-                            24,
-                            25,
-                            26,
-                        ]
+                        "valueSet": [v for k, v in vars(SymbolKind).items() if k.isupper() and isinstance(v, int)]
                     },
                 },
                 "completion": {
@@ -294,54 +269,90 @@ class GenericLSPClient:
             logger.error("Failed to get completion: %s", str(e))
             return None
 
-    async def _read_source_context(self, file_path, start_line):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                return "".join(lines[max(0, start_line - 2) : start_line + 3])
-        except (OSError, RuntimeError) as e:
-            logger.debug("Failed to read source: %s", str(e))
-            return ""
-
     async def get_definition(self, file_path, line, character):
-        """获取符号定义位置及源码信息"""
+        """获取符号定义位置"""
         try:
-            definition = await self.send_request(
+            return await self.send_request(
                 "textDocument/definition",
                 {
                     "textDocument": {"uri": f"file://{file_path}"},
                     "position": {"line": line - 1, "character": character},
                 },
             )
-
-            if not definition:
-                return None
-
-            locations = definition if isinstance(definition, list) else [definition]
-            results = []
-
-            for loc in locations:
-                parsed_uri = urlparse(loc["uri"])
-                file_path = unquote(parsed_uri.path)
-                if os.name == "nt" and len(file_path) >= 3 and file_path[0] == "/" and file_path[2] == ":":
-                    file_path = file_path[1:]
-                file_path = os.path.normpath(file_path)
-
-                start_line = loc["range"]["start"]["line"] + 1
-                start_char = loc["range"]["start"]["character"]
-
-                context = await self._read_source_context(file_path, start_line)
-                results.append(
-                    {
-                        "file_path": file_path,
-                        "line": start_line,
-                        "character": start_char,
-                        "source_context": context.strip(),
-                    }
-                )
-
-            return results[0] if len(results) == 1 else results
-
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get definition: %s", str(e))
+            return None
+
+    async def prepare_call_hierarchy(self, file_path, line, character):
+        """准备调用层次结构"""
+        try:
+            return await self.send_request(
+                "textDocument/prepareCallHierarchy",
+                {
+                    "textDocument": {"uri": f"file://{file_path}"},
+                    "position": {"line": line - 1, "character": character},
+                },
+            )
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to prepare call hierarchy: %s", str(e))
+            return None
+
+    async def get_incoming_calls(self, item):
+        """获取传入调用"""
+        try:
+            return await self.send_request("callHierarchy/incomingCalls", {"item": item})
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to get incoming calls: %s", str(e))
+            return None
+
+    async def get_outgoing_calls(self, item):
+        """获取传出调用"""
+        try:
+            return await self.send_request("callHierarchy/outgoingCalls", {"item": item})
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to get outgoing calls: %s", str(e))
+            return None
+
+    async def prepare_type_hierarchy(self, file_path, line, character):
+        """准备类型层次结构"""
+        try:
+            return await self.send_request(
+                "textDocument/prepareTypeHierarchy",
+                {
+                    "textDocument": {"uri": f"file://{file_path}"},
+                    "position": {"line": line - 1, "character": character},
+                },
+            )
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to prepare type hierarchy: %s", str(e))
+            return None
+
+    async def get_supertypes(self, item):
+        """获取超类型"""
+        try:
+            return await self.send_request("typeHierarchy/supertypes", {"item": item})
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to get supertypes: %s", str(e))
+            return None
+
+    async def get_subtypes(self, item):
+        """获取子类型"""
+        try:
+            return await self.send_request("typeHierarchy/subtypes", {"item": item})
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to get subtypes: %s", str(e))
+            return None
+
+    async def get_signature_help(self, file_path, line, character):
+        """获取函数签名信息"""
+        try:
+            return await self.send_request(
+                "textDocument/signatureHelp",
+                {
+                    "textDocument": {"uri": f"file://{file_path}"},
+                    "position": {"line": line - 1, "character": character},
+                },
+            )
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to get signature help: %s", str(e))
             return None

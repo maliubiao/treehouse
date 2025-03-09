@@ -26,13 +26,7 @@ class CallHierarchyPlugin(LSPCommandPlugin):
 
         abs_file_path = os.path.abspath(file_path)
         # 准备调用层次结构
-        prepare_result = await lsp_client.send_request(
-            "textDocument/prepareCallHierarchy",
-            {
-                "textDocument": {"uri": f"file://{abs_file_path}"},
-                "position": {"line": line - 1, "character": char},
-            },
-        )
+        prepare_result = await lsp_client.prepare_call_hierarchy(abs_file_path, line, char)
         if not prepare_result:
             console.print(Panel("🕳️ 没有找到调用层次结构", title="空结果", border_style="blue"))
             return
@@ -55,20 +49,14 @@ def _build_call_hierarchy_tree(tree_node, item, lsp_client: GenericLSPClient):
     node = tree_node.add(f"[bold]{name}[/] ({kind})")
 
     # 获取传入调用
-    incoming_calls = lsp_client.send_request(
-        "callHierarchy/incomingCalls",
-        {"item": item},
-    )
+    incoming_calls = lsp_client.get_incoming_calls(item)
     if incoming_calls:
         incoming_node = node.add("📥 传入调用")
         for call in incoming_calls:
             _build_call_hierarchy_tree(incoming_node, call["from"], lsp_client)
 
     # 获取传出调用
-    outgoing_calls = lsp_client.send_request(
-        "callHierarchy/outgoingCalls",
-        {"item": item},
-    )
+    outgoing_calls = lsp_client.get_outgoing_calls(item)
     if outgoing_calls:
         outgoing_node = node.add("📤 传出调用")
         for call in outgoing_calls:
