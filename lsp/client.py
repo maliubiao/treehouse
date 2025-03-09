@@ -48,6 +48,7 @@ class Capabilities:
         self.diagnostic_provider = capabilities_dict.get("diagnosticProvider")
         self.workspace_symbol_provider = capabilities_dict.get("workspaceSymbolProvider")
         self.workspace = capabilities_dict.get("workspace", {})
+        self.workspace_workspace_folders = self.workspace.get("workspaceFolders", {})
         self.experimental = capabilities_dict.get("experimental")
 
     def supports(self, feature):
@@ -64,6 +65,8 @@ class Capabilities:
             "implementation": self.implementation_provider,
             "rename": self.rename_provider,
             "codeAction": self.code_action_provider,
+            "workspaceFolders": self.workspace_workspace_folders.get("supported", False),
+            "workspaceSymbol": self.workspace_symbol_provider,
         }
         return bool(provider_map.get(feature))
 
@@ -141,14 +144,26 @@ class GenericLSPClient:
                     },
                     "contextSupport": True,
                 },
-                "definition": {"linkSupport": True},
-                "typeDefinition": {"linkSupport": True},
+                "definition": {"linkSupport": False},
+                "typeDefinition": {"linkSupport": False},
             },
             "workspace": {
                 "workspaceFolders": True,
                 "fileOperations": {"didCreateFiles": True, "didDeleteFiles": True, "didRenameFiles": True},
+                "symbol": {
+                    "dynamicRegistration": True,
+                    "symbolKind": {
+                        "valueSet": [v for k, v in vars(SymbolKind).items() if k.isupper() and isinstance(v, int)]
+                    },
+                    "resolveSupport": {"properties": ["location.range", "location.uri", "containerName"]},
+                },
             },
         }
+
+        workspace_folders = self.init_params.get(
+            "workspaceFolders",
+            [{"uri": f"file://{self.workspace_path}", "name": os.path.basename(self.workspace_path.rstrip(os.sep))}],
+        )
 
         init_params = {
             "processId": os.getpid(),
@@ -158,6 +173,7 @@ class GenericLSPClient:
                 "hover": {"show": {"computations": True, "debug": False}},
                 "completion": {"resolveTriggerCharacters": [".", ":", "@"]},
             },
+            "workspaceFolders": workspace_folders,
             **self.init_params,
         }
         future = self.send_request("initialize", init_params)
@@ -318,6 +334,15 @@ class GenericLSPClient:
             )
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get document symbols: %s", str(e))
+            return None
+
+    async def get_workspace_symbols(self, query):
+        """获取工作区符号"""
+        self._check_feature_support("workspaceSymbol")
+        try:
+            return await asyncio.wrap_future(self.send_request("workspace/symbol", {"query": query}))
+        except (OSError, RuntimeError) as e:
+            logger.error("Failed to get workspace symbols: %s", str(e))
             return None
 
     async def get_hover_info(self, file_path, line, character):

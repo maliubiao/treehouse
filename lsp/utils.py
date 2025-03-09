@@ -154,9 +154,9 @@ def _get_symbol_position(sym):
         return "未知位置"
 
     uri = urlparse(_get_symbol_attr(loc, "uri", "")).path
-    start = _get_symbol_attr(loc["range"]["start"], "line", 0) + 1
-    char = _get_symbol_attr(loc["range"]["start"], "character", 0)
-    return f"{unquote(uri)} {start}:{char}"
+    start = _get_symbol_attr(loc.get("range", {}).get("start"), "line", 0) + 1
+    char = _get_symbol_attr(loc.get("range", {}).get("start"), "character", 0)
+    return f"{unquote(uri)} {start}:{char}" if start else f"{unquote(uri)}"
 
 
 def _get_symbol_tags(sym):
