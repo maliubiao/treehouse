@@ -394,7 +394,9 @@ def _process_and_save_response(
     history.append({"role": "assistant", "content": content})
 
     # 保存更新后的对话历史
-    save_conversation_history(kwargs.get("conversation_file", "conversation_history.json"), history)
+    save_conversation_history(
+        kwargs.get("conversation_file", os.path.join(os.path.dirname(__file__), "conversation_history.json")), history
+    )
 
     # 处理think标签
     content, reasoning = _handle_think_tags(content, reasoning)
