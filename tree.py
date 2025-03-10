@@ -2248,7 +2248,7 @@ def build_plaintext_response(contents: list) -> PlainTextResponse:
     return PlainTextResponse("\n\n".join(contents))
 
 
-def update_trie_if_needed(prefix: str, trie, file_mtime_cache) -> bool:
+def update_trie_if_needed(prefix: str, trie, file_mtime_cache, just_path=False) -> bool:
     """根据前缀更新前缀树，如果需要的话
 
     Args:
@@ -2261,16 +2261,17 @@ def update_trie_if_needed(prefix: str, trie, file_mtime_cache) -> bool:
     """
     if not prefix.startswith("symbol:"):
         return False
-
-    # 使用rfind找到最后一个/的位置
-    last_slash_idx = prefix.rfind("/")
-    if last_slash_idx == -1:
-        # 没有斜杠时，直接去掉'symbol:'前缀
-        file_path = prefix[len("symbol:") :]
+    if not just_path:
+        # 使用rfind找到最后一个/的位置
+        last_slash_idx = prefix.rfind("/")
+        if last_slash_idx == -1:
+            # 没有斜杠时，直接去掉'symbol:'前缀
+            file_path = prefix[len("symbol:") :]
+        else:
+            # 提取从'symbol:'到最后一个/之间的部分作为文件路径
+            file_path = prefix[len("symbol:") : last_slash_idx]
     else:
-        # 提取从'symbol:'到最后一个/之间的部分作为文件路径
-        file_path = prefix[len("symbol:") : last_slash_idx]
-
+        file_path = prefix[len("symbol:") :] if prefix.startswith("symbol:") else prefix
     # 检查文件扩展名是否在支持的语言中
     ext = os.path.splitext(file_path)[1]  # 去掉点号
     if ext not in SUPPORTED_LANGUAGES:
@@ -2306,7 +2307,9 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
     trie = app.state.file_symbol_trie
     max_results = clamp(max_results, 1, 50)
     file_path, symbols = parse_symbol_prefix(prefix)
+    print("debug", file_path, symbols)
     current_prefix = determine_current_prefix(file_path, symbols)
+    print("prefix", current_prefix)
     updated = update_trie_for_completion(file_path, trie, app.state.file_mtime_cache)
 
     results = perform_trie_search(trie, current_prefix, max_results, file_path, updated)
@@ -2334,10 +2337,10 @@ def parse_symbol_prefix(prefix: str) -> tuple[str | None, list[str]]:
 
 def determine_current_prefix(file_path: str | None, symbols: list[str]) -> str:
     """确定当前搜索前缀"""
-    if symbols:
+    if symbols and any(symbols):
         return f"symbol:{file_path}/{symbols[-1]}"
     if file_path:
-        return f"symbol:{file_path.split("/")[-1]}"
+        return f"symbol:{file_path}"
     return ""
 
 
@@ -2345,7 +2348,7 @@ def update_trie_for_completion(file_path: str | None, trie: Any, mtime_cache: An
     """更新前缀树数据"""
     if not file_path:
         return False
-    return update_trie_if_needed(f"symbol:{file_path}", trie, mtime_cache)
+    return update_trie_if_needed(f"symbol:{file_path}", trie, mtime_cache, just_path=True)
 
 
 def perform_trie_search(trie: Any, prefix: str, max_results: int, file_path: str | None, updated: bool) -> list:

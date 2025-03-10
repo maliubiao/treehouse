@@ -100,13 +100,15 @@ def _handle_directory_completion(local_path: str, api_server: str):
 def _complete_local_directory(local_path: str):
     """执行本地目录补全"""
     try:
-        dir_path = Path(local_path).parent or Path(".")
-        base_name = Path(local_path).name
+        clean_path = local_path.rstrip("/")
+        dir_path = Path(clean_path)
+        if not dir_path.is_dir():
+            logging.warning("Directory path does not exist or is not a directory: %s", clean_path)
+            return
 
         for item in dir_path.iterdir():
-            if item.name.startswith(base_name):
-                suffix = "/" if item.is_dir() else ""
-                print(f"symbol_{item}{suffix}")
+            suffix = "/" if item.is_dir() else ""
+            print(f"symbol_{clean_path}/{item.name}{suffix}")
     except OSError as e:
         logging.error("Local completion failed: %s", str(e))
 
