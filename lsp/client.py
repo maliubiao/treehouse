@@ -68,8 +68,17 @@ class Capabilities:
             "codeAction": self.code_action_provider,
             "workspaceFolders": self.workspace_workspace_folders.get("supported", False),
             "workspaceSymbol": self.workspace_symbol_provider,
+            "textDocumentSync": self._get_text_sync_kind(),
         }
         return bool(provider_map.get(feature))
+
+    def _get_text_sync_kind(self):
+        """解析文本同步类型"""
+        if isinstance(self.text_document_sync, dict):
+            return self.text_document_sync.get("change")
+        if isinstance(self.text_document_sync, int):
+            return self.text_document_sync
+        return None
 
 
 class LSPFeatureError(NotImplementedError):
@@ -94,6 +103,7 @@ class GenericLSPClient:
         self._lock = threading.Lock()
         self.capabilities = None
         self.initialized_event = threading.Event()
+        self._document_versions = {}
         atexit.register(self._cleanup)
 
     def start(self):
@@ -337,6 +347,25 @@ class GenericLSPClient:
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get document symbols: %s", str(e))
             return None
+
+    async def did_change(self, file_path: str, content: str):
+        """发送文档变更通知（全量更新）"""
+        self._check_feature_support("textDocumentSync")
+        sync_kind = self.capabilities._get_text_sync_kind()
+
+        if sync_kind != 1:  # 1表示Full同步模式
+            raise LSPFeatureError(f"textDocumentSync Full (current sync kind: {sync_kind})")
+
+        # 更新文档版本号
+        version = self._document_versions.get(file_path, 1) + 1
+        self._document_versions[file_path] = version
+
+        params = {
+            "textDocument": {"uri": f"file://{file_path}", "version": version},
+            "contentChanges": [{"text": content}],
+        }
+        self.send_notification("textDocument/didChange", params)
+        logger.debug("Sent didChange notification for %s (version %d)", file_path, version)
 
     async def get_workspace_symbols(self, query):
         """获取工作区符号"""

@@ -115,7 +115,19 @@ def _complete_local_directory(local_path: str):
 
 def _request_api_completion(api_server: str, prefix: str):
     """请求远程API补全"""
+    original_env = {
+        "HTTP_PROXY": os.environ.get("HTTP_PROXY"),
+        "HTTPS_PROXY": os.environ.get("HTTPS_PROXY"),
+        "ALL_PROXY": os.environ.get("ALL_PROXY"),
+        "http_proxy": os.environ.get("http_proxy"),
+        "https_proxy": os.environ.get("https_proxy"),
+        "all_proxy": os.environ.get("all_proxy"),
+    }
     try:
+        # 彻底清除代理环境变量
+        for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
+            os.environ.pop(proxy_var, None)
+
         api_prefix = prefix.replace("symbol_", "symbol:")
         resp = requests.get(
             f"{api_server}complete_realtime",
@@ -128,6 +140,13 @@ def _request_api_completion(api_server: str, prefix: str):
                 print(item.replace("symbol:", "symbol_"))
     except requests.RequestException as e:
         logging.error("API request failed: %s", str(e))
+    finally:
+        # 恢复原始环境变量
+        for var, value in original_env.items():
+            if value is not None:
+                os.environ[var] = value
+            else:
+                os.environ.pop(var, None)
 
 
 def scan_conversation_files(conversation_dir: str, limit: int):

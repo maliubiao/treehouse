@@ -202,6 +202,10 @@ codegpt() {
     askgpt @edit @edit-file @tree $@
 }
 
+patchgpt() {
+    askgpt @patch $@
+}
+
 # 补全功能辅助函数
 
 _get_prompt_files() {
@@ -271,7 +275,7 @@ _zsh_completion_setup() {
         _alternative "providers:可用模型:(${providers[@]})"
     }
 
-    compdef _zsh_at_complete askgpt naskgpt codegpt
+    compdef _zsh_at_complete askgpt naskgpt codegpt patchgpt
     compdef _zsh_usegpt_complete usegpt
 }
 
