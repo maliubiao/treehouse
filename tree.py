@@ -20,6 +20,7 @@ from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote, urlparse
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException
@@ -30,6 +31,7 @@ from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Parser, Query
 
 from lsp.client import GenericLSPClient, LSPFeatureError
+from lsp.language_id import LanguageId
 
 # 定义语言名称常量
 C_LANG = "c"
@@ -2147,8 +2149,219 @@ def extract_identifiable_path(file_path: str) -> str:
 import pdb
 
 
+async def location_to_symbol(
+    symbol: Dict, trie: SymbolTrie, lsp_client: GenericLSPClient, lookup_cache: Dict | None = None
+) -> List[Dict]:
+    """通过LSP获取定义位置并更新符号前缀树
+
+    Args:
+        symbol: 包含调用信息的符号字典
+        trie: 符号前缀树
+        lsp_client: LSP客户端实例
+        lookup_cache: 符号查找缓存，避免重复查找相同位置的符号
+
+    Returns:
+        收集到的符号定义信息列表
+    """
+    collected_symbols = []
+    file_content_cache = {}
+    file_lines_cache = {}
+    if not lookup_cache:
+        lookup_cache = {}
+
+    # 初始化LSP服务器
+    await _initialize_lsp_server(symbol, lsp_client)
+    # 处理每个调用
+    for call in symbol["calls"]:
+        try:
+            symbols = await _process_call(
+                call, symbol["file_path"], trie, lsp_client, file_content_cache, file_lines_cache, lookup_cache
+            )
+            collected_symbols.extend(symbols)
+        except Exception as e:
+            print(f"处理调用 {call['name']} 时发生错误: {str(e)}")
+
+    return collected_symbols
+
+
+async def _initialize_lsp_server(symbol: Dict, lsp_client: GenericLSPClient) -> None:
+    """初始化LSP服务器，发送文件打开通知"""
+    file_path = symbol["file_path"]
+    with open(file_path, "r", encoding="utf-8") as f:
+        file_content = f.read()
+
+    language_id = LanguageId.get_language_id(file_path)
+    abs_file_path = os.path.abspath(file_path)
+    lsp_client.send_notification(
+        "textDocument/didOpen",
+        {
+            "textDocument": {
+                "uri": f"file://{abs_file_path}",
+                "languageId": language_id,
+                "version": 1,
+                "text": file_content,
+            }
+        },
+    )
+
+
+async def _process_call(
+    call: Dict,
+    file_path: str,
+    trie: SymbolTrie,
+    lsp_client: GenericLSPClient,
+    file_content_cache: Dict,
+    file_lines_cache: Dict,
+    lookup_cache: Dict | None = None,
+) -> List[Dict]:
+    """处理单个调用，返回收集到的符号信息"""
+    call_name = call["name"]
+    line = call["start_point"][0] + 1
+    char = call["start_point"][1] + 1
+
+    # 获取定义信息
+    definition = await lsp_client.get_definition(os.path.abspath(file_path), line, char)
+    if not definition:
+        return []
+
+    definitions = definition if isinstance(definition, list) else [definition]
+
+    collected_symbols = []
+    for def_item in definitions:
+        # 生成缓存key
+        uri = def_item.get("uri", "")
+        def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
+        if not def_path:
+            continue
+
+        cache_key = f"{def_path}:{def_item.get('range', {}).get('start', {}).get('line', 0)}"
+        if lookup_cache and cache_key in lookup_cache:
+            continue
+        symbols = await _process_definition(def_item, trie, call_name, file_content_cache, file_lines_cache)
+        if lookup_cache:
+            lookup_cache[cache_key] = symbols
+        collected_symbols.extend(symbols)
+
+    return collected_symbols
+
+
+async def _process_definition(
+    def_item: Dict, trie: SymbolTrie, call_name: str, file_content_cache: Dict, file_lines_cache: Dict
+) -> List[Dict]:
+    """处理单个定义项，返回收集到的符号信息"""
+    # 解析定义位置
+    uri = def_item.get("uri", "")
+    def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
+    if not def_path or not os.path.exists(def_path):
+        return []
+
+    # 更新前缀树
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    rel_def_path = os.path.relpath(def_path, current_dir)
+    update_trie_if_needed(f"symbol:{rel_def_path}", trie, app.state.file_mtime_cache, just_path=True)
+
+    # 获取文件内容
+    lines = _get_file_content(def_path, file_content_cache, file_lines_cache)
+
+    # 提取符号信息
+    symbol_name = _extract_symbol_name(def_item, lines)
+    if not symbol_name:
+        return []
+
+    # 搜索并收集符号
+    return _collect_symbols(rel_def_path, symbol_name, call_name, trie, file_content_cache)
+
+
+def _get_file_content(file_path: str, file_content_cache: Dict, file_lines_cache: Dict) -> List[str]:
+    """获取文件内容，使用缓存优化性能"""
+    if file_path not in file_content_cache:
+        with open(file_path, "rb") as f:
+            file_content_cache[file_path] = f.read()
+            file_lines_cache[file_path] = file_content_cache[file_path].decode("utf8").splitlines()
+    return file_lines_cache[file_path]
+
+
+def _extract_symbol_name(def_item: Dict, lines: List[str]) -> str:
+    """从定义项中提取符号名称"""
+    range_info = def_item.get("range", {})
+    start = range_info.get("start", {})
+    end = range_info.get("end", {})
+
+    # 处理行号
+    start_line = start.get("line", 0)
+    if start_line >= len(lines):
+        return ""
+    target_line = lines[start_line]
+
+    # 处理字符位置
+    start_char = start.get("character", 0)
+    end_char = end.get("character", start_char + 1)
+
+    # 提取符号名称
+    symbol_name = target_line[start_char:end_char].strip()
+    if not symbol_name:
+        symbol_name = _expand_symbol_from_line(target_line, start_char, end_char)
+    return symbol_name
+
+
+def _collect_symbols(
+    rel_def_path: str, symbol_name: str, call_name: str, trie: SymbolTrie, file_content_cache: Dict
+) -> List[Dict]:
+    """收集符号信息"""
+    symbols = perform_trie_search(
+        trie=trie,
+        prefix=f"symbol:{rel_def_path}/{symbol_name}",
+        max_results=5,
+        file_path=rel_def_path,
+        updated=True,
+        search_exact=True,
+    )
+
+    collected_symbols = []
+    for s in symbols:
+        if not s:
+            continue
+        # 获取符号的完整位置信息
+        start_point, end_point, block_range = s["location"]
+        # 提取符号对应的源代码内容
+        content = file_content_cache[os.path.abspath(rel_def_path)][block_range[0] : block_range[1]].decode("utf8")
+        # 构造完整的符号信息
+        symbol_info = {
+            "name": symbol_name,
+            "file_path": rel_def_path,
+            "location": {
+                "start_line": start_point[0],
+                "start_col": start_point[1],
+                "end_line": end_point[0],
+                "end_col": end_point[1],
+                "block_range": block_range,
+            },
+            "content": content,
+            "jump_from": call_name,
+            "calls": s.get("calls", []),
+        }
+        collected_symbols.append(symbol_info)
+
+    return collected_symbols
+
+
+def _expand_symbol_from_line(line: str, start: int, end: int) -> str:
+    """从行内容扩展符号边界"""
+    # 向左扩展边界
+    while start > 0 and (line[start - 1].isidentifier() or line[start - 1] == "_"):
+        start -= 1
+
+    # 向右扩展边界
+    while end < len(line) and (line[end].isidentifier() or line[end] == "_"):
+        end += 1
+
+    return line[start:end].strip() or "<无名符号>"
+
+
 @app.get("/symbol_content")
-async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), json: bool = False):
+async def get_symbol_content(
+    symbol_path: str = QueryArgs(..., min_length=1), json: bool = False, lsp_enabled: bool = False
+):
     """根据符号路径获取符号对应的源代码内容
 
     Args:
@@ -2179,9 +2392,17 @@ async def get_symbol_content(symbol_path: str = QueryArgs(..., min_length=1), js
 
     # 内容提取
     contents = extract_contents(source_code, symbol_results)
-
+    collected_symbols = []
+    lookup_cache = {}
+    if lsp_enabled:
+        for symbol in symbol_results:
+            collected_symbols.extend(await location_to_symbol(symbol, trie, app.state.LSP_CLIENT, lookup_cache))
     # 构建响应
-    return build_json_response(symbol_results, contents) if json else build_plaintext_response(contents)
+    return (
+        collected_symbols + build_json_response(symbol_results, contents)
+        if json
+        else build_plaintext_response(contents)
+    )
 
 
 def parse_symbol_path(symbol_path: str) -> tuple[str, list] | PlainTextResponse:
@@ -2243,6 +2464,7 @@ def build_json_response(symbol_results: list, contents: list) -> list:
                 "end_col": result["location"][1][1],
                 "block_range": result["location"][2],
             },
+            "calls": result.get("calls", []),
         }
         for result, content in zip(symbol_results, contents)
     ]
@@ -2394,10 +2616,14 @@ def update_trie_for_completion(file_path: str | None, trie: Any, mtime_cache: An
     return update_trie_if_needed(f"symbol:{file_path}", trie, mtime_cache, just_path=True)
 
 
-def perform_trie_search(trie: Any, prefix: str, max_results: int, file_path: str | None, updated: bool) -> list:
+def perform_trie_search(
+    trie: SymbolTrie, prefix: str, max_results: int, file_path: str | None, updated: bool, search_exact: bool = False
+) -> list:
     """执行前缀树搜索"""
-    results = trie.search_prefix(prefix, max_results=max_results) if file_path else []
-
+    if search_exact:
+        results = [trie.search_exact(prefix)]
+    else:
+        results = trie.search_prefix(prefix, max_results=max_results) if file_path else []
     if not results and file_path and not updated:
         if update_trie_if_needed(f"symbol:{file_path}", trie, app.state.file_mtime_cache):
             return trie.search_prefix(prefix, max_results)

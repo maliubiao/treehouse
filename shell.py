@@ -128,7 +128,7 @@ def _request_api_completion(api_server: str, prefix: str):
         for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
             os.environ.pop(proxy_var, None)
 
-        api_prefix = prefix.replace("symbol_", "symbol:")
+        api_prefix = prefix.replace("symbol_", "symbol:", 1)  # 仅替换第一个symbol_
         resp = requests.get(
             f"{api_server}complete_realtime",
             params={"prefix": api_prefix},
