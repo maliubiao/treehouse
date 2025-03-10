@@ -47,7 +47,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from lsp import GenericLSPClient
 from tree import BlockPatch
 
 MAX_FILE_SIZE = 32000
@@ -1265,22 +1264,20 @@ def parse_llm_response(response_text, symbol_names=None):
     return parser.parse(response_text)
 
 
-def process_patch_response(response_text, symbol_detail, client: GenericLSPClient = None):
+def process_patch_response(response_text, symbol_detail):
     """
     处理大模型的补丁响应，生成差异并应用补丁
 
     参数:
         response_text: 大模型返回的响应文本（可能包含<thinking>标签）
         symbol_detail: 要处理的符号
-        client: 可选的LSP客户端，用于通知文件变更
 
     返回:
         如果用户确认应用补丁，则返回修改后的代码(bytes)
         否则返回None
     """
     # 过滤掉<thinking>标签内容（包含多行情况）
-    filtered_response = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
-    # 解析大模型响应
+    filtered_response = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()  # 解析大模型响应
     results = parse_llm_response(filtered_response, symbol_detail.keys())
 
     # 准备BlockPatch参数
@@ -1319,14 +1316,6 @@ def process_patch_response(response_text, symbol_detail, client: GenericLSPClien
         for file in file_map:
             with open(file, "wb+") as f:
                 f.write(file_map[file])
-        # 通知LSP客户端文件变更
-        if client:
-            for file_path, content_bytes in file_map.items():
-                try:
-                    content_str = content_bytes.decode("utf-8")
-                    client.did_change(file_path, content_str)
-                except Exception as e:
-                    print(f"通知LSP变更失败: {str(e)}")
         print("补丁已成功应用")
         return file_map
     else:
@@ -1897,7 +1886,7 @@ def _save_diff_content(diff_content):
     return None
 
 
-def _display_and_apply_diff(diff_file, auto_apply=False, lsp_client: GenericLSPClient = None, modified_files=None):
+def _display_and_apply_diff(diff_file, auto_apply=False):
     """显示并应用diff"""
     if diff_file.exists():
         with open(diff_file, "r", encoding="utf-8") as f:
@@ -1908,33 +1897,24 @@ def _display_and_apply_diff(diff_file, auto_apply=False, lsp_client: GenericLSPC
 
         if auto_apply:
             print("自动应用变更...")
-            _apply_patch(diff_file, lsp_client=lsp_client, modified_files=modified_files)
+            _apply_patch(diff_file)
         else:
             print(f"\n申请变更文件，是否应用 {diff_file}？")
             apply = input("输入 y 应用，其他键跳过: ").lower()
             if apply == "y":
-                _apply_patch(diff_file, lsp_client=lsp_client, modified_files=modified_files)
+                _apply_patch(diff_file)
 
 
-def _apply_patch(diff_file, lsp_client=None, modified_files=None):
+def _apply_patch(diff_file):
     """应用patch的公共方法"""
     try:
         subprocess.run(["patch", "-p0", "-i", str(diff_file)], check=True)
         print("已成功应用变更")
-        if lsp_client and modified_files:
-            for file_path in modified_files:
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    lsp_client.did_change(file_path, content)
-                    print(f"通知LSP客户端文件变更: {file_path}")
-                except Exception as e:
-                    print(f"通知LSP客户端失败: {e}")
     except subprocess.CalledProcessError as e:
         print(f"应用变更失败: {e}")
 
 
-def extract_and_diff_files(content, auto_apply=False, lsp_client: GenericLSPClient = None):
+def extract_and_diff_files(content, auto_apply=False):
     """从内容中提取文件并生成diff"""
     _save_response_content(content)
     matches = _extract_file_matches(content)
@@ -1942,7 +1922,6 @@ def extract_and_diff_files(content, auto_apply=False, lsp_client: GenericLSPClie
         return
 
     diff_content = ""
-    modified_files = []
     for filename, file_content in matches:
         file_path = Path(filename.strip()).absolute()
         old_file_path = file_path
@@ -1954,15 +1933,14 @@ def extract_and_diff_files(content, auto_apply=False, lsp_client: GenericLSPClie
         _save_file_to_shadowroot(shadow_file_path, file_content)
         original_content = ""
         print("debug", old_file_path)
-        with open(old_file_path, "r", encoding="utf8") as f:
+        with open(str(old_file_path), "r", encoding="utf8") as f:
             original_content = f.read()
         diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
         diff_content += "\n".join(diff) + "\n\n"
-        modified_files.append(str(old_file_path))
 
     diff_file = _save_diff_content(diff_content)
     if diff_file:
-        _display_and_apply_diff(diff_file, auto_apply=auto_apply, lsp_client=lsp_client, modified_files=modified_files)
+        _display_and_apply_diff(diff_file, auto_apply=auto_apply)
 
 
 def process_response(prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None):

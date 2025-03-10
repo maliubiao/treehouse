@@ -485,13 +485,14 @@ class TestExtractAndDiffFiles(unittest.TestCase):
         mock_file = MagicMock()
         mock_file.exists.return_value = True
         mock_file.__str__.return_value = test_file_path
+        mock_file.absolute.return_value = mock_file
         mock_path.return_value = mock_file
         mock_gen_diff.return_value = [f"--- a/{test_file_path}", f"+++ b/{test_file_path}", "@@ -1 +1,3 @@"]
 
         llm_query.extract_and_diff_files("content", auto_apply=True)
 
         mock_save_shadow.assert_called_once()
-        mock_file_open.assert_any_call(mock_file, "r", encoding="utf8")
+        mock_file_open.assert_any_call(test_file_path, "r", encoding="utf8")
         mock_gen_diff.assert_called_once()
         mock_save_diff.assert_called_once_with("\n".join(mock_gen_diff.return_value) + "\n\n")
 
