@@ -56,6 +56,61 @@ def handle_complete(prefix: str):
         _process_file_completion(path_obj, gpt_api_server, prefix)
 
 
+def handle_cmd_complete(prefix: str):
+    """
+    传入以@号开头, [clipboard tree treefull read listen glow last edit patch context]
+    这是特殊实例
+    可补全GPT_PATH/prompts目录下的文件
+    可任意子目录，子文件
+    当以symbol_开头时，用handle_complete补全
+    对补全的结果数组做排序
+    """
+    prefix = prefix.strip("@")
+    special_commands = [
+        "clipboard",
+        "tree",
+        "treefull",
+        "read",
+        "listen",
+        "glow",
+        "last",
+        "edit",
+        "patch",
+        "context",
+        "symbol_",
+    ]
+
+    completions = []
+    prompts_dir = os.path.join(os.getenv("GPT_PATH", ""), "prompts")
+
+    # 处理特殊命令补全
+    completions.extend(cmd for cmd in special_commands if cmd.startswith(prefix))
+
+    # 处理prompts目录补全
+    if os.path.isdir(prompts_dir):
+        try:
+            items = os.listdir(prompts_dir)
+            for item in items:
+                full_path = item.replace(":", "_")
+                if full_path.startswith(prefix):
+                    if os.path.isdir(os.path.join(prompts_dir, item)):
+                        completions.append(f"{full_path}/")
+                    else:
+                        completions.append(full_path)
+        except OSError as e:
+            logging.error(f"Failed to list prompts directory: {e}")
+    # 处理symbol_前缀补全
+    if prefix.startswith("symbol_"):
+        handle_complete(prefix)
+        return
+    # 去重排序并添加@前缀
+    seen = set()
+    for item in sorted(completions):
+        if item not in seen:
+            seen.add(item)
+            print(f"{item}")
+
+
 def _process_file_completion(path_obj: Path, api_server: str, prefix: str):
     """统一处理文件补全逻辑"""
     if path_obj.exists():
@@ -76,9 +131,12 @@ def _complete_partial_path(parent_dir: Path, base_name: str):
     try:
         for item in parent_dir.iterdir():
             if item.name.startswith(base_name):
-                relative_path = parent_dir.joinpath(item.name).as_posix()
-                suffix = "/" if item.is_dir() else ""
-                print(f"symbol_{relative_path}{suffix}")
+                if parent_dir == Path("."):
+                    print(f"symbol_{item.name}")
+                else:
+                    relative_path = parent_dir.joinpath(item.name).as_posix()
+                    suffix = "/" if item.is_dir() else ""
+                    print(f"symbol_{relative_path}{suffix}")
     except OSError as e:
         logging.error("Partial path completion failed: %s", str(e))
 
@@ -108,7 +166,10 @@ def _complete_local_directory(local_path: str):
 
         for item in dir_path.iterdir():
             suffix = "/" if item.is_dir() else ""
-            print(f"symbol_{clean_path}/{item.name}{suffix}")
+            if clean_path == ".":
+                print(f"symbol_{item.name}{suffix}")
+            else:
+                print(f"symbol_{clean_path}/{item.name}{suffix}")
     except OSError as e:
         logging.error("Local completion failed: %s", str(e))
 
@@ -209,6 +270,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     commands = {
+        "shell-complete": ("prefix",),
         "complete": ("prefix",),
         "conversations": ("--limit",),
         "list-models": ("config_file",),
@@ -229,6 +291,7 @@ def main():
 
     command_handlers = {
         "complete": lambda: handle_complete(args.prefix),
+        "shell-complete": lambda: handle_cmd_complete(args.prefix),
         "conversations": lambda: _handle_conversations(args.limit),
         "list-models": lambda: list_models(args.config_file),
         "list-model-names": lambda: list_model_names(args.config_file),

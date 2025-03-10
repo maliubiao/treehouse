@@ -260,7 +260,7 @@ _zsh_completion_setup() {
         local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol_/'))
 
         _alternative \
-            'special:特殊选项:(clipboard tree treefull read listen symbol_ glow last edit patch)' \
+            'special:特殊选项:(clipboard tree treefull read listen symbol_ glow last edit patch context)' \
             'prompts:提示词文件:(${prompt_files[@]})' \
             'api:API补全:(${api_completions[@]})' \
             'symbols:本地符号:(${symbol_items[@]})' \
@@ -282,23 +282,19 @@ _zsh_completion_setup() {
 _bash_completion_setup() {
     _bash_at_complete() {
         local cur=${COMP_WORDS[COMP_CWORD]}
-        [[ "$cur" != @* ]] && return
-
-        local search_prefix=${cur#@}
-        _debug_print "[$search_prefix]"
-        local prompt_files=($(_get_prompt_files))
-        local api_completions=($(_get_api_completions "$search_prefix"))
-        local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol_/'))
-
+        local prev=${COMP_WORDS[COMP_CWORD-1]}
+        _debug_print "cur $cur ${COMP_WORDS[*]}"
+        [[ "$cur" != @* && "$prev" != "@" ]] && return 
+        local array=$("$PYTHON_BIN" "$GPT_PATH/shell.py" shell-complete "@$cur")
         COMPREPLY=()
-        # 当search_prefix以symbol_开头时，只考虑api和symbol
-        COMPREPLY+=(${symbol_items[@]/#/@})
-        COMPREPLY+=(${api_completions[@]/#/@})
-        if [[ "$search_prefix" != symbol_* ]]; then
-            COMPREPLY+=(${prompt_files[@]/#/@})
-            COMPREPLY+=($(compgen -f -- "$search_prefix" | sed 's/^/@/'))
+        for item in $array; do
+            COMPREPLY+=("@$item")
+        done
+        if [[ "$prev" == "@" ]]; then
+            COMPREPLY=($(compgen -W "${COMPREPLY[*]}" -- "@$cur"))
+        else
+            COMPREPLY=($(compgen -W "${COMPREPLY[*]}" -- "$cur"))
         fi
-        COMPREPLY=($(compgen -W "${COMPREPLY[*]}" -- "$cur"))
     }
 
     _bash_usegpt_complete() {
@@ -306,7 +302,7 @@ _bash_completion_setup() {
         COMPREPLY=($(compgen -W "$(_list_model_names)" -- "$cur"))
     }
 
-    complete -F _bash_at_complete askgpt naskgpt
+    complete -F _bash_at_complete askgpt naskgpt codegpt patchgpt
     complete -F _bash_usegpt_complete usegpt
 }
 
