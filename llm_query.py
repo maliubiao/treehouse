@@ -1423,8 +1423,10 @@ def get_symbol_detail(symbol_names: str) -> list:
     symbol_list = _parse_symbol_names(symbol_names)
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
     batch_response = _send_http_request(_build_api_url(api_url, symbol_names))
-
-    return [_process_symbol_data(symbol_data, symbol_list[idx]) for idx, symbol_data in enumerate(batch_response)]
+    if GPT_FLAGS.get(GPT_FLAG_CONTEXT):
+        return [_process_symbol_data(symbol_data, "") for _, symbol_data in enumerate(batch_response)]
+    else:
+        return [_process_symbol_data(symbol_data, symbol_list[idx]) for idx, symbol_data in enumerate(batch_response)]
 
 
 def _parse_symbol_names(symbol_names: str) -> list:
@@ -1446,7 +1448,8 @@ def _parse_symbol_names(symbol_names: str) -> list:
 def _build_api_url(api_url: str, symbol_names: str) -> str:
     """构造批量请求的API URL"""
     encoded_symbols = requests.utils.quote(symbol_names)
-    return f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json=true"
+    lsp_enabled = GPT_FLAGS.get(GPT_FLAG_CONTEXT)
+    return f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json=true&lsp_enabled={lsp_enabled}"
 
 
 def _process_symbol_data(symbol_data: dict, symbol_name: str) -> dict:
@@ -1457,6 +1460,8 @@ def _process_symbol_data(symbol_data: dict, symbol_name: str) -> dict:
     - location字段必须包含start_line/start_col和end_line/end_col
     """
     location = symbol_data["location"]
+    if not symbol_name:
+        symbol_name = f"{symbol_data["file_path"]}/{symbol_data["name"]}"
     return {
         "symbol_name": symbol_name,
         "file_path": symbol_data["file_path"],

@@ -2146,9 +2146,6 @@ def extract_identifiable_path(file_path: str) -> str:
     return abs_path
 
 
-import pdb
-
-
 async def location_to_symbol(
     symbol: Dict, trie: SymbolTrie, lsp_client: GenericLSPClient, lookup_cache: Dict | None = None
 ) -> List[Dict]:
@@ -2431,6 +2428,10 @@ def validate_and_lookup_symbols(file_path_part: str, symbols: list, trie, file_m
         result = trie.search_exact(full_symbol_path)
         if not result:
             return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
+        if full_symbol_path.startswith("symbol:"):
+            result["name"] = full_symbol_path[len("symbol:") :]
+        else:
+            result["name"] = full_symbol_path
         symbol_results.append(result)
     return symbol_results
 
@@ -2455,6 +2456,7 @@ def build_json_response(symbol_results: list, contents: list) -> list:
     """构建JSON响应"""
     return [
         {
+            "name": result["name"],
             "file_path": result["file_path"],
             "content": content,
             "location": {

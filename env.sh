@@ -199,11 +199,11 @@ askgpt() {
 }
 
 codegpt() {
-    askgpt @edit @edit-file @tree $@
+    naskgpt @edit @edit-file @tree $@
 }
 
 patchgpt() {
-    askgpt @patch $@
+    naskgpt @patch $@
 }
 
 # 补全功能辅助函数
