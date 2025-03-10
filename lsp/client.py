@@ -8,6 +8,7 @@ from concurrent.futures import Future
 from logging import getLogger
 from urllib.parse import unquote, urlparse
 
+from .language_id import LanguageId
 from .lsp_symbol_kind import SymbolKind
 
 logger = getLogger(__name__)
@@ -323,9 +324,10 @@ class GenericLSPClient:
             logger.error("Failed to read file: %s", str(e))
             return None
 
+        language_id = LanguageId.get_language_id(file_path)
         self.send_notification(
             "textDocument/didOpen",
-            {"textDocument": {"uri": f"file://{file_path}", "languageId": "python", "version": 1, "text": text}},
+            {"textDocument": {"uri": f"file://{file_path}", "languageId": language_id, "version": 1, "text": text}},
         )
 
         try:
