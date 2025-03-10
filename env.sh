@@ -43,47 +43,12 @@ _new_conversation() {
 # 会话列表核心逻辑
 _conversation_core_logic() {
     local limit=$1
-    CONVERSATION_LIMIT=$limit python3 -c '
-import os, sys, json
-from datetime import datetime
-
-def scan_conversation_files(conversation_dir):
-    files = []
-    for root, _, filenames in os.walk(conversation_dir):
-        for fname in filenames:
-            if fname in ["index.json", ".DS_Store"] or not fname.endswith(".json"):
-                continue
-            path = os.path.join(root, fname)
-            try:
-                date_str = os.path.basename(os.path.dirname(path))
-                time_uuid = os.path.splitext(fname)[0]
-                uuid = "-".join(time_uuid.split("-")[3:])
-                time_str = ":".join(time_uuid.split("-")[0:3])
-                mtime = os.path.getmtime(path)
-                preview = get_preview(path)
-                files.append((mtime, date_str, time_str, uuid, preview, path))
-            except Exception as e:
-                continue
-    return files
-
-def get_preview(file_path):
-    try:
-        with open(file_path, "r") as f:
-            data = json.load(f)
-            if isinstance(data, list) and len(data) > 0:
-                return data[0].get("content", "")[:32].replace("\n", " ").strip()
-    except Exception as e:
-        pass
-    return "N/A"
+    CONVERSATION_LIMIT=$limit "$GPT_PATH/.venv/bin/python3" -c '
+import os, sys
+from shell import scan_conversation_files, get_preview
 
 conversation_dir = os.path.join(os.environ["GPT_PATH"], "conversation")
-files = scan_conversation_files(conversation_dir)
-files.sort(reverse=True, key=lambda x: x[0])
-
-limit = int(os.getenv("CONVERSATION_LIMIT", "0"))
-if limit > 0:
-    files = files[:limit]
-
+files = scan_conversation_files(conversation_dir, int(os.getenv("CONVERSATION_LIMIT", "0")))
 for idx, (_, date, time, uuid, preview, _) in enumerate(files):
     print(f"{idx+1}\t{date} {time}\t{uuid}\t{preview}")
 '
@@ -94,13 +59,10 @@ _show_conversation_menu() {
     local selection=$1
     local title=$2
 
-    echo "$title："
-    echo "$selection" | awk -F '\t' '
-    BEGIN { format = "\033[1m%2d)\033[0m \033[33m%-19s\033[0m \033[36m%-36s\033[0m %s\n" }
     {
-        preview = length($4)>32 ? substr($4,1,32) "..." : $4
-        printf format, $1, $2, $3, preview
-    }'
+        echo "$title"
+        echo "$selection"
+    } | "$GPT_PATH/.venv/bin/python3" "$GPT_PATH/shell.py" format-conversation-menu
 }
 
 # 处理用户选择
@@ -136,19 +98,19 @@ _conversation_list() {
 # 模型管理函数
 _list_models() {
     local config_file="${1:-$GPT_PATH/model.json}"
-    python3 -c "import json, sys; config=json.load(open('$config_file')); [print(f'{k}: {v[\"model_name\"]}') for k, v in config.items() if v.get('key')]" 2>/dev/null
+    "$GPT_PATH/.venv/bin/python3" "$GPT_PATH/shell.py" list-models "$config_file"
 }
 
 _list_model_names() {
     local config_file="${1:-$GPT_PATH/model.json}"
-    python3 -c "import json, sys; config=json.load(open('$config_file')); [print(k) for k, v in config.items() if v.get('key')]" 2>/dev/null
+    "$GPT_PATH/.venv/bin/python3" "$GPT_PATH/shell.py" list-model-names "$config_file"
 }
 
 
 _read_model_config() {
     local model_name=$1
     local config_file=$2
-    python3 -c "import json, sys; config=json.load(open('$config_file')).get('$model_name', {}); print(config.get('key', ''), config.get('base_url', ''), config.get('model_name', ''), config.get('max_tokens', ''), config.get('temperature', ''))"
+    "$GPT_PATH/.venv/bin/python3" "$GPT_PATH/shell.py" read-model-config "$model_name" "$config_file"
 }
 
 _set_gpt_env_vars() {
@@ -221,18 +183,18 @@ explaingpt() {
     [[ -f "$file" ]] || { echo >&2 "Error: Source file not found: $file"; return 1; }
     [[ -f "$prompt_file" ]] || { echo >&2 "Error: Prompt file not found: $prompt_file"; return 1; }
 
-    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --file "$file" --prompt-file "$prompt_file"
+    "$GPT_PATH/.venv/bin/python" "$GPT_PATH/llm_query.py" --file "$file" --prompt-file "$prompt_file"
 }
 
 chat() {
     _check_gpt_env || return 1
     [[ "$1" == "new" ]] && export GPT_UUID_CONVERSATION=$(uuidgen)
-    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --chatbot
+    "$GPT_PATH/.venv/bin/python" "$GPT_PATH/llm_query.py" --chatbot
 }
 
 askgpt() {
     [[ -z "$*" ]] && { echo >&2 "Error: Question cannot be empty"; return 1; }
-    $GPT_PATH/.venv/bin/python $GPT_PATH/llm_query.py --ask "$*"
+    "$GPT_PATH/.venv/bin/python" "$GPT_PATH/llm_query.py" --ask "$*"
 }
 
 codegpt() {
@@ -269,22 +231,13 @@ _get_prompt_files() {
 _get_api_completions() {
     local prefix="$1"
     [[ -z "$GPT_API_SERVER" || "$prefix" != symbol_* ]] && return
+
+    _debug_print "api $prefix"
+    local local_path="${prefix#symbol_}"
     
-    if [[ "$prefix" != *_* ]]; then
-        # 兼容zsh和bash的文件补全
-        local symbol_prefix="${prefix#symbol_}"
-        if type compgen &>/dev/null; then
-            # bash环境使用compgen
-            compgen -f "$symbol_prefix" | sed 's/^/symbol_/'
-        else
-            # zsh环境使用ls
-            ls -p "$symbol_prefix"* 2>/dev/null | grep -v / | sed 's/^/symbol_/'
-        fi
-    else
-        # 将symbol_后的_替换为:
-        local api_prefix="${prefix//symbol_/symbol:}"
-        curl -s --noproxy "*" "${GPT_API_SERVER}complete_realtime?prefix=${api_prefix}" | sed 's/symbol:/symbol_/g'
-    fi
+    "$GPT_PATH/.venv/bin/python3" "$GPT_PATH/shell.py" complete "$prefix" | while read -r item; do
+        echo "$item"
+    done
 }
 
 # Shell 补全函数

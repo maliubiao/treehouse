@@ -321,6 +321,21 @@ def query_gpt_api(
         sys.exit(1)
 
 
+def get_conversation_file(file):
+    if file:
+        return file
+    cid = os.environ.get("GPT_UUID_CONVERSATION")
+
+    if cid:
+        try:
+            conversation_file = get_conversation(cid)
+        except FileNotFoundError:
+            conversation_file = new_conversation(cid)
+    else:
+        conversation_file = os.path.join(os.path.dirname(__file__), "conversation_history.json")
+    return conversation_file
+
+
 def _initialize_conversation_history(kwargs: dict) -> list:
     """初始化对话历史
 
@@ -331,17 +346,9 @@ def _initialize_conversation_history(kwargs: dict) -> list:
         list: 对话历史列表
     """
     conversation_file = kwargs.get(
-        "conversation_file", os.path.join(os.path.dirname(__file__), "conversation_history.json")
+        "conversation_file",
     )
-    cid = os.environ.get("GPT_UUID_CONVERSATION")
-
-    if cid:
-        try:
-            conversation_file = get_conversation(cid)
-        except FileNotFoundError:
-            conversation_file = new_conversation(cid)
-
-    return load_conversation_history(conversation_file)
+    return load_conversation_history(get_conversation_file(conversation_file))
 
 
 def _get_api_response(
@@ -394,9 +401,7 @@ def _process_and_save_response(
     history.append({"role": "assistant", "content": content})
 
     # 保存更新后的对话历史
-    save_conversation_history(
-        kwargs.get("conversation_file", os.path.join(os.path.dirname(__file__), "conversation_history.json")), history
-    )
+    save_conversation_history(get_conversation_file(kwargs.get("conversation_file")), history)
 
     # 处理think标签
     content, reasoning = _handle_think_tags(content, reasoning)

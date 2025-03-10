@@ -32,6 +32,7 @@ PYTHON_LANG = "python"
 JAVASCRIPT_LANG = "javascript"
 JAVA_LANG = "java"
 GO_LANG = "go"
+SHELL_LANG = "bash"
 
 # 文件后缀到语言名称的映射
 SUPPORTED_LANGUAGES = {
@@ -41,6 +42,7 @@ SUPPORTED_LANGUAGES = {
     ".js": JAVASCRIPT_LANG,
     ".java": JAVA_LANG,
     ".go": GO_LANG,
+    ".sh": SHELL_LANG,
 }
 
 # 各语言的查询语句映射
@@ -200,6 +202,8 @@ LANGUAGE_QUERIES = {
         ) @call
         (#contains? @body @call)
     )
+    """,
+    "bash": """
     """,
 }
 
@@ -474,8 +478,28 @@ class ParserUtil:
         return None
 
     @staticmethod
+    def _find_child_by_field(node, field_name):
+        """根据字段名查找子节点"""
+        for child in node.children:
+            if child.type == field_name:
+                return child
+        return None
+
+    @staticmethod
     def _get_function_name(node):
         """从函数定义节点中提取函数名"""
+        if node.type == "function_definition":
+            name_node = ParserUtil._find_child_by_field(node, "name")
+            if name_node:
+                return name_node.text.decode("utf8")
+            word_node = ParserUtil._find_child_by_type(node, "word")
+            if word_node:
+                return word_node.text.decode("utf8")
+            identifier_node = ParserUtil._find_child_by_type(node, "identifier")
+            if identifier_node:
+                return identifier_node.text.decode("utf8")
+            return None
+
         pointer_declarator = ParserUtil._find_child_by_type(node, "pointer_declarator")
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
@@ -2282,7 +2306,6 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
     trie = app.state.file_symbol_trie
     max_results = clamp(max_results, 1, 50)
     file_path, symbols = parse_symbol_prefix(prefix)
-
     current_prefix = determine_current_prefix(file_path, symbols)
     updated = update_trie_for_completion(file_path, trie, app.state.file_mtime_cache)
 

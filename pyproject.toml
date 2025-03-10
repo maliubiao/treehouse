@@ -34,6 +34,7 @@ dependencies = [
     "rich>=13.9.4",
     "python-lsp-server>=1.12.2",
     "setuptools>=75.8.2",
+    "tree-sitter-bash>=0.23.3",
 ]
 
 [tool.black]
