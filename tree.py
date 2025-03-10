@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import traceback
 import zlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,14 +22,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Form, HTTPException
 from fastapi import Query as QueryArgs
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Parser, Query
 
-from lsp.client import GenericLSPClient
+from lsp.client import GenericLSPClient, LSPFeatureError
 
 # 定义语言名称常量
 C_LANG = "c"
@@ -2295,6 +2296,44 @@ def update_trie_if_needed(prefix: str, trie, file_mtime_cache, just_path=False) 
     return False
 
 
+@app.post("/lsp/didChange")
+async def lsp_file_didChange(file_path: str = Form(...), content: str = Form(...)):
+    """
+    处理LSP文档变更通知的接口
+
+    参数要求:
+    - file_path: 文件路径参数，必须非空
+    - content: 文件最新内容
+
+    流程说明:
+    1. 检查全局LSP_CLIENT是否可用，不可用时返回501错误
+    2. 验证客户端是否支持文档同步功能
+    3. 调用客户端的did_change方法发送变更通知
+    4. 记录操作日志并返回成功响应
+
+    异常处理:
+    - 客户端未初始化返回HTTP 501
+    - 功能不支持返回HTTP 400
+    - 其他错误返回HTTP 500
+    """
+    client = getattr(app.state, "LSP_CLIENT", None)
+    if not client or not client.running:
+        return JSONResponse(status_code=501, content={"message": "LSP client not initialized"})
+
+    try:
+        client.did_change(file_path, content)
+        print("Processed didChange notification for %s", file_path)
+        return {"status": "success"}
+
+    except LSPFeatureError as e:
+        print("Feature not supported: %s", str(e))
+        return JSONResponse(status_code=400, content={"message": f"Feature not supported: {e.feature}"})
+    except Exception as e:
+        traceback.print_exc()
+        print("Failed to process didChange: %s", str(e))
+        return JSONResponse(status_code=500, content={"message": "Internal server error"})
+
+
 @app.get("/complete_realtime")
 async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
     """实时符号补全，直接解析指定文件并返回符号列表
@@ -2906,6 +2945,7 @@ def scan_project_files_optimized(
     app.state.symbol_trie = trie
     app.state.file_symbol_trie = SymbolTrie.from_symbols({})
     app.state.file_mtime_cache = {}
+    app.state.LSP_CLIENT = LSP_CLIENT
     # 获取需要处理的文件列表
     tasks = []
     for project_path in project_paths:

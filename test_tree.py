@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from textwrap import dedent
+from unittest.mock import patch
 from urllib.parse import unquote, urlparse
 
 from fastapi.testclient import TestClient
@@ -871,6 +872,99 @@ class TestExtractIdentifiablePath(unittest.TestCase):
     def test_init_py_normal_handling(self):
         rel_path = "package/__init__.py"
         self.assertEqual(tree.extract_identifiable_path(rel_path), rel_path)
+
+
+class TestLSPIntegration(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+        self.temp_files = []
+        self.lsp_client = GenericLSPClient(
+            lsp_command=["pylsp"],
+            workspace_path=os.path.dirname(__file__),
+            init_params={"rootUri": f"file://{os.path.dirname(__file__)}"},
+        )
+        app.state.LSP_CLIENT = self.lsp_client
+        self.lsp_client.start()
+        # 确保初始化完成
+        if not self.lsp_client.initialized_event.wait(timeout=5):
+            raise RuntimeError("LSP client failed to initialize")
+        # 强制设置textDocumentSync能力为Full模式用于测试
+        self.lsp_client.capabilities.text_document_sync = {"change": 1}
+
+    def tearDown(self):
+        if self.lsp_client.running:
+            asyncio.run(self.lsp_client.shutdown())
+        for tmp in self.temp_files:
+            try:
+                os.unlink(tmp.name)
+            except:
+                pass
+
+    def test_did_change_success(self):
+        """测试正常文档变更通知"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
+            tmp.write("def test(): pass")
+            tmp.flush()  # 确保内容写入磁盘
+            self.temp_files.append(tmp)
+
+        # 先发送didOpen通知初始化文档
+        self.lsp_client.send_notification(
+            "textDocument/didOpen",
+            {
+                "textDocument": {
+                    "uri": f"file://{tmp.name}",
+                    "languageId": "python",
+                    "version": 1,
+                    "text": "def test(): pass",
+                }
+            },
+        )
+
+        response = self.client.post(
+            "/lsp/didChange", data={"file_path": tmp.name, "content": "def test(): pass\nprint('updated')"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("success", response.json()["status"])
+
+    def test_missing_parameters(self):
+        """测试缺少必要参数"""
+        response = self.client.post("/lsp/didChange", data={})
+        self.assertEqual(response.status_code, 422)
+        # 检查错误详情结构
+        detail = response.json()["detail"]
+        missing_fields = {err["loc"][-1] for err in detail if err["type"] == "missing"}
+        self.assertIn("file_path", missing_fields)
+        self.assertIn("content", missing_fields)
+
+    def test_client_not_initialized(self):
+        """测试客户端未初始化场景"""
+        app.state.LSP_CLIENT = None
+        response = self.client.post("/lsp/didChange", data={"file_path": "test.py", "content": "content"})
+        self.assertEqual(response.status_code, 501)
+        self.assertIn("not initialized", response.json()["message"])
+
+    def test_unsupported_feature(self):
+        """测试不支持的文档同步功能"""
+        # 修改能力对象以模拟不支持Full模式
+        original_capabilities = self.lsp_client.capabilities
+        self.lsp_client.capabilities.text_document_sync = 2  # 设置为非Full模式
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
+            self.temp_files.append(tmp)
+
+        response = self.client.post("/lsp/didChange", data={"file_path": tmp.name, "content": "content"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("textDocumentSync Full", response.json()["message"])
+
+        # 恢复原始能力对象
+        self.lsp_client.capabilities = original_capabilities
+
+    def test_server_error_handling(self):
+        """测试服务端异常处理"""
+        with patch.object(GenericLSPClient, "did_change", side_effect=Exception("mock error")):
+            response = self.client.post("/lsp/didChange", data={"file_path": "test.py", "content": "content"})
+            self.assertEqual(response.status_code, 500)
+            self.assertIn("Internal server error", response.json()["message"])
 
 
 if __name__ == "__main__":
