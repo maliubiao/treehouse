@@ -1,8 +1,10 @@
+import argparse
 import asyncio
 import fnmatch
 import hashlib
 import importlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -25,6 +27,8 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Parser, Query
+
+from lsp.client import GenericLSPClient
 
 # 定义语言名称常量
 C_LANG = "c"
@@ -3013,10 +3017,48 @@ def main(
     uvicorn.run(app, host=host, port=port)
 
 
-if __name__ == "__main__":
-    import argparse
-    import logging
+LSP_CLIENT = None
 
+
+def start_lsp_client(lsp_command: str, workspace_path: str) -> threading.Thread:
+    global LSP_CLIENT
+    """启动LSP客户端线程
+    
+    参数:
+        lsp_command: LSP服务器启动命令
+        workspace_path: 工作区根目录路径
+        
+    返回:
+        已启动的后台线程对象
+    """
+    try:
+        logger.info("正在初始化LSP客户端，服务器命令：%s", lsp_command)
+        client = GenericLSPClient(lsp_command=lsp_command.split(), workspace_path=workspace_path)
+        LSP_CLIENT = client
+
+        def run_event_loop():
+            """运行LSP客户端事件循环"""
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                client.start()
+                loop.run_forever()
+            except Exception as e:
+                logger.error("LSP客户端运行异常: %s", str(e))
+            finally:
+                loop.run_until_complete(client.shutdown())
+                loop.close()
+                logger.info("LSP客户端已关闭")
+
+        thread = threading.Thread(target=run_event_loop, daemon=True)
+        thread.start()
+        return thread
+    except Exception as e:
+        logger.error("LSP客户端启动失败: %s", str(e))
+        raise
+
+
+if __name__ == "__main__":
     # 配置日志格式
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -3042,6 +3084,7 @@ if __name__ == "__main__":
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="设置日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL",
     )
+    arg_parser.add_argument("--lsp", type=str, help="启动LSP客户端，指定LSP服务器命令（如：pylsp）")
 
     args = arg_parser.parse_args()
 
@@ -3051,6 +3094,11 @@ if __name__ == "__main__":
     logger.info("启动代码分析工具，日志级别设置为：%s", args.log_level)
 
     DEFAULT_DB = args.db_path
+
+    # 根据命令行参数启动对应功能
+    if args.lsp:
+        start_lsp_client(lsp_command=args.lsp, workspace_path=args.project[0])
+
     if args.demo:
         logger.debug("进入演示模式")
         test_split_source_and_patch()
