@@ -6,10 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from textwrap import dedent
+from urllib.parse import unquote, urlparse
 
 from fastapi.testclient import TestClient
 
 import tree
+from lsp import GenericLSPClient
 from tree import (
     BlockPatch,
     ParserLoader,
@@ -347,6 +349,16 @@ class TestParserUtil(unittest.TestCase):
     def setUp(self):
         self.parser_loader = ParserLoader()
         self.parser_util = ParserUtil(self.parser_loader)
+        self.lsp_client = GenericLSPClient(
+            lsp_command=["pylsp"],
+            workspace_path=os.path.dirname(__file__),
+            init_params={"rootUri": f"file://{os.path.dirname(__file__)}"},
+        )
+        self.lsp_client.start()
+
+    def tearDown(self):
+        if self.lsp_client.running:
+            asyncio.run(self.lsp_client.shutdown())
 
     def create_temp_file(self, code: str) -> str:
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".py") as f:
@@ -457,10 +469,22 @@ class TestParserUtil(unittest.TestCase):
     def test_function_call_extraction(self):
         code = dedent(
             """
+            def some_function():
+                pass
+
+            class A:
+                class B:
+                    @staticmethod
+                    def f():
+                        pass
+
             class MyClass:
-                @a()
+                def other_method(self):
+                    pass
+
+                @A.B.f()
                 def my_method(self):
-                    a.b.f()
+                    A.B.f()
                     self.other_method()
                     some_function()
             """
@@ -468,39 +492,52 @@ class TestParserUtil(unittest.TestCase):
         path = self.create_temp_file(code)
         paths, code_map = self.parser_util.get_symbol_paths(path)
 
-        # 读取原始字节内容用于位置计算
         with open(path, "rb") as f:
             code_bytes = f.read()
         os.unlink(path)
 
-        expected_paths = ["MyClass", "MyClass.my_method"]
+        expected_paths = ["A", "A.B", "A.B.f", "MyClass", "MyClass.other_method", "MyClass.my_method", "some_function"]
         method_entry = code_map["MyClass.my_method"]
-        method_code = method_entry["code"]
 
-        # 验证符号路径
         self.assertEqual(sorted(paths), sorted(expected_paths))
 
-        # 验证调用列表
         actual_calls = method_entry["calls"]
-        expected_call_names = {"a", "a.b.f", "self.other_method", "some_function"}
+        expected_call_names = {"A.B.f", "self.other_method", "some_function"}
         actual_call_names = {call["name"] for call in actual_calls}
         self.assertEqual(actual_call_names, expected_call_names)
 
-        # 验证每个调用的位置信息是否有效
-        for call in actual_calls:
-            start_line, start_col = call["start_point"]
-            end_line, end_col = call["end_point"]
-            # 验证行列位置是否在代码范围内
-            self.assertLessEqual(start_line, end_line)
-            if start_line == end_line:
-                self.assertLess(start_col, end_col)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            temp_path = f.name
 
-            # 验证对应代码片段是否匹配
-            start_byte = call.get("start_byte")
-            end_byte = call.get("end_byte")
-            if start_byte is not None and end_byte is not None:
-                call_code = code_bytes[start_byte:end_byte].decode("utf8")
-                self.assertIn(call["name"], call_code)
+        try:
+            self.lsp_client.send_notification(
+                "textDocument/didOpen",
+                {"textDocument": {"uri": f"file://{temp_path}", "languageId": "python", "version": 1, "text": code}},
+            )
+
+            for call in actual_calls:
+                line = call["start_point"][0] + 1
+                char = call["start_point"][1] + 1
+
+                definition = asyncio.run(self.lsp_client.get_definition(temp_path, line, char))
+                self.assertTrue(definition is not None, f"未找到 {call['name']} 的定义")
+
+                # 增强定义位置验证逻辑
+                definitions = definition if isinstance(definition, list) else [definition]
+                found_valid = False
+                for d in definitions:
+                    uri = d.get("uri", "")
+                    if uri.startswith("file://"):
+                        def_path = unquote(urlparse(uri).path)
+                        if os.path.exists(def_path):
+                            found_valid = True
+                            break
+                self.assertTrue(found_valid, f"未找到有效的文件路径定义: {call['name']}")
+        finally:
+            os.unlink(temp_path)
+            if self.lsp_client.running:
+                asyncio.run(self.lsp_client.shutdown())
 
 
 class TestSymbolsComplete(unittest.TestCase):
