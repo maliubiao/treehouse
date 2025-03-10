@@ -348,7 +348,7 @@ class GenericLSPClient:
             logger.error("Failed to get document symbols: %s", str(e))
             return None
 
-    async def did_change(self, file_path: str, content: str):
+    def did_change(self, file_path: str, content: str):
         """发送文档变更通知（全量更新）"""
         self._check_feature_support("textDocumentSync")
         sync_kind = self.capabilities._get_text_sync_kind()
