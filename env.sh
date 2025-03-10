@@ -49,8 +49,8 @@ from shell import scan_conversation_files, get_preview
 
 conversation_dir = os.path.join(os.environ["GPT_PATH"], "conversation")
 files = scan_conversation_files(conversation_dir, int(os.getenv("CONVERSATION_LIMIT", "0")))
-for idx, (_, date, time, uuid, preview, _) in enumerate(files):
-    print(f"{idx+1}\t{date} {time}\t{uuid}\t{preview}")
+for idx, (t, date, uuid, preview) in enumerate(files):
+    print(f"{idx+1}\t{date}\t{uuid}\t{preview}")
 '
 }
 
