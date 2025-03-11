@@ -488,6 +488,8 @@ class TestParserUtil(unittest.TestCase):
                     A.B.f()
                     self.other_method()
                     some_function()
+                    self.attr
+                    A.B.f
             """
         )
         path = self.create_temp_file(code)
@@ -503,7 +505,7 @@ class TestParserUtil(unittest.TestCase):
         self.assertEqual(sorted(paths), sorted(expected_paths))
 
         actual_calls = method_entry["calls"]
-        expected_call_names = {"A.B.f", "self.other_method", "some_function"}
+        expected_call_names = {"A.B", "A.B.f", "self.other_method", "some_function", "self.attr"}
         actual_call_names = {call["name"] for call in actual_calls}
         self.assertEqual(actual_call_names, expected_call_names)
 

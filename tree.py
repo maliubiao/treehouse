@@ -652,6 +652,19 @@ class ParserUtil:
                             "end_point": (end_line, end_col),
                         }
                         code_map[current_path]["calls"].append(call_info)
+        elif node.type == "attribute":
+            func_name = self._get_full_attribute_name(node)
+            if func_name and current_symbols:
+                current_path = ".".join(current_symbols)
+                if current_path in code_map:
+                    start_line, start_col = node.start_point
+                    end_line, end_col = node.end_point
+                    call_info = {
+                        "name": func_name,
+                        "start_point": (start_line, start_col),
+                        "end_point": (end_line, end_col),
+                    }
+                    code_map[current_path]["calls"].append(call_info)
         for child in node.children:
             self._extract_function_calls(child, current_symbols, code_map)
 
