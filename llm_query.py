@@ -67,8 +67,8 @@ class CmdNode:
     """命令节点"""
 
     command: str
-    command_type: str = None
-    args: List[str] = None
+    command_type: str | None = None
+    args: List[str] | None = None
 
 
 @dataclass
@@ -1591,7 +1591,6 @@ def parse_project_text(text: str) -> ProjectSections:
 
     section_dict = {}
     for name, content in matches:
-        # 转换为小写蛇形命名，如 PROJECT_DESIGN -> project_design
         key = name.lower()
         section_dict[key] = content.strip()
 
@@ -1613,11 +1612,6 @@ class GPTContextProcessor:
 
     def __init__(self):
         self.cmd_map = self._initialize_cmd_map()
-        self.env_vars = {
-            "os": sys.platform,
-            "os_version": platform.version(),
-            "current_path": os.getcwd(),
-        }
         self.current_length = 0
         self._add_gpt_flags()
 
