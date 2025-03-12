@@ -145,9 +145,10 @@ fixgpt
 
 
 ## 代码生成
-符号补丁，借助tree.py支持符号查找, 可以自动获取某个函数的上下文, 之后根据大模型的个性, 根据diff的结果自主决定是否patch     
+符号补丁，启动tree.py以支持符号查找, 可以自动获取某个函数的上下文, 提问之后， 之后根据大模型的的代码输出, 根据diff的结果自主决定是否patch     
 tree.py的启动示例   
 ```bash
+#建议加全局变量，避免askgpt找不到符号服务器
 export GPT_API_SERVER="http://127.0.0.1:9050/"
 python  tree.py --project . --excludes "*/.venv/*" "*/node/*" --port 9050 --db-path local.sqlite  
 #之后可以在askgpt中使用@symbol_file.xx/main 这样获取符号上下文，bash, zsh shell支持补号补全, 比较方便
