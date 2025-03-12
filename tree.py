@@ -635,36 +635,32 @@ class ParserUtil:
             return ParserUtil._get_full_attribute_name(function_node)
         return None
 
+    @staticmethod
+    def _add_call_info(func_name, current_symbols, code_map, node):
+        """通用方法：添加调用信息到code_map"""
+        if func_name and current_symbols:
+            current_path = ".".join(current_symbols)
+            if current_path in code_map:
+                start_line, start_col = node.start_point
+                end_line, end_col = node.end_point
+                call_info = {
+                    "name": func_name,
+                    "start_point": (start_line, start_col),
+                    "end_point": (end_line, end_col),
+                }
+                code_map[current_path]["calls"].append(call_info)
+
     def _extract_function_calls(self, node, current_symbols, code_map):
         """提取函数调用信息并添加到当前符号的calls集合"""
         if node.type == "call":
             function_node = node.child_by_field_name("function")
             if function_node:
                 func_name = self._get_function_name_from_call(function_node)
-                if func_name and current_symbols:
-                    current_path = ".".join(current_symbols)
-                    if current_path in code_map:
-                        start_line, start_col = function_node.start_point
-                        end_line, end_col = function_node.end_point
-                        call_info = {
-                            "name": func_name,
-                            "start_point": (start_line, start_col),
-                            "end_point": (end_line, end_col),
-                        }
-                        code_map[current_path]["calls"].append(call_info)
+                self._add_call_info(func_name, current_symbols, code_map, function_node)
         elif node.type == "attribute":
             func_name = self._get_full_attribute_name(node)
-            if func_name and current_symbols:
-                current_path = ".".join(current_symbols)
-                if current_path in code_map:
-                    start_line, start_col = node.start_point
-                    end_line, end_col = node.end_point
-                    call_info = {
-                        "name": func_name,
-                        "start_point": (start_line, start_col),
-                        "end_point": (end_line, end_col),
-                    }
-                    code_map[current_path]["calls"].append(call_info)
+            self._add_call_info(func_name, current_symbols, code_map, node)
+
         for child in node.children:
             self._extract_function_calls(child, current_symbols, code_map)
 

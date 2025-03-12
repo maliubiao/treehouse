@@ -315,6 +315,16 @@ fi
 
 # 遗留函数保持兼容
 function commitgpt() {
+    if [[ -z "$VIRTUAL_ENV" ]]; then
+        echo "错误：不在Python虚拟环境中，请先激活虚拟环境"
+        return 1
+    fi
+
+    if ! git diff --quiet; then
+        echo "错误：存在未暂存的更改，请先使用git add添加更改"
+        return 1
+    fi
+
     newconversation
     askgpt @git-commit-message @git-stage @git-diff-summary.txt
     rm -f git-diff-summary.txt
