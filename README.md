@@ -11,6 +11,7 @@
 
 ```bash
 
+
 # 分析剪贴板内容
 askgpt 解释这段代码：@clipboard @tree
 
@@ -98,8 +99,7 @@ naskgpt @large-file:20-50
 #把prompt当脚本执行, 如果你给它设置了可执行权限, 或者以#!开头
 naskgpt @script.sh
 
-#符号补丁，借助tree.py支持符号查找, 可以自动编辑某个函数, 根据diff的结果自主决定是否patch
-#tree.py 的启动样本 python  tree.py --project . --excludes "*/.venv/*" "*/node/*" --port 9050 --db-path local.sqlite
+
 #@patch表示响应中有要patch的符号
 askgpt @patch @symbol_tree.py/ParserUtil traverse在遇到function_definition这样的节点时,要额外考虑,它是父节点是否decorated_definition, 如果是,则需要用父节点　的全文,　以包括装饰器
 
@@ -108,14 +108,24 @@ askgpt @symbol_file/symbol
 
 # 修改代码的bug,会生成一个diff, 看你要不要使用patch, @edit表示响应中有要patch的内容, @edit-file是在规定输出些什么
 askgpt @edit @edit-file @main.py 找到其中可能的bug，并加以修复
+#一样的功能
+codegpt @main.py 找到其中可能的bug，并加以修复
 
+# 改写某个符号
+patchgpt @symbol_file/symbol 修复里边的bug
+
+# 改写符号并提供LSP上下文
+patchgpt @context @symbol_file/symbol 修复里边的bug
+
+# 命令行执行检错, 重执行，结果上传gpt诊断
+fixgpt 
 ```
 
 
 
 ## 功能特性
 
-- **代码文件分析**：替代view, vim, 用大模型分析本地源代码文件, 提供代码修改建议
+- **代码生成**：实现cursor, windsurf的代码生成功能,基于AST,LSP获取精准的上下文
 - **对话保存，对话切换**： 跟进提问，还可以恢复过去的会话，继续提问
 - **上下文集成**：
   - 剪贴板内容自动读取 (`@clipboard`)
@@ -132,6 +142,17 @@ askgpt @edit @edit-file @main.py 找到其中可能的bug，并加以修复
 - **代理支持**：完善的HTTP代理配置检测
 - **多个模型切换**： 用配置文件在本机ollama 14b,32b小模型, 远程r1全量模型之间切换
 - **流式响应**：实时显示API响应内容, 推理思考内容的输出
+
+
+## 代码生成
+符号补丁，借助tree.py支持符号查找, 可以自动获取某个函数的上下文, 之后根据大模型的个性, 根据diff的结果自主决定是否patch     
+tree.py的启动示例   
+```bash
+export GPT_API_SERVER="http://127.0.0.1:9050/"
+python  tree.py --project . --excludes "*/.venv/*" "*/node/*" --port 9050 --db-path local.sqlite  
+#之后可以在askgpt中使用@symbol_file.xx/main 这样获取符号上下文，bash, zsh shell支持补号补全, 比较方便
+```
+
 
 ## 安装与配置
 
