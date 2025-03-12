@@ -301,7 +301,6 @@ filters:
 ### 符号查询
 
 tree.py是一个tree-sitter实现的抽象语法树解析库，会生成一个sqlite做源代码索引，这个示例中我就索引了内核gcc　-E预处理过的源代码  
-在环境中指定api server的位置，`GPT_SYMBOL_API_URL` 大概长这样`http://127.0.0.1:9050/symbols`  
 
 ```bash
 #一个典型的输出
@@ -335,19 +334,10 @@ INFO:     127.0.0.1:57957 - "GET /symbols/show_tty_driver/context?max_depth=5 HT
 ### 提示词模板
 
 在`prompts/`目录中创建自定义模板, 请复制参考现有的文件：
-```txt
-请分析以下Python代码：
-
-主要任务：
-1. 解释核心功能
-2. 找出潜在bug
-3. 提出优化建议
-
-文件名: {path}
-{pager}
-\```
-{code}
-\```
+```py
+#! /usr/bin/env python
+#在prompts下边写shell脚本，脚本会被执行，输出会当成提示器的一部分, 加上可执行权限
+print("你是一个友好的助手")
 ```
 
 ## 环境变量
@@ -362,7 +352,7 @@ INFO:     127.0.0.1:57957 - "GET /symbols/show_tty_driver/context?max_depth=5 HT
 ## 目录结构
 
 ```
-groq/
+terminal-llm/
 ├── bin/              # 工具脚本
 ├── server/           # 网页转换服务
 │   └── server.py     # 转换服务器主程序
@@ -376,7 +366,7 @@ groq/
 
 ## 注意事项
 
-1. **依赖工具**：
+1. **可选工具**：
    - 安装[glow](https://github.com/charmbracelet/glow)用于Markdown渲染
    - 安装`tree`命令查看目录结构
 
