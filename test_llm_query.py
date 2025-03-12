@@ -3,12 +3,10 @@
 llm_query 模块的单元测试
 """
 
-import difflib
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import TestCase, mock
 from unittest.mock import ANY, MagicMock, mock_open, patch
 
 import llm_query
@@ -475,9 +473,6 @@ line2
 line3
 [source code end]
 """
-                import pdb
-
-                pdb.set_trace()
                 llm_query.extract_and_diff_files(test_content, auto_apply=True)
 
                 # Verify file content

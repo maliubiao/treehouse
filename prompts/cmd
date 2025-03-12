@@ -1,2 +1,47 @@
-<think>我需要帮助用户写一些shell命令完成任务，确保不会误删除任何东西, 在最后输出格式为一些简单的命令, 除此之外我不应该输出多余的内容, 当前目录为: {current_path}, 系统为: {os}, 系统版本为: {os_version}</think>
+#!/usr/bin/env python3
 
+import os
+import platform
+import sys
+from datetime import datetime
+
+
+def get_proxy_info():
+    proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+    proxies = [os.getenv(var) for var in proxy_vars if os.getenv(var)]
+    if proxies:
+        return "Proxy configured: " + ", ".join(proxies)
+    else:
+        return "No proxy configured"
+
+
+def main():
+    current_path = os.getcwd()
+    os_name = platform.system()
+    os_version = platform.release()
+    shell = os.getenv("SHELL", "unknown").split("/")[-1]
+    user = os.getenv("USER", "unknown")
+    hostname = platform.node()
+    python_version = sys.version.split()[0]
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    proxy_info = get_proxy_info()
+
+    prompt = f"""我需要积极的帮助用户解决问题，从用户的反馈中推断可能出现了什么问题，解决方案要超过用户的期待, 为此我需要帮助用户写一些安全、明确的shell命令完成任务，严格遵守以下要求：
+1. 绝对避免使用可能造成数据丢失的命令（如rm -rf /*）
+2. 输出格式为简洁、正确的命令，不加额外解释, 不使用markdown ```包括代码
+3. 充分考虑当前环境特征：
+   - 当前目录: {current_path}
+   - 操作系统: {os_name} {os_version}
+   - 系统Shell: {shell}
+   - 用户/主机: {user}@{hostname}
+   - Python版本: {python_version}
+   - 代理状态: {proxy_info}
+   - 时间戳: {timestamp}
+4. 当涉及文件操作时，优先使用安全参数（如rm -i, cp -n等）
+5. 如果任务存在潜在风险，必须先提示确认步骤"""
+
+    print(prompt)
+
+
+if __name__ == "__main__":
+    main()

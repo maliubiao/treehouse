@@ -865,7 +865,7 @@ def _handle_command(match: CmdNode, cmd_map: Dict[str, Callable]) -> str:
 def _handle_any_script(match: CmdNode) -> str:
     """处理shell命令"""
     script_name = match.command.strip("=")
-    file_path = os.path.join("prompts", script_name)
+    file_path = os.path.join(os.environ.get("GPT_PATH", ""), "prompts", script_name)
     # 检查文件是否有执行权限
     if not os.access(file_path, os.X_OK):
         # 获取当前文件权限
@@ -878,7 +878,7 @@ def _handle_any_script(match: CmdNode) -> str:
     try:
         # 直接执行文件
         process = subprocess.Popen(
-            f"./{file_path}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            f"{file_path}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         stdout, stderr = process.communicate()
         output = f"\n\n[shell command]: ./{file_path}\n"
