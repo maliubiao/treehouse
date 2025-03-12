@@ -295,25 +295,27 @@ _get_api_completions() {
 _zsh_completion_setup() {
   _zsh_at_complete() {
     local orig_prefix=$PREFIX
-    [[ "$PREFIX" != @* ]] && return
+    if [[ "$PREFIX" == @* ]]; then
+      local search_prefix=${PREFIX#@}
+      IPREFIX="@"
+      PREFIX=$search_prefix
 
-    local search_prefix=${PREFIX#@}
-    IPREFIX="@"
-    PREFIX=$search_prefix
+      local prompt_files=($(_get_prompt_files))
+      local api_completions=($(_get_api_completions "$search_prefix"))
+      local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol_/'))
 
-    local prompt_files=($(_get_prompt_files))
-    local api_completions=($(_get_api_completions "$search_prefix"))
-    local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol_/'))
+      _alternative \
+        'special:特殊选项:(clipboard tree treefull read listen symbol_ glow last edit patch context)' \
+        'prompts:提示词文件:(${prompt_files[@]})' \
+        'api:API补全:(${api_completions[@]})' \
+        'symbols:本地符号:(${symbol_items[@]})' \
+        'files:文件名:_files'
 
-    _alternative \
-      'special:特殊选项:(clipboard tree treefull read listen symbol_ glow last edit patch context)' \
-      'prompts:提示词文件:(${prompt_files[@]})' \
-      'api:API补全:(${api_completions[@]})' \
-      'symbols:本地符号:(${symbol_items[@]})' \
-      'files:文件名:_files'
-
-    PREFIX=$orig_prefix
-    IPREFIX=""
+      PREFIX=$orig_prefix
+      IPREFIX=""
+    else
+      _files
+    fi
   }
 
   _zsh_usegpt_complete() {
@@ -330,7 +332,10 @@ _bash_completion_setup() {
     local cur=${COMP_WORDS[COMP_CWORD]}
     local prev=${COMP_WORDS[COMP_CWORD - 1]}
     _debug_print "cur $cur ${COMP_WORDS[*]}"
-    [[ "$cur" != @* && "$prev" != "@" ]] && return
+    if [[ "$cur" != @* && "$prev" != "@" ]]; then
+      COMPREPLY=($(compgen -o default -- "$cur"))
+      return
+    fi
     local array=$("$PYTHON_BIN" "$GPT_PATH/shell.py" shell-complete "@$cur")
     COMPREPLY=()
     for item in $array; do
