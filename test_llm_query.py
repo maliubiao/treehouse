@@ -3,11 +3,13 @@
 llm_query 模块的单元测试
 """
 
+import difflib
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest import TestCase, mock
+from unittest.mock import ANY, MagicMock, mock_open, patch
 
 import llm_query
 from llm_query import (
@@ -453,64 +455,83 @@ class TestDirectoryHandling(unittest.TestCase):
 
 
 class TestExtractAndDiffFiles(unittest.TestCase):
-    @patch("llm_query._extract_file_matches")
-    @patch("llm_query._save_diff_content")
-    def test_no_matches_returns_early(self, mock_save_diff, mock_extract):
-        mock_extract.return_value = []
-        llm_query.extract_and_diff_files("dummy content")
-        mock_save_diff.assert_not_called()
+    def test_no_matches_returns_early(self):
+        with patch("llm_query._save_diff_content") as mock_save_diff:
+            with patch("llm_query._extract_file_matches", return_value=[]):
+                llm_query.extract_and_diff_files("dummy content")
+                mock_save_diff.assert_not_called()
 
-    @patch("llm_query._save_response_content")
-    @patch("builtins.open", new_callable=mock_open, read_data="")
-    @patch("llm_query._extract_file_matches")
-    @patch("llm_query.Path")
-    @patch("llm_query._save_file_to_shadowroot")
-    @patch("llm_query._generate_unified_diff")
-    @patch("llm_query._save_diff_content")
-    def test_single_file_processing(
-        self,
-        mock_save_diff,
-        mock_gen_diff,
-        mock_save_shadow,
-        mock_path,
-        mock_extract,
-        mock_file_open,
-        _,
-    ):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
-            tmp_file.write("line1\nline2")
-            test_file_path = tmp_file.name
+    def test_single_file_processing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.write_text("line1\nline2\n")
 
-        mock_extract.return_value = [(test_file_path, "line1\nline2\nline3")]
-        mock_file = MagicMock()
-        mock_file.exists.return_value = True
-        mock_file.__str__.return_value = test_file_path
-        mock_file.absolute.return_value = mock_file
-        mock_path.return_value = mock_file
-        mock_gen_diff.return_value = [f"--- a/{test_file_path}", f"+++ b/{test_file_path}", "@@ -1 +1,3 @@"]
+            with patch("llm_query.shadowroot", Path(tmpdir)):
+                test_content = f"""
+[modified file]: {test_file}
+[source code start]
+line1
+line2
+line3
+[source code end]
+"""
+                import pdb
 
-        llm_query.extract_and_diff_files("content", auto_apply=True)
+                pdb.set_trace()
+                llm_query.extract_and_diff_files(test_content, auto_apply=True)
 
-        mock_save_shadow.assert_called_once()
-        mock_file_open.assert_any_call(test_file_path, "r", encoding="utf8")
-        mock_gen_diff.assert_called_once()
-        mock_save_diff.assert_called_once_with("\n".join(mock_gen_diff.return_value) + "\n\n")
+                # Verify file content
+                self.assertEqual(test_file.read_text(), "line1\nline2\nline3\n")
+                # Verify diff file
+                diff_file = Path(tmpdir) / "changes.diff"
+                self.assertTrue(diff_file.exists())
 
-        os.remove(test_file_path)
+    def test_diff_application_flow(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test.txt"
+            test_file.touch()
 
-    @patch("llm_query._display_and_apply_diff")
-    @patch("llm_query._save_diff_content")
-    @patch("llm_query._extract_file_matches")
-    def test_diff_application_flow(self, mock_extract, mock_save, mock_display):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
-            test_file_path = tmp_file.name
+            with patch("llm_query.shadowroot", Path(tmpdir)):
+                test_content = f"""
+[modified file]: {test_file}
+[source code start]
+new content
+[source code end]
+"""
+                llm_query.extract_and_diff_files(test_content, auto_apply=True)
+                self.assertEqual(test_file.read_text(), "new content\n")
 
-        mock_extract.return_value = [(test_file_path, "content")]
-        mock_save.return_value = Path("/tmp/changes.diff")
-        llm_query.extract_and_diff_files("content", auto_apply=True)
-        mock_display.assert_called_once_with(Path("/tmp/changes.diff"), auto_apply=True)
+    def test_setup_script_processing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("llm_query.shadowroot", Path(tmpdir)):
+                test_content = """
+[project setup script start]
+#!/bin/bash
+echo 'setup'
+[project setup script end]
+"""
+                llm_query.extract_and_diff_files(test_content)
 
-        os.remove(test_file_path)
+                setup_script = Path(tmpdir) / "project_setup.sh"
+                self.assertTrue(setup_script.exists())
+                self.assertEqual(setup_script.read_text(), "#!/bin/bash\necho 'setup'")
+                self.assertTrue(os.access(setup_script, os.X_OK))
+
+    def test_verify_script_processing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("llm_query.shadowroot", Path(tmpdir)):
+                test_content = """
+[user verify script start]
+#!/bin/bash
+echo 'verify'
+[user verify script end]
+"""
+                llm_query.extract_and_diff_files(test_content)
+
+                verify_script = Path(tmpdir) / "user_verify.sh"
+                self.assertTrue(verify_script.exists())
+                self.assertEqual(verify_script.read_text(), "#!/bin/bash\necho 'verify'")
+                self.assertTrue(os.access(verify_script, os.X_OK))
 
 
 class TestDisplayAndApplyDiff(unittest.TestCase):

@@ -1107,7 +1107,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 7. 能复用就不手写
 8. 函数参数不要太长，参数不要太多
 9. 实现类时需要便于调试
-10. 如果提供了__import__符号则可在此加入包导入语句, 否则不加入包导入语句，用户会自行处理
+10. 处理包时集中进行
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
@@ -1461,7 +1461,10 @@ def _process_symbol_data(symbol_data: dict, symbol_name: str) -> dict:
     """
     location = symbol_data["location"]
     if not symbol_name:
-        symbol_name = f"{symbol_data["file_path"]}/{symbol_data["name"]}"
+        if "/" not in symbol_data["name"]:
+            symbol_name = f"{symbol_data["file_path"]}/{symbol_data["name"]}"
+        else:
+            symbol_name = symbol_data["name"]
     return {
         "symbol_name": symbol_name,
         "file_path": symbol_data["file_path"],
@@ -1839,9 +1842,20 @@ def _save_response_content(content):
 
 def _extract_file_matches(content):
     """从内容中提取文件匹配项"""
-    return re.findall(
-        r"\[(?:modified|created) file\]: (.*?)\n\[source code start\] *?\n(.*?)\n\[source code end\]", content, re.S
+    pattern = (
+        r"(\[project setup shellscript start\]\n(.*?)\n\[project setup shellscript end\]|"
+        r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
+        r"\[(modified|created) file\]: (.*?)\n\[source code start\]\n(.*?)\n\[source code end\])"
     )
+    matches = []
+    for match in re.finditer(pattern, content, re.DOTALL):
+        if match.group(1).startswith("[project setup"):
+            matches.append(("project_setup_script", match.group(2).strip(), ""))
+        elif match.group(1).startswith("[user verify"):
+            matches.append(("user_verify_script", match.group(3).strip(), ""))
+        else:
+            matches.append((f"{match.group(4)}_file", match.group(6).strip(), match.group(5).strip()))
+    return matches
 
 
 def _process_file_path(file_path):
@@ -1917,9 +1931,36 @@ def extract_and_diff_files(content, auto_apply=False):
     if not matches:
         return
 
+    setup_script = None
+    verify_script = None
+    file_matches = []
+
+    for match_type, content, path in matches:
+        if match_type == "project_setup_script":
+            setup_script = content
+        elif match_type == "user_verify_script":
+            verify_script = content
+        else:
+            file_matches.append((path, content))
+
+    # 处理项目准备脚本
+    if setup_script:
+        setup_path = shadowroot / "project_setup.sh"
+        _save_file_to_shadowroot(setup_path, setup_script)
+        os.chmod(setup_path, 0o755)
+        print(f"项目准备脚本已保存到: {setup_path}")
+
+    # 处理验证脚本
+    if verify_script:
+        verify_path = shadowroot / "user_verify.sh"
+        _save_file_to_shadowroot(verify_path, verify_script)
+        os.chmod(verify_path, 0o755)
+        print(f"验证脚本已保存到: {verify_path}")
+
+    # 处理文件修改
     diff_content = ""
-    for filename, file_content in matches:
-        file_path = Path(filename.strip()).absolute()
+    for filename, file_content in file_matches:
+        file_path = Path(filename).absolute()
         old_file_path = file_path
         if not old_file_path.exists():
             old_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1928,7 +1969,6 @@ def extract_and_diff_files(content, auto_apply=False):
         shadow_file_path = shadowroot / file_path
         _save_file_to_shadowroot(shadow_file_path, file_content)
         original_content = ""
-        print("debug", old_file_path)
         with open(str(old_file_path), "r", encoding="utf8") as f:
             original_content = f.read()
         diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)

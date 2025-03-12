@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -27,6 +28,7 @@ from fastapi import FastAPI, Form, HTTPException
 from fastapi import Query as QueryArgs
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
+from pygments import formatters, highlight, lexers, styles
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Parser, Query
 
@@ -3335,6 +3337,46 @@ def start_lsp_client(lsp_command: str, workspace_path: str) -> threading.Thread:
         raise
 
 
+class SyntaxHighlight:
+    """
+    自动语法高亮处理器
+    输入假设:
+    - 必须提供file_path或lang_type至少一个
+    - 源代码需为字符串格式
+    - 主题需存在于pygments.styles内置主题中
+    """
+
+    def __init__(self, source_code=None, file_path=None, lang_type=None, theme="default"):
+        self.source_code = source_code
+        self.lexer = None
+        self.theme = theme
+        self.available_themes = list(styles.get_all_styles())
+
+        if lang_type:
+            self.lexer = lexers.get_lexer_by_name(lang_type)
+        elif file_path:
+            self.lexer = lexers.get_lexer_for_filename(file_path)
+
+        if not self.lexer:
+            raise ValueError("无法确定语言类型，请指定lang_type或file_path")
+
+    def render(self):
+        formatter = formatters.Terminal256Formatter(style=self.theme)
+        return highlight(self.source_code, self.lexer, formatter)
+
+    def output(self):
+        highlighted = self.render()
+        print(highlighted)
+
+    @staticmethod
+    def highlight_if_terminal(source_code, file_path=None, lang_type=None, theme="default"):
+        """根据终端是否支持颜色输出，决定是否进行语法高亮"""
+        if sys.stdout.isatty():
+            highlighter = SyntaxHighlight(source_code, file_path, lang_type, theme)
+            return highlighter.render()
+        return source_code
+
+
 if __name__ == "__main__":
     # 配置日志格式
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
@@ -3407,7 +3449,7 @@ if __name__ == "__main__":
         skeleton = SourceSkeleton(parser_loader_s)
         framework = skeleton.generate_framework(args.debug_skeleton)
         print("源代码框架信息：")
-        print(framework)
+        print(SyntaxHighlight.highlight_if_terminal(framework, file_path=args.debug_skeleton))
     else:
         logger.info("启动FastAPI服务")
         main(
