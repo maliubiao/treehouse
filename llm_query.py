@@ -31,6 +31,7 @@ from typing import Callable, Dict, List, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
+import yaml
 from openai import OpenAI
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -47,7 +48,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from tree import BlockPatch
+from tree import BlockPatch, RipgrepSearcher, SearchConfig, SearchResult
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
@@ -89,6 +90,13 @@ def parse_arguments():
     group.add_argument("--file", help="要分析的源代码文件路径")
     group.add_argument("--ask", help="直接提供提示词内容，与--file互斥")
     group.add_argument("--chatbot", action="store_true", help="进入聊天机器人UI模式，与--file和--ask互斥")
+    group.add_argument("--project-search", nargs="+", metavar="KEYWORD", help="执行项目关键词搜索(支持多词)")
+    parser.add_argument(
+        "--config",
+        default=os.path.join(os.path.dirname(__file__), "llm_project.yml"),
+        type=Path,
+        help="项目配置文件路径（YAML格式）",
+    )
     parser.add_argument(
         "--prompt-file",
         default=os.path.expanduser("~/.llm/source-query.txt"),
@@ -2081,7 +2089,7 @@ def validate_environment():
 
 def validate_files(program_args):
     """验证输入文件是否存在"""
-    if not program_args.ask and not program_args.chatbot:  # 仅在未使用--ask参数时检查文件
+    if not (program_args.ask or program_args.chatbot or program_args.project_search):  # 仅在需要检查文件时执行
         if not os.path.isfile(program_args.file):
             print(f"错误：源代码文件不存在 {program_args.file}")
             sys.exit(1)
@@ -2463,6 +2471,104 @@ def handle_small_code(program_args, code_content, prompt_template, api_key, prox
     )
 
 
+def prompt_words_search(words: List[str], args):
+    """根据关键词执行配置化搜索
+
+    Args:
+        words: 需要搜索的关键词列表
+        args: 命令行参数对象
+
+    Raises:
+        ValueError: 当输入不是非空字符串列表时
+    """
+    if not words or any(not isinstance(w, str) or len(w.strip()) == 0 for w in words):
+        raise ValueError("需要至少一个有效搜索关键词")
+
+    config = ConfigLoader(args.config).load_config()
+    searcher = RipgrepSearcher(config, debug=True)
+
+    try:
+        print(f"🔍 搜索关键词: {', '.join(words)}")
+        results = searcher.search(patterns=[re.escape(word) for word in words], search_root=Path.cwd())
+        print(f"找到 {len(results)} 个匹配文件")
+
+        for result in results:
+            print(f"\n🔍 在 {result.file_path}:")
+            for match in result.matches:
+                highlighted = (
+                    match.text[: match.column_range[0]]
+                    + "\033[1;31m"
+                    + match.text[match.column_range[0] : match.column_range[1]]
+                    + "\033[0m"
+                    + match.text[match.column_range[1] :]
+                )
+                print(f"  L{match.line}: {highlighted.strip()}")
+
+    except Exception as e:
+        print(f"搜索失败: {str(e)}")
+        sys.exit(1)
+
+
+class ConfigLoader:
+    """加载和管理LLM项目搜索配置
+
+    配置结构示例:
+    exclude:
+      dirs: [".venv", "node_modules", "tmp"]
+      files: ["*.min.js", "*.bundle.css"]
+    include:
+      files: ["*.py", "*.md", "*.txt"]
+    file_types: [".py", ".js", ".md"]
+    """
+
+    def __init__(self, config_path: Path = Path("llm_project.yml")):
+        self.config_path = config_path
+        self._default_config = {
+            "exclude": {
+                "dirs": [".git", ".venv", "node_modules", "build", "dist", "__pycache__"],
+                "files": ["*.min.js", "*.bundle.css", "*.log", "*.tmp"],
+            },
+            "include": {"dirs": [], "files": ["*.py", "*.js", "*.md", "*.txt"]},
+            "file_types": [".py", ".js", ".md", ".txt"],
+        }
+
+    def load_config(self) -> "SearchConfig":
+        """加载并验证配置文件"""
+        if not self.config_path.exists():
+            return self._create_search_config(self._default_config)
+
+        try:
+            with open(self.config_path, encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            merged = self._merge_configs(config)
+            return self._create_search_config(merged)
+        except (yaml.YAMLError, IOError) as e:
+            print(f"❌ 配置文件加载失败: {str(e)}")
+            return self._create_search_config(self._default_config)
+
+    def _merge_configs(self, user_config: dict) -> dict:
+        """合并用户配置和默认配置"""
+        return {
+            "exclude": {**self._default_config["exclude"], **user_config.get("exclude", {})},
+            "include": {**self._default_config["include"], **user_config.get("include", {})},
+            "file_types": user_config.get("file_types", self._default_config["file_types"]),
+        }
+
+    def _create_search_config(self, config: dict) -> SearchConfig:
+        """创建SearchConfig对象并进行验证"""
+        required_keys = {"exclude", "include", "file_types"}
+        if not required_keys.issubset(config.keys()):
+            raise ValueError(f"配置文件缺少必要字段: {required_keys - config.keys()}")
+
+        return SearchConfig(
+            exclude_dirs=config["exclude"]["dirs"],
+            exclude_files=config["exclude"]["files"],
+            include_dirs=config["include"]["dirs"],
+            include_files=config["include"]["files"],
+            file_types=config["file_types"],
+        )
+
+
 def main(args):
     shadowroot.mkdir(parents=True, exist_ok=True)
 
@@ -2475,6 +2581,8 @@ def main(args):
         handle_ask_mode(args, os.getenv("GPT_KEY"), proxies)
     elif args.chatbot:
         ChatbotUI().run()
+    elif args.project_search:
+        prompt_words_search(args.project_search, args)
     else:
         handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)
 

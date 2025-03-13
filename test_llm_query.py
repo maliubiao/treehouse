@@ -500,10 +500,10 @@ new content
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("llm_query.shadowroot", Path(tmpdir)):
                 test_content = """
-[project setup script start]
+[project setup shellscript start]
 #!/bin/bash
 echo 'setup'
-[project setup script end]
+[project setup shellscript end]
 """
                 llm_query.extract_and_diff_files(test_content)
 

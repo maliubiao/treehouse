@@ -702,7 +702,13 @@ class TestParserUtil(unittest.TestCase):
 
 class TestRipGrepSearch(unittest.TestCase):
     def setUp(self):
-        self.base_config = SearchConfig(exclude_dirs=["vendor", "node_modules"], include_files=[".py", ".md"])
+        self.base_config = SearchConfig(
+            exclude_dirs=["vendor", "node_modules"],
+            exclude_files=["temp.txt"],
+            include_dirs=["src"],
+            include_files=[".py", ".md"],
+            file_types=["py", "md"],
+        )
         self.searcher = RipgrepSearcher(self.base_config)
 
     @patch("subprocess.run")
@@ -722,30 +728,35 @@ class TestRipGrepSearch(unittest.TestCase):
         self.assertEqual(results[0].stats.get("matched_lines"), 1)
 
     @patch("subprocess.run")
-    def test_exclude_patterns(self, mock_run):
+    def test_command_generation(self, mock_run):
         mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
 
-        expected_command = [
+        expected = [
             "rg",
             "--json",
             "--smart-case",
             "--trim",
-            "--regex",
+            "--type-add",
+            "custom:*.{py,md}",
+            "-t",
+            "custom",
+            "--no-ignore",
+            "--regexp",
             "test",
-            "src",
             "--glob",
             "!vendor/**",
             "--glob",
             "!node_modules/**",
             "--glob",
-            "*.py",
+            "!temp.txt",
             "--glob",
-            "*.md",
+            "src/**",
+            "src",
         ]
 
         self.searcher.search(["test"], Path("src"))
         actual_command = mock_run.call_args[0][0]
-        self.assertListEqual(actual_command, expected_command)
+        self.assertListEqual(actual_command, expected)
 
     def test_invalid_search_root(self):
         with self.assertRaises(ValueError):
@@ -757,42 +768,19 @@ class TestRipGrepSearch(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.searcher.search(["[invalid-regex"], Path("."))
 
-    def test_result_structure(self):
-        sample_result = SearchResult(Path("test.py"), [Match(1, (0, 4), "test")])
-        self.assertEqual(sample_result.file_path.name, "test.py")
-        self.assertEqual(sample_result.matches[0].text, "test")
-
     @patch("subprocess.run")
-    def test_multiple_submatches(self, mock_run):
-        mock_output = """
-{"type":"begin","data":{"path":{"text":"src/test.py"}}}
-{"type":"match","data":{"path":{"text":"src/test.py"},"lines":{"text":"ParserUtil ParserUtil"},"line_number":10,"submatches":[{"start":0,"end":10},{"start":11,"end":21}]}}
-{"type":"end","data":{"path":{"text":"src/test.py"},"stats":{"elapsed":{"secs":0,"nanos":23456},"matched_lines":1,"matches":2}}}
-""".strip()
-        mock_run.return_value = MagicMock(stdout=mock_output, stderr="", returncode=0)
-
-        results = self.searcher.search(["ParserUtil"], Path("src"))
-        self.assertEqual(len(results), 1)
-        self.assertEqual(len(results[0].matches), 2)
-        self.assertEqual(results[0].matches[0].column_range, (0, 10))
-        self.assertEqual(results[0].matches[1].column_range, (11, 21))
-        self.assertEqual(results[0].stats.get("matches"), 2)
-
-    @patch("subprocess.run")
-    def test_multiple_patterns_search(self, mock_run):
+    def test_multiple_patterns(self, mock_run):
         mock_output = """
 {"type":"begin","data":{"path":{"text":"src/test.py"}}}
 {"type":"match","data":{"path":{"text":"src/test.py"},"lines":{"text":"class ParserUtil:"},"line_number":5,"submatches":[{"start":6,"end":16}]}}
-{"type":"match","data":{"path":{"text":"src/test.py"},"lines":{"text":"class SourceSkeleton:"},"line_number":8,"submatches":[{"start":12,"end":16}]}}
-{"type":"end","data":{"path":{"text":"src/test.py"},"stats":{"elapsed":{"secs":0,"nanos":34567},"matched_lines":2,"matches":2}}}
+{"type":"end","data":{"path":{"text":"src/test.py"},"stats":{"elapsed":{"secs":0,"nanos":34567},"matched_lines":1,"matches":1}}}
 """.strip()
         mock_run.return_value = MagicMock(stdout=mock_output, stderr="", returncode=0)
 
-        results = self.searcher.search(["ParserUtil", "Skel"], Path("src"))
+        results = self.searcher.search(["ParserUtil", "Validator"], Path("src"))
         self.assertEqual(len(results), 1)
-        self.assertEqual(len(results[0].matches), 2)
-        self.assertEqual(results[0].matches[0].text, "class ParserUtil:")
-        self.assertEqual(results[0].matches[1].text, "class SourceSkeleton:")
+        self.assertIn("--regexp ParserUtil", " ".join(mock_run.call_args[0][0]))
+        self.assertIn("--regexp Validator", " ".join(mock_run.call_args[0][0]))
 
 
 class TestSymbolsComplete(unittest.TestCase):

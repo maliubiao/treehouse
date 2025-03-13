@@ -906,22 +906,44 @@ class SearchResult:
 
 
 class SearchConfig:
+    __slots__ = ["exclude_dirs", "exclude_files", "include_dirs", "include_files", "file_types"]
+
     def __init__(
         self,
-        include_dirs: List[str] = None,
-        exclude_dirs: List[str] = None,
-        include_files: List[str] = None,
-        exclude_files: List[str] = None,
+        exclude_dirs: List[str],
+        exclude_files: List[str],
+        include_dirs: List[str],
+        include_files: List[str],
+        file_types: List[str],
     ):
-        self.include_dirs = include_dirs or []
-        self.exclude_dirs = exclude_dirs or []
-        self.include_files = include_files or []
-        self.exclude_files = exclude_files or []
+        self.exclude_dirs = exclude_dirs
+        self.exclude_files = exclude_files
+        self.include_dirs = include_dirs
+        self.include_files = include_files
+        self.file_types = file_types
 
 
 class RipgrepSearcher:
-    def __init__(self, config: SearchConfig):
+    def __init__(self, config: SearchConfig, debug: bool = False):
         self.config = config
+        self.debug = debug
+        self.file_pattern = self._build_file_pattern()
+
+    def _build_file_pattern(self) -> str:
+        """构建符合ripgrep要求的文件类型匹配模式"""
+        predefined = []
+        extensions = []
+        for ext in self.config.file_types:
+            clean_ext = ext.lstrip(".")
+            if "/" in clean_ext:  # 处理预定义类型如 'python'
+                predefined.append(clean_ext)
+            else:
+                extensions.append(clean_ext)
+
+        patterns = predefined.copy()
+        if extensions:
+            patterns.append(f'*.{{{",".join(extensions)}}}')
+        return ",".join(patterns)
 
     def search(self, patterns: List[str], search_root: Path) -> List[SearchResult]:
         """Execute ripgrep search with multiple patterns
@@ -943,27 +965,47 @@ class RipgrepSearcher:
             raise ValueError(f"Search root {search_root} does not exist")
 
         cmd = self._build_command(patterns, search_root)
+        if self.debug:
+            print("调试信息：执行命令:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode not in (0, 1):
-            raise RuntimeError(f"rg command failed: {result.stderr}")
+            error_msg = f"rg command failed: {result.stderr}\nCommand: {' '.join(cmd)}"
+            raise RuntimeError(error_msg)
 
         return self._parse_results(result.stdout)
 
     def _build_command(self, patterns: List[str], search_root: Path) -> List[str]:
-        cmd = ["rg", "--json", "--smart-case", "--trim"]
-        for pattern in patterns:
-            cmd.extend(["--regex", pattern])
-        cmd.append(str(search_root))
+        cmd = [
+            "rg",
+            "--json",
+            "--smart-case",
+            "--trim",
+            "--type-add",
+            f"custom:{self.file_pattern}",
+            "-t",
+            "custom",
+            "--no-ignore",  # 确保遵守我们自己的过滤规则
+        ]
 
+        # 添加搜索模式
+        for pattern in patterns:
+            cmd.extend(["--regexp", pattern])
+
+        # 添加排除目录
         for d in self.config.exclude_dirs:
             cmd.extend(["--glob", f"!{d}/**"])
+
+        # 添加排除文件
         for f in self.config.exclude_files:
             cmd.extend(["--glob", f"!{f}"])
+
+        # 添加包含目录（通过glob实现）
         for d in self.config.include_dirs:
             cmd.extend(["--glob", f"{d}/**"])
-        for f in self.config.include_files:
-            cmd.extend(["--glob", f"*{f}"])
+
+        # 最终添加搜索根目录
+        cmd.append(str(search_root))
 
         return cmd
 

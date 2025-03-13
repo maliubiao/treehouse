@@ -38,6 +38,7 @@ dependencies = [
     "tree-sitter-java>=0.23.5",
     "python-multipart>=0.0.20",
     "jieba>=0.42.1",
+    "pyyaml>=6.0.2",
 ]
 
 [tool.black]
