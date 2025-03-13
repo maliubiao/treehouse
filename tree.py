@@ -730,6 +730,84 @@ class ParserUtil:
             symbol_info = self._build_symbol_info(info, file_path)
             symbol_trie.insert(path, symbol_info)
 
+    def find_symbols_by_location(self, code_map: dict, line: int, column: int) -> list:
+        """根据行列位置查找对应的符号路径列表，按嵌套层次排序（最内层在前）
+
+        输入假设:
+        - code_map 必须包含有效的符号位置信息
+        - line和column从0开始计数
+        """
+        matched_symbols = []
+        for path, info in code_map.items():
+            start_line = info["start_line"]
+            start_col = info["start_col"]
+            end_line = info["end_line"]
+            end_col = info["end_col"]
+
+            # 检查位置是否在符号范围内
+            if (start_line < line or (start_line == line and start_col <= column)) and (
+                line < end_line or (line == end_line and column <= end_col)
+            ):
+                matched_symbols.append(path)
+
+        # 按符号路径深度和位置排序（最内层在前）
+        matched_symbols.sort(
+            key=lambda x: (-x.count("."), x.split(".")[-1].startswith("__"), x)  # 路径深度倒序  # 特殊符号在后
+        )
+        return matched_symbols
+
+    def find_symbols_for_locations(self, code_map: dict, locations: list[tuple[int, int]]) -> list[str]:
+        """批量处理位置并返回去重后的符号列表
+        输入假设:
+        - locations中的每个元素是(line, column)元组，从0开始计数
+        - code_map必须已经通过get_symbol_paths生成
+        """
+        # 将符号按起始行降序、起始列降序，结束行升序、结束列升序排列，以确保内层符号优先
+        sorted_symbols = sorted(
+            code_map.items(),
+            key=lambda item: (-item[1]["start_line"], -item[1]["start_col"], item[1]["end_line"], item[1]["end_col"]),
+        )
+
+        # 将位置按行和列升序排列
+        sorted_locations = sorted(locations, key=lambda loc: (loc[0], loc[1]))
+
+        processed_symbols = []
+        processed_ranges = []
+
+        for line, col in sorted_locations:
+            # 检查是否在已处理范围
+            in_range = False
+            for sl, sc, el, ec in processed_ranges:
+                if (sl <= line <= el) and (line > sl or col >= sc) and (line < el or col <= ec):
+                    in_range = True
+                    break
+            if in_range:
+                continue
+
+            current_symbol = None
+            # 查找第一个包含该位置的符号（按内层优先顺序）
+            for symbol_path, symbol_info in sorted_symbols:
+                s_line = symbol_info["start_line"]
+                s_col = symbol_info["start_col"]
+                e_line = symbol_info["end_line"]
+                e_col = symbol_info["end_col"]
+
+                # 检查位置是否在符号范围内
+                if (
+                    (s_line <= line <= e_line)
+                    and (s_col <= col if line == s_line else True)
+                    and (col <= e_col if line == e_line else True)
+                ):
+                    current_symbol = symbol_path
+                    # 记录处理范围用于后续跳过
+                    processed_ranges.append((s_line, s_col, e_line, e_col))
+                    break
+
+            if current_symbol and (not processed_symbols or processed_symbols[-1] != current_symbol):
+                processed_symbols.append(current_symbol)
+
+        return processed_symbols
+
     def print_symbol_paths(self, file_path: str):
         """打印文件中的所有符号路径及对应代码和位置信息"""
         paths, code_map = self.get_symbol_paths(file_path)
@@ -742,6 +820,109 @@ class ParserUtil:
                 f"调用列表: {[call['name'] for call in info['calls']]}\n"
                 f"代码内容:\n{info['code']}\n"
             )
+
+
+class Match:
+    def __init__(self, line: int, column_range: tuple[int, int], text: str):
+        self.line = line
+        self.column_range = column_range
+        self.text = text
+
+
+class SearchResult:
+    def __init__(self, file_path: Path, matches: List[Match], stats: Optional[Dict] = None):
+        self.file_path = file_path
+        self.matches = matches
+        self.stats = stats or {}
+
+
+class SearchConfig:
+    def __init__(
+        self,
+        include_dirs: List[str] = None,
+        exclude_dirs: List[str] = None,
+        include_files: List[str] = None,
+        exclude_files: List[str] = None,
+    ):
+        self.include_dirs = include_dirs or []
+        self.exclude_dirs = exclude_dirs or []
+        self.include_files = include_files or []
+        self.exclude_files = exclude_files or []
+
+
+class RipgrepSearcher:
+    def __init__(self, config: SearchConfig):
+        self.config = config
+
+    def search(self, pattern: str, search_root: Path) -> List[SearchResult]:
+        """Execute ripgrep search with structured configuration
+
+        Args:
+            pattern: Regex pattern to search
+            search_root: Root directory for search
+
+        Returns:
+            List of structured search results
+
+        Raises:
+            ValueError: If invalid search root or pattern
+            RuntimeError: If rg command execution fails
+        """
+        if not search_root.exists():
+            raise ValueError(f"Search root {search_root} does not exist")
+
+        cmd = self._build_command(pattern, search_root)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode not in (0, 1):
+            raise RuntimeError(f"rg command failed: {result.stderr}")
+
+        return self._parse_results(result.stdout)
+
+    def _build_command(self, pattern: str, search_root: Path) -> List[str]:
+        cmd = ["rg", "--json", "--smart-case", "--trim", f"--regex={pattern}", str(search_root)]
+
+        for d in self.config.exclude_dirs:
+            cmd.extend(["--glob", f"!{d}/**"])
+        for f in self.config.exclude_files:
+            cmd.extend(["--glob", f"!{f}"])
+        for d in self.config.include_dirs:
+            cmd.extend(["--glob", f"{d}/**"])
+        for f in self.config.include_files:
+            cmd.extend(["--glob", f"*{f}"])
+
+        return cmd
+
+    def _parse_results(self, output: str) -> List[SearchResult]:
+        results: Dict[Path, Dict] = {}
+
+        for line in output.splitlines():
+            try:
+                data = json.loads(line)
+                if data["type"] == "begin":
+                    path = Path(data["data"]["path"]["text"])
+                    if path not in results:
+                        results[path] = {"matches": [], "stats": {}}
+                elif data["type"] == "match":
+                    path = Path(data["data"]["path"]["text"])
+                    line_num = data["data"]["line_number"]
+                    text = data["data"]["lines"]["text"]
+                    for submatch in data["data"]["submatches"]:
+                        start = submatch["start"]
+                        end = submatch["end"]
+                        columns = (start, end)
+                        match = Match(line_num, columns, text)
+                        if path in results:
+                            results[path]["matches"].append(match)
+                elif data["type"] == "end":
+                    path = Path(data["data"]["path"]["text"])
+                    stats = data["data"].get("stats", {})
+                    if path in results:
+                        results[path]["stats"] = stats
+            except (KeyError, json.JSONDecodeError) as e:
+                continue
+
+        return [SearchResult(path, entry["matches"], entry["stats"]) for path, entry in results.items()]
 
 
 def dump_tree(node, source_bytes, indent=0):

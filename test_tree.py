@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from textwrap import dedent
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import unquote, urlparse
 
 from fastapi.testclient import TestClient
@@ -15,8 +15,12 @@ import tree
 from lsp import GenericLSPClient
 from tree import (
     BlockPatch,
+    Match,
     ParserLoader,
     ParserUtil,
+    RipgrepSearcher,
+    SearchConfig,
+    SearchResult,
     SourceSkeleton,
     SymbolTrie,
     app,
@@ -541,6 +545,204 @@ class TestParserUtil(unittest.TestCase):
             os.unlink(temp_path)
             if self.lsp_client.running:
                 asyncio.run(self.lsp_client.shutdown())
+
+    def test_find_symbol_by_location(self):
+        code = dedent(
+            """
+            class Outer:
+                class Inner:
+                    def nested_method(self):
+                        def local_function():
+                            pass
+                        local_variable = 42
+            """
+        )
+        path = self.create_temp_file(code)
+        _, code_map = self.parser_util.get_symbol_paths(path)
+
+        # 验证所有符号都存在
+        expected_symbols = [
+            "Outer",
+            "Outer.Inner",
+            "Outer.Inner.nested_method",
+            "Outer.Inner.nested_method.local_function",
+            "Outer.Inner.nested_method.local_variable",
+        ]
+        for symbol in expected_symbols:
+            self.assertIn(symbol, code_map, f"符号 {symbol} 未在code_map中找到")
+
+        # 动态获取符号位置进行测试
+        def test_symbol_position(symbol_path):
+            info = code_map[symbol_path]
+            # 在符号起始位置测试
+            symbols = self.parser_util.find_symbols_by_location(code_map, info["start_line"], info["start_col"])
+            self.assertIn(symbol_path, symbols, f"在起始位置未找到符号 {symbol_path}")
+            # 在符号中间位置测试
+            mid_line = (info["start_line"] + info["end_line"]) // 2
+            mid_col = (info["start_col"] + info["end_col"]) // 2
+            symbols = self.parser_util.find_symbols_by_location(code_map, mid_line, mid_col)
+            self.assertIn(symbol_path, symbols, f"在中间位置未找到符号 {symbol_path}")
+
+        # 测试所有符号
+        test_symbol_position("Outer")
+        test_symbol_position("Outer.Inner")
+        test_symbol_position("Outer.Inner.nested_method")
+        test_symbol_position("Outer.Inner.nested_method.local_function")
+        test_symbol_position("Outer.Inner.nested_method.local_variable")
+
+        # 测试嵌套范围
+        nested_info = code_map["Outer.Inner.nested_method.local_function"]
+        symbols = self.parser_util.find_symbols_by_location(
+            code_map, nested_info["start_line"], nested_info["start_col"]
+        )
+        expected_symbols = [
+            "Outer.Inner.nested_method.local_function",
+            "Outer.Inner.nested_method",
+            "Outer.Inner",
+            "Outer",
+        ]
+        self.assertEqual(symbols, expected_symbols)
+
+        os.unlink(path)
+
+    def test_batch_find_symbols(self):
+        code = dedent(
+            """
+            class Alpha:
+                def method_a(self):
+                    pass
+
+            class Beta:
+                def method_b(self):
+                    pass
+        """
+        )
+        path = self.create_temp_file(code)
+        _, code_map = self.parser_util.get_symbol_paths(path)
+
+        with open(path, "rb") as f:
+            code_bytes = f.read()
+
+        # 查找各个符号的起始位置
+        alpha_pos = self._find_byte_position(code_bytes, "class Alpha:")
+        alpha_start_line, alpha_start_col, _, _ = self._convert_bytes_to_points(
+            code_bytes, alpha_pos[0], alpha_pos[0] + 1
+        )
+
+        method_a_pos = self._find_byte_position(code_bytes, "def method_a(self):")
+        method_a_start_line, method_a_start_col, _, _ = self._convert_bytes_to_points(
+            code_bytes, method_a_pos[0], method_a_pos[0] + 1
+        )
+
+        beta_pos = self._find_byte_position(code_bytes, "class Beta:")
+        beta_start_line, beta_start_col, _, _ = self._convert_bytes_to_points(code_bytes, beta_pos[0], beta_pos[0] + 1)
+
+        method_b_pos = self._find_byte_position(code_bytes, "def method_b(self):")
+        method_b_start_line, method_b_start_col, _, _ = self._convert_bytes_to_points(
+            code_bytes, method_b_pos[0], method_b_pos[0] + 1
+        )
+
+        # 构造测试位置列表（包含重复和连续位置）
+        test_locations = [
+            (alpha_start_line, alpha_start_col),
+            (alpha_start_line, alpha_start_col + 5),
+            (method_a_start_line, method_a_start_col),
+            (method_a_start_line, method_a_start_col + 3),
+            (beta_start_line, beta_start_col),
+            (beta_start_line, beta_start_col + 4),
+            (method_b_start_line, method_b_start_col),
+            (method_b_start_line, method_b_start_col + 3),
+        ]
+
+        # 调用批量查找方法
+        symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations)
+
+        # 验证去重结果
+        expected_symbols = [
+            "Alpha",
+            "Beta",
+        ]
+        self.assertEqual(sorted(symbols), sorted(expected_symbols))
+
+        os.unlink(path)
+
+
+class TestRipGrepSearch(unittest.TestCase):
+    def setUp(self):
+        self.base_config = SearchConfig(exclude_dirs=["vendor", "node_modules"], include_files=[".py", ".md"])
+        self.searcher = RipgrepSearcher(self.base_config)
+
+    @patch("subprocess.run")
+    def test_basic_search(self, mock_run):
+        mock_output = """
+{"type":"begin","data":{"path":{"text":"src/main.py"}}}
+{"type":"match","data":{"path":{"text":"src/main.py"},"lines":{"text":"def test():"},"line_number":42,"submatches":[{"start":4,"end":8}]}}
+{"type":"end","data":{"path":{"text":"src/main.py"},"stats":{"elapsed":{"secs":0,"nanos":12345},"matched_lines":1,"matches":1}}}
+""".strip()
+        mock_run.return_value = MagicMock(stdout=mock_output, stderr="", returncode=0)
+
+        results = self.searcher.search("test", Path("src"))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].file_path.name, "main.py")
+        self.assertEqual(len(results[0].matches), 1)
+        self.assertEqual(results[0].matches[0].line, 42)
+        self.assertEqual(results[0].stats.get("matched_lines"), 1)
+
+    @patch("subprocess.run")
+    def test_exclude_patterns(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+
+        expected_command = [
+            "rg",
+            "--json",
+            "--smart-case",
+            "--trim",
+            "--regex=test",
+            "src",
+            "--glob",
+            "!vendor/**",
+            "--glob",
+            "!node_modules/**",
+            "--glob",
+            "*.py",
+            "--glob",
+            "*.md",
+        ]
+
+        self.searcher.search("test", Path("src"))
+        actual_command = mock_run.call_args[0][0]
+        self.assertListEqual(actual_command, expected_command)
+
+    def test_invalid_search_root(self):
+        with self.assertRaises(ValueError):
+            self.searcher.search("test", Path("/nonexistent"))
+
+    @patch("subprocess.run")
+    def test_error_handling(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="", stderr="invalid pattern", returncode=2)
+        with self.assertRaises(RuntimeError):
+            self.searcher.search("[invalid-regex", Path("."))
+
+    def test_result_structure(self):
+        sample_result = SearchResult(Path("test.py"), [Match(1, (0, 4), "test")])
+        self.assertEqual(sample_result.file_path.name, "test.py")
+        self.assertEqual(sample_result.matches[0].text, "test")
+
+    @patch("subprocess.run")
+    def test_multiple_submatches(self, mock_run):
+        mock_output = """
+{"type":"begin","data":{"path":{"text":"src/test.py"}}}
+{"type":"match","data":{"path":{"text":"src/test.py"},"lines":{"text":"ParserUtil ParserUtil"},"line_number":10,"submatches":[{"start":0,"end":10},{"start":11,"end":21}]}}
+{"type":"end","data":{"path":{"text":"src/test.py"},"stats":{"elapsed":{"secs":0,"nanos":23456},"matched_lines":1,"matches":2}}}
+""".strip()
+        mock_run.return_value = MagicMock(stdout=mock_output, stderr="", returncode=0)
+
+        results = self.searcher.search("ParserUtil", Path("src"))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].matches), 2)
+        self.assertEqual(results[0].matches[0].column_range, (0, 10))
+        self.assertEqual(results[0].matches[1].column_range, (11, 21))
+        self.assertEqual(results[0].stats.get("matches"), 2)
 
 
 class TestSymbolsComplete(unittest.TestCase):
