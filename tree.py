@@ -854,24 +854,26 @@ class RipgrepSearcher:
     def __init__(self, config: SearchConfig):
         self.config = config
 
-    def search(self, pattern: str, search_root: Path) -> List[SearchResult]:
-        """Execute ripgrep search with structured configuration
+    def search(self, patterns: List[str], search_root: Path) -> List[SearchResult]:
+        """Execute ripgrep search with multiple patterns
 
         Args:
-            pattern: Regex pattern to search
+            patterns: List of regex patterns to search
             search_root: Root directory for search
 
         Returns:
             List of structured search results
 
         Raises:
-            ValueError: If invalid search root or pattern
+            ValueError: If invalid search root or empty patterns
             RuntimeError: If rg command execution fails
         """
+        if not patterns:
+            raise ValueError("At least one search pattern is required")
         if not search_root.exists():
             raise ValueError(f"Search root {search_root} does not exist")
 
-        cmd = self._build_command(pattern, search_root)
+        cmd = self._build_command(patterns, search_root)
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode not in (0, 1):
@@ -879,8 +881,11 @@ class RipgrepSearcher:
 
         return self._parse_results(result.stdout)
 
-    def _build_command(self, pattern: str, search_root: Path) -> List[str]:
-        cmd = ["rg", "--json", "--smart-case", "--trim", f"--regex={pattern}", str(search_root)]
+    def _build_command(self, patterns: List[str], search_root: Path) -> List[str]:
+        cmd = ["rg", "--json", "--smart-case", "--trim"]
+        for pattern in patterns:
+            cmd.extend(["--regex", pattern])
+        cmd.append(str(search_root))
 
         for d in self.config.exclude_dirs:
             cmd.extend(["--glob", f"!{d}/**"])
