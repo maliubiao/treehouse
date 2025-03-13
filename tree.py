@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 
 import jieba
 import uvicorn
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import Body, FastAPI, Form, HTTPException
 from fastapi import Query as QueryArgs
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -906,16 +906,18 @@ class SearchResult:
 
 
 class SearchConfig:
-    __slots__ = ["exclude_dirs", "exclude_files", "include_dirs", "include_files", "file_types"]
+    __slots__ = ["root_dir", "exclude_dirs", "exclude_files", "include_dirs", "include_files", "file_types"]
 
     def __init__(
         self,
+        root_dir: Path,
         exclude_dirs: List[str],
         exclude_files: List[str],
         include_dirs: List[str],
         include_files: List[str],
         file_types: List[str],
     ):
+        self.root_dir = root_dir
         self.exclude_dirs = exclude_dirs
         self.exclude_files = exclude_files
         self.include_dirs = include_dirs
@@ -945,12 +947,12 @@ class RipgrepSearcher:
             patterns.append(f'*.{{{",".join(extensions)}}}')
         return ",".join(patterns)
 
-    def search(self, patterns: List[str], search_root: Path) -> List[SearchResult]:
+    def search(self, patterns: List[str], search_root: Path = None) -> List[SearchResult]:
         """Execute ripgrep search with multiple patterns
 
         Args:
             patterns: List of regex patterns to search
-            search_root: Root directory for search
+            search_root: 已废弃，使用config中的root_dir
 
         Returns:
             List of structured search results
@@ -961,10 +963,14 @@ class RipgrepSearcher:
         """
         if not patterns:
             raise ValueError("At least one search pattern is required")
-        if not search_root.exists():
-            raise ValueError(f"Search root {search_root} does not exist")
+        if search_root:
+            actual_root = search_root
+        else:
+            actual_root = self.config.root_dir
+        if not actual_root.exists():
+            raise ValueError(f"配置的根目录不存在: {actual_root}")
 
-        cmd = self._build_command(patterns, search_root)
+        cmd = self._build_command(patterns, actual_root)
         if self.debug:
             print("调试信息：执行命令:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -2906,6 +2912,74 @@ async def extract_identifier(text: str = QueryArgs(...)):
     return [word for word in words if identifier_pattern.fullmatch(word)]
 
 
+class MatchResult(BaseModel):
+    line: int
+    column_range: tuple[int, int]
+    text: str
+
+
+class FileSearchResult(BaseModel):
+    file_path: str
+    matches: list[MatchResult]
+
+    def to_json(self) -> str:
+        return self.json()
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "FileSearchResult":
+        return cls.model_validate_json(json_str)
+
+
+@app.post("/search-to-symbols")
+async def search_to_symbols(results: list[FileSearchResult] = Body(..., min_length=1)):
+    """根据文件搜索结果解析符号路径"""
+    try:
+        parser_util = ParserUtil()
+        symbol_results = []
+
+        symbol_cache = app.state.symbol_cache
+        for file_result in results:
+            file_path_str = file_result.file_path
+            file_path = Path(file_path_str)
+            try:
+                current_mtime = file_path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+
+            if file_path_str in symbol_cache:
+                cached_mtime, code_map = symbol_cache[file_path_str]
+                if cached_mtime != current_mtime:
+                    _, code_map = parser_util.get_symbol_paths(file_path_str)
+                    symbol_cache[file_path_str] = (current_mtime, code_map)
+            else:
+                _, code_map = parser_util.get_symbol_paths(file_path_str)
+                symbol_cache[file_path_str] = (current_mtime, code_map)
+
+            locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
+
+            symbols = parser_util.find_symbols_for_locations(code_map, locations)
+
+            symbol_results.append(
+                {
+                    "file_path": file_path_str,
+                    "matches": [
+                        {
+                            "line": match.line,
+                            "columns": match.column_range,
+                            "text": match.text,
+                            "symbol": symbols[i] if i < len(symbols) else None,
+                        }
+                        for i, match in enumerate(file_result.matches)
+                    ],
+                }
+            )
+
+        return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"符号解析失败: {str(e)}"})
+
+
 @app.get("/complete_realtime")
 async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
     """实时符号补全，直接解析指定文件并返回符号列表
@@ -3712,6 +3786,64 @@ class SyntaxHighlight:
             highlighter = SyntaxHighlight(source_code, file_path, lang_type, theme)
             return highlighter.render()
         return source_code
+
+
+class LintResult(BaseModel):
+    """Structured representation of pylint error"""
+
+    file_path: str
+    line: int
+    column_range: tuple[int, int]
+    code: str
+    message: str
+
+    def to_json(self) -> str:
+        return self.model_dump_json()
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "LintResult":
+        return cls.model_validate_json(json_str)
+
+    @property
+    def full_message(self) -> str:
+        """Format message with code for display"""
+        return f"{self.code}: {self.message}"
+
+
+class LintParser:
+    """
+    Parse pylint output into structured LintResult objects
+    Example input format: "tree.py:1870:0: C0325: Unnecessary parens after 'not' keyword"
+    """
+
+    _LINE_PATTERN = re.compile(
+        r"^(?P<path>.+?):"  # File path
+        r"(?P<line>\d+):"  # Line number
+        r"(?P<column>\d+): "  # Column start
+        r"(?P<code>\w+) "  # Lint code
+        r"(?P<message>.+)$"  # Error message
+    )
+
+    @classmethod
+    def parse(cls, raw_output: str) -> list[LintResult]:
+        """Parse raw pylint output into structured results"""
+        results = []
+        for line in raw_output.splitlines():
+            if not line.strip() or line.startswith("***"):
+                continue
+
+            if match := cls._LINE_PATTERN.match(line):
+                groups = match.groupdict()
+                results.append(
+                    LintResult(
+                        file_path=groups["path"],
+                        line=int(groups["line"]),
+                        column_range=(int(groups["column"]), int(groups["column"])),
+                        code=groups["code"],
+                        message=groups["message"].strip(),
+                    )
+                )
+        return results
 
 
 if __name__ == "__main__":

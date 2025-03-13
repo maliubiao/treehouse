@@ -48,7 +48,13 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from tree import BlockPatch, RipgrepSearcher, SearchConfig, SearchResult
+from tree import (
+    BlockPatch,
+    FileSearchResult,
+    MatchResult,
+    RipgrepSearcher,
+    SearchConfig,
+)
 
 MAX_FILE_SIZE = 32000
 MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
@@ -2489,7 +2495,7 @@ def prompt_words_search(words: List[str], args):
 
     try:
         print(f"🔍 搜索关键词: {', '.join(words)}")
-        results = searcher.search(patterns=[re.escape(word) for word in words], search_root=Path.cwd())
+        results = searcher.search(patterns=[re.escape(word) for word in words])
         print(f"找到 {len(results)} 个匹配文件")
 
         for result in results:
@@ -2513,6 +2519,7 @@ class ConfigLoader:
     """加载和管理LLM项目搜索配置
 
     配置结构示例:
+    root_dir: "."
     exclude:
       dirs: [".venv", "node_modules", "tmp"]
       files: ["*.min.js", "*.bundle.css"]
@@ -2524,6 +2531,7 @@ class ConfigLoader:
     def __init__(self, config_path: Path = Path("llm_project.yml")):
         self.config_path = config_path
         self._default_config = {
+            "root_dir": str(Path.cwd()),
             "exclude": {
                 "dirs": [".git", ".venv", "node_modules", "build", "dist", "__pycache__"],
                 "files": ["*.min.js", "*.bundle.css", "*.log", "*.tmp"],
@@ -2549,6 +2557,7 @@ class ConfigLoader:
     def _merge_configs(self, user_config: dict) -> dict:
         """合并用户配置和默认配置"""
         return {
+            "root_dir": user_config.get("root_dir", self._default_config["root_dir"]),
             "exclude": {**self._default_config["exclude"], **user_config.get("exclude", {})},
             "include": {**self._default_config["include"], **user_config.get("include", {})},
             "file_types": user_config.get("file_types", self._default_config["file_types"]),
@@ -2556,17 +2565,40 @@ class ConfigLoader:
 
     def _create_search_config(self, config: dict) -> SearchConfig:
         """创建SearchConfig对象并进行验证"""
-        required_keys = {"exclude", "include", "file_types"}
+        required_keys = {"root_dir", "exclude", "include", "file_types"}
         if not required_keys.issubset(config.keys()):
             raise ValueError(f"配置文件缺少必要字段: {required_keys - config.keys()}")
 
         return SearchConfig(
+            root_dir=Path(config["root_dir"]).expanduser().resolve(),
             exclude_dirs=config["exclude"]["dirs"],
             exclude_files=config["exclude"]["files"],
             include_dirs=config["include"]["dirs"],
             include_files=config["include"]["files"],
             file_types=config["file_types"],
         )
+
+
+async def perform_search(words: List[str], config_path: str = "llm_project.yml") -> list[FileSearchResult]:
+    """执行代码搜索并返回强类型结果"""
+
+    if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
+        raise ValueError("需要至少一个有效搜索关键词")
+
+    config = ConfigLoader(Path(config_path)).load_config()
+    searcher = RipgrepSearcher(config)
+    rg_results = searcher.search(patterns=[re.escape(word) for word in words])
+
+    return [
+        FileSearchResult(
+            file_path=str(result.file_path),
+            matches=[
+                MatchResult(line=match.line, column_range=match.column_range, text=match.text)
+                for match in result.matches
+            ],
+        )
+        for result in rg_results
+    ]
 
 
 def main(args):

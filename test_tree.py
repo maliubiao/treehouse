@@ -15,6 +15,7 @@ import tree
 from lsp import GenericLSPClient
 from tree import (
     BlockPatch,
+    LintParser,
     Match,
     ParserLoader,
     ParserUtil,
@@ -703,6 +704,7 @@ class TestParserUtil(unittest.TestCase):
 class TestRipGrepSearch(unittest.TestCase):
     def setUp(self):
         self.base_config = SearchConfig(
+            root_dir=Path.cwd(),
             exclude_dirs=["vendor", "node_modules"],
             exclude_files=["temp.txt"],
             include_dirs=["src"],
@@ -751,10 +753,10 @@ class TestRipGrepSearch(unittest.TestCase):
             "!temp.txt",
             "--glob",
             "src/**",
-            "src",
+            str(Path.cwd()),
         ]
 
-        self.searcher.search(["test"], Path("src"))
+        self.searcher.search(["test"])
         actual_command = mock_run.call_args[0][0]
         self.assertListEqual(actual_command, expected)
 
@@ -1227,6 +1229,29 @@ class TestSentenceSegments:
     def test_should_ignore_spaces_and_symbols(self):
         response = self.client.get("/extract_identifier?text=hello_world x123 _temp var-2")
         assert response.json() == ["hello_world", "x123", "_temp"]
+
+
+class TestLintParser:
+    def test_parse_pylint_output(self):
+        sample_output = """
+        tree.py:1870:0: C0325: Unnecessary parens after 'not' keyword
+        test.py:42:10: E1136: Value 'foo' is unsubscriptable
+        """
+        results = LintParser.parse(sample_output)
+
+        assert len(results) == 2
+        assert results[0].file_path == "tree.py"
+        assert results[0].line == 1870
+        assert results[0].column_range == (0, 0)
+        assert results[0].code == "C0325"
+        assert results[0].message == "Unnecessary parens after 'not' keyword"
+
+        assert results[1].code == "E1136"
+        assert "unsubscriptable" in results[1].message
+
+    def test_parse_invalid_lines(self):
+        assert len(LintParser.parse("")) == 0
+        assert len(LintParser.parse("*** Module tree")) == 0
 
 
 if __name__ == "__main__":
