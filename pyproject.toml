@@ -37,6 +37,7 @@ dependencies = [
     "tree-sitter-bash>=0.23.3",
     "tree-sitter-java>=0.23.5",
     "python-multipart>=0.0.20",
+    "jieba>=0.42.1",
 ]
 
 [tool.black]

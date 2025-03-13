@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import traceback
+import typing
 import zlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+import jieba
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException
 from fastapi import Query as QueryArgs
@@ -674,12 +676,79 @@ class ParserUtil:
         for child in node.children:
             self._extract_function_calls(child, current_symbols, code_map)
 
+    def _extract_parameter_type_calls(self, node, current_symbols, code_map):
+        """提取参数的类型注释中的调用信息"""
+        if node.type in (NodeTypes.TYPED_PARAMETER, NodeTypes.TYPED_DEFAULT_PARAMETER):
+            type_node = node.child_by_field_name("type")
+            if not type_node:
+                return
+            # 收集所有类型标识符
+            identifiers = self._collect_type_identifiers(type_node)
+            for identifier in identifiers:
+                type_name = identifier.text.decode("utf8")
+                if not self._is_standard_type(type_name):
+                    self._add_call_info(type_name, current_symbols, code_map, identifier)
+
+    def _collect_type_identifiers(self, node):
+        """递归收集类型节点中的所有标识符"""
+        identifiers = []
+        if node.type == NodeTypes.IDENTIFIER:
+            identifiers.append(node)
+        for child in node.children:
+            identifiers.extend(self._collect_type_identifiers(child))
+        return identifiers
+
+    def _is_standard_type(self, type_name: str) -> bool:
+        """判断是否是标准库类型或基本类型"""
+        basic_types = {
+            "typing",
+            "int",
+            "str",
+            "float",
+            "bool",
+            "list",
+            "dict",
+            "tuple",
+            "set",
+            "None",
+            "Any",
+            "Optional",
+            "Union",
+            "List",
+            "Dict",
+            "Tuple",
+            "Set",
+            "Type",
+            "Callable",
+            "Iterable",
+            "Sequence",
+            "Mapping",
+            "TypeVar",
+            "Generic",
+            "Protocol",
+            "runtime_checkable",
+        }
+
+        # 处理带模块前缀的类型
+        if "." in type_name:
+            module_part, *rest = type_name.split(".", 1)
+            # 处理typing模块的特殊情况
+            if module_part == "typing":
+                try:
+                    # 尝试获取typing模块中的实际类型
+                    return getattr(typing, rest[0].split(".", 1)[0]) is not None
+                except AttributeError:
+                    return False
+            return module_part in {"typing", "collections", "abc"}
+        return type_name in basic_types
+
     def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
         processed_node = self._process_symbol_node(
             node, current_symbols, current_nodes, code_map, source_bytes, results
         )
         if processed_node:
             self._extract_function_calls(processed_node, current_symbols, code_map)
+        self._extract_parameter_type_calls(node, current_symbols, code_map)
         for child in node.children:
             self.traverse(child, current_symbols, current_nodes, code_map, source_bytes, results)
         if processed_node:
@@ -975,6 +1044,10 @@ class NodeTypes:
     POINTER_DECLARATOR = "pointer_declarator"
     FUNCTION_DECLARATOR = "function_declarator"
     COMPARISON_OPERATOR = "comparison_operator"
+    TYPED_PARAMETER = "typed_parameter"
+    TYPED_DEFAULT_PARAMETER = "typed_default_parameter"
+    GENERIC_TYPE = "generic_type"
+    UNION_TYPE = "union_type"
 
 
 INDENT_UNIT = "    "  # 定义缩进单位
@@ -2769,6 +2842,26 @@ async def lsp_file_didChange(file_path: str = Form(...), content: str = Form(...
         traceback.print_exc()
         print("Failed to process didChange: %s", str(e))
         return JSONResponse(status_code=500, content={"message": "Internal server error"})
+
+
+@app.get("/extract_identifier")
+async def extract_identifier(text: str = QueryArgs(...)):
+    """
+    对输入文本进行分词，提取符合编程语言标识符规则的词语
+
+    Args:
+        text: 需要分词的原始文本，长度建议不超过1000字符
+        有效输入示例: "ParserUtil Python TestCase"
+
+    Returns:
+        list[str]: 符合标识符规则的词语列表
+    """
+    if not text.strip():
+        return []
+
+    words = list(jieba.cut(text, cut_all=False))
+    identifier_pattern = re.compile(r"^[a-zA-Z_]\w*$")
+    return [word for word in words if identifier_pattern.fullmatch(word)]
 
 
 @app.get("/complete_realtime")

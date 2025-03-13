@@ -546,6 +546,39 @@ class TestParserUtil(unittest.TestCase):
             if self.lsp_client.running:
                 asyncio.run(self.lsp_client.shutdown())
 
+    def test_parameter_type_calls(self):
+        """测试参数类型调用提取"""
+        code = dedent(
+            """
+            from typing import List, Optional
+            
+            class MyType:
+                pass
+            
+            def example(
+                a: int,
+                b: MyType,
+                c: List[MyType],
+                d: Optional[List[int]],
+                e: "Optional[MyType]",
+                f: dict[str, MyType],
+                g: tuple[MyType, int],
+                h: Sequence[MyType]
+            ):
+                pass
+        """
+        )
+        path = self.create_temp_file(code)
+        _, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        # 验证参数类型调用
+        entry = code_map["example"]
+        call_names = {call["name"] for call in entry["calls"]}
+        # 预期包含所有MyType引用，排除标准库类型
+        expected_calls = {"MyType"}
+        self.assertEqual(call_names, expected_calls)
+
     def test_find_symbol_by_location(self):
         code = dedent(
             """
@@ -1186,6 +1219,26 @@ class TestLSPIntegration(unittest.TestCase):
             response = self.client.post("/lsp/didChange", data={"file_path": "test.py", "content": "content"})
             self.assertEqual(response.status_code, 500)
             self.assertIn("Internal server error", response.json()["message"])
+
+
+class TestSentenceSegments:
+    client = TestClient(app)
+
+    def test_should_extract_identifiers(self):
+        response = self.client.get("/extract_identifier?text=我们试试看ParserUtil Python TestCase")
+        assert sorted(response.json()) == ["ParserUtil", "Python", "TestCase"]
+
+    def test_should_handle_empty_input(self):
+        response = self.client.get("/extract_identifier?text=")
+        assert response.status_code == 422
+
+    def test_should_filter_non_identifiers(self):
+        response = self.client.get("/extract_identifier?text=百度是高科技公司")
+        assert response.json() == []
+
+    def test_should_ignore_spaces_and_symbols(self):
+        response = self.client.get("/extract_identifier?text=hello_world x123 _temp var-2")
+        assert response.json() == ["hello_world", "x123", "_temp"]
 
 
 if __name__ == "__main__":
