@@ -441,10 +441,14 @@ class ParserUtil:
         while current_node and current_node.type in (
             "comment",
             "import_statement",
-            "expression_statement",
             "import_from_statement",
+            "expression_statement",
         ):
-            import_block.append(current_node)
+            if current_node.type == "expression_statement":
+                if current_node.children[0].type == "string":
+                    import_block.append(current_node)
+            else:
+                import_block.append(current_node)
             current_node = current_node.next_sibling
         return import_block
 

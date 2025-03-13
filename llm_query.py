@@ -1116,7 +1116,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 4. 保持原有缩进和代码风格，不添注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
 6. 允许在符号内容在前后添加新代码
-7. 在非正式输出部分使用[modified symbol]需要转义成[modify symbol]
+7. 输出中提到[modified symbol], [modified block]必须以字符串拼接的方式表示，以避免干扰格式化内容提取
 """
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
