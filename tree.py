@@ -439,13 +439,13 @@ class ParserUtil:
         current_node = node
         # 扩展支持模块头部的字符串字面量（如文档字符串）、注释和所有导入语句
         while current_node and current_node.type in (
-            "comment",
-            "import_statement",
-            "import_from_statement",
-            "expression_statement",
+            NodeTypes.COMMENT,
+            NodeTypes.IMPORT_STATEMENT,
+            NodeTypes.IMPORT_FROM_STATEMENT,
+            NodeTypes.EXPRESSION_STATEMENT,
         ):
-            if current_node.type == "expression_statement":
-                if current_node.children[0].type == "string":
+            if current_node.type == NodeTypes.EXPRESSION_STATEMENT:
+                if current_node.children[0].type == NodeTypes.STRING:
                     import_block.append(current_node)
             else:
                 import_block.append(current_node)
@@ -461,23 +461,23 @@ class ParserUtil:
         if not hasattr(node, "type"):
             return None
 
-        if node.type == "class_definition":
+        if node.type == NodeTypes.CLASS_DEFINITION:
             return ParserUtil._get_class_name(node)
-        elif node.type == "function_definition":
+        elif node.type == NodeTypes.FUNCTION_DEFINITION:
             return ParserUtil._get_function_name(node)
-        elif node.type == "assignment":
+        elif node.type == NodeTypes.ASSIGNMENT:
             return ParserUtil._get_assignment_name(node)
-        elif node.type == "if_statement" and ParserUtil._is_main_block(node):
+        elif node.type == NodeTypes.IF_STATEMENT and ParserUtil._is_main_block(node):
             return "__main__"
         return None
 
     @staticmethod
     def _is_main_block(node):
         """判断是否是__main__块"""
-        condition = ParserUtil._find_child_by_type(node, "comparison_operator")
+        condition = ParserUtil._find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
         if condition:
-            left = ParserUtil._find_child_by_type(condition, "identifier")
-            right = ParserUtil._find_child_by_type(condition, "string")
+            left = ParserUtil._find_child_by_type(condition, NodeTypes.IDENTIFIER)
+            right = ParserUtil._find_child_by_type(condition, NodeTypes.STRING)
             if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
                 return True
         return False
@@ -486,7 +486,7 @@ class ParserUtil:
     def _get_class_name(node):
         """从类定义节点中提取类名"""
         for child in node.children:
-            if child.type == "identifier":
+            if child.type == NodeTypes.IDENTIFIER:
                 return child.text.decode("utf8")
         return None
 
@@ -501,25 +501,25 @@ class ParserUtil:
     @staticmethod
     def _get_function_name(node):
         """从函数定义节点中提取函数名"""
-        if node.type == "function_definition":
-            name_node = ParserUtil._find_child_by_field(node, "name")
+        if node.type == NodeTypes.FUNCTION_DEFINITION:
+            name_node = ParserUtil._find_child_by_field(node, NodeTypes.NAME)
             if name_node:
                 return name_node.text.decode("utf8")
-            word_node = ParserUtil._find_child_by_type(node, "word")
+            word_node = ParserUtil._find_child_by_type(node, NodeTypes.WORD)
             if word_node:
                 return word_node.text.decode("utf8")
-            identifier_node = ParserUtil._find_child_by_type(node, "identifier")
+            identifier_node = ParserUtil._find_child_by_type(node, NodeTypes.IDENTIFIER)
             if identifier_node:
                 return identifier_node.text.decode("utf8")
             return None
 
-        pointer_declarator = ParserUtil._find_child_by_type(node, "pointer_declarator")
+        pointer_declarator = ParserUtil._find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
-            if func_declarator and func_declarator.type == "function_declarator":
+            if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
                 return ParserUtil._find_identifier_in_node(func_declarator)
 
-        func_declarator = ParserUtil._find_child_by_type(node, "function_declarator")
+        func_declarator = ParserUtil._find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
         if func_declarator:
             return ParserUtil._find_identifier_in_node(func_declarator)
 
@@ -528,12 +528,12 @@ class ParserUtil:
     @staticmethod
     def _get_assignment_name(node):
         """从赋值节点中提取变量名"""
-        identifier = ParserUtil._find_child_by_type(node, "identifier")
+        identifier = ParserUtil._find_child_by_type(node, NodeTypes.IDENTIFIER)
         if identifier:
             return identifier.text.decode("utf8")
 
         left = node.child_by_field_name("left")
-        if left and left.type == "identifier":
+        if left and left.type == NodeTypes.IDENTIFIER:
             return left.text.decode("utf8")
         return None
 
@@ -549,13 +549,17 @@ class ParserUtil:
     def _find_identifier_in_node(node):
         """在节点中查找identifier节点"""
         for child in node.children:
-            if child.type == "identifier":
+            if child.type == NodeTypes.IDENTIFIER:
                 return child.text.decode("utf8")
         return None
 
     def _get_effective_node(self, node):
         """获取有效的语法树节点（处理装饰器情况）"""
-        if node.type == "function_definition" and node.parent and node.parent.type == "decorated_definition":
+        if (
+            node.type == NodeTypes.FUNCTION_DEFINITION
+            and node.parent
+            and node.parent.type == NodeTypes.DECORATED_DEFINITION
+        ):
             return node.parent
         return node
 
@@ -624,9 +628,9 @@ class ParserUtil:
     @staticmethod
     def _get_full_attribute_name(node):
         """递归获取属性调用的完整名称"""
-        if node.type == "identifier":
+        if node.type == NodeTypes.IDENTIFIER:
             return node.text.decode("utf8")
-        elif node.type == "attribute":
+        elif node.type == NodeTypes.ATTRIBUTE:
             obj_part = ParserUtil._get_full_attribute_name(node.child_by_field_name("object"))
             attr_part = node.child_by_field_name("attribute").text.decode("utf8")
             return f"{obj_part}.{attr_part}"
@@ -635,9 +639,9 @@ class ParserUtil:
     @staticmethod
     def _get_function_name_from_call(function_node):
         """从函数调用节点中提取函数名"""
-        if function_node.type == "identifier":
+        if function_node.type == NodeTypes.IDENTIFIER:
             return function_node.text.decode("utf8")
-        elif function_node.type == "attribute":
+        elif function_node.type == NodeTypes.ATTRIBUTE:
             return ParserUtil._get_full_attribute_name(function_node)
         return None
 
@@ -658,12 +662,12 @@ class ParserUtil:
 
     def _extract_function_calls(self, node, current_symbols, code_map):
         """提取函数调用信息并添加到当前符号的calls集合"""
-        if node.type == "call":
+        if node.type == NodeTypes.CALL:
             function_node = node.child_by_field_name("function")
             if function_node:
                 func_name = self._get_function_name_from_call(function_node)
                 self._add_call_info(func_name, current_symbols, code_map, function_node)
-        elif node.type == "attribute":
+        elif node.type == NodeTypes.ATTRIBUTE:
             func_name = self._get_full_attribute_name(node)
             self._add_call_info(func_name, current_symbols, code_map, node)
 
@@ -696,7 +700,7 @@ class ParserUtil:
         """递归遍历语法树，记录符号节点的路径、代码和位置信息"""
         node = root_node
         source_bytes = source_code
-        if node.type == "module" and len(node.children) != 0:
+        if node.type == NodeTypes.MODULE and len(node.children) != 0:
             self._process_import_block(node, code_map, source_bytes, results)
         self.traverse(root_node, [], [], code_map, source_code, results)
 
@@ -761,21 +765,30 @@ class NodeTypes:
     IMPORT_STATEMENT = "import_statement"
     IMPORT_FROM_STATEMENT = "import_from_statement"
     C_DEFINE = "preproc_def"
-    C_DEFINE = "preproc_include"
+    C_INCLUDE = "preproc_include"
     C_DECLARATION = "declaration"
     GO_SOURCE_FILE = "source_file"
-    GO_DECLARATION = "import_declaration"
-    GO_CONST_DECLARTION = "const_declaration"
-    GO_DECLARATION = "var_declaration"
-    GO_TYPE_DECLARATION = "type_declaration"
-    GO_FUNC_DECLARTION = "function_declaration"
-    GO_METHOD_DECLARTION = "method_declaration"
+    GO_IMPORT_DECLARATION = "import_declaration"
     GO_CONST_DECLARATION = "const_declaration"
+    GO_VAR_DECLARATION = "var_declaration"
+    GO_TYPE_DECLARATION = "type_declaration"
+    GO_FUNC_DECLARATION = "function_declaration"
+    GO_METHOD_DECLARATION = "method_declaration"
     GO_PACKAGE_CLAUSE = "package_clause"
-    GO_COMMENT = "comment"
+    COMMENT = "comment"
     BLOCK = "block"
     BODY = "body"
     STRING = "string"
+    IDENTIFIER = "identifier"
+    ASSIGNMENT = "assignment"
+    IF_STATEMENT = "if_statement"
+    CALL = "call"
+    ATTRIBUTE = "attribute"
+    NAME = "name"
+    WORD = "word"
+    POINTER_DECLARATOR = "pointer_declarator"
+    FUNCTION_DECLARATOR = "function_declarator"
+    COMPARISON_OPERATOR = "comparison_operator"
 
 
 INDENT_UNIT = "    "  # 定义缩进单位
@@ -808,13 +821,13 @@ class SourceSkeleton:
                     and node.children[0].children[0].type == NodeTypes.STRING
                 ):
                     return node.children[0].text.decode("utf8")
-        elif parent_type in (NodeTypes.GO_FUNC_DECLARTION, NodeTypes.GO_METHOD_DECLARTION):
+        elif parent_type in (NodeTypes.GO_FUNC_DECLARATION, NodeTypes.GO_METHOD_DECLARATION):
             prev = node.prev_sibling
             comment_all = []
-            while prev.type == NodeTypes.GO_COMMENT:
+            while prev and prev.type == NodeTypes.COMMENT:
                 comment_all.append(prev.text.decode("utf8"))
                 prev = prev.prev_sibling
-            return "\n".join(comment_all)
+            return "\n".join(reversed(comment_all))
         return None
 
     def _capture_signature(self, node, source_bytes: bytes) -> str:
@@ -838,8 +851,8 @@ class SourceSkeleton:
         elif node.type in (
             NodeTypes.FUNCTION_DEFINITION,
             NodeTypes.CLASS_DEFINITION,
-            NodeTypes.GO_FUNC_DECLARTION,
-            NodeTypes.GO_METHOD_DECLARTION,
+            NodeTypes.GO_FUNC_DECLARATION,
+            NodeTypes.GO_METHOD_DECLARATION,
         ):
             end = 0
             for j, v1 in enumerate(node.children):
@@ -870,14 +883,13 @@ class SourceSkeleton:
                     NodeTypes.IMPORT_STATEMENT,
                     NodeTypes.DECORATED_DEFINITION,
                     NodeTypes.C_DEFINE,
-                    NodeTypes.C_DEFINE,
+                    NodeTypes.C_INCLUDE,
                     NodeTypes.C_DECLARATION,
-                    NodeTypes.GO_DECLARATION,
-                    NodeTypes.GO_CONST_DECLARTION,
-                    NodeTypes.GO_TYPE_DECLARATION,
-                    NodeTypes.GO_FUNC_DECLARTION,
-                    NodeTypes.GO_METHOD_DECLARTION,
+                    NodeTypes.GO_IMPORT_DECLARATION,
                     NodeTypes.GO_CONST_DECLARATION,
+                    NodeTypes.GO_TYPE_DECLARATION,
+                    NodeTypes.GO_FUNC_DECLARATION,
+                    NodeTypes.GO_METHOD_DECLARATION,
                     NodeTypes.GO_PACKAGE_CLAUSE,
                 ]:
                     output.extend(self._process_node(child, source_bytes, lang_name=lang_name))
@@ -900,8 +912,8 @@ class SourceSkeleton:
                     if member.type in [
                         NodeTypes.FUNCTION_DEFINITION,
                         NodeTypes.DECORATED_DEFINITION,
-                        NodeTypes.GO_DECLARATION,
-                        NodeTypes.GO_METHOD_DECLARTION,
+                        NodeTypes.GO_IMPORT_DECLARATION,
+                        NodeTypes.GO_METHOD_DECLARATION,
                     ]:
                         output.extend(self._process_node(member, source_bytes, indent + 1, lang_name=lang_name))
                     elif member.type == NodeTypes.EXPRESSION_STATEMENT:
@@ -912,8 +924,8 @@ class SourceSkeleton:
         elif node.type in [
             NodeTypes.FUNCTION_DEFINITION,
             NodeTypes.DECORATED_DEFINITION,
-            NodeTypes.GO_FUNC_DECLARTION,
-            NodeTypes.GO_METHOD_DECLARTION,
+            NodeTypes.GO_FUNC_DECLARATION,
+            NodeTypes.GO_METHOD_DECLARATION,
         ]:
             if self.is_lang_cstyle(lang_name):
                 docstring = self._get_docstring(node, node.type)
@@ -937,8 +949,8 @@ class SourceSkeleton:
         elif node.type in (
             NodeTypes.EXPRESSION_STATEMENT,
             NodeTypes.C_DEFINE,
-            NodeTypes.GO_DECLARATION,
-            NodeTypes.C_DEFINE,
+            NodeTypes.GO_IMPORT_DECLARATION,
+            NodeTypes.C_INCLUDE,
             NodeTypes.C_DECLARATION,
             NodeTypes.IMPORT_STATEMENT,
             NodeTypes.IMPORT_FROM_STATEMENT,
