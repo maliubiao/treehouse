@@ -14,6 +14,7 @@ import json
 import logging
 import marshal
 import os
+import pprint
 import re
 import stat
 import subprocess
@@ -1660,7 +1661,7 @@ class GPTContextProcessor:
 
         # 提取符号节点（..符号..）
         symbol_matches = re.findall(r"\.\.(.*?)\.\.", text)
-        text = re.sub(r"\.\.(.*?)\.\.", "", text)
+        text = re.sub(r"\.\.(.*?)\.\.", r"\1", text)
         symbol_node = SymbolsNode(symbols=symbol_matches)
         # 首先按{}分割文本
         segments = re.split(r"({.*?})", text)
@@ -2706,8 +2707,6 @@ def main(args):
     elif args.project_search:
         prompt_words_search(args.project_search, args)
         symbols = perform_search(args.project_search, args.config)
-        import pprint
-
         pprint.pprint(symbols)
     else:
         handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)

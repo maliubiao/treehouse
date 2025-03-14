@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import llm_query
 from llm_query import (
@@ -162,7 +162,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_process.return_value = "符号处理结果"
             result = self.processor.process_text_with_file_path(text)
             mock_process.assert_called_once()
-            self.assertEqual(result, "符号处理结果")
+            self.assertEqual(result, "符号处理结果test_symbol")
 
     def test_multiple_symbols_processing(self):
         """测试多个符号节点处理"""
@@ -171,7 +171,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_process.return_value = "多符号处理结果"
             result = self.processor.process_text_with_file_path(text)
             mock_process.assert_called_once_with(SymbolsNode(symbols=["symbol1", "symbol2"]))
-            self.assertEqual(result, "多符号处理结果 ")
+            self.assertEqual(result, "多符号处理结果symbol1 symbol2")
 
     def test_mixed_symbols_and_content(self):
         """测试符号节点与混合内容处理"""
@@ -183,7 +183,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_symbol.return_value = "符号处理结果"
             result = self.processor.process_text_with_file_path(text)
             mock_symbol.assert_called_once_with(SymbolsNode(symbols=["symbol1", "symbol2"]))
-            self.assertEqual(result, "符号处理结果前置内容中间剪贴板内容 结尾")
+            self.assertEqual(result, "符号处理结果前置内容symbol1中间剪贴板内容 symbol2结尾")
 
     def test_patch_symbol_with_prompt(self):
         """测试生成符号补丁提示词"""
