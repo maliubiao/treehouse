@@ -2944,7 +2944,7 @@ class FileSearchResults(BaseModel):
 
 
 @app.post("/search-to-symbols")
-async def search_to_symbols(results: FileSearchResults = Body(...)):
+async def search_to_symbols(max_context: int = QueryArgs(default=16384), results: FileSearchResults = Body(...)):
     """根据文件搜索结果解析符号路径"""
     parser_loader_s = ParserLoader()
     parser_util = ParserUtil(parser_loader_s)
@@ -2972,7 +2972,7 @@ async def search_to_symbols(results: FileSearchResults = Body(...)):
             print("解析出错", file_path_str, e)
             continue
         locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
-        symbols = parser_util.find_symbols_for_locations(code_map, locations)
+        symbols = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=max_context)
 
         file_abs = os.path.abspath(file_path_str)
         if os.path.commonpath([file_abs, script_dir]) == script_dir:
