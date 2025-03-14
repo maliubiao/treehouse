@@ -828,7 +828,9 @@ class ParserUtil:
         )
         return matched_symbols
 
-    def find_symbols_for_locations(self, code_map: dict, locations: list[tuple[int, int]]) -> dict[str, dict]:
+    def find_symbols_for_locations(
+        self, code_map: dict, locations: list[tuple[int, int]], max_context_size: int = 16 * 1024
+    ) -> dict[str, dict]:
         """批量处理位置并返回符号名到符号信息的映射"""
         sorted_symbols = sorted(
             code_map.items(),
@@ -839,6 +841,7 @@ class ParserUtil:
 
         processed_symbols = {}
         processed_ranges = []
+        total_code_size = 0
 
         for line, col in sorted_locations:
             in_range = False
@@ -868,7 +871,15 @@ class ParserUtil:
                     break
 
             if current_symbol and current_symbol not in processed_symbols:
+                code_length = len(symbol_info.get("code", ""))
+                if total_code_size + code_length > max_context_size:
+                    logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
+                    break
                 processed_symbols[current_symbol] = code_map[current_symbol]
+                total_code_size += code_length
+
+            if total_code_size >= max_context_size:
+                break
 
         return processed_symbols
 
