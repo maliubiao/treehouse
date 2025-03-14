@@ -588,7 +588,8 @@ class ParserUtil:
             "start_col": node_info["start_point"][1],
             "end_line": node_info["end_point"][0],
             "end_col": node_info["end_point"][1],
-            "calls": [],  # 修改为列表存储带位置信息的调用
+            "calls": [],
+            "type": "unknown",
         }
 
     def _process_import_block(self, node, code_map, source_bytes, results):
@@ -605,6 +606,7 @@ class ParserUtil:
             }
             code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
             code_map["__import__"] = self._build_code_map_entry("__import__", code, node_info)
+            code_map["__import__"]["type"] = "import_block"
             results.append("__import__")
 
     def _process_symbol_node(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
@@ -612,6 +614,16 @@ class ParserUtil:
         symbol_name = self.get_symbol_name(node)
         if symbol_name is None:
             return None
+
+        symbol_type = None
+        if node.type == NodeTypes.CLASS_DEFINITION:
+            symbol_type = "class"
+        elif node.type == NodeTypes.FUNCTION_DEFINITION:
+            symbol_type = "function"
+        elif node.type == NodeTypes.ASSIGNMENT:
+            symbol_type = "module_variable" if not current_symbols else "variable"
+        elif node.type == NodeTypes.IF_STATEMENT and self._is_main_block(node):
+            symbol_type = "main_block"
 
         effective_node = self._get_effective_node(node)
         current_symbols.append(symbol_name)
@@ -622,7 +634,9 @@ class ParserUtil:
 
         node_info = self._get_node_info(current_node)
         code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
-        code_map[path_key] = self._build_code_map_entry(path_key, code, node_info)
+        code_entry = self._build_code_map_entry(path_key, code, node_info)
+        code_entry["type"] = symbol_type
+        code_map[path_key] = code_entry
         results.append(path_key)
 
         return effective_node
@@ -682,7 +696,6 @@ class ParserUtil:
             type_node = node.child_by_field_name("type")
             if not type_node:
                 return
-            # 收集所有类型标识符
             identifiers = self._collect_type_identifiers(type_node)
             for identifier in identifiers:
                 type_name = identifier.text.decode("utf8")
@@ -729,13 +742,10 @@ class ParserUtil:
             "runtime_checkable",
         }
 
-        # 处理带模块前缀的类型
         if "." in type_name:
             module_part, *rest = type_name.split(".", 1)
-            # 处理typing模块的特殊情况
             if module_part == "typing":
                 try:
-                    # 尝试获取typing模块中的实际类型
                     return getattr(typing, rest[0].split(".", 1)[0]) is not None
                 except AttributeError:
                     return False
@@ -766,11 +776,9 @@ class ParserUtil:
 
         results = []
         code_map = {}
-        """递归遍历语法树，记录符号节点的路径、代码和位置信息"""
         node = root_node
-        source_bytes = source_code
         if node.type == NodeTypes.MODULE and len(node.children) != 0:
-            self._process_import_block(node, code_map, source_bytes, results)
+            self._process_import_block(node, code_map, source_code, results)
         self.traverse(root_node, [], [], code_map, source_code, results)
 
         return results, code_map
@@ -788,7 +796,7 @@ class ParserUtil:
             "signature": "",
             "full_definition_hash": full_definition_hash,
             "location": location,
-            "calls": info["calls"],  # 添加calls信息
+            "calls": info["calls"],
         }
 
     def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
@@ -799,13 +807,8 @@ class ParserUtil:
             symbol_info = self._build_symbol_info(info, file_path)
             symbol_trie.insert(path, symbol_info)
 
-    def find_symbols_by_location(self, code_map: dict, line: int, column: int) -> list:
-        """根据行列位置查找对应的符号路径列表，按嵌套层次排序（最内层在前）
-
-        输入假设:
-        - code_map 必须包含有效的符号位置信息
-        - line和column从0开始计数
-        """
+    def find_symbols_by_location(self, code_map: dict, line: int, column: int) -> list[dict]:
+        """根据行列位置查找对应的符号信息列表，按嵌套层次排序（最内层在前）"""
         matched_symbols = []
         for path, info in code_map.items():
             start_line = info["start_line"]
@@ -813,38 +816,31 @@ class ParserUtil:
             end_line = info["end_line"]
             end_col = info["end_col"]
 
-            # 检查位置是否在符号范围内
             if (start_line < line or (start_line == line and start_col <= column)) and (
                 line < end_line or (line == end_line and column <= end_col)
             ):
-                matched_symbols.append(path)
+                if info.get("type") == "variable":
+                    continue
+                matched_symbols.append({"symbol": path, "info": info})
 
-        # 按符号路径深度和位置排序（最内层在前）
         matched_symbols.sort(
-            key=lambda x: (-x.count("."), x.split(".")[-1].startswith("__"), x)  # 路径深度倒序  # 特殊符号在后
+            key=lambda x: (-x["symbol"].count("."), x["symbol"].split(".")[-1].startswith("__"), x["symbol"])
         )
         return matched_symbols
 
-    def find_symbols_for_locations(self, code_map: dict, locations: list[tuple[int, int]]) -> list[str]:
-        """批量处理位置并返回去重后的符号列表
-        输入假设:
-        - locations中的每个元素是(line, column)元组，从0开始计数
-        - code_map必须已经通过get_symbol_paths生成
-        """
-        # 将符号按起始行降序、起始列降序，结束行升序、结束列升序排列，以确保内层符号优先
+    def find_symbols_for_locations(self, code_map: dict, locations: list[tuple[int, int]]) -> dict[str, dict]:
+        """批量处理位置并返回符号名到符号信息的映射"""
         sorted_symbols = sorted(
             code_map.items(),
             key=lambda item: (-item[1]["start_line"], -item[1]["start_col"], item[1]["end_line"], item[1]["end_col"]),
         )
 
-        # 将位置按行和列升序排列
         sorted_locations = sorted(locations, key=lambda loc: (loc[0], loc[1]))
 
-        processed_symbols = []
+        processed_symbols = {}
         processed_ranges = []
 
         for line, col in sorted_locations:
-            # 检查是否在已处理范围
             in_range = False
             for sl, sc, el, ec in processed_ranges:
                 if (sl <= line <= el) and (line > sl or col >= sc) and (line < el or col <= ec):
@@ -854,26 +850,25 @@ class ParserUtil:
                 continue
 
             current_symbol = None
-            # 查找第一个包含该位置的符号（按内层优先顺序）
             for symbol_path, symbol_info in sorted_symbols:
+                if symbol_info["type"] == "variable":
+                    continue
                 s_line = symbol_info["start_line"]
                 s_col = symbol_info["start_col"]
                 e_line = symbol_info["end_line"]
                 e_col = symbol_info["end_col"]
 
-                # 检查位置是否在符号范围内
                 if (
                     (s_line <= line <= e_line)
                     and (s_col <= col if line == s_line else True)
                     and (col <= e_col if line == e_line else True)
                 ):
                     current_symbol = symbol_path
-                    # 记录处理范围用于后续跳过
                     processed_ranges.append((s_line, s_col, e_line, e_col))
                     break
 
-            if current_symbol and (not processed_symbols or processed_symbols[-1] != current_symbol):
-                processed_symbols.append(current_symbol)
+            if current_symbol and current_symbol not in processed_symbols:
+                processed_symbols[current_symbol] = code_map[current_symbol]
 
         return processed_symbols
 
@@ -2918,34 +2913,42 @@ class MatchResult(BaseModel):
     text: str
 
 
+MatchResults = list[MatchResult]
+
+
 class FileSearchResult(BaseModel):
     file_path: str
     matches: list[MatchResult]
 
+
+class FileSearchResults(BaseModel):
+    results: list[FileSearchResult]
+
     def to_json(self) -> str:
-        return self.json()
+        return self.model_dump_json()
 
     @classmethod
-    def from_json(cls, json_str: str) -> "FileSearchResult":
+    def from_json(cls, json_str: str) -> "FileSearchResults":
         return cls.model_validate_json(json_str)
 
 
 @app.post("/search-to-symbols")
-async def search_to_symbols(results: list[FileSearchResult] = Body(..., min_length=1)):
+async def search_to_symbols(results: FileSearchResults = Body(...)):
     """根据文件搜索结果解析符号路径"""
-    try:
-        parser_util = ParserUtil()
-        symbol_results = []
+    parser_loader_s = ParserLoader()
+    parser_util = ParserUtil(parser_loader_s)
+    symbol_results = {}
 
-        symbol_cache = app.state.symbol_cache
-        for file_result in results:
-            file_path_str = file_result.file_path
-            file_path = Path(file_path_str)
-            try:
-                current_mtime = file_path.stat().st_mtime
-            except FileNotFoundError:
-                continue
-
+    symbol_cache = app.state.symbol_cache
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    for file_result in results.results:
+        file_path_str = file_result.file_path
+        file_path = Path(file_path_str)
+        try:
+            current_mtime = file_path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        try:
             if file_path_str in symbol_cache:
                 cached_mtime, code_map = symbol_cache[file_path_str]
                 if cached_mtime != current_mtime:
@@ -2954,30 +2957,23 @@ async def search_to_symbols(results: list[FileSearchResult] = Body(..., min_leng
             else:
                 _, code_map = parser_util.get_symbol_paths(file_path_str)
                 symbol_cache[file_path_str] = (current_mtime, code_map)
+        except ValueError as e:
+            print("解析出错", file_path_str, e)
+            continue
+        locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
+        symbols = parser_util.find_symbols_for_locations(code_map, locations)
 
-            locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
+        file_abs = os.path.abspath(file_path_str)
+        if os.path.commonpath([file_abs, script_dir]) == script_dir:
+            rel_path = os.path.relpath(file_abs, script_dir)
+        else:
+            rel_path = file_abs
 
-            symbols = parser_util.find_symbols_for_locations(code_map, locations)
+        for key, value in symbols.items():
+            value["name"] = f"{rel_path}/{key}"
+        symbol_results.update(symbols)
 
-            symbol_results.append(
-                {
-                    "file_path": file_path_str,
-                    "matches": [
-                        {
-                            "line": match.line,
-                            "columns": match.column_range,
-                            "text": match.text,
-                            "symbol": symbols[i] if i < len(symbols) else None,
-                        }
-                        for i, match in enumerate(file_result.matches)
-                    ],
-                }
-            )
-
-        return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
-
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"符号解析失败: {str(e)}"})
+    return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
 
 
 @app.get("/complete_realtime")
@@ -3596,6 +3592,7 @@ def scan_project_files_optimized(
     app.state.file_symbol_trie = SymbolTrie.from_symbols({})
     app.state.file_mtime_cache = {}
     app.state.LSP_CLIENT = LSP_CLIENT
+    app.state.symbol_cache = {}
     # 获取需要处理的文件列表
     tasks = []
     for project_path in project_paths:

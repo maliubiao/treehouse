@@ -51,6 +51,7 @@ from rich.text import Text
 from tree import (
     BlockPatch,
     FileSearchResult,
+    FileSearchResults,
     MatchResult,
     RipgrepSearcher,
     SearchConfig,
@@ -1121,7 +1122,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 7. 能复用就不手写
 8. 函数参数不要太长，参数不要太多
 9. 实现类时需要便于调试
-10. 处理包时集中进行
+10. 不导入依赖的包
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
@@ -1504,15 +1505,9 @@ def _send_http_request(url, is_plain_text=False):
         url: 请求的URL
         is_plain_text: 是否返回纯文本内容，默认为False返回JSON
     """
-    # 禁用所有代理
-    proxies = {"http": None, "https": None, "http_proxy": None, "https_proxy": None, "all_proxy": None}
-    # 同时清除环境变量中的代理设置
-    os.environ.pop("http_proxy", None)
-    os.environ.pop("https_proxy", None)
-    os.environ.pop("all_proxy", None)
-
-    response = requests.get(url, proxies=proxies, timeout=5)
-    response.raise_for_status()
+    with ProxyEnvDisable():
+        response = requests.get(url, proxies={"http": None, "https": None}, timeout=5)
+        response.raise_for_status()
 
     return response.text if is_plain_text else response.json()
 
@@ -2579,7 +2574,7 @@ class ConfigLoader:
         )
 
 
-async def perform_search(words: List[str], config_path: str = "llm_project.yml") -> list[FileSearchResult]:
+def perform_search(words: List[str], config_path: str = "llm_project.yml"):
     """执行代码搜索并返回强类型结果"""
 
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
@@ -2589,16 +2584,66 @@ async def perform_search(words: List[str], config_path: str = "llm_project.yml")
     searcher = RipgrepSearcher(config)
     rg_results = searcher.search(patterns=[re.escape(word) for word in words])
 
-    return [
-        FileSearchResult(
-            file_path=str(result.file_path),
-            matches=[
-                MatchResult(line=match.line, column_range=match.column_range, text=match.text)
-                for match in result.matches
-            ],
-        )
-        for result in rg_results
-    ]
+    results: FileSearchResults = FileSearchResults(
+        results=[
+            FileSearchResult(
+                file_path=str(result.file_path),
+                matches=[
+                    MatchResult(line=match.line, column_range=match.column_range, text=match.text)
+                    for match in result.matches
+                ],
+            )
+            for result in rg_results
+        ]
+    )
+    api_server = os.getenv("GPT_API_SERVER", "http://127.0.0.1:9050/")
+    if api_server.endswith("/"):
+        api_server = api_server[:-1]
+    api_url = f"{api_server}/search-to-symbols"
+    try:
+        with ProxyEnvDisable():
+            response = requests.post(
+                api_url, data=results.to_json(), headers={"Content-Type": "application/json"}, timeout=10
+            )
+            response.raise_for_status()
+            import pprint
+
+            pprint.pprint(response.json())
+    except requests.exceptions.RequestException as e:
+        print(f"API请求失败: {str(e)}")
+    except json.JSONDecodeError:
+        print("API返回无效的JSON响应")
+    except Exception as e:
+        print(f"处理API响应时发生未预期错误: {str(e)}")
+
+    return results
+
+
+class ProxyEnvDisable:
+    """
+    资源管理器用于临时禁用代理环境变量
+
+    进入上下文时移除所有代理相关环境变量，退出时恢复原始值
+    处理变量：http_proxy, https_proxy, ftp_proxy及其大写形式
+    """
+
+    PROXY_VARS = {"http_proxy", "https_proxy", "ftp_proxy", "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY"}
+
+    def __init__(self):
+        self.original_proxies = {}
+        for var in self.PROXY_VARS:
+            self.original_proxies[var] = os.environ.get(var)
+
+    def __enter__(self):
+        for var in self.PROXY_VARS:
+            os.environ.pop(var, None)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for var, value in self.original_proxies.items():
+            if value is not None:
+                os.environ[var] = value
+            else:
+                os.environ.pop(var, None)
 
 
 def main(args):
@@ -2615,6 +2660,7 @@ def main(args):
         ChatbotUI().run()
     elif args.project_search:
         prompt_words_search(args.project_search, args)
+        perform_search(args.project_search, args.config)
     else:
         handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)
 

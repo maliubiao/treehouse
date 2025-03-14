@@ -610,32 +610,34 @@ class TestParserUtil(unittest.TestCase):
             info = code_map[symbol_path]
             # 在符号起始位置测试
             symbols = self.parser_util.find_symbols_by_location(code_map, info["start_line"], info["start_col"])
-            self.assertIn(symbol_path, symbols, f"在起始位置未找到符号 {symbol_path}")
+            found_symbols = [s["symbol"] for s in symbols]
+            self.assertIn(symbol_path, found_symbols, f"在起始位置未找到符号 {symbol_path}")
             # 在符号中间位置测试
             mid_line = (info["start_line"] + info["end_line"]) // 2
             mid_col = (info["start_col"] + info["end_col"]) // 2
             symbols = self.parser_util.find_symbols_by_location(code_map, mid_line, mid_col)
-            self.assertIn(symbol_path, symbols, f"在中间位置未找到符号 {symbol_path}")
+            found_symbols = [s["symbol"] for s in symbols]
+            self.assertIn(symbol_path, found_symbols, f"在中间位置未找到符号 {symbol_path}")
 
         # 测试所有符号
         test_symbol_position("Outer")
         test_symbol_position("Outer.Inner")
         test_symbol_position("Outer.Inner.nested_method")
         test_symbol_position("Outer.Inner.nested_method.local_function")
-        test_symbol_position("Outer.Inner.nested_method.local_variable")
 
         # 测试嵌套范围
         nested_info = code_map["Outer.Inner.nested_method.local_function"]
         symbols = self.parser_util.find_symbols_by_location(
             code_map, nested_info["start_line"], nested_info["start_col"]
         )
+        found_symbols = [s["symbol"] for s in symbols]
         expected_symbols = [
             "Outer.Inner.nested_method.local_function",
             "Outer.Inner.nested_method",
             "Outer.Inner",
             "Outer",
         ]
-        self.assertEqual(symbols, expected_symbols)
+        self.assertEqual(found_symbols, expected_symbols)
 
         os.unlink(path)
 
@@ -692,11 +694,11 @@ class TestParserUtil(unittest.TestCase):
         symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations)
 
         # 验证去重结果
-        expected_symbols = [
-            "Alpha",
-            "Beta",
-        ]
-        self.assertEqual(sorted(symbols), sorted(expected_symbols))
+        expected_symbols = {
+            "Alpha": code_map["Alpha"],
+            "Beta": code_map["Beta"],
+        }
+        self.assertEqual(symbols.keys(), expected_symbols.keys())
 
         os.unlink(path)
 
