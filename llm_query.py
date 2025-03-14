@@ -14,7 +14,6 @@ import json
 import logging
 import marshal
 import os
-import platform
 import re
 import stat
 import subprocess
@@ -77,6 +76,13 @@ class CmdNode:
     command: str
     command_type: str | None = None
     args: List[str] | None = None
+
+
+@dataclass
+class SymbolsNode:
+    """符号节点"""
+
+    symbols: List[str]
 
 
 @dataclass
@@ -1149,7 +1155,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 文件路径: {patch_dict["file_path"]}
 
 [CONTENT START]
-{patch_dict["block_content"].decode('utf-8')}
+{patch_dict["block_content"] if isinstance(patch_dict["block_content"], str) else patch_dict["block_content"].decode('utf-8')}
 [CONTENT END]
 
 [SYMBOL END]
@@ -1221,8 +1227,6 @@ class BlockPatchResponse:
         解析大模型返回的响应内容
         返回格式: [(identifier, source_code), ...]
         """
-        import re
-
         results = []
         pending_code = []  # 暂存未注册符号的代码片段
 
@@ -1649,11 +1653,15 @@ class GPTContextProcessor:
         for flag in GPT_FLAGS:
             self.cmd_map[flag] = update_gpt_flag
 
-    def preprocess_text(self, text) -> List[Union[TextNode, CmdNode, TemplateNode]]:
+    def preprocess_text(self, text) -> List[Union[TextNode, CmdNode, SymbolsNode, TemplateNode]]:
         """预处理文本，将文本按{}分段，并提取@命令"""
         result = []
         cmd_groups = defaultdict(list)
 
+        # 提取符号节点（..符号..）
+        symbol_matches = re.findall(r"\.\.(.*?)\.\.", text)
+        text = re.sub(r"\.\.(.*?)\.\.", "", text)
+        symbol_node = SymbolsNode(symbols=symbol_matches)
         # 首先按{}分割文本
         segments = re.split(r"({.*?})", text)
 
@@ -1696,6 +1704,9 @@ class GPTContextProcessor:
             else:
                 # 如果没有找到命令，插入到第一位
                 result.insert(0, CmdNode(command=symbol, args=args))
+
+        if symbol_node.symbols:
+            return [symbol_node] + result
         return result
 
     def process_text_with_file_path(self, text: str) -> str:
@@ -1709,6 +1720,9 @@ class GPTContextProcessor:
                 processed_text = self._process_match(node)
                 parts[i] = processed_text
                 self.current_length += len(processed_text)
+            elif isinstance(node, SymbolsNode):
+                parts[i] = self._process_symbol(node)
+                self.current_length += len(parts[i])
             elif isinstance(node, TemplateNode):
                 template_replacement = self._process_match(node.template)
                 args = []
@@ -1731,6 +1745,26 @@ class GPTContextProcessor:
         except Exception as e:
             error_match = " ".join([m.command for m in match]) if isinstance(match, list) else match.command
             handle_processing_error(error_match, e)
+
+    def _symbol_format(self, symbol):
+        return {
+            "symbol_name": symbol["name"],
+            "file_path": symbol["file_path"],
+            "code_range": ((symbol["start_line"], symbol["start_col"]), (symbol["end_line"], symbol["end_col"])),
+            "block_range": symbol["block_range"],
+            "block_content": symbol["code"],
+        }
+
+    def _process_symbol(self, symbol_name: SymbolsNode) -> str:
+        """处理符号"""
+        symbol_map = {}
+        symbols = perform_search(symbol_name.symbols, args.config, max_context_size=MAX_PROMPT_SIZE)
+        for symbol in symbols.values():
+            symbol_map[symbol["name"]] = self._symbol_format(symbol)
+        GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH] = symbol_map
+        return generate_patch_prompt(
+            CmdNode(command="symbol", args=list(symbol_map.keys())), symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH)
+        )
 
     def _get_replacement(self, match: CmdNode):
         """根据匹配类型获取替换内容"""
@@ -2574,7 +2608,7 @@ class ConfigLoader:
         )
 
 
-def perform_search(words: List[str], config_path: str = "llm_project.yml"):
+def perform_search(words: List[str], config_path: str = "llm_project.yml", max_context_size=MAX_PROMPT_SIZE):
     """执行代码搜索并返回强类型结果"""
 
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
@@ -2599,16 +2633,18 @@ def perform_search(words: List[str], config_path: str = "llm_project.yml"):
     api_server = os.getenv("GPT_API_SERVER", "http://127.0.0.1:9050/")
     if api_server.endswith("/"):
         api_server = api_server[:-1]
-    api_url = f"{api_server}/search-to-symbols"
+    api_url = f"{api_server}/search-to-symbols?max_context_size={max_context_size}"
     try:
         with ProxyEnvDisable():
             response = requests.post(
-                api_url, data=results.to_json(), headers={"Content-Type": "application/json"}, timeout=10
+                api_url,
+                proxies={"http": None, "https": None},
+                data=results.to_json(),
+                headers={"Content-Type": "application/json"},
+                timeout=10,
             )
             response.raise_for_status()
-            import pprint
-
-            pprint.pprint(list(response.json()["results"].keys()))
+            return response.json()["results"]
     except requests.exceptions.RequestException as e:
         print(f"API请求失败: {str(e)}")
     except json.JSONDecodeError:
@@ -2616,7 +2652,7 @@ def perform_search(words: List[str], config_path: str = "llm_project.yml"):
     except Exception as e:
         print(f"处理API响应时发生未预期错误: {str(e)}")
 
-    return results
+    return None
 
 
 class ProxyEnvDisable:
@@ -2627,7 +2663,16 @@ class ProxyEnvDisable:
     处理变量：http_proxy, https_proxy, ftp_proxy及其大写形式
     """
 
-    PROXY_VARS = {"http_proxy", "https_proxy", "ftp_proxy", "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY"}
+    PROXY_VARS = {
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+        "ftp_proxy",
+        "ALL_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "FTP_PROXY",
+    }
 
     def __init__(self):
         self.original_proxies = {}
@@ -2660,7 +2705,10 @@ def main(args):
         ChatbotUI().run()
     elif args.project_search:
         prompt_words_search(args.project_search, args)
-        perform_search(args.project_search, args.config)
+        symbols = perform_search(args.project_search, args.config)
+        import pprint
+
+        pprint.pprint(symbols)
     else:
         handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)
 

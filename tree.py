@@ -2981,12 +2981,11 @@ class FileSearchResults(BaseModel):
 
 
 @app.post("/search-to-symbols")
-async def search_to_symbols(max_context: int = QueryArgs(default=16384), results: FileSearchResults = Body(...)):
+async def search_to_symbols(max_context_size: int = QueryArgs(default=16384), results: FileSearchResults = Body(...)):
     """根据文件搜索结果解析符号路径"""
     parser_loader_s = ParserLoader()
     parser_util = ParserUtil(parser_loader_s)
     symbol_results = {}
-
     symbol_cache = app.state.symbol_cache
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for file_result in results.results:
@@ -3009,7 +3008,7 @@ async def search_to_symbols(max_context: int = QueryArgs(default=16384), results
             print("解析出错", file_path_str, e)
             continue
         locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
-        symbols = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=max_context)
+        symbols = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=max_context_size)
 
         file_abs = os.path.abspath(file_path_str)
         if os.path.commonpath([file_abs, script_dir]) == script_dir:
@@ -3019,6 +3018,7 @@ async def search_to_symbols(max_context: int = QueryArgs(default=16384), results
 
         for key, value in symbols.items():
             value["name"] = f"{rel_path}/{key}"
+            value["file_path"] = rel_path
         symbol_results.update(symbols)
 
     return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
@@ -3176,11 +3176,11 @@ def debug_tree_source_file(file_path: Path):
     try:
         # 获取解析器和查询对象
         parser, _, _ = ParserLoader().get_parser(str(file_path))
-        print(f"[DEBUG] 开始解析文件: {file_path}")
+        print("[DEBUG] 开始解析文件: {file_path}")
 
         # 解析文件并获取语法树
         tree = parse_code_file(file_path, parser)
-        print(f"[DEBUG] 文件解析完成，开始打印语法树")
+        print("[DEBUG] 文件解析完成，开始打印语法树")
 
         # 递归打印语法树结构
         def print_tree(node, indent=0):
@@ -3193,7 +3193,7 @@ def debug_tree_source_file(file_path: Path):
 
         # 从根节点开始打印
         print_tree(tree.root_node)
-        print(f"[DEBUG] 语法树打印完成")
+        print("[DEBUG] 语法树打印完成")
 
     except Exception as e:
         print(f"[ERROR] 调试语法树时发生错误: {str(e)}")

@@ -15,6 +15,7 @@ from llm_query import (
     BlockPatchResponse,
     CmdNode,
     GPTContextProcessor,
+    SymbolsNode,
     _fetch_symbol_data,
     _find_gitignore,
     _handle_local_file,
@@ -153,6 +154,36 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_handle_url.assert_called_once_with(
                 CmdNode(command="https://example.com", command_type=None, args=None)
             )
+
+    def test_single_symbol_processing(self):
+        """测试单个符号节点处理"""
+        text = "..test_symbol.."
+        with patch.object(self.processor, "_process_symbol") as mock_process:
+            mock_process.return_value = "符号处理结果"
+            result = self.processor.process_text_with_file_path(text)
+            mock_process.assert_called_once()
+            self.assertEqual(result, "符号处理结果")
+
+    def test_multiple_symbols_processing(self):
+        """测试多个符号节点处理"""
+        text = "..symbol1.. ..symbol2.."
+        with patch.object(self.processor, "_process_symbol") as mock_process:
+            mock_process.return_value = "多符号处理结果"
+            result = self.processor.process_text_with_file_path(text)
+            mock_process.assert_called_once_with(SymbolsNode(symbols=["symbol1", "symbol2"]))
+            self.assertEqual(result, "多符号处理结果 ")
+
+    def test_mixed_symbols_and_content(self):
+        """测试符号节点与混合内容处理"""
+        text = "前置内容..symbol1..中间@clipboard ..symbol2..结尾"
+        with (
+            patch.object(self.processor, "_process_symbol") as mock_symbol,
+            patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容"}),
+        ):
+            mock_symbol.return_value = "符号处理结果"
+            result = self.processor.process_text_with_file_path(text)
+            mock_symbol.assert_called_once_with(SymbolsNode(symbols=["symbol1", "symbol2"]))
+            self.assertEqual(result, "符号处理结果前置内容中间剪贴板内容 结尾")
 
     def test_patch_symbol_with_prompt(self):
         """测试生成符号补丁提示词"""
