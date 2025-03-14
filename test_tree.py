@@ -15,8 +15,10 @@ import tree
 from lsp import GenericLSPClient
 from tree import (
     BlockPatch,
+    CodeMapBuilder,
     LintParser,
     Match,
+    NodeProcessor,
     ParserLoader,
     ParserUtil,
     RipgrepSearcher,
@@ -354,6 +356,8 @@ class TestBlockPatch(unittest.TestCase):
 class TestParserUtil(unittest.TestCase):
     def setUp(self):
         self.parser_loader = ParserLoader()
+        self.node_processor = NodeProcessor()
+        self.code_map_builder = CodeMapBuilder(self.node_processor)
         self.parser_util = ParserUtil(self.parser_loader)
         self.lsp_client = GenericLSPClient(
             lsp_command=["pylsp"],

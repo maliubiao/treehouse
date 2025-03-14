@@ -434,26 +434,60 @@ class ParserUtil:
     def __init__(self, parser_loader: ParserLoader):
         """初始化解析器工具类"""
         self.parser_loader = parser_loader
+        self.node_processor = NodeProcessor()
+        self.code_map_builder = CodeMapBuilder(self.node_processor)
 
-    def _extract_import_block(self, node):
-        """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
-        import_block = []
-        current_node = node
-        # 扩展支持模块头部的字符串字面量（如文档字符串）、注释和所有导入语句
-        while current_node and current_node.type in (
-            NodeTypes.COMMENT,
-            NodeTypes.IMPORT_STATEMENT,
-            NodeTypes.IMPORT_FROM_STATEMENT,
-            NodeTypes.EXPRESSION_STATEMENT,
-        ):
-            if current_node.type == NodeTypes.EXPRESSION_STATEMENT:
-                if current_node.children[0].type == NodeTypes.STRING:
-                    import_block.append(current_node)
-            else:
-                import_block.append(current_node)
-            current_node = current_node.next_sibling
-        return import_block
+    def get_symbol_paths(self, file_path: str):
+        """解析代码文件并返回所有符号路径及对应代码和位置信息"""
+        parser, _, _ = self.parser_loader.get_parser(file_path)
 
+        with open(file_path, "rb") as f:
+            source_code = f.read()
+        tree = parser.parse(source_code)
+        root_node = tree.root_node
+
+        results = []
+        code_map = {}
+        node = root_node
+        if node.type == NodeTypes.MODULE and len(node.children) != 0:
+            self.code_map_builder.process_import_block(node, code_map, source_code, results)
+        self.code_map_builder.traverse(root_node, [], [], code_map, source_code, results)
+
+        return results, code_map
+
+    def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
+        """更新符号前缀树，将文件中的所有符号插入到前缀树中"""
+        paths, code_map = self.get_symbol_paths(file_path)
+        for path in paths:
+            info = code_map[path]
+            symbol_info = self.code_map_builder.build_symbol_info(info, file_path)
+            symbol_trie.insert(path, symbol_info)
+
+    def find_symbols_by_location(self, code_map: dict, line: int, column: int) -> list[dict]:
+        """根据行列位置查找对应的符号信息列表，按嵌套层次排序（最内层在前）"""
+        return self.code_map_builder.find_symbols_by_location(code_map, line, column)
+
+    def find_symbols_for_locations(
+        self, code_map: dict, locations: list[tuple[int, int]], max_context_size: int = 16 * 1024
+    ) -> dict[str, dict]:
+        """批量处理位置并返回符号名到符号信息的映射"""
+        return self.code_map_builder.find_symbols_for_locations(code_map, locations, max_context_size)
+
+    def print_symbol_paths(self, file_path: str):
+        """打印文件中的所有符号路径及对应代码和位置信息"""
+        paths, code_map = self.get_symbol_paths(file_path)
+        for path in paths:
+            info = code_map[path]
+            print(
+                f"{path}:\n"
+                f"代码位置: 第{info['start_line']+1}行{info['start_col']+1}列 "
+                f"到 第{info['end_line']+1}行{info['end_col']+1}列\n"
+                f"调用列表: {[call['name'] for call in info['calls']]}\n"
+                f"代码内容:\n{info['code']}\n"
+            )
+
+
+class NodeProcessor:
     @staticmethod
     def get_symbol_name(node):
         """提取节点的符号名称
@@ -464,22 +498,22 @@ class ParserUtil:
             return None
 
         if node.type == NodeTypes.CLASS_DEFINITION:
-            return ParserUtil._get_class_name(node)
+            return NodeProcessor._get_class_name(node)
         elif node.type == NodeTypes.FUNCTION_DEFINITION:
-            return ParserUtil._get_function_name(node)
+            return NodeProcessor._get_function_name(node)
         elif node.type == NodeTypes.ASSIGNMENT:
-            return ParserUtil._get_assignment_name(node)
-        elif node.type == NodeTypes.IF_STATEMENT and ParserUtil._is_main_block(node):
+            return NodeProcessor._get_assignment_name(node)
+        elif node.type == NodeTypes.IF_STATEMENT and NodeProcessor._is_main_block(node):
             return "__main__"
         return None
 
     @staticmethod
     def _is_main_block(node):
         """判断是否是__main__块"""
-        condition = ParserUtil._find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
+        condition = NodeProcessor._find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
         if condition:
-            left = ParserUtil._find_child_by_type(condition, NodeTypes.IDENTIFIER)
-            right = ParserUtil._find_child_by_type(condition, NodeTypes.STRING)
+            left = NodeProcessor._find_child_by_type(condition, NodeTypes.IDENTIFIER)
+            right = NodeProcessor._find_child_by_type(condition, NodeTypes.STRING)
             if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
                 return True
         return False
@@ -504,33 +538,33 @@ class ParserUtil:
     def _get_function_name(node):
         """从函数定义节点中提取函数名"""
         if node.type == NodeTypes.FUNCTION_DEFINITION:
-            name_node = ParserUtil._find_child_by_field(node, NodeTypes.NAME)
+            name_node = NodeProcessor._find_child_by_field(node, NodeTypes.NAME)
             if name_node:
                 return name_node.text.decode("utf8")
-            word_node = ParserUtil._find_child_by_type(node, NodeTypes.WORD)
+            word_node = NodeProcessor._find_child_by_type(node, NodeTypes.WORD)
             if word_node:
                 return word_node.text.decode("utf8")
-            identifier_node = ParserUtil._find_child_by_type(node, NodeTypes.IDENTIFIER)
+            identifier_node = NodeProcessor._find_child_by_type(node, NodeTypes.IDENTIFIER)
             if identifier_node:
                 return identifier_node.text.decode("utf8")
             return None
 
-        pointer_declarator = ParserUtil._find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
+        pointer_declarator = NodeProcessor._find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
             if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
-                return ParserUtil._find_identifier_in_node(func_declarator)
+                return NodeProcessor._find_identifier_in_node(func_declarator)
 
-        func_declarator = ParserUtil._find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
+        func_declarator = NodeProcessor._find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
         if func_declarator:
-            return ParserUtil._find_identifier_in_node(func_declarator)
+            return NodeProcessor._find_identifier_in_node(func_declarator)
 
-        return ParserUtil._find_identifier_in_node(node)
+        return NodeProcessor._find_identifier_in_node(node)
 
     @staticmethod
     def _get_assignment_name(node):
         """从赋值节点中提取变量名"""
-        identifier = ParserUtil._find_child_by_type(node, NodeTypes.IDENTIFIER)
+        identifier = NodeProcessor._find_child_by_type(node, NodeTypes.IDENTIFIER)
         if identifier:
             return identifier.text.decode("utf8")
 
@@ -555,99 +589,13 @@ class ParserUtil:
                 return child.text.decode("utf8")
         return None
 
-    def _get_effective_node(self, node):
-        """获取有效的语法树节点（处理装饰器情况）"""
-        if (
-            node.type == NodeTypes.FUNCTION_DEFINITION
-            and node.parent
-            and node.parent.type == NodeTypes.DECORATED_DEFINITION
-        ):
-            return node.parent
-        return node
-
-    def _get_node_info(self, node):
-        """获取节点的代码和位置信息"""
-        effective_node = self._get_effective_node(node)
-        return {
-            "start_byte": effective_node.start_byte,
-            "end_byte": effective_node.end_byte,
-            "start_point": effective_node.start_point,
-            "end_point": effective_node.end_point,
-        }
-
-    def _extract_code(self, source_bytes, start_byte, end_byte):
-        """从源字节中提取代码"""
-        return source_bytes[start_byte:end_byte].decode("utf8")
-
-    def _build_code_map_entry(self, path_key, code, node_info):
-        """构建代码映射条目"""
-        return {
-            "code": code,
-            "block_range": (node_info["start_byte"], node_info["end_byte"]),
-            "start_line": node_info["start_point"][0],
-            "start_col": node_info["start_point"][1],
-            "end_line": node_info["end_point"][0],
-            "end_col": node_info["end_point"][1],
-            "calls": [],
-            "type": "unknown",
-        }
-
-    def _process_import_block(self, node, code_map, source_bytes, results):
-        """处理import块"""
-        import_block = self._extract_import_block(node.children[0])
-        if import_block:
-            first_node = import_block[0]
-            last_node = import_block[-1]
-            node_info = {
-                "start_byte": first_node.start_byte,
-                "end_byte": last_node.end_byte,
-                "start_point": first_node.start_point,
-                "end_point": last_node.end_point,
-            }
-            code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
-            code_map["__import__"] = self._build_code_map_entry("__import__", code, node_info)
-            code_map["__import__"]["type"] = "import_block"
-            results.append("__import__")
-
-    def _process_symbol_node(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
-        """处理符号节点，返回处理后的有效节点或None"""
-        symbol_name = self.get_symbol_name(node)
-        if symbol_name is None:
-            return None
-
-        symbol_type = None
-        if node.type == NodeTypes.CLASS_DEFINITION:
-            symbol_type = "class"
-        elif node.type == NodeTypes.FUNCTION_DEFINITION:
-            symbol_type = "function"
-        elif node.type == NodeTypes.ASSIGNMENT:
-            symbol_type = "module_variable" if not current_symbols else "variable"
-        elif node.type == NodeTypes.IF_STATEMENT and self._is_main_block(node):
-            symbol_type = "main_block"
-
-        effective_node = self._get_effective_node(node)
-        current_symbols.append(symbol_name)
-        current_nodes.append(effective_node)
-
-        path_key = ".".join(current_symbols)
-        current_node = current_nodes[-1]
-
-        node_info = self._get_node_info(current_node)
-        code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
-        code_entry = self._build_code_map_entry(path_key, code, node_info)
-        code_entry["type"] = symbol_type
-        code_map[path_key] = code_entry
-        results.append(path_key)
-
-        return effective_node
-
     @staticmethod
     def _get_full_attribute_name(node):
         """递归获取属性调用的完整名称"""
         if node.type == NodeTypes.IDENTIFIER:
             return node.text.decode("utf8")
         elif node.type == NodeTypes.ATTRIBUTE:
-            obj_part = ParserUtil._get_full_attribute_name(node.child_by_field_name("object"))
+            obj_part = NodeProcessor._get_full_attribute_name(node.child_by_field_name("object"))
             attr_part = node.child_by_field_name("attribute").text.decode("utf8")
             return f"{obj_part}.{attr_part}"
         return ""
@@ -658,60 +606,11 @@ class ParserUtil:
         if function_node.type == NodeTypes.IDENTIFIER:
             return function_node.text.decode("utf8")
         elif function_node.type == NodeTypes.ATTRIBUTE:
-            return ParserUtil._get_full_attribute_name(function_node)
+            return NodeProcessor._get_full_attribute_name(function_node)
         return None
 
     @staticmethod
-    def _add_call_info(func_name, current_symbols, code_map, node):
-        """通用方法：添加调用信息到code_map"""
-        if func_name and current_symbols:
-            current_path = ".".join(current_symbols)
-            if current_path in code_map:
-                start_line, start_col = node.start_point
-                end_line, end_col = node.end_point
-                call_info = {
-                    "name": func_name,
-                    "start_point": (start_line, start_col),
-                    "end_point": (end_line, end_col),
-                }
-                code_map[current_path]["calls"].append(call_info)
-
-    def _extract_function_calls(self, node, current_symbols, code_map):
-        """提取函数调用信息并添加到当前符号的calls集合"""
-        if node.type == NodeTypes.CALL:
-            function_node = node.child_by_field_name("function")
-            if function_node:
-                func_name = self._get_function_name_from_call(function_node)
-                self._add_call_info(func_name, current_symbols, code_map, function_node)
-        elif node.type == NodeTypes.ATTRIBUTE:
-            func_name = self._get_full_attribute_name(node)
-            self._add_call_info(func_name, current_symbols, code_map, node)
-
-        for child in node.children:
-            self._extract_function_calls(child, current_symbols, code_map)
-
-    def _extract_parameter_type_calls(self, node, current_symbols, code_map):
-        """提取参数的类型注释中的调用信息"""
-        if node.type in (NodeTypes.TYPED_PARAMETER, NodeTypes.TYPED_DEFAULT_PARAMETER):
-            type_node = node.child_by_field_name("type")
-            if not type_node:
-                return
-            identifiers = self._collect_type_identifiers(type_node)
-            for identifier in identifiers:
-                type_name = identifier.text.decode("utf8")
-                if not self._is_standard_type(type_name):
-                    self._add_call_info(type_name, current_symbols, code_map, identifier)
-
-    def _collect_type_identifiers(self, node):
-        """递归收集类型节点中的所有标识符"""
-        identifiers = []
-        if node.type == NodeTypes.IDENTIFIER:
-            identifiers.append(node)
-        for child in node.children:
-            identifiers.extend(self._collect_type_identifiers(child))
-        return identifiers
-
-    def _is_standard_type(self, type_name: str) -> bool:
+    def _is_standard_type(type_name: str) -> bool:
         """判断是否是标准库类型或基本类型"""
         basic_types = {
             "typing",
@@ -752,6 +651,164 @@ class ParserUtil:
             return module_part in {"typing", "collections", "abc"}
         return type_name in basic_types
 
+
+class CodeMapBuilder:
+    def __init__(self, node_processor: NodeProcessor):
+        self.node_processor = node_processor
+
+    def _extract_import_block(self, node):
+        """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
+        import_block = []
+        current_node = node
+        while current_node and current_node.type in (
+            NodeTypes.COMMENT,
+            NodeTypes.IMPORT_STATEMENT,
+            NodeTypes.IMPORT_FROM_STATEMENT,
+            NodeTypes.EXPRESSION_STATEMENT,
+        ):
+            if current_node.type == NodeTypes.EXPRESSION_STATEMENT:
+                if current_node.children[0].type == NodeTypes.STRING:
+                    import_block.append(current_node)
+            else:
+                import_block.append(current_node)
+            current_node = current_node.next_sibling
+        return import_block
+
+    def _get_effective_node(self, node):
+        """获取有效的语法树节点（处理装饰器情况）"""
+        if (
+            node.type == NodeTypes.FUNCTION_DEFINITION
+            and node.parent
+            and node.parent.type == NodeTypes.DECORATED_DEFINITION
+        ):
+            return node.parent
+        return node
+
+    def _get_node_info(self, node):
+        """获取节点的代码和位置信息"""
+        effective_node = self._get_effective_node(node)
+        return {
+            "start_byte": effective_node.start_byte,
+            "end_byte": effective_node.end_byte,
+            "start_point": effective_node.start_point,
+            "end_point": effective_node.end_point,
+        }
+
+    def _extract_code(self, source_bytes, start_byte, end_byte):
+        """从源字节中提取代码"""
+        return source_bytes[start_byte:end_byte].decode("utf8")
+
+    def _build_code_map_entry(self, path_key, code, node_info):
+        """构建代码映射条目"""
+        return {
+            "code": code,
+            "block_range": (node_info["start_byte"], node_info["end_byte"]),
+            "start_line": node_info["start_point"][0],
+            "start_col": node_info["start_point"][1],
+            "end_line": node_info["end_point"][0],
+            "end_col": node_info["end_point"][1],
+            "calls": [],
+            "type": "unknown",
+        }
+
+    def process_import_block(self, node, code_map, source_bytes, results):
+        """处理import块"""
+        import_block = self._extract_import_block(node.children[0])
+        if import_block:
+            first_node = import_block[0]
+            last_node = import_block[-1]
+            node_info = {
+                "start_byte": first_node.start_byte,
+                "end_byte": last_node.end_byte,
+                "start_point": first_node.start_point,
+                "end_point": last_node.end_point,
+            }
+            code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
+            code_map["__import__"] = self._build_code_map_entry("__import__", code, node_info)
+            code_map["__import__"]["type"] = "import_block"
+            results.append("__import__")
+
+    def _process_symbol_node(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
+        """处理符号节点，返回处理后的有效节点或None"""
+        symbol_name = self.node_processor.get_symbol_name(node)
+        if symbol_name is None:
+            return None
+
+        symbol_type = None
+        if node.type == NodeTypes.CLASS_DEFINITION:
+            symbol_type = "class"
+        elif node.type == NodeTypes.FUNCTION_DEFINITION:
+            symbol_type = "function"
+        elif node.type == NodeTypes.ASSIGNMENT:
+            symbol_type = "module_variable" if not current_symbols else "variable"
+        elif node.type == NodeTypes.IF_STATEMENT and self.node_processor._is_main_block(node):
+            symbol_type = "main_block"
+
+        effective_node = self._get_effective_node(node)
+        current_symbols.append(symbol_name)
+        current_nodes.append(effective_node)
+
+        path_key = ".".join(current_symbols)
+        current_node = current_nodes[-1]
+
+        node_info = self._get_node_info(current_node)
+        code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
+        code_entry = self._build_code_map_entry(path_key, code, node_info)
+        code_entry["type"] = symbol_type
+        code_map[path_key] = code_entry
+        results.append(path_key)
+
+        return effective_node
+
+    def _add_call_info(self, func_name, current_symbols, code_map, node):
+        """通用方法：添加调用信息到code_map"""
+        if func_name and current_symbols:
+            current_path = ".".join(current_symbols)
+            if current_path in code_map:
+                start_line, start_col = node.start_point
+                end_line, end_col = node.end_point
+                call_info = {
+                    "name": func_name,
+                    "start_point": (start_line, start_col),
+                    "end_point": (end_line, end_col),
+                }
+                code_map[current_path]["calls"].append(call_info)
+
+    def _extract_function_calls(self, node, current_symbols, code_map):
+        """提取函数调用信息并添加到当前符号的calls集合"""
+        if node.type == NodeTypes.CALL:
+            function_node = node.child_by_field_name("function")
+            if function_node:
+                func_name = self.node_processor._get_function_name_from_call(function_node)
+                self._add_call_info(func_name, current_symbols, code_map, function_node)
+        elif node.type == NodeTypes.ATTRIBUTE:
+            func_name = self.node_processor._get_full_attribute_name(node)
+            self._add_call_info(func_name, current_symbols, code_map, node)
+
+        for child in node.children:
+            self._extract_function_calls(child, current_symbols, code_map)
+
+    def _extract_parameter_type_calls(self, node, current_symbols, code_map):
+        """提取参数的类型注释中的调用信息"""
+        if node.type in (NodeTypes.TYPED_PARAMETER, NodeTypes.TYPED_DEFAULT_PARAMETER):
+            type_node = node.child_by_field_name("type")
+            if not type_node:
+                return
+            identifiers = self._collect_type_identifiers(type_node)
+            for identifier in identifiers:
+                type_name = identifier.text.decode("utf8")
+                if not self.node_processor._is_standard_type(type_name):
+                    self._add_call_info(type_name, current_symbols, code_map, identifier)
+
+    def _collect_type_identifiers(self, node):
+        """递归收集类型节点中的所有标识符"""
+        identifiers = []
+        if node.type == NodeTypes.IDENTIFIER:
+            identifiers.append(node)
+        for child in node.children:
+            identifiers.extend(self._collect_type_identifiers(child))
+        return identifiers
+
     def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
         processed_node = self._process_symbol_node(
             node, current_symbols, current_nodes, code_map, source_bytes, results
@@ -765,25 +822,7 @@ class ParserUtil:
             current_symbols.pop()
             current_nodes.pop()
 
-    def get_symbol_paths(self, file_path: str):
-        """解析代码文件并返回所有符号路径及对应代码和位置信息"""
-        parser, _, _ = self.parser_loader.get_parser(file_path)
-
-        with open(file_path, "rb") as f:
-            source_code = f.read()
-        tree = parser.parse(source_code)
-        root_node = tree.root_node
-
-        results = []
-        code_map = {}
-        node = root_node
-        if node.type == NodeTypes.MODULE and len(node.children) != 0:
-            self._process_import_block(node, code_map, source_code, results)
-        self.traverse(root_node, [], [], code_map, source_code, results)
-
-        return results, code_map
-
-    def _build_symbol_info(self, info, file_path):
+    def build_symbol_info(self, info, file_path):
         """构建符号信息字典"""
         full_definition_hash = calculate_crc32_hash(info["code"])
         location = (
@@ -798,14 +837,6 @@ class ParserUtil:
             "location": location,
             "calls": info["calls"],
         }
-
-    def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
-        """更新符号前缀树，将文件中的所有符号插入到前缀树中"""
-        paths, code_map = self.get_symbol_paths(file_path)
-        for path in paths:
-            info = code_map[path]
-            symbol_info = self._build_symbol_info(info, file_path)
-            symbol_trie.insert(path, symbol_info)
 
     def find_symbols_by_location(self, code_map: dict, line: int, column: int) -> list[dict]:
         """根据行列位置查找对应的符号信息列表，按嵌套层次排序（最内层在前）"""
@@ -836,7 +867,6 @@ class ParserUtil:
             code_map.items(),
             key=lambda item: (-item[1]["start_line"], -item[1]["start_col"], item[1]["end_line"], item[1]["end_col"]),
         )
-
         sorted_locations = sorted(locations, key=lambda loc: (loc[0], loc[1]))
 
         processed_symbols = {}
@@ -870,31 +900,38 @@ class ParserUtil:
                     processed_ranges.append((s_line, s_col, e_line, e_col))
                     break
 
-            if current_symbol and current_symbol not in processed_symbols:
-                code_length = len(symbol_info.get("code", ""))
-                if total_code_size + code_length > max_context_size:
-                    logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
-                    break
-                processed_symbols[current_symbol] = code_map[current_symbol]
-                total_code_size += code_length
+            if current_symbol:
+                symbol_info = code_map[current_symbol]
+                if symbol_info.get("type") == "function":
+                    parts = current_symbol.split(".")
+                    if len(parts) > 1:
+                        class_path = ".".join(parts[:-1])
+                        if class_path in processed_symbols:
+                            continue
+                        if class_path in code_map:
+                            class_info = code_map[class_path]
+                            class_code_length = len(class_info.get("code", ""))
+                            if (
+                                class_path not in processed_symbols
+                                and total_code_size + class_code_length <= max_context_size
+                            ):
+                                current_symbol = class_path
+                                symbol_info = class_info
+                                code_length = class_code_length
+
+                if current_symbol not in processed_symbols:
+                    code_length = len(symbol_info.get("code", ""))
+                    if total_code_size + code_length > max_context_size:
+                        logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
+                        break
+                    print("adding", current_symbol)
+                    processed_symbols[current_symbol] = symbol_info
+                    total_code_size += code_length
 
             if total_code_size >= max_context_size:
                 break
 
         return processed_symbols
-
-    def print_symbol_paths(self, file_path: str):
-        """打印文件中的所有符号路径及对应代码和位置信息"""
-        paths, code_map = self.get_symbol_paths(file_path)
-        for path in paths:
-            info = code_map[path]
-            print(
-                f"{path}:\n"
-                f"代码位置: 第{info['start_line']+1}行{info['start_col']+1}列 "
-                f"到 第{info['end_line']+1}行{info['end_col']+1}列\n"
-                f"调用列表: {[call['name'] for call in info['calls']]}\n"
-                f"代码内容:\n{info['code']}\n"
-            )
 
 
 class Match:

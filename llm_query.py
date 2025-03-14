@@ -2608,7 +2608,7 @@ def perform_search(words: List[str], config_path: str = "llm_project.yml"):
             response.raise_for_status()
             import pprint
 
-            pprint.pprint(response.json())
+            pprint.pprint(list(response.json()["results"].keys()))
     except requests.exceptions.RequestException as e:
         print(f"API请求失败: {str(e)}")
     except json.JSONDecodeError:
