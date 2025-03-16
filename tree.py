@@ -498,28 +498,28 @@ class NodeProcessor:
             return None
 
         if node.type == NodeTypes.CLASS_DEFINITION:
-            return NodeProcessor._get_class_name(node)
+            return NodeProcessor.get_class_name(node)
         elif node.type == NodeTypes.FUNCTION_DEFINITION:
-            return NodeProcessor._get_function_name(node)
+            return NodeProcessor.get_function_name(node)
         elif node.type == NodeTypes.ASSIGNMENT:
-            return NodeProcessor._get_assignment_name(node)
-        elif node.type == NodeTypes.IF_STATEMENT and NodeProcessor._is_main_block(node):
+            return NodeProcessor.get_assignment_name(node)
+        elif node.type == NodeTypes.IF_STATEMENT and NodeProcessor.is_main_block(node):
             return "__main__"
         return None
 
     @staticmethod
-    def _is_main_block(node):
+    def is_main_block(node):
         """判断是否是__main__块"""
-        condition = NodeProcessor._find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
+        condition = NodeProcessor.find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
         if condition:
-            left = NodeProcessor._find_child_by_type(condition, NodeTypes.IDENTIFIER)
-            right = NodeProcessor._find_child_by_type(condition, NodeTypes.STRING)
+            left = NodeProcessor.find_child_by_type(condition, NodeTypes.IDENTIFIER)
+            right = NodeProcessor.find_child_by_type(condition, NodeTypes.STRING)
             if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
                 return True
         return False
 
     @staticmethod
-    def _get_class_name(node):
+    def get_class_name(node):
         """从类定义节点中提取类名"""
         for child in node.children:
             if child.type == NodeTypes.IDENTIFIER:
@@ -527,7 +527,7 @@ class NodeProcessor:
         return None
 
     @staticmethod
-    def _find_child_by_field(node, field_name):
+    def find_child_by_field(node, field_name):
         """根据字段名查找子节点"""
         for child in node.children:
             if child.type == field_name:
@@ -535,36 +535,36 @@ class NodeProcessor:
         return None
 
     @staticmethod
-    def _get_function_name(node):
+    def get_function_name(node):
         """从函数定义节点中提取函数名"""
         if node.type == NodeTypes.FUNCTION_DEFINITION:
-            name_node = NodeProcessor._find_child_by_field(node, NodeTypes.NAME)
+            name_node = NodeProcessor.find_child_by_field(node, NodeTypes.NAME)
             if name_node:
                 return name_node.text.decode("utf8")
-            word_node = NodeProcessor._find_child_by_type(node, NodeTypes.WORD)
+            word_node = NodeProcessor.find_child_by_type(node, NodeTypes.WORD)
             if word_node:
                 return word_node.text.decode("utf8")
-            identifier_node = NodeProcessor._find_child_by_type(node, NodeTypes.IDENTIFIER)
+            identifier_node = NodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
             if identifier_node:
                 return identifier_node.text.decode("utf8")
             return None
 
-        pointer_declarator = NodeProcessor._find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
+        pointer_declarator = NodeProcessor.find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
             if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
-                return NodeProcessor._find_identifier_in_node(func_declarator)
+                return NodeProcessor.find_identifier_in_node(func_declarator)
 
-        func_declarator = NodeProcessor._find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
+        func_declarator = NodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
         if func_declarator:
-            return NodeProcessor._find_identifier_in_node(func_declarator)
+            return NodeProcessor.find_identifier_in_node(func_declarator)
 
-        return NodeProcessor._find_identifier_in_node(node)
+        return NodeProcessor.find_identifier_in_node(node)
 
     @staticmethod
-    def _get_assignment_name(node):
+    def get_assignment_name(node):
         """从赋值节点中提取变量名"""
-        identifier = NodeProcessor._find_child_by_type(node, NodeTypes.IDENTIFIER)
+        identifier = NodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
         if identifier:
             return identifier.text.decode("utf8")
 
@@ -574,7 +574,7 @@ class NodeProcessor:
         return None
 
     @staticmethod
-    def _find_child_by_type(node, target_type):
+    def find_child_by_type(node, target_type):
         """在节点子节点中查找指定类型的节点"""
         for child in node.children:
             if child.type == target_type:
@@ -582,7 +582,7 @@ class NodeProcessor:
         return None
 
     @staticmethod
-    def _find_identifier_in_node(node):
+    def find_identifier_in_node(node):
         """在节点中查找identifier节点"""
         for child in node.children:
             if child.type == NodeTypes.IDENTIFIER:
@@ -590,27 +590,27 @@ class NodeProcessor:
         return None
 
     @staticmethod
-    def _get_full_attribute_name(node):
+    def get_full_attribute_name(node):
         """递归获取属性调用的完整名称"""
         if node.type == NodeTypes.IDENTIFIER:
             return node.text.decode("utf8")
         elif node.type == NodeTypes.ATTRIBUTE:
-            obj_part = NodeProcessor._get_full_attribute_name(node.child_by_field_name("object"))
+            obj_part = NodeProcessor.get_full_attribute_name(node.child_by_field_name("object"))
             attr_part = node.child_by_field_name("attribute").text.decode("utf8")
             return f"{obj_part}.{attr_part}"
         return ""
 
     @staticmethod
-    def _get_function_name_from_call(function_node):
+    def get_function_name_from_call(function_node):
         """从函数调用节点中提取函数名"""
         if function_node.type == NodeTypes.IDENTIFIER:
             return function_node.text.decode("utf8")
         elif function_node.type == NodeTypes.ATTRIBUTE:
-            return NodeProcessor._get_full_attribute_name(function_node)
+            return NodeProcessor.get_full_attribute_name(function_node)
         return None
 
     @staticmethod
-    def _is_standard_type(type_name: str) -> bool:
+    def is_standard_type(type_name: str) -> bool:
         """判断是否是标准库类型或基本类型"""
         basic_types = {
             "typing",
@@ -741,7 +741,7 @@ class CodeMapBuilder:
             symbol_type = "function"
         elif node.type == NodeTypes.ASSIGNMENT:
             symbol_type = "module_variable" if not current_symbols else "variable"
-        elif node.type == NodeTypes.IF_STATEMENT and self.node_processor._is_main_block(node):
+        elif node.type == NodeTypes.IF_STATEMENT and self.node_processor.is_main_block(node):
             symbol_type = "main_block"
 
         effective_node = self._get_effective_node(node)
@@ -779,10 +779,10 @@ class CodeMapBuilder:
         if node.type == NodeTypes.CALL:
             function_node = node.child_by_field_name("function")
             if function_node:
-                func_name = self.node_processor._get_function_name_from_call(function_node)
+                func_name = self.node_processor.get_function_name_from_call(function_node)
                 self._add_call_info(func_name, current_symbols, code_map, function_node)
         elif node.type == NodeTypes.ATTRIBUTE:
-            func_name = self.node_processor._get_full_attribute_name(node)
+            func_name = self.node_processor.get_full_attribute_name(node)
             self._add_call_info(func_name, current_symbols, code_map, node)
 
         for child in node.children:
@@ -797,7 +797,7 @@ class CodeMapBuilder:
             identifiers = self._collect_type_identifiers(type_node)
             for identifier in identifiers:
                 type_name = identifier.text.decode("utf8")
-                if not self.node_processor._is_standard_type(type_name):
+                if not self.node_processor.is_standard_type(type_name):
                     self._add_call_info(type_name, current_symbols, code_map, identifier)
 
     def _collect_type_identifiers(self, node):
@@ -3617,14 +3617,22 @@ def scan_project_files_optimized(
         include_suffixes: 要包含的文件后缀列表
         parallel: 并行度，-1表示使用CPU核心数，0或1表示单进程
     """
-    # 检查路径是否存在
+    validate_project_paths(project_paths)
+    suffixes = include_suffixes if include_suffixes else SUPPORTED_LANGUAGES.keys()
+    log_database_stats(conn)
+    all_existing_symbols = get_existing_symbols(conn)
+    initialize_symbol_trie(all_existing_symbols)
+    tasks = collect_processing_tasks(project_paths, conn, excludes, suffixes)
+    process_files(conn, tasks, all_existing_symbols, parallel)
+
+
+def validate_project_paths(project_paths: List[str]):
     non_existent_paths = [path for path in project_paths if not Path(path).exists()]
     if non_existent_paths:
         raise ValueError(f"以下路径不存在: {', '.join(non_existent_paths)}")
 
-    suffixes = include_suffixes if include_suffixes else SUPPORTED_LANGUAGES.keys()
 
-    # 获取数据库统计信息
+def log_database_stats(conn: sqlite3.Connection):
     total_symbols, total_files, indexes = get_database_stats(conn)
     print("\n数据库当前状态：")
     print(f"  总符号数: {total_symbols}")
@@ -3633,15 +3641,19 @@ def scan_project_files_optimized(
     for idx in indexes:
         print(f"    索引名: {idx[1]}, 唯一性: {'是' if idx[2] else '否'}")
 
-    # 获取已存在符号
-    all_existing_symbols = get_existing_symbols(conn)
+
+def initialize_symbol_trie(all_existing_symbols: dict):
     trie = SymbolTrie.from_symbols(all_existing_symbols)
     app.state.symbol_trie = trie
     app.state.file_symbol_trie = SymbolTrie.from_symbols({})
     app.state.file_mtime_cache = {}
     app.state.LSP_CLIENT = LSP_CLIENT
     app.state.symbol_cache = {}
-    # 获取需要处理的文件列表
+
+
+def collect_processing_tasks(
+    project_paths: List[str], conn: sqlite3.Connection, excludes: List[str], suffixes: List[str]
+) -> list:
     tasks = []
     for project_path in project_paths:
         project_dir = Path(project_path)
@@ -3650,58 +3662,68 @@ def scan_project_files_optimized(
             continue
 
         for file_path in project_dir.rglob("*"):
-            # 检查文件后缀是否在支持列表中
-            if file_path.suffix.lower() not in suffixes:
+            if not should_process_file(file_path, suffixes, excludes, project_dir):
                 continue
 
-            # 检查文件路径是否在排除列表中
             full_path = str((project_dir / file_path).resolve().absolute())
-            if excludes:
-                excluded = False
-                for pattern in excludes:
-                    if fnmatch.fnmatch(full_path, pattern):
-                        excluded = True
-                        break
-                if excluded:
-                    continue
-
-            need_process = check_file_needs_processing(conn, full_path)
-            if need_process:
+            if check_file_needs_processing(conn, full_path):
                 tasks.append(file_path)
+    return tasks
 
-    # 根据并行度选择处理方式
+
+def should_process_file(file_path: Path, suffixes: List[str], excludes: List[str], project_dir: Path) -> bool:
+    if file_path.suffix.lower() not in suffixes:
+        return False
+
+    full_path = str((project_dir / file_path).resolve().absolute())
+    if excludes and any(fnmatch.fnmatch(full_path, pattern) for pattern in excludes):
+        return False
+
+    return True
+
+
+def process_files(conn: sqlite3.Connection, tasks: list, all_existing_symbols: dict, parallel: int):
     if parallel in (0, 1):
-        # 单进程处理
-        print("\n使用单进程模式处理文件...")
-        for file_path in tasks:
-            print(f"[INFO] 开始处理文件: {file_path}")
-            file_path, symbols = parse_worker_wrapper(file_path)
-            if file_path:
-                print(f"[INFO] 文件 {file_path} 解析完成，开始插入数据库...")
-                process_symbols_to_db(
-                    conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
-                )
-                print(f"[INFO] 文件 {file_path} 数据库插入完成")
+        process_files_single(conn, tasks, all_existing_symbols)
     else:
-        # 多进程处理
-        processes = os.cpu_count() if parallel == -1 else parallel
-        print(f"\n使用多进程模式处理文件，进程数：{processes}...")
-        with Pool(processes=processes) as pool:
-            batch_size = 32
-            for i in range(0, len(tasks), batch_size):
-                results = []
-                batch = tasks[i : i + batch_size]
-                for result in pool.imap_unordered(partial(parse_worker_wrapper), batch):
-                    if result:
-                        results.append(result)
-                print(f"已完成批次 {i//batch_size + 1}/{(len(tasks)//batch_size)+1}")
-                # 单线程处理数据库写入
-                for file_path, symbols in results:
-                    if not file_path:
-                        continue
-                    process_symbols_to_db(
-                        conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
-                    )
+        process_files_multiprocess(conn, tasks, all_existing_symbols, parallel)
+
+
+def process_files_single(conn: sqlite3.Connection, tasks: list, all_existing_symbols: dict):
+    print("\n使用单进程模式处理文件...")
+    for file_path in tasks:
+        print(f"[INFO] 开始处理文件: {file_path}")
+        file_path, symbols = parse_worker_wrapper(file_path)
+        if file_path:
+            print(f"[INFO] 文件 {file_path} 解析完成，开始插入数据库...")
+            process_symbols_to_db(
+                conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
+            )
+            print(f"[INFO] 文件 {file_path} 数据库插入完成")
+
+
+def process_files_multiprocess(conn: sqlite3.Connection, tasks: list, all_existing_symbols: dict, parallel: int):
+    processes = os.cpu_count() if parallel == -1 else parallel
+    print(f"\n使用多进程模式处理文件，进程数：{processes}...")
+    with Pool(processes=processes) as pool:
+        batch_size = 32
+        for i in range(0, len(tasks), batch_size):
+            results = []
+            batch = tasks[i : i + batch_size]
+            for result in pool.imap_unordered(partial(parse_worker_wrapper), batch):
+                if result:
+                    results.append(result)
+            print(f"已完成批次 {i//batch_size + 1}/{(len(tasks)//batch_size)+1}")
+            process_batch_results(conn, results, all_existing_symbols)
+
+
+def process_batch_results(conn: sqlite3.Connection, results: list, all_existing_symbols: dict):
+    for file_path, symbols in results:
+        if not file_path:
+            continue
+        process_symbols_to_db(
+            conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
+        )
 
 
 def build_index(
@@ -3831,64 +3853,6 @@ class SyntaxHighlight:
             highlighter = SyntaxHighlight(source_code, file_path, lang_type, theme)
             return highlighter.render()
         return source_code
-
-
-class LintResult(BaseModel):
-    """Structured representation of pylint error"""
-
-    file_path: str
-    line: int
-    column_range: tuple[int, int]
-    code: str
-    message: str
-
-    def to_json(self) -> str:
-        return self.model_dump_json()
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "LintResult":
-        return cls.model_validate_json(json_str)
-
-    @property
-    def full_message(self) -> str:
-        """Format message with code for display"""
-        return f"{self.code}: {self.message}"
-
-
-class LintParser:
-    """
-    Parse pylint output into structured LintResult objects
-    Example input format: "tree.py:1870:0: C0325: Unnecessary parens after 'not' keyword"
-    """
-
-    _LINE_PATTERN = re.compile(
-        r"^(?P<path>.+?):"  # File path
-        r"(?P<line>\d+):"  # Line number
-        r"(?P<column>\d+): "  # Column start
-        r"(?P<code>\w+) "  # Lint code
-        r"(?P<message>.+)$"  # Error message
-    )
-
-    @classmethod
-    def parse(cls, raw_output: str) -> list[LintResult]:
-        """Parse raw pylint output into structured results"""
-        results = []
-        for line in raw_output.splitlines():
-            if not line.strip() or line.startswith("***"):
-                continue
-
-            if match := cls._LINE_PATTERN.match(line):
-                groups = match.groupdict()
-                results.append(
-                    LintResult(
-                        file_path=groups["path"],
-                        line=int(groups["line"]),
-                        column_range=(int(groups["column"]), int(groups["column"])),
-                        code=groups["code"],
-                        message=groups["message"].strip(),
-                    )
-                )
-        return results
 
 
 if __name__ == "__main__":

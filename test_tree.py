@@ -1,6 +1,5 @@
 import asyncio
 import os
-import pdb
 import sqlite3
 import tempfile
 import unittest
@@ -16,14 +15,11 @@ from lsp import GenericLSPClient
 from tree import (
     BlockPatch,
     CodeMapBuilder,
-    LintParser,
-    Match,
     NodeProcessor,
     ParserLoader,
     ParserUtil,
     RipgrepSearcher,
     SearchConfig,
-    SearchResult,
     SourceSkeleton,
     SymbolTrie,
     app,
@@ -149,26 +145,22 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
-        # 通过字符串查找确定字节范围
         with open(file_path, "rb") as f:
             content = f.read()
             patch_range = self._find_byte_range(content, b"return 1")
 
-        # 测试基本补丁功能
-        patch = BlockPatch(
+        basic_patch = BlockPatch(
             file_paths=[file_path],
-            patch_ranges=[patch_range],  # return 1
+            patch_ranges=[patch_range],
             block_contents=[b"return 1"],
             update_contents=[b"return 10"],
         )
 
-        # 验证差异生成
-        diff = patch.generate_diff()
+        diff = basic_patch.generate_diff()
         self.assertIn("-    return 1", diff)
         self.assertIn("+    return 10", diff)
 
-        # 验证补丁应用
-        patched_files = patch.apply_patch()
+        patched_files = basic_patch.apply_patch()
         self.assertIn(file_path, patched_files)
         self.assertIn(b"return 10", patched_files[file_path])
 
@@ -184,29 +176,25 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
-        # 通过字符串查找确定字节范围
         with open(file_path, "rb") as f:
             content = f.read()
             patch_range1 = self._find_byte_range(content, b"return 1")
             patch_range2 = self._find_byte_range(content, b"return 2")
 
-        # 测试多个补丁
-        patch = BlockPatch(
+        multiple_patch = BlockPatch(
             file_paths=[file_path, file_path],
-            patch_ranges=[patch_range1, patch_range2],  # return 1, return 2
+            patch_ranges=[patch_range1, patch_range2],
             block_contents=[b"return 1", b"return 2"],
             update_contents=[b"return 10", b"return 20"],
         )
 
-        # 验证差异生成
-        diff = patch.generate_diff()
+        diff = multiple_patch.generate_diff()
         self.assertIn("-    return 1", diff)
         self.assertIn("+    return 10", diff)
         self.assertIn("-    return 2", diff)
         self.assertIn("+    return 20", diff)
 
-        # 验证补丁应用
-        patched_files = patch.apply_patch()
+        patched_files = multiple_patch.apply_patch()
         self.assertIn(file_path, patched_files)
         self.assertIn(b"return 10", patched_files[file_path])
         self.assertIn(b"return 20", patched_files[file_path])
@@ -220,30 +208,27 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
-        # 通过字符串查找确定字节范围
         with open(file_path, "rb") as f:
             content = f.read()
             patch_range = self._find_byte_range(content, b"return 1")
 
-        # 测试无效补丁（内容不匹配）
-        patch = BlockPatch(
+        invalid_patch = BlockPatch(
             file_paths=[file_path],
-            patch_ranges=[patch_range],  # return 1
-            block_contents=[b"return 2"],  # 错误的内容
+            patch_ranges=[patch_range],
+            block_contents=[b"return 2"],
             update_contents=[b"return 10"],
         )
         with self.assertRaises(ValueError):
-            patch.generate_diff()
+            invalid_patch.generate_diff()
 
-        # 测试无效补丁（范围重叠）
-        patch = BlockPatch(
+        overlap_patch = BlockPatch(
             file_paths=[file_path, file_path],
-            patch_ranges=[(patch_range[0], patch_range[1] - 2), (patch_range[0] + 2, patch_range[1])],  # 重叠范围
+            patch_ranges=[(patch_range[0], patch_range[1] - 2), (patch_range[0] + 2, patch_range[1])],
             block_contents=[b"return 1", b"return 1"],
             update_contents=[b"return 10", b"return 10"],
         )
         with self.assertRaises(ValueError):
-            patch.generate_diff()
+            overlap_patch.generate_diff()
 
     def test_no_changes(self):
         code = dedent(
@@ -254,24 +239,19 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
-        # 通过字符串查找确定字节范围
         with open(file_path, "rb") as f:
             content = f.read()
             patch_range = self._find_byte_range(content, b"return 1")
 
-        # 测试没有实际变化的补丁
-        patch = BlockPatch(
+        nochange_patch = BlockPatch(
             file_paths=[file_path],
-            patch_ranges=[patch_range],  # return 1
+            patch_ranges=[patch_range],
             block_contents=[b"return 1"],
-            update_contents=[b"return 1"],  # 内容相同
+            update_contents=[b"return 1"],
         )
 
-        # 验证差异为空
-        self.assertEqual(patch.generate_diff(), "")
-
-        # 验证补丁应用结果为空
-        self.assertEqual(patch.apply_patch(), {})
+        self.assertEqual(nochange_patch.generate_diff(), "")
+        self.assertEqual(nochange_patch.apply_patch(), {})
 
     def test_multiple_files(self):
         code1 = dedent(
@@ -289,7 +269,6 @@ class TestBlockPatch(unittest.TestCase):
         file1 = self.create_temp_file(code1)
         file2 = self.create_temp_file(code2)
 
-        # 通过字符串查找确定字节范围
         with open(file1, "rb") as f:
             content = f.read()
             patch_range1 = self._find_byte_range(content, b"return 1")
@@ -298,23 +277,20 @@ class TestBlockPatch(unittest.TestCase):
             content = f.read()
             patch_range2 = self._find_byte_range(content, b"return 2")
 
-        # 测试多文件补丁
-        patch = BlockPatch(
+        multifile_patch = BlockPatch(
             file_paths=[file1, file2],
-            patch_ranges=[patch_range1, patch_range2],  # return 1, return 2
+            patch_ranges=[patch_range1, patch_range2],
             block_contents=[b"return 1", b"return 2"],
             update_contents=[b"return 10", b"return 20"],
         )
 
-        # 验证差异生成
-        diff = patch.generate_diff()
+        diff = multifile_patch.generate_diff()
         self.assertIn("-    return 1", diff)
         self.assertIn("+    return 10", diff)
         self.assertIn("-    return 2", diff)
         self.assertIn("+    return 20", diff)
 
-        # 验证补丁应用
-        patched_files = patch.apply_patch()
+        patched_files = multifile_patch.apply_patch()
         self.assertIn(file1, patched_files)
         self.assertIn(file2, patched_files)
         self.assertIn(b"return 10", patched_files[file1])
@@ -329,28 +305,24 @@ class TestBlockPatch(unittest.TestCase):
         )
         file_path = self.create_temp_file(code)
 
-        # 通过字符串查找确定插入位置
         with open(file_path, "rb") as f:
             content = f.read()
             insert_pos = content.find(b"return 1")
 
-        # 测试插入补丁
-        patch = BlockPatch(
+        insert_patch = BlockPatch(
             file_paths=[file_path],
-            patch_ranges=[(insert_pos, insert_pos)],  # 插入位置
-            block_contents=[b""],  # 空内容
-            update_contents=[b"print('inserted')\n    "],  # 插入内容
+            patch_ranges=[(insert_pos, insert_pos)],
+            block_contents=[b""],
+            update_contents=[b"print('inserted')\n    "],
         )
 
-        # 验证差异生成
-        diff = patch.generate_diff()
+        diff = insert_patch.generate_diff()
         self.assertIn("+    print('inserted')", diff)
 
-        # 验证补丁应用
-        patched_files = patch.apply_patch()
+        patched_files = insert_patch.apply_patch()
         self.assertIn(file_path, patched_files)
         self.assertIn(b"print('inserted')", patched_files[file_path])
-        self.assertIn(b"return 1", patched_files[file_path])  # 原有内容保持不变
+        self.assertIn(b"return 1", patched_files[file_path])
 
 
 class TestParserUtil(unittest.TestCase):
@@ -1235,29 +1207,6 @@ class TestSentenceSegments:
     def test_should_ignore_spaces_and_symbols(self):
         response = self.client.get("/extract_identifier?text=hello_world x123 _temp var-2")
         assert response.json() == ["hello_world", "x123", "_temp"]
-
-
-class TestLintParser:
-    def test_parse_pylint_output(self):
-        sample_output = """
-        tree.py:1870:0: C0325: Unnecessary parens after 'not' keyword
-        test.py:42:10: E1136: Value 'foo' is unsubscriptable
-        """
-        results = LintParser.parse(sample_output)
-
-        assert len(results) == 2
-        assert results[0].file_path == "tree.py"
-        assert results[0].line == 1870
-        assert results[0].column_range == (0, 0)
-        assert results[0].code == "C0325"
-        assert results[0].message == "Unnecessary parens after 'not' keyword"
-
-        assert results[1].code == "E1136"
-        assert "unsubscriptable" in results[1].message
-
-    def test_parse_invalid_lines(self):
-        assert len(LintParser.parse("")) == 0
-        assert len(LintParser.parse("*** Module tree")) == 0
 
 
 if __name__ == "__main__":

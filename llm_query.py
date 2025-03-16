@@ -5,7 +5,6 @@ LLM 查询工具模块
 该模块提供与OpenAI兼容 API交互的功能，支持代码分析、多轮对话、剪贴板集成等功能。
 包含代理配置检测、代码分块处理、对话历史管理等功能。
 """
-
 import argparse
 import datetime
 import difflib
@@ -16,6 +15,7 @@ import marshal
 import os
 import pprint
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -27,7 +27,8 @@ import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple, Union
+from textwrap import dedent
+from typing import Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -38,6 +39,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.styles import Style
+from pydantic import BaseModel
 from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
@@ -55,10 +57,86 @@ from tree import (
     MatchResult,
     RipgrepSearcher,
     SearchConfig,
+    SyntaxHighlight,
 )
 
+
+class ModelConfig:
+    key: str
+    base_url: str
+    model_name: str
+    max_tokens: int | None = None
+    temperature: float = 0.0
+
+    def __init__(
+        self, key: str, base_url: str, model_name: str, max_tokens: int | None = None, temperature: float = 0.0
+    ):
+        self.key = key
+        self.base_url = base_url
+        self.model_name = model_name
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+
+    def __repr__(self) -> str:
+        masked_key = f"{self.key[:3]}***" if self.key else "None"
+        return (
+            f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
+            f"max_tokens={self.max_tokens}, temperature={self.temperature}, "
+            f"key={masked_key})"
+        )
+
+    def get_debug_info(self) -> dict:
+        """获取用于调试的配置信息"""
+        return {
+            "base_url": self.base_url,
+            "model_name": self.model_name,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "key_prefix": self.key[:3] + "***" if self.key else "None",
+        }
+
+    @classmethod
+    def from_env(cls) -> "ModelConfig":
+        key = os.environ.get("GPT_KEY")
+        if not key:
+            raise ValueError("环境变量GPT_KEY未设置")
+        base_url = os.environ.get("GPT_BASE_URL")
+        if not base_url:
+            raise ValueError("环境变量GPT_BASE_URL未设置")
+
+        try:
+            parsed_url = urlparse(base_url)
+            if not all([parsed_url.scheme, parsed_url.netloc]):
+                raise ValueError(f"无效的base_url格式: {base_url}")
+        except Exception as e:
+            raise ValueError("解析base_url失败") from e
+
+        model_name = os.environ.get("GPT_MODEL")
+        if not model_name:
+            raise ValueError("环境变量GPT_MODEL未设置")
+
+        max_tokens = os.environ.get("GPT_MAX_TOKEN")
+        temperature = os.environ.get("GPT_TEMPERATURE")
+
+        if max_tokens is not None:
+            try:
+                max_tokens = int(max_tokens)
+            except ValueError as e:
+                raise ValueError(f"无效的max_tokens值: {max_tokens}") from e
+        else:
+            max_tokens = 16384
+
+        try:
+            temperature = float(temperature) if temperature is not None else 0.0
+        except ValueError as exc:
+            raise ValueError(f"无效的temperature值: {temperature}") from exc
+
+        return cls(key=key, base_url=base_url, model_name=model_name, max_tokens=max_tokens, temperature=temperature)
+
+
+_MODEL_CONFIG = ModelConfig.from_env()
+
 MAX_FILE_SIZE = 32000
-MAX_PROMPT_SIZE = int(os.environ.get("GPT_MAX_TOKEN", 16384))
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 
@@ -105,6 +183,7 @@ def parse_arguments():
     group.add_argument("--ask", help="直接提供提示词内容，与--file互斥")
     group.add_argument("--chatbot", action="store_true", help="进入聊天机器人UI模式，与--file和--ask互斥")
     group.add_argument("--project-search", nargs="+", metavar="KEYWORD", help="执行项目关键词搜索(支持多词)")
+    group.add_argument("--pylint-log", type=Path, help="执行Pylint修复的日志文件路径")
     parser.add_argument(
         "--config",
         default=os.path.join(os.path.dirname(__file__), "llm_project.yml"),
@@ -338,8 +417,31 @@ def query_gpt_api(
         # 处理并保存响应
         return _process_and_save_response(response, history, kwargs)
 
+    except requests.exceptions.HTTPError as he:
+        debug_info = _MODEL_CONFIG.get_debug_info()
+        error_msg = f"API请求失败 HTTP {he.response.status_code}\n"
+        error_msg += f"请求配置: {debug_info}\n"
+
+        if he.response.status_code in (401, 403):
+            error_msg += "可能原因: 1. API密钥无效 2. 账户欠费 3. 权限不足\n"
+            error_msg += f"请检查密钥前三位: {debug_info['key_prefix']} 是否正确"
+
+        raise RuntimeError(error_msg) from he
+
+    except requests.exceptions.RequestException as re:
+        debug_info = _MODEL_CONFIG.get_debug_info()
+        error_msg = f"网络请求异常: {str(re)}\n"
+        error_msg += f"当前配置: {debug_info}"
+        raise RuntimeError(error_msg) from re
+
+    except RuntimeError as re:
+        print(f"详细错误信息: {str(re)}")
+        sys.exit(1)
     except Exception as e:
-        print(f"OpenAI API请求失败: {e}")
+        debug_info = _MODEL_CONFIG.get_debug_info()
+        error_msg = f"未预期的错误: {str(e)}\n"
+        error_msg += f"配置状态: {debug_info}"
+        print(error_msg)
         sys.exit(1)
 
 
@@ -392,14 +494,18 @@ def _get_api_response(
     """
     client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
 
-    return client.chat.completions.create(
-        model=model,
-        messages=history,
-        temperature=kwargs.get("temperature", 0.0),
-        max_tokens=MAX_PROMPT_SIZE,
-        top_p=0.8,
-        stream=True,
-    )
+    try:
+        return client.chat.completions.create(
+            model=model,
+            messages=history,
+            temperature=kwargs.get("temperature", 0.0),
+            max_tokens=_MODEL_CONFIG.max_tokens,
+            top_p=0.8,
+            stream=True,
+        )
+    except Exception as e:
+        err_msg = f"API请求失败: {str(e)}"
+        raise RuntimeError(err_msg) from e
 
 
 def _process_and_save_response(
@@ -1109,6 +1215,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
         2. file_ranges中的content字段必须可utf-8解码
         3. 当patch_require=True时用户会提供具体修改要求
     """
+
     prompt = ""
 
     if patch_require:
@@ -1129,7 +1236,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 7. 能复用就不手写
 8. 函数参数不要太长，参数不要太多
 9. 实现类时需要便于调试
-10. 不导入依赖的包
+10. 不导入依赖的包，建议用户自行处理
 
 # 指令说明
 1. 必须返回结构化内容，使用严格指定的标签格式
@@ -1420,7 +1527,7 @@ def patch_symbol_with_prompt(symbol_names: CmdNode):
         else:
             for symbol in symbol_result:
                 symbol_map[symbol["symbol_name"]] = symbol
-    GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH] = symbol_map
+    GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH].update(symbol_map)
     return generate_patch_prompt(
         CmdNode(command="symbol", args=list(symbol_map.keys())), symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH)
     )
@@ -1553,7 +1660,7 @@ def query_symbol(symbol_name):
             context += "[main definition end]\n"
 
         # 计算剩余可用长度
-        remaining_length = MAX_PROMPT_SIZE - len(context) - 1024  # 保留1024字符余量
+        remaining_length = _MODEL_CONFIG.max_tokens - len(context) - 1024  # 保留1024字符余量
 
         # 添加其他定义，直到达到长度限制
         if len(data["definitions"]) > 1 and remaining_length > 0:
@@ -1697,17 +1804,17 @@ class GPTContextProcessor:
         for i, node in enumerate(result):
             if isinstance(node, CmdNode):
                 last_cmd_index = i
-
         for symbol, args in cmd_groups.items():
             if last_cmd_index != -1:
-                # 在最后一个命令后插入
                 result.insert(last_cmd_index + 1, CmdNode(command=symbol, args=args))
             else:
-                # 如果没有找到命令，插入到第一位
                 result.insert(0, CmdNode(command=symbol, args=args))
 
         if symbol_node.symbols:
-            return [symbol_node] + result
+            if last_cmd_index < 0:
+                result.append(symbol_node)
+            else:
+                result.insert(last_cmd_index + 1, symbol_node)
         return result
 
     def process_text_with_file_path(self, text: str) -> str:
@@ -1753,16 +1860,16 @@ class GPTContextProcessor:
             "file_path": symbol["file_path"],
             "code_range": ((symbol["start_line"], symbol["start_col"]), (symbol["end_line"], symbol["end_col"])),
             "block_range": symbol["block_range"],
-            "block_content": symbol["code"],
+            "block_content": symbol["code"].encode("utf-8"),
         }
 
     def _process_symbol(self, symbol_name: SymbolsNode) -> str:
         """处理符号"""
         symbol_map = {}
-        symbols = perform_search(symbol_name.symbols, args.config, max_context_size=MAX_PROMPT_SIZE)
+        symbols = perform_search(symbol_name.symbols, args.config, max_context_size=_MODEL_CONFIG.max_tokens)
         for symbol in symbols.values():
             symbol_map[symbol["name"]] = self._symbol_format(symbol)
-        GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH] = symbol_map
+        GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH].update(symbol_map)
         return generate_patch_prompt(
             CmdNode(command="symbol", args=list(symbol_map.keys())), symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH)
         )
@@ -1782,8 +1889,8 @@ class GPTContextProcessor:
     def _finalize_text(self, text):
         """最终处理文本"""
         truncated_suffix = "\n[输入太长内容已自动截断]"
-        if len(text) > MAX_PROMPT_SIZE:
-            text = text[: MAX_PROMPT_SIZE - len(truncated_suffix)] + truncated_suffix
+        if len(text) > _MODEL_CONFIG.max_tokens:
+            text = text[: _MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
 
         with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
             f.write(text)
@@ -1827,14 +1934,14 @@ GPT_SYMBOL_PATCH = "patch"
 GPT_FLAG_CONTEXT = "context"
 
 GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False, GPT_FLAG_CONTEXT: False}
-GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: False}
+GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: {}}
 
 
 def finalize_text(text):
     """最终处理文本"""
     truncated_suffix = "\n[输入太长内容已自动截断]"
-    if len(text) > MAX_PROMPT_SIZE:
-        text = text[: MAX_PROMPT_SIZE - len(truncated_suffix)] + truncated_suffix
+    if len(text) > _MODEL_CONFIG.max_tokens:
+        text = text[: _MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
 
     with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
         f.write(text)
@@ -2101,28 +2208,6 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
         process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
-def validate_environment():
-    """验证必要的环境变量"""
-    api_key = os.getenv("GPT_KEY")
-    if not api_key:
-        print("错误：未设置GPT_KEY环境变量")
-        sys.exit(1)
-
-    base_url = os.getenv("GPT_BASE_URL")
-    if not base_url:
-        print("错误：未设置GPT_BASE_URL环境变量")
-        sys.exit(1)
-
-    try:
-        parsed_url = urlparse(base_url)
-        if not all([parsed_url.scheme, parsed_url.netloc]):
-            print(f"错误：GPT_BASE_URL不是有效的URL: {base_url}")
-            sys.exit(1)
-    except Exception as e:
-        print(f"错误：解析GPT_BASE_URL失败: {e}")
-        sys.exit(1)
-
-
 def validate_files(program_args):
     """验证输入文件是否存在"""
     if not (program_args.ask or program_args.chatbot or program_args.project_search):  # 仅在需要检查文件时执行
@@ -2153,7 +2238,7 @@ def handle_ask_mode(program_args, api_key, proxies):
     """处理--ask模式"""
     program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
 
-    base_url = os.getenv("GPT_BASE_URL")
+    base_url = _MODEL_CONFIG.base_url
     context_processor = GPTContextProcessor()
     text = context_processor.process_text_with_file_path(program_args.ask)
     print(text)
@@ -2161,9 +2246,9 @@ def handle_ask_mode(program_args, api_key, proxies):
         api_key,
         text,
         proxies=proxies,
-        model=os.environ["GPT_MODEL"],
+        model=_MODEL_CONFIG.model_name,
         base_url=base_url,
-        temperature=float(os.getenv("GPT_TEMPERATURE", "0.0")),
+        temperature=_MODEL_CONFIG.temperature,
     )
     process_response(
         text,
@@ -2385,10 +2470,10 @@ class ChatbotUI:
         """
         processed_text = self.gpt_processor.process_text_with_file_path(prompt)
         return query_gpt_api(
-            api_key=os.getenv("GPT_KEY"),
+            api_key=_MODEL_CONFIG.api_key,
             prompt=processed_text,
-            model=os.environ["GPT_MODEL"],
-            base_url=os.getenv("GPT_BASE_URL"),
+            model=_MODEL_CONFIG.model_name,
+            base_url=_MODEL_CONFIG.base_url,
             stream=True,
             console=self.console,
             temperature=self.temperature,
@@ -2477,7 +2562,7 @@ def handle_large_code(program_args, code_content, prompt_template, api_key, prox
     code_chunks = split_code(code_content, program_args.chunk_size)
     responses = []
     total_chunks = len(code_chunks)
-    base_url = os.getenv("GPT_BASE_URL")
+    base_url = _MODEL_CONFIG.base_url
     for i, chunk in enumerate(code_chunks, 1):
         pager = f"这是代码的第 {i}/{total_chunks} 部分：\n\n"
         print(pager)
@@ -2486,7 +2571,7 @@ def handle_large_code(program_args, code_content, prompt_template, api_key, prox
             api_key,
             chunk_prompt,
             proxies=proxies,
-            model=os.environ["GPT_MODEL"],
+            model=_MODEL_CONFIG.model_name,
             base_url=base_url,
         )
         response_pager = f"\n这是回答的第 {i}/{total_chunks} 部分：\n\n"
@@ -2497,12 +2582,12 @@ def handle_large_code(program_args, code_content, prompt_template, api_key, prox
 def handle_small_code(program_args, code_content, prompt_template, api_key, proxies):
     """处理小文件分析"""
     full_prompt = prompt_template.format(path=program_args.file, pager="", code=code_content)
-    base_url = os.getenv("GPT_BASE_URL")
+    base_url = _MODEL_CONFIG.base_url
     return query_gpt_api(
         api_key,
         full_prompt,
         proxies=proxies,
-        model=os.environ["GPT_MODEL"],
+        model=_MODEL_CONFIG.model_name,
         base_url=base_url,
     )
 
@@ -2609,7 +2694,7 @@ class ConfigLoader:
         )
 
 
-def perform_search(words: List[str], config_path: str = "llm_project.yml", max_context_size=MAX_PROMPT_SIZE):
+def perform_search(words: List[str], config_path: str = "llm_project.yml", max_context_size=_MODEL_CONFIG.max_tokens):
     """执行代码搜索并返回强类型结果"""
 
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
@@ -2692,16 +2777,501 @@ class ProxyEnvDisable:
                 os.environ.pop(var, None)
 
 
+class LintResult(BaseModel):
+    """Structured representation of pylint error"""
+
+    file_path: str
+    line: int
+    column_range: tuple[int, int]
+    code: str
+    message: str
+
+    def to_json(self) -> str:
+        return self.model_dump_json()
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "LintResult":
+        return cls.model_validate_json(json_str)
+
+    @property
+    def full_message(self) -> str:
+        """Format message with code for display"""
+        return f"{self.code}: {self.message}"
+
+
+class LintParser:
+    """
+    Parse pylint output into structured LintResult objects
+    Example input format: "tree.py:1870:0: C0325: Unnecessary parens after 'not' keyword"
+    """
+
+    _LINE_PATTERN = re.compile(
+        r"^(?P<path>.+?):"  # File path
+        r"(?P<line>\d+):"  # Line number
+        r"(?P<column>\d+): "  # Column start
+        r"(?P<code>\w+):\s*"  # Lint code with colon
+        r"(?P<message>.+)$"  # Error message
+    )
+
+    @classmethod
+    def parse(cls, raw_output: str) -> list[LintResult]:
+        """Parse raw pylint output into structured results"""
+        results = []
+        for line in raw_output.splitlines():
+            if not line.strip() or line.startswith("***"):
+                continue
+
+            if match := cls._LINE_PATTERN.match(line):
+                groups = match.groupdict()
+                message = groups["message"].strip()
+                column = int(groups["column"])
+                start_col = column
+                end_col = column
+
+                # Extract column range from message if present
+                if column_range_match := re.search(r"column (\d+)-(\d+)", message):
+                    start_col = int(column_range_match.group(1))
+                    end_col = int(column_range_match.group(2))
+
+                results.append(
+                    LintResult(
+                        file_path=groups["path"],
+                        line=int(groups["line"]),
+                        column_range=(start_col, end_col),
+                        code=groups["code"],
+                        message=message,
+                    )
+                )
+        return results
+
+
+class ModelSwitch:
+    """
+    根据模型名称自动切换配置并调用API查询
+
+    从与当前文件同目录下的model.json加载模型配置
+
+    假设:
+        - model.json文件存在且包含对应模型配置
+        - 配置中包含'key', 'base_url', 'model'字段
+        如果不符合上述假设，将抛出异常
+    """
+
+    def __init__(self):
+        self.config = self._load_config()
+
+    def _load_config(self, default_path: str = "model.json") -> dict:
+        """加载模型配置文件"""
+        config_path = os.path.join(os.path.dirname(__file__), default_path)
+        try:
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            raise ValueError(f"模型配置文件未找到: {config_path}")
+        except json.JSONDecodeError:
+            raise ValueError(f"配置文件格式错误: {config_path}")
+
+    def query(self, model_name: str, prompt: str, **kwargs) -> dict:
+        """
+        根据模型名称查询API
+
+        参数:
+            model_name (str): 配置中的模型名称(如'14b')
+            prompt (str): 用户输入的提示词
+            kwargs: 其他传递给query_gpt_api的参数
+
+        返回:
+            dict: API响应结果
+
+        异常:
+            ValueError: 当模型配置不存在或缺少必要字段时
+        """
+        if model_name not in self.config:
+            raise ValueError(f"未找到模型配置: {model_name}")
+
+        config = self.config[model_name]
+        required_keys = ["key", "base_url", "model_name"]
+        for key in required_keys:
+            if key not in config:
+                raise ValueError(f"模型{model_name}配置缺少必要字段: {key}")
+
+        api_key = config["key"]
+        base_url = config["base_url"]
+        model = config["model_name"]
+        max_tokens = config.get("max_tokens")
+        temperature = config.get("temperature", 0.6)
+
+        filtered_config = config.copy()
+        combined_kwargs = {**filtered_config, **kwargs}
+
+        try:
+            _MODEL_CONFIG.key = api_key
+            _MODEL_CONFIG.base_url = base_url
+            _MODEL_CONFIG.model_name = model
+            if max_tokens is not None:
+                _MODEL_CONFIG.max_tokens = max_tokens
+            if temperature is not None:
+                _MODEL_CONFIG.temperature = temperature
+        except AttributeError as e:
+            debug_info = f"配置更新失败: {str(e)}\n当前配置状态: {repr(_MODEL_CONFIG)}"
+            raise RuntimeError(debug_info) from e
+
+        try:
+            return query_gpt_api(api_key=api_key, prompt=prompt, model=model, **combined_kwargs)
+        except Exception as e:
+            debug_info = f"API调用失败: {str(e)}\n当前配置状态: {_MODEL_CONFIG.get_debug_info()}"
+            raise RuntimeError(debug_info) from e
+
+
+class LintReportFix:
+    """根据Lint检查结果自动生成修复补丁"""
+
+    _MAX_CONTEXT_SPAN = 100  # 最大上下文跨度行数
+
+    def __init__(self, model_switch: ModelSwitch = ModelSwitch()):
+        self.model_switch = model_switch
+        self._source_cache: dict[str, list[str]] = {}
+
+    def _get_source_lines(self, file_path: str) -> list[str]:
+        """缓存源代码内容"""
+        if file_path not in self._source_cache:
+            with open(file_path, "r", encoding="utf-8") as f:
+                self._source_cache[file_path] = f.readlines()
+        return self._source_cache[file_path]
+
+    def _group_results(self, results: list[LintResult]) -> list[list[LintResult]]:
+        """将结果按文件分组并按行号合并邻近错误"""
+
+        file_groups = defaultdict(list)
+        for res in results:
+            file_groups[res.file_path].append(res)
+
+        all_groups = []
+        for file_path, file_results in file_groups.items():
+            sorted_results = sorted(file_results, key=lambda x: x.line)
+            current_group = []
+            last_line = -self._MAX_CONTEXT_SPAN - 1
+            for res in sorted_results:
+                if not current_group:
+                    current_group.append(res)
+                    last_line = res.line
+                    continue
+
+                within_span = res.line - last_line <= self._MAX_CONTEXT_SPAN
+                if within_span:
+                    current_group.append(res)
+                    last_line = max(last_line, res.line)
+                else:
+                    all_groups.append(current_group)
+                    current_group = [res]
+                    last_line = res.line
+            if current_group:
+                all_groups.append(current_group)
+        return all_groups
+
+    def _build_code_context(self, group: list[LintResult], context_lines: int = 3) -> tuple[str, int, int]:
+        """构建合并后的代码上下文"""
+        file_path = group[0].file_path
+        source = self._get_source_lines(file_path)
+        min_res_line = min(res.line for res in group)
+        max_res_line = max(res.line for res in group)
+
+        start_line_num = max(1, min_res_line - context_lines)
+        end_line_num = min(len(source), max_res_line + context_lines)
+
+        start_index = start_line_num - 1
+        end_index = end_line_num
+
+        context = []
+        error_lines = {res.line for res in group}
+        context.append(f"# 代码块行号范围: {start_line_num}-{end_line_num}")
+        for i in range(start_index, end_index):
+            line_num = i + 1
+            prefix = ">>> " if line_num in error_lines else "    "
+            context.append(f"{line_num:4d}{prefix}{source[i].rstrip()}")
+        return "\n".join(context), start_line_num, end_line_num
+
+    def _build_prompt(self, group: list[LintResult]) -> str:
+        """构建合并后的提示词模板"""
+        code_context, start_line_num, end_line_num = self._build_code_context(group)
+        file_path = group[0].file_path
+        source_lines = self._get_source_lines(file_path)
+
+        errors_desc = "\n\n".join(
+            f"问题 {idx+1}:\n"
+            f"位置: 第{res.line}行，列{res.column_range[0]}-{res.column_range[1]}\n"
+            f"错误代码: {res.code}\n"
+            f"描述: {res.message}\n"
+            f"原代码行: {source_lines[res.line - 1].strip()}"
+            for idx, res in enumerate(group)
+        )
+
+        return dedent(
+            f"""  
+        **批量代码问题修复**  
+        文件路径: {group[0].file_path}  
+        共发现 {len(group)} 个相关联的问题  
+  
+        {errors_desc}  
+  
+        相关代码上下文(可能包含不完整代码块，请忽略截断部分):  
+        {code_context}  
+  
+        请严格按以下要求操作:  
+        1. 按问题顺序逐个修复，保持其他代码不变  
+        2. 输出格式: ```fixed  
+           [修复后的完整代码块]  
+           ```  
+        3. 使用问题对应的行号注释说明修改原因，例如: # 第42行修复E1136错误  
+        4. 保持原有代码风格和缩进  
+        5. 不得修改可能破坏编程接口的报错，如函数名、参数等
+        6. 不得添加新的注释
+        """
+        )
+
+    def _parse_response(self, response: dict, original_lines: list[str]) -> list[str]:
+        """解析批量修复响应"""
+        try:
+            content = response["choices"][0]["message"]["content"]
+            match = re.search(r"```fixed\n(.*?)\n```", content, re.DOTALL)
+            if not match:
+                raise ValueError("未找到修复代码块")
+
+            fixed_lines = match.group(1).strip().split("\n")
+            return [line for line in fixed_lines if line.strip()]
+        except (KeyError, IndexError, AttributeError) as e:
+            raise ValueError(f"无效的API响应格式: {str(e)}") from e
+
+    def generate_batch_fix(self, group: list[LintResult]) -> tuple[list[str], int, int]:
+        """生成批量修复建议"""
+        prompt = self._build_prompt(group)
+        response = self.model_switch.query("default", prompt)
+        code_context, start_line, end_line = self._build_code_context(group)
+        return (self._parse_response(response, self._get_source_lines(group[0].file_path)), start_line, end_line)
+
+    def batch_fix(self, results: list[LintResult]) -> list[str]:
+        """批量生成修复建议"""
+        suggestions = []
+        for group in self._group_results(results):
+            if fixes := self.generate_batch_fix(group):
+                suggestions.extend(fixes)
+        return suggestions
+
+
+class PylintFixer:
+    """自动化修复Pylint报告的主处理器"""
+
+    def __init__(
+        self,
+        linter_log_path: str,
+        auto_apply: bool = False,
+        shadowroot: Optional[Path] = None,
+        root_dir: Optional[Path] = None,
+    ):
+        self.log_path = Path(linter_log_path)
+        self.results: list[LintResult] = []
+        self.file_groups: dict[str, list[LintResult]] = {}
+        self.fixer = LintReportFix()
+        self.auto_apply = auto_apply
+        self.shadowroot = shadowroot if shadowroot is not None else Path(os.path.expanduser("~/.shadowroot"))
+        self.shadowroot.mkdir(parents=True, exist_ok=True)
+        self.last_diff: Optional[list[str]] = None
+        self.shadow_file: Optional[Path] = None
+        self.target_file: Optional[Path] = None
+        self.root_dir = root_dir if root_dir is not None else Path.cwd().resolve()
+        self.file_patches: dict[Path, list[tuple[list[str], int, int]]] = defaultdict(list)
+        self._line_offsets_cache: dict[Path, list[int]] = {}
+
+    def _get_line_offsets(self, file_path: Path) -> list[int]:
+        """获取文件的字节偏移量数组"""
+        if file_path in self._line_offsets_cache:
+            return self._line_offsets_cache[file_path]
+
+        content = file_path.read_bytes()
+        offsets = [0]
+        offset = 0
+        while True:
+            pos = content.find(b"\n", offset)
+            if pos == -1:
+                break
+            offset = pos + 1
+            offsets.append(offset)
+        self._line_offsets_cache[file_path] = offsets
+        return offsets
+
+    def _line_range_to_byte_range(self, file_path: Path, start_line: int, end_line: int) -> tuple[int, int]:
+        """将行号范围转换为字节范围"""
+        offsets = self._get_line_offsets(file_path)
+        max_line = len(offsets) - 1
+
+        start_line = max(1, min(start_line, max_line))
+        end_line = max(start_line, min(end_line, max_line))
+
+        start_offset = offsets[start_line - 1]
+        end_offset = offsets[end_line] if end_line < len(offsets) else len(file_path.read_bytes())
+        return (start_offset, end_offset)
+
+    def _generate_shadow_file(self, target_file: Path) -> tuple[Path, list[str]]:
+        """生成包含所有修复的shadow文件"""
+        abs_root = self.root_dir.resolve()
+        abs_target = target_file.resolve()
+        relative_path = abs_target.relative_to(abs_root)
+        shadow_file = self.shadowroot / relative_path
+
+        shadow_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(target_file, shadow_file)
+
+        original_content = target_file.read_bytes()
+        file_patches = []
+
+        for fixes, start_line, end_line in self.file_patches[target_file]:
+            start_byte, end_byte = self._line_range_to_byte_range(target_file, start_line, end_line)
+            original_block = original_content[start_byte:end_byte]
+            new_block = "\n".join(fixes).encode("utf-8") + b"\n"
+            file_patches.append((start_byte, end_byte, original_block, new_block))
+
+        if not file_patches:
+            return shadow_file, []
+
+        patch = BlockPatch(
+            file_paths=[str(target_file)] * len(file_patches),
+            patch_ranges=[(s, e) for s, e, _, _ in file_patches],
+            block_contents=[ob for _, _, ob, _ in file_patches],
+            update_contents=[nb for _, _, _, nb in file_patches],
+        )
+        patched = patch.apply_patch()
+        shadow_file.write_bytes(patched[str(target_file)])
+
+        return shadow_file, patch.generate_diff()
+
+    def _process_file_patches(self, target_file: Path) -> None:
+        """处理单个文件的所有补丁"""
+        if not self.file_patches[target_file]:
+            return
+
+        shadow_file, diff = self._generate_shadow_file(target_file)
+        self.last_diff = diff
+        self.shadow_file = shadow_file
+        self.target_file = target_file
+
+        print(f"\n生成的综合差异（共 {len(diff)} 行）:")
+        SyntaxHighlight(diff, lang_type="diff").output()
+
+        if self.auto_apply:
+            self._apply_patch()
+
+    def load_and_validate_log(self) -> None:
+        """加载并验证日志文件"""
+        if not self.log_path.is_file():
+            raise FileNotFoundError(f"日志文件 '{self.log_path}' 不存在或不是文件")
+
+        try:
+            log_content = self.log_path.read_text(encoding="utf-8")
+            self.results = LintParser.parse(log_content)
+        except Exception as e:
+            raise RuntimeError(f"读取日志文件失败: {e}") from e
+
+    def group_results_by_file(self) -> None:
+        """按文件路径对结果进行分组"""
+        for res in self.results:
+            file_key = res.file_path
+            if file_key not in self.file_groups:
+                self.file_groups[file_key] = []
+            self.file_groups[file_key].append(res)
+
+    def process_single_group(self, group: list[LintResult]) -> None:
+        """处理单个错误组并执行交互流程"""
+        if not group:
+            return
+
+        target_file = Path(group[0].file_path)
+        if not target_file.is_file():
+            print(f"错误：目标文件 '{target_file}' 不存在，跳过处理该错误组")
+            return
+
+        try:
+            fixes, start_line, end_line = self.fixer.generate_batch_fix(group)
+        except Exception as e:
+            print(f"生成修复建议失败: {e}", file=sys.stderr)
+            return
+
+        if not fixes:
+            print("未生成修复建议")
+            return
+
+        print("\n修复建议的代码块:")
+        print("\n".join(fixes))
+
+        self.file_patches[target_file].append((fixes, start_line, end_line))
+
+    def _apply_patch(self) -> None:
+        """应用差异到原始文件"""
+        try:
+            if self.shadow_file and self.target_file:
+                shutil.copy2(self.shadow_file, self.target_file)
+                print(f"已自动应用修复到文件 {self.target_file}")
+        except Exception as e:
+            print(f"文件替换失败: {e}", file=sys.stderr)
+
+    def handle_user_choice(self) -> None:
+        """处理用户交互选择"""
+        while True:
+            choice = input("\n是否应用此修复？(y-应用, n-跳过，q-退出): ").strip().lower()
+            if choice == "y":
+                self._apply_patch()
+                break
+            elif choice == "n":
+                print("跳过此修复")
+                break
+            elif choice == "q":
+                raise SystemExit("用户终止修复流程")
+            else:
+                print("无效输入，请选择 y, n 或 q")
+
+    def execute(self) -> None:
+        """执行完整的修复流程"""
+        try:
+            self.load_and_validate_log()
+            if not self.results:
+                print("未发现可修复的错误")
+                return
+
+            self.group_results_by_file()
+
+            for file_path, file_results in self.file_groups.items():
+                groups = self.fixer._group_results(file_results)
+                print(f"\n=== 处理文件: {file_path}，共 {len(groups)} 个错误组 ===")
+
+                for group_idx, group in enumerate(groups, 1):
+                    print(f"\n处理错误组 {group_idx}/{len(groups)}:")
+                    self.process_single_group(group)
+
+                if file_path in self.file_groups:
+                    target_file = Path(file_path)
+                    self._process_file_patches(target_file)
+                    if self.last_diff and not self.auto_apply:
+                        self.handle_user_choice()
+
+            print("\n修复流程完成")
+        except Exception as e:
+            print(f"处理过程中发生错误: {e}", file=sys.stderr)
+
+
+def pylint_fix(pylint_log) -> None:
+    """修复入口函数"""
+    fixer = PylintFixer(str(pylint_log))
+    fixer.execute()
+
+
 def main(args):
     shadowroot.mkdir(parents=True, exist_ok=True)
 
-    validate_environment()
     validate_files(args)
     proxies, proxy_sources = detect_proxies()
     print_proxy_info(proxies, proxy_sources)
 
     if args.ask:
-        handle_ask_mode(args, os.getenv("GPT_KEY"), proxies)
+        handle_ask_mode(args, _MODEL_CONFIG.key, proxies)
     elif args.chatbot:
         ChatbotUI().run()
     elif args.project_search:
@@ -2709,7 +3279,7 @@ def main(args):
         symbols = perform_search(args.project_search, args.config)
         pprint.pprint(symbols)
     else:
-        handle_code_analysis(args, os.getenv("GPT_KEY"), proxies)
+        handle_code_analysis(args, _MODEL_CONFIG.key, proxies)
 
 
 if __name__ == "__main__":
@@ -2717,5 +3287,7 @@ if __name__ == "__main__":
     if args.trace:
         tracer = trace.Trace(trace=1)
         tracer.runfunc(main, args)
+    elif args.pylint_log:
+        pylint_fix(args.pylint_log)
     else:
         main(args)
