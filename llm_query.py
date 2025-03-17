@@ -1410,27 +1410,23 @@ def process_patch_response(response_text, symbol_detail):
     filtered_response = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()  # 解析大模型响应
     results = parse_llm_response(filtered_response, symbol_detail.keys())
 
-    # 准备BlockPatch参数
-    file_paths = []
-    patch_ranges = []
-    block_contents = []
-    update_contents = []
+    # 使用列表推导式减少局部变量数量
+    patch_data = [
+        (
+            symbol_detail[symbol_name]["file_path"],
+            symbol_detail[symbol_name]["block_range"],
+            symbol_detail[symbol_name]["block_content"],
+            source_code.encode("utf-8"),
+        )
+        for symbol_name, source_code in results
+    ]
 
-    # 遍历解析结果，构造参数
-    for symbol_name, source_code in results:
-        # 获取符号详细信息
-        detail = symbol_detail[symbol_name]
-        file_paths.append(detail["file_path"])
-        patch_ranges.append(detail["block_range"])
-        block_contents.append(detail["block_content"])
-        update_contents.append(source_code.encode("utf-8"))
-
-    # 创建BlockPatch对象
+    # 解构数据创建BlockPatch
     patch = BlockPatch(
-        file_paths=file_paths,
-        patch_ranges=patch_ranges,
-        block_contents=block_contents,
-        update_contents=update_contents,
+        file_paths=[data[0] for data in patch_data],
+        patch_ranges=[data[1] for data in patch_data],
+        block_contents=[data[2] for data in patch_data],
+        update_contents=[data[3] for data in patch_data],
     )
 
     # 生成并显示差异
@@ -1443,14 +1439,14 @@ def process_patch_response(response_text, symbol_detail):
     user_input = input("\n是否应用此补丁？(y/n): ").lower()
     if user_input == "y":
         file_map = patch.apply_patch()
-        for file in file_map:
-            with open(file, "wb+") as f:
-                f.write(file_map[file])
+        for file_path, content in file_map.items():
+            with open(file_path, "wb+") as f:
+                f.write(content)
         print("补丁已成功应用")
         return file_map
-    else:
-        print("补丁未应用")
-        return None
+
+    print("补丁未应用")
+    return None
 
 
 def test_patch_response():
@@ -1555,8 +1551,7 @@ def get_symbol_detail(symbol_names: str) -> list:
     batch_response = send_http_request(_build_api_url(api_url, symbol_names))
     if GPT_FLAGS.get(GPT_FLAG_CONTEXT):
         return [_process_symbol_data(symbol_data, "") for _, symbol_data in enumerate(batch_response)]
-    else:
-        return [_process_symbol_data(symbol_data, symbol_list[idx]) for idx, symbol_data in enumerate(batch_response)]
+    return [_process_symbol_data(symbol_data, symbol_list[idx]) for idx, symbol_data in enumerate(batch_response)]
 
 
 def _parse_symbol_names(symbol_names: str) -> list:
@@ -1689,7 +1684,7 @@ def query_symbol(symbol_name):
         return f"\n[error] 符号查询失败: {str(e)}\n"
     except KeyError as e:
         return f"\n[error] 无效的API响应格式: {str(e)}\n"
-    except Exception as e:
+    except (ValueError, TypeError, AttributeError) as e:
         return f"\n[error] 符号查询时发生错误: {str(e)}\n"
 
 
@@ -2089,29 +2084,25 @@ def extract_and_diff_files(content, auto_apply=False):
     verify_script = None
     file_matches = []
 
-    for match_type, content, path in matches:
+    for match_type, match_content, path in matches:
         if match_type == "project_setup_script":
-            setup_script = content
+            setup_script = match_content
         elif match_type == "user_verify_script":
-            verify_script = content
+            verify_script = match_content
         else:
-            file_matches.append((path, content))
+            file_matches.append((path, match_content))
 
-    # 处理项目准备脚本
-    if setup_script:
-        setup_path = shadowroot / "project_setup.sh"
-        _save_file_to_shadowroot(setup_path, setup_script)
-        os.chmod(setup_path, 0o755)
-        print(f"项目准备脚本已保存到: {setup_path}")
+    def _process_script(script, script_name):
+        if not script:
+            return
+        script_path = shadowroot / script_name
+        _save_file_to_shadowroot(script_path, script)
+        os.chmod(script_path, 0o755)
+        print(f"{script_name}已保存到: {script_path}")
 
-    # 处理验证脚本
-    if verify_script:
-        verify_path = shadowroot / "user_verify.sh"
-        _save_file_to_shadowroot(verify_path, verify_script)
-        os.chmod(verify_path, 0o755)
-        print(f"验证脚本已保存到: {verify_path}")
+    _process_script(setup_script, "project_setup.sh")
+    _process_script(verify_script, "user_verify.sh")
 
-    # 处理文件修改
     diff_content = ""
     for filename, file_content in file_matches:
         file_path = Path(filename).absolute()
@@ -2555,7 +2546,7 @@ def handle_code_analysis(program_args, api_key, proxies):
             ask_param=program_args.file,
         )
 
-    except Exception as e:
+    except (IOError, ValueError, RuntimeError) as e:
         print(f"运行时错误: {e}")
         sys.exit(1)
 
@@ -2628,7 +2619,7 @@ def prompt_words_search(words: List[str], args):
                 )
                 print(f"  L{match.line}: {highlighted.strip()}")
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, RuntimeError) as e:
         print(f"搜索失败: {str(e)}")
         sys.exit(1)
 
@@ -2671,6 +2662,10 @@ class ConfigLoader:
         except (yaml.YAMLError, IOError) as e:
             print(f"❌ 配置文件加载失败: {str(e)}")
             return self._create_search_config(self._default_config)
+
+    def get_default_config(self) -> dict:
+        """获取默认配置"""
+        return self._default_config.copy()
 
     def _merge_configs(self, user_config: dict) -> dict:
         """合并用户配置和默认配置"""
@@ -2740,8 +2735,8 @@ def perform_search(
         print(f"API请求失败: {str(e)}")
     except json.JSONDecodeError:
         print("API返回无效的JSON响应")
-    except Exception as e:
-        print(f"处理API响应时发生未预期错误: {str(e)}")
+    except (ValueError, KeyError) as e:
+        print(f"处理API响应时发生数据解析错误: {str(e)}")
 
     return None
 
@@ -3036,8 +3031,11 @@ class PylintFixer:
         print(f"\n当前错误组信息（共 {len(group)} 个错误）:")
         for idx, result in enumerate(group, 1):
             print(f"错误 {idx}: {result.file_path} 第 {result.line} 行 : {result.message}")
-
-        self.fixer.fix_symbol(symbol, symbol_map)
+        try:
+            self.fixer.fix_symbol(symbol, symbol_map)
+        except Exception as e:
+            traceback.print_exc()
+            print("无法自动修复当前错误组", str(e))
 
     def _get_symbol_locations(self, file_path: str) -> list[tuple[int, int]]:
         """获取符号定位信息"""
@@ -3131,23 +3129,23 @@ def pylint_fix(pylint_log) -> None:
     fixer.execute()
 
 
-def main(args):
+def main(input_args):
     shadowroot.mkdir(parents=True, exist_ok=True)
 
-    validate_files(args)
+    validate_files(input_args)
     proxies, proxy_sources = detect_proxies()
     print_proxy_info(proxies, proxy_sources)
 
-    if args.ask:
-        handle_ask_mode(args, GLOBAL_MODEL_CONFIG.key, proxies)
-    elif args.chatbot:
+    if input_args.ask:
+        handle_ask_mode(input_args, GLOBAL_MODEL_CONFIG.key, proxies)
+    elif input_args.chatbot:
         ChatbotUI().run()
-    elif args.project_search:
-        prompt_words_search(args.project_search, args)
-        symbols = perform_search(args.project_search, args.config)
+    elif input_args.project_search:
+        prompt_words_search(input_args.project_search, input_args)
+        symbols = perform_search(input_args.project_search, input_args.config)
         pprint.pprint(symbols)
     else:
-        handle_code_analysis(args, GLOBAL_MODEL_CONFIG.key, proxies)
+        handle_code_analysis(input_args, GLOBAL_MODEL_CONFIG.key, proxies)
 
 
 if __name__ == "__main__":

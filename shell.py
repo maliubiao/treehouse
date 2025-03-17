@@ -98,7 +98,7 @@ def handle_cmd_complete(prefix: str):
                     else:
                         completions.append(full_path)
         except OSError as e:
-            logging.error(f"Failed to list prompts directory: {e}")
+            logging.error("Failed to list prompts directory: %s", e)
     # 处理symbol_前缀补全
     if prefix.startswith("symbol_"):
         handle_complete(prefix)

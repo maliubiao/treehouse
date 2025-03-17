@@ -265,38 +265,36 @@ class TestGPTContextProcessor(unittest.TestCase):
 
 class TestSymbolLocation(unittest.TestCase):
     def setUp(self):
+        self._setup_test_data()
+        self._setup_test_file()
+        self._setup_mock_api()
+
+    def _setup_test_data(self):
         self.symbol_name = "test_symbol"
         self.file_path = "test_file.py"
         self.original_content = "\n\ndef test_symbol():\n    pass"
         self.block_range = (1, len(self.original_content))
-        self.content = self.original_content[self.block_range[0] : self.block_range[1]]
         self.code_range = ((1, 0), (2, 4))
-        self.flags = None
         self.whole_content = self.original_content + "\n"
-        # 创建测试文件
+
+    def _setup_test_file(self):
         with open(self.file_path, "w") as f:
             f.write(self.whole_content)
 
-        # 模拟API响应
+    def _setup_mock_api(self):
         self.symbol_data = {
-            "content": self.content,
+            "content": self.original_content[self.block_range[0] : self.block_range[1]],
             "location": {"block_range": self.block_range, "start_line": 1, "start_col": 0, "end_line": 2, "end_col": 4},
             "file_path": self.file_path,
         }
-
-        # 模拟http请求（修复响应数据结构为列表）
         self.original_send_http_request = llm_query.send_http_request
-        llm_query.send_http_request = lambda url: [self.symbol_data]  # 包装为列表
+        llm_query.send_http_request = lambda url: [self.symbol_data]
 
     def tearDown(self):
-        # 删除测试文件
         if os.path.exists(self.file_path):
             os.remove(self.file_path)
-
-        # 恢复原始http请求函数
         llm_query.send_http_request = self.original_send_http_request
 
-    # 以下测试方法保持原样不变...
     def test_basic_symbol(self):
         result = llm_query.get_symbol_detail(self.symbol_name)
         self.assertIsNotNone(result)
@@ -305,49 +303,45 @@ class TestSymbolLocation(unittest.TestCase):
         self.assertEqual(result[0]["file_path"], self.file_path)
         self.assertEqual(result[0]["code_range"], self.code_range)
         self.assertEqual(result[0]["block_range"], self.block_range)
-        self.assertEqual(result[0]["block_content"], self.content.encode("utf-8"))
+        self.assertEqual(
+            result[0]["block_content"], self.original_content[self.block_range[0] : self.block_range[1]].encode("utf-8")
+        )
 
     def test_multiline_symbol(self):
-        # 测试多行符号
-        self.content = "def test_symbol():\n    pass\n    pass\n"
-        self.block_range = (0, len(self.content))
-        self.code_range = ((1, 0), (3, 4))
+        content = "def test_symbol():\n    pass\n    pass\n"
+        block_range = (0, len(content))
+        code_range = ((1, 0), (3, 4))
 
-        # 更新测试文件
         with open(self.file_path, "w", encoding="utf8") as f:
-            f.write(self.content)
+            f.write(content)
 
-        # 更新模拟数据（保持列表结构）
-        self.symbol_data["content"] = self.content
-        self.symbol_data["location"]["block_range"] = self.block_range
+        self.symbol_data["content"] = content
+        self.symbol_data["location"]["block_range"] = block_range
         self.symbol_data["location"]["end_line"] = 3
         result = llm_query.get_symbol_detail(self.symbol_name)
         self.assertIsNotNone(result)
         self.assertGreaterEqual(len(result), 1)
-        self.assertEqual(result[0]["block_range"], self.block_range)
-        self.assertEqual(result[0]["code_range"], self.code_range)
+        self.assertEqual(result[0]["block_range"], block_range)
+        self.assertEqual(result[0]["code_range"], code_range)
 
     def test_empty_symbol(self):
-        # 测试空符号
-        self.content = ""
-        self.block_range = (0, 0)
-        self.code_range = ((1, 0), (1, 0))
+        content = ""
+        block_range = (0, 0)
+        code_range = ((1, 0), (1, 0))
 
-        # 更新测试文件
         with open(self.file_path, "w", encoding="utf8") as f:
-            f.write(self.content)
+            f.write(content)
 
-        # 更新模拟数据（保持列表结构）
-        self.symbol_data["content"] = self.content
-        self.symbol_data["location"]["block_range"] = self.block_range
+        self.symbol_data["content"] = content
+        self.symbol_data["location"]["block_range"] = block_range
         self.symbol_data["location"]["end_line"] = 1
-        self.symbol_data["location"]["end_col"] = 0  # 修复结束列位置
+        self.symbol_data["location"]["end_col"] = 0
 
         result = llm_query.get_symbol_detail(self.symbol_name)
         self.assertIsNotNone(result)
         self.assertGreaterEqual(len(result), 1)
-        self.assertEqual(result[0]["block_range"], self.block_range)
-        self.assertEqual(result[0]["code_range"], self.code_range)
+        self.assertEqual(result[0]["block_range"], block_range)
+        self.assertEqual(result[0]["code_range"], code_range)
 
 
 class TestFileRange(unittest.TestCase):
