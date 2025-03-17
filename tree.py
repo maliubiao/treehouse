@@ -870,18 +870,10 @@ class CodeMapBuilder:
         sorted_locations = sorted(locations, key=lambda loc: (loc[0], loc[1]))
 
         processed_symbols = {}
-        processed_ranges = []
+        symbol_locations = {}
         total_code_size = 0
 
         for line, col in sorted_locations:
-            in_range = False
-            for sl, sc, el, ec in processed_ranges:
-                if (sl <= line <= el) and (line > sl or col >= sc) and (line < el or col <= ec):
-                    in_range = True
-                    break
-            if in_range:
-                continue
-
             current_symbol = None
             for symbol_path, symbol_info in sorted_symbols:
                 if symbol_info["type"] == "variable":
@@ -897,10 +889,13 @@ class CodeMapBuilder:
                     and (col <= e_col if line == e_line else True)
                 ):
                     current_symbol = symbol_path
-                    processed_ranges.append((s_line, s_col, e_line, e_col))
                     break
 
             if current_symbol:
+                if current_symbol not in symbol_locations:
+                    symbol_locations[current_symbol] = []
+                symbol_locations[current_symbol].append((line, col))
+
                 symbol_info = code_map[current_symbol]
                 if symbol_info.get("type") == "function":
                     parts = current_symbol.split(".")
@@ -924,8 +919,9 @@ class CodeMapBuilder:
                     if total_code_size + code_length > max_context_size:
                         logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
                         break
-                    print("adding", current_symbol)
-                    processed_symbols[current_symbol] = symbol_info
+                    symbol_info_with_locations = symbol_info.copy()
+                    symbol_info_with_locations["locations"] = symbol_locations.get(current_symbol, [])
+                    processed_symbols[current_symbol] = symbol_info_with_locations
                     total_code_size += code_length
 
             if total_code_size >= max_context_size:

@@ -15,7 +15,6 @@ import marshal
 import os
 import pprint
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -27,7 +26,6 @@ import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from textwrap import dedent
 from typing import Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
@@ -55,9 +53,10 @@ from tree import (
     FileSearchResult,
     FileSearchResults,
     MatchResult,
+    ParserLoader,
+    ParserUtil,
     RipgrepSearcher,
     SearchConfig,
-    SyntaxHighlight,
 )
 
 
@@ -134,7 +133,7 @@ class ModelConfig:
         return cls(key=key, base_url=base_url, model_name=model_name, max_tokens=max_tokens, temperature=temperature)
 
 
-_MODEL_CONFIG = ModelConfig.from_env()
+GLOBAL_MODEL_CONFIG = ModelConfig.from_env()
 
 MAX_FILE_SIZE = 32000
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
@@ -418,7 +417,7 @@ def query_gpt_api(
         return _process_and_save_response(response, history, kwargs)
 
     except requests.exceptions.HTTPError as he:
-        debug_info = _MODEL_CONFIG.get_debug_info()
+        debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
         error_msg = f"API请求失败 HTTP {he.response.status_code}\n"
         error_msg += f"请求配置: {debug_info}\n"
 
@@ -428,18 +427,18 @@ def query_gpt_api(
 
         raise RuntimeError(error_msg) from he
 
-    except requests.exceptions.RequestException as re:
-        debug_info = _MODEL_CONFIG.get_debug_info()
-        error_msg = f"网络请求异常: {str(re)}\n"
+    except requests.exceptions.RequestException as req_exc:
+        debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
+        error_msg = f"网络请求异常: {str(req_exc)}\n"
         error_msg += f"当前配置: {debug_info}"
-        raise RuntimeError(error_msg) from re
+        raise RuntimeError(error_msg) from req_exc
 
-    except RuntimeError as re:
-        print(f"详细错误信息: {str(re)}")
+    except RuntimeError as runtime_exc:
+        print(f"详细错误信息: {str(runtime_exc)}")
         sys.exit(1)
-    except Exception as e:
-        debug_info = _MODEL_CONFIG.get_debug_info()
-        error_msg = f"未预期的错误: {str(e)}\n"
+    except (ValueError, TypeError, KeyError) as specific_exc:
+        debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
+        error_msg = f"特定类型错误: {str(specific_exc)}\n"
         error_msg += f"配置状态: {debug_info}"
         print(error_msg)
         sys.exit(1)
@@ -469,6 +468,8 @@ def _initialize_conversation_history(kwargs: dict) -> list:
     返回:
         list: 对话历史列表
     """
+    if kwargs.get("disable_conversation_history"):
+        return []
     conversation_file = kwargs.get(
         "conversation_file",
     )
@@ -499,7 +500,7 @@ def _get_api_response(
             model=model,
             messages=history,
             temperature=kwargs.get("temperature", 0.0),
-            max_tokens=_MODEL_CONFIG.max_tokens,
+            max_tokens=GLOBAL_MODEL_CONFIG.max_tokens,
             top_p=0.8,
             stream=True,
         )
@@ -529,14 +530,15 @@ def _process_and_save_response(
     history.append({"role": "assistant", "content": content})
 
     # 保存更新后的对话历史
-    save_conversation_history(get_conversation_file(kwargs.get("conversation_file")), history)
+    if not kwargs.get("disable_conversation_history"):
+        save_conversation_history(get_conversation_file(kwargs.get("conversation_file")), history)
 
     # 处理think标签
     content, reasoning = _handle_think_tags(content, reasoning)
 
     # 存储思维过程
     if reasoning:
-        content = f"<think>\n{reasoning}\n</think>\n\n\n{content}"
+        content = f"\n\n\n{content}"
 
     return {"choices": [{"message": {"content": content}}]}
 
@@ -701,7 +703,10 @@ def check_deps_installed() -> bool:
     if sys.platform == "win32":
         try:
             import win32clipboard  # type: ignore
-        except ImportError as e:
+
+            win32clipboard.OpenClipboard()  # 实际使用导入的模块
+            win32clipboard.CloseClipboard()
+        except ImportError:
             print("剪贴板支持缺失: 需要pywin32包")
             print("解决方案: pip install pywin32")
             all_installed = False
@@ -780,7 +785,7 @@ def get_directory_context(max_depth=1):
 
             return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
 
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return f"获取目录上下文时出错: {str(e)}"
 
 
@@ -932,10 +937,19 @@ def get_clipboard_content_string():
         if sys.platform == "darwin":
             result = subprocess.run(["pbpaste"], stdout=subprocess.PIPE, text=True, check=True)
             return result.stdout
-        else:
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            return result.stdout
+        except FileNotFoundError:
             try:
                 result = subprocess.run(
-                    ["xclip", "-selection", "clipboard", "-o"],
+                    ["xsel", "--clipboard", "--output"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -943,19 +957,9 @@ def get_clipboard_content_string():
                 )
                 return result.stdout
             except FileNotFoundError:
-                try:
-                    result = subprocess.run(
-                        ["xsel", "--clipboard", "--output"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        check=True,
-                    )
-                    return result.stdout
-                except FileNotFoundError:
-                    print("未找到 xclip 或 xsel")
-                    return "无法获取剪贴板内容：未找到xclip或xsel"
-    except Exception as e:
+                print("未找到 xclip 或 xsel")
+                return "无法获取剪贴板内容：未找到xclip或xsel"
+    except (FileNotFoundError, subprocess.CalledProcessError, ImportError) as e:
         print(f"获取剪贴板内容时出错: {str(e)}")
         return f"获取剪贴板内容时出错: {str(e)}"
 
@@ -970,7 +974,7 @@ def fetch_url_content(url, is_news=False):
         response = session.get(api_url)
         response.raise_for_status()
         return response.text
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         return f"获取URL内容失败: {str(e)}"
 
 
@@ -1004,17 +1008,17 @@ def _handle_any_script(match: CmdNode) -> str:
         os.chmod(file_path, new_mode)
 
     try:
-        # 直接执行文件
-        process = subprocess.Popen(
+        # 使用with语句管理子进程资源
+        with subprocess.Popen(
             f"{file_path}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        stdout, stderr = process.communicate()
-        output = f"\n\n[shell command]: ./{file_path}\n"
-        output += f"[stdout begin]\n{stdout}\n[stdout end]\n"
-        if stderr:
-            output += f"[stderr begin]\n{stderr}\n[stderr end]\n"
-        return output
-    except Exception as e:
+        ) as process:
+            stdout, stderr = process.communicate()
+            output = f"\n\n[shell command]: ./{file_path}\n"
+            output += f"[stdout begin]\n{stdout}\n[stdout end]\n"
+            if stderr:
+                output += f"[stderr begin]\n{stderr}\n[stderr end]\n"
+            return output
+    except subprocess.SubprocessError as e:
         return f"\n\n[shell command error]: {str(e)}\n"
 
 
@@ -1044,10 +1048,9 @@ def _handle_local_file(match: CmdNode) -> str:
 
     if os.path.isfile(expanded_path):
         return _process_single_file(expanded_path, line_range_match)
-    elif os.path.isdir(expanded_path):
+    if os.path.isdir(expanded_path):
         return _process_directory(expanded_path)
-    else:
-        return f"\n\n[error]: 路径不存在 {expanded_path}\n\n"
+    return f"\n\n[error]: 路径不存在 {expanded_path}\n\n"
 
 
 def _expand_file_path(command: str) -> tuple:
@@ -1066,7 +1069,7 @@ def _process_single_file(file_path: str, line_range_match: re.Match) -> str:
             content = _read_file_content(f, line_range_match)
     except UnicodeDecodeError:
         content = "二进制文件或无法解码"
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, OSError) as e:
         return f"\n\n[error]: 无法读取文件 {file_path}: {str(e)}\n\n"
 
     return _format_file_content(file_path, content)
@@ -1113,7 +1116,7 @@ def _process_directory(dir_path: str) -> str:
                 replacement += (
                     f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
                 )
-            except Exception as e:
+            except (OSError, IOError) as e:
                 replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
     replacement += f"[directory end]: {dir_path}\n\n"
     return replacement
@@ -1142,8 +1145,8 @@ def _parse_gitignore(gitignore_path: str, root_dir: str) -> callable:
                     line = line.strip()
                     if line and not line.startswith("#"):
                         patterns.append(line)
-        except Exception as e:
-            logging.warning(f"解析.gitignore失败: {str(e)}")
+        except (IOError, UnicodeDecodeError) as e:
+            logging.warning("解析.gitignore失败: %s", str(e))
 
     default_patterns = [
         "__pycache__/",
@@ -1549,7 +1552,7 @@ def get_symbol_detail(symbol_names: str) -> list:
     """
     symbol_list = _parse_symbol_names(symbol_names)
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
-    batch_response = _send_http_request(_build_api_url(api_url, symbol_names))
+    batch_response = send_http_request(_build_api_url(api_url, symbol_names))
     if GPT_FLAGS.get(GPT_FLAG_CONTEXT):
         return [_process_symbol_data(symbol_data, "") for _, symbol_data in enumerate(batch_response)]
     else:
@@ -1608,10 +1611,10 @@ def _fetch_symbol_data(symbol_name, file_path=None):
     url = f"{api_url}/symbols/{symbol_name}/context?max_depth=2" + (f"&file_path={file_path}" if file_path else "")
 
     # 使用公共函数发送请求
-    return _send_http_request(url)
+    return send_http_request(url)
 
 
-def _send_http_request(url, is_plain_text=False):
+def send_http_request(url, is_plain_text=False):
     """发送HTTP请求的公共函数
     Args:
         url: 请求的URL
@@ -1660,7 +1663,7 @@ def query_symbol(symbol_name):
             context += "[main definition end]\n"
 
         # 计算剩余可用长度
-        remaining_length = _MODEL_CONFIG.max_tokens - len(context) - 1024  # 保留1024字符余量
+        remaining_length = GLOBAL_MODEL_CONFIG.max_tokens - len(context) - 1024  # 保留1024字符余量
 
         # 添加其他定义，直到达到长度限制
         if len(data["definitions"]) > 1 and remaining_length > 0:
@@ -1866,7 +1869,7 @@ class GPTContextProcessor:
     def _process_symbol(self, symbol_name: SymbolsNode) -> str:
         """处理符号"""
         symbol_map = {}
-        symbols = perform_search(symbol_name.symbols, args.config, max_context_size=_MODEL_CONFIG.max_tokens)
+        symbols = perform_search(symbol_name.symbols, args.config, max_context_size=GLOBAL_MODEL_CONFIG.max_tokens)
         for symbol in symbols.values():
             symbol_map[symbol["name"]] = self._symbol_format(symbol)
         GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH].update(symbol_map)
@@ -1889,8 +1892,8 @@ class GPTContextProcessor:
     def _finalize_text(self, text):
         """最终处理文本"""
         truncated_suffix = "\n[输入太长内容已自动截断]"
-        if len(text) > _MODEL_CONFIG.max_tokens:
-            text = text[: _MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
+        if len(text) > GLOBAL_MODEL_CONFIG.max_tokens:
+            text = text[: GLOBAL_MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
 
         with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
             f.write(text)
@@ -1940,8 +1943,8 @@ GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: {}}
 def finalize_text(text):
     """最终处理文本"""
     truncated_suffix = "\n[输入太长内容已自动截断]"
-    if len(text) > _MODEL_CONFIG.max_tokens:
-        text = text[: _MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
+    if len(text) > GLOBAL_MODEL_CONFIG.max_tokens:
+        text = text[: GLOBAL_MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
 
     with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
         f.write(text)
@@ -2047,7 +2050,7 @@ def _save_diff_content(diff_content):
     return None
 
 
-def _display_and_apply_diff(diff_file, auto_apply=False):
+def display_and_apply_diff(diff_file, auto_apply=False):
     """显示并应用diff"""
     if diff_file.exists():
         with open(diff_file, "r", encoding="utf-8") as f:
@@ -2127,7 +2130,7 @@ def extract_and_diff_files(content, auto_apply=False):
 
     diff_file = _save_diff_content(diff_content)
     if diff_file:
-        _display_and_apply_diff(diff_file, auto_apply=auto_apply)
+        display_and_apply_diff(diff_file, auto_apply=auto_apply)
 
 
 def process_response(prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
@@ -2238,7 +2241,7 @@ def handle_ask_mode(program_args, api_key, proxies):
     """处理--ask模式"""
     program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
 
-    base_url = _MODEL_CONFIG.base_url
+    base_url = GLOBAL_MODEL_CONFIG.base_url
     context_processor = GPTContextProcessor()
     text = context_processor.process_text_with_file_path(program_args.ask)
     print(text)
@@ -2246,9 +2249,9 @@ def handle_ask_mode(program_args, api_key, proxies):
         api_key,
         text,
         proxies=proxies,
-        model=_MODEL_CONFIG.model_name,
+        model=GLOBAL_MODEL_CONFIG.model_name,
         base_url=base_url,
-        temperature=_MODEL_CONFIG.temperature,
+        temperature=GLOBAL_MODEL_CONFIG.temperature,
     )
     process_response(
         text,
@@ -2470,10 +2473,10 @@ class ChatbotUI:
         """
         processed_text = self.gpt_processor.process_text_with_file_path(prompt)
         return query_gpt_api(
-            api_key=_MODEL_CONFIG.api_key,
+            api_key=GLOBAL_MODEL_CONFIG.api_key,
             prompt=processed_text,
-            model=_MODEL_CONFIG.model_name,
-            base_url=_MODEL_CONFIG.base_url,
+            model=GLOBAL_MODEL_CONFIG.model_name,
+            base_url=GLOBAL_MODEL_CONFIG.base_url,
             stream=True,
             console=self.console,
             temperature=self.temperature,
@@ -2562,7 +2565,7 @@ def handle_large_code(program_args, code_content, prompt_template, api_key, prox
     code_chunks = split_code(code_content, program_args.chunk_size)
     responses = []
     total_chunks = len(code_chunks)
-    base_url = _MODEL_CONFIG.base_url
+    base_url = GLOBAL_MODEL_CONFIG.base_url
     for i, chunk in enumerate(code_chunks, 1):
         pager = f"这是代码的第 {i}/{total_chunks} 部分：\n\n"
         print(pager)
@@ -2571,7 +2574,7 @@ def handle_large_code(program_args, code_content, prompt_template, api_key, prox
             api_key,
             chunk_prompt,
             proxies=proxies,
-            model=_MODEL_CONFIG.model_name,
+            model=GLOBAL_MODEL_CONFIG.model_name,
             base_url=base_url,
         )
         response_pager = f"\n这是回答的第 {i}/{total_chunks} 部分：\n\n"
@@ -2582,12 +2585,12 @@ def handle_large_code(program_args, code_content, prompt_template, api_key, prox
 def handle_small_code(program_args, code_content, prompt_template, api_key, proxies):
     """处理小文件分析"""
     full_prompt = prompt_template.format(path=program_args.file, pager="", code=code_content)
-    base_url = _MODEL_CONFIG.base_url
+    base_url = GLOBAL_MODEL_CONFIG.base_url
     return query_gpt_api(
         api_key,
         full_prompt,
         proxies=proxies,
-        model=_MODEL_CONFIG.model_name,
+        model=GLOBAL_MODEL_CONFIG.model_name,
         base_url=base_url,
     )
 
@@ -2694,7 +2697,9 @@ class ConfigLoader:
         )
 
 
-def perform_search(words: List[str], config_path: str = "llm_project.yml", max_context_size=_MODEL_CONFIG.max_tokens):
+def perform_search(
+    words: List[str], config_path: str = "llm_project.yml", max_context_size=GLOBAL_MODEL_CONFIG.max_tokens
+):
     """执行代码搜索并返回强类型结果"""
 
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
@@ -2785,6 +2790,7 @@ class LintResult(BaseModel):
     column_range: tuple[int, int]
     code: str
     message: str
+    original_line: str
 
     def to_json(self) -> str:
         return self.model_dump_json()
@@ -2812,6 +2818,7 @@ class LintParser:
         r"(?P<code>\w+):\s*"  # Lint code with colon
         r"(?P<message>.+)$"  # Error message
     )
+    _file_cache = {}
 
     @classmethod
     def parse(cls, raw_output: str) -> list[LintResult]:
@@ -2828,21 +2835,52 @@ class LintParser:
                 start_col = column
                 end_col = column
 
-                # Extract column range from message if present
                 if column_range_match := re.search(r"column (\d+)-(\d+)", message):
                     start_col = int(column_range_match.group(1))
                     end_col = int(column_range_match.group(2))
 
+                file_path = groups["path"]
+                line_num = int(groups["line"])
+                original_line = ""
+
+                try:
+                    if file_path not in cls._file_cache:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            cls._file_cache[file_path] = f.readlines()
+
+                    file_lines = cls._file_cache[file_path]
+                    if 0 < line_num <= len(file_lines):
+                        original_line = file_lines[line_num - 1].rstrip("\n")
+                except Exception as e:
+                    print(f"Error reading {file_path}:{line_num} - {str(e)}")
+
                 results.append(
                     LintResult(
-                        file_path=groups["path"],
-                        line=int(groups["line"]),
+                        file_path=file_path,
+                        line=line_num,
                         column_range=(start_col, end_col),
                         code=groups["code"],
                         message=message,
+                        original_line=original_line,
                     )
                 )
         return results
+
+
+def lint_to_search_protocol(lint_results: list[LintResult]) -> FileSearchResults:
+    """Convert lint results to search protocol format retaining positional data"""
+    file_groups: dict[str, list[MatchResult]] = defaultdict(list)
+    for lint_res in lint_results:
+        file_groups[lint_res.file_path].append(
+            MatchResult(
+                line=lint_res.line,
+                column_range=lint_res.column_range,
+                text="",  # Text field not used in positional search
+            )
+        )
+    return FileSearchResults(
+        results=[FileSearchResult(file_path=file_path, matches=matches) for file_path, matches in file_groups.items()]
+    )
 
 
 class ModelSwitch:
@@ -2902,24 +2940,24 @@ class ModelSwitch:
         temperature = config.get("temperature", 0.6)
 
         filtered_config = config.copy()
-        combined_kwargs = {**filtered_config, **kwargs}
+        combined_kwargs = {**filtered_config, "disable_conversation_history": True, **kwargs}
 
         try:
-            _MODEL_CONFIG.key = api_key
-            _MODEL_CONFIG.base_url = base_url
-            _MODEL_CONFIG.model_name = model
+            GLOBAL_MODEL_CONFIG.key = api_key
+            GLOBAL_MODEL_CONFIG.base_url = base_url
+            GLOBAL_MODEL_CONFIG.model_name = model
             if max_tokens is not None:
-                _MODEL_CONFIG.max_tokens = max_tokens
+                GLOBAL_MODEL_CONFIG.max_tokens = max_tokens
             if temperature is not None:
-                _MODEL_CONFIG.temperature = temperature
+                GLOBAL_MODEL_CONFIG.temperature = temperature
         except AttributeError as e:
-            debug_info = f"配置更新失败: {str(e)}\n当前配置状态: {repr(_MODEL_CONFIG)}"
+            debug_info = f"配置更新失败: {str(e)}\n当前配置状态: {repr(GLOBAL_MODEL_CONFIG)}"
             raise RuntimeError(debug_info) from e
 
         try:
             return query_gpt_api(api_key=api_key, prompt=prompt, model=model, **combined_kwargs)
         except Exception as e:
-            debug_info = f"API调用失败: {str(e)}\n当前配置状态: {_MODEL_CONFIG.get_debug_info()}"
+            debug_info = f"API调用失败: {str(e)}\n当前配置状态: {GLOBAL_MODEL_CONFIG.get_debug_info()}"
             raise RuntimeError(debug_info) from e
 
 
@@ -2932,130 +2970,26 @@ class LintReportFix:
         self.model_switch = model_switch
         self._source_cache: dict[str, list[str]] = {}
 
-    def _get_source_lines(self, file_path: str) -> list[str]:
-        """缓存源代码内容"""
-        if file_path not in self._source_cache:
-            with open(file_path, "r", encoding="utf-8") as f:
-                self._source_cache[file_path] = f.readlines()
-        return self._source_cache[file_path]
-
-    def _group_results(self, results: list[LintResult]) -> list[list[LintResult]]:
-        """将结果按文件分组并按行号合并邻近错误"""
-
-        file_groups = defaultdict(list)
-        for res in results:
-            file_groups[res.file_path].append(res)
-
-        all_groups = []
-        for file_path, file_results in file_groups.items():
-            sorted_results = sorted(file_results, key=lambda x: x.line)
-            current_group = []
-            last_line = -self._MAX_CONTEXT_SPAN - 1
-            for res in sorted_results:
-                if not current_group:
-                    current_group.append(res)
-                    last_line = res.line
-                    continue
-
-                within_span = res.line - last_line <= self._MAX_CONTEXT_SPAN
-                if within_span:
-                    current_group.append(res)
-                    last_line = max(last_line, res.line)
-                else:
-                    all_groups.append(current_group)
-                    current_group = [res]
-                    last_line = res.line
-            if current_group:
-                all_groups.append(current_group)
-        return all_groups
-
-    def _build_code_context(self, group: list[LintResult], context_lines: int = 3) -> tuple[str, int, int]:
-        """构建合并后的代码上下文"""
-        file_path = group[0].file_path
-        source = self._get_source_lines(file_path)
-        min_res_line = min(res.line for res in group)
-        max_res_line = max(res.line for res in group)
-
-        start_line_num = max(1, min_res_line - context_lines)
-        end_line_num = min(len(source), max_res_line + context_lines)
-
-        start_index = start_line_num - 1
-        end_index = end_line_num
-
-        context = []
-        error_lines = {res.line for res in group}
-        context.append(f"# 代码块行号范围: {start_line_num}-{end_line_num}")
-        for i in range(start_index, end_index):
-            line_num = i + 1
-            prefix = ">>> " if line_num in error_lines else "    "
-            context.append(f"{line_num:4d}{prefix}{source[i].rstrip()}")
-        return "\n".join(context), start_line_num, end_line_num
-
-    def _build_prompt(self, group: list[LintResult]) -> str:
+    def _build_prompt(self, symbol, symbol_map):
+        group: list[LintResult] = symbol.get("own_errors", [])
         """构建合并后的提示词模板"""
-        code_context, start_line_num, end_line_num = self._build_code_context(group)
-        file_path = group[0].file_path
-        source_lines = self._get_source_lines(file_path)
 
         errors_desc = "\n\n".join(
-            f"问题 {idx+1}:\n"
-            f"位置: 第{res.line}行，列{res.column_range[0]}-{res.column_range[1]}\n"
-            f"错误代码: {res.code}\n"
-            f"描述: {res.message}\n"
-            f"原代码行: {source_lines[res.line - 1].strip()}"
+            f"错误代码: {res.code}\n" f"描述: {res.message}\n" f"原代码行: {res.original_line}"
             for idx, res in enumerate(group)
         )
-
-        return dedent(
-            f"""  
-        **批量代码问题修复**  
-        文件路径: {group[0].file_path}  
-        共发现 {len(group)} 个相关联的问题  
-  
-        {errors_desc}  
-  
-        相关代码上下文(可能包含不完整代码块，请忽略截断部分):  
-        {code_context}  
-  
-        请严格按以下要求操作:  
-        1. 按问题顺序逐个修复，保持其他代码不变  
-        2. 输出格式: ```fixed  
-           [修复后的完整代码块]  
-           ```  
-        3. 使用问题对应的行号注释说明修改原因，例如: # 第42行修复E1136错误  
-        4. 保持原有代码风格和缩进  
-        5. 不得修改可能破坏编程接口的报错，如函数名、参数等
-        6. 不得添加新的注释
-        """
+        base_prompt = generate_patch_prompt(
+            CmdNode(command="symbol", args=[symbol["name"]]), symbol_map, patch_require=True
         )
 
-    def _parse_response(self, response: dict, original_lines: list[str]) -> list[str]:
-        """解析批量修复响应"""
-        try:
-            content = response["choices"][0]["message"]["content"]
-            match = re.search(r"```fixed\n(.*?)\n```", content, re.DOTALL)
-            if not match:
-                raise ValueError("未找到修复代码块")
+        return f"{base_prompt}\n{errors_desc}\n不破坏编程接口，避免无法通过测试\n"
 
-            fixed_lines = match.group(1).strip().split("\n")
-            return [line for line in fixed_lines if line.strip()]
-        except (KeyError, IndexError, AttributeError) as e:
-            raise ValueError(f"无效的API响应格式: {str(e)}") from e
-
-    def generate_batch_fix(self, group: list[LintResult]) -> tuple[list[str], int, int]:
+    def fix_symbol(self, symbol, symbol_map) -> tuple[list[str], int, int]:
         """生成批量修复建议"""
-        prompt = self._build_prompt(group)
+        prompt = self._build_prompt(symbol, symbol_map)
+        print(prompt)
         response = self.model_switch.query("default", prompt)
-        code_context, start_line, end_line = self._build_code_context(group)
-        return (self._parse_response(response, self._get_source_lines(group[0].file_path)), start_line, end_line)
-
-    def batch_fix(self, results: list[LintResult]) -> list[str]:
-        """批量生成修复建议"""
-        suggestions = []
-        for group in self._group_results(results):
-            if fixes := self.generate_batch_fix(group):
-                suggestions.extend(fixes)
-        return suggestions
+        process_patch_response(response["choices"][0]["message"]["content"], symbol_map)
 
 
 class PylintFixer:
@@ -3073,92 +3007,8 @@ class PylintFixer:
         self.file_groups: dict[str, list[LintResult]] = {}
         self.fixer = LintReportFix()
         self.auto_apply = auto_apply
-        self.shadowroot = shadowroot if shadowroot is not None else Path(os.path.expanduser("~/.shadowroot"))
-        self.shadowroot.mkdir(parents=True, exist_ok=True)
-        self.last_diff: Optional[list[str]] = None
-        self.shadow_file: Optional[Path] = None
         self.target_file: Optional[Path] = None
         self.root_dir = root_dir if root_dir is not None else Path.cwd().resolve()
-        self.file_patches: dict[Path, list[tuple[list[str], int, int]]] = defaultdict(list)
-        self._line_offsets_cache: dict[Path, list[int]] = {}
-
-    def _get_line_offsets(self, file_path: Path) -> list[int]:
-        """获取文件的字节偏移量数组"""
-        if file_path in self._line_offsets_cache:
-            return self._line_offsets_cache[file_path]
-
-        content = file_path.read_bytes()
-        offsets = [0]
-        offset = 0
-        while True:
-            pos = content.find(b"\n", offset)
-            if pos == -1:
-                break
-            offset = pos + 1
-            offsets.append(offset)
-        self._line_offsets_cache[file_path] = offsets
-        return offsets
-
-    def _line_range_to_byte_range(self, file_path: Path, start_line: int, end_line: int) -> tuple[int, int]:
-        """将行号范围转换为字节范围"""
-        offsets = self._get_line_offsets(file_path)
-        max_line = len(offsets) - 1
-
-        start_line = max(1, min(start_line, max_line))
-        end_line = max(start_line, min(end_line, max_line))
-
-        start_offset = offsets[start_line - 1]
-        end_offset = offsets[end_line] if end_line < len(offsets) else len(file_path.read_bytes())
-        return (start_offset, end_offset)
-
-    def _generate_shadow_file(self, target_file: Path) -> tuple[Path, list[str]]:
-        """生成包含所有修复的shadow文件"""
-        abs_root = self.root_dir.resolve()
-        abs_target = target_file.resolve()
-        relative_path = abs_target.relative_to(abs_root)
-        shadow_file = self.shadowroot / relative_path
-
-        shadow_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(target_file, shadow_file)
-
-        original_content = target_file.read_bytes()
-        file_patches = []
-
-        for fixes, start_line, end_line in self.file_patches[target_file]:
-            start_byte, end_byte = self._line_range_to_byte_range(target_file, start_line, end_line)
-            original_block = original_content[start_byte:end_byte]
-            new_block = "\n".join(fixes).encode("utf-8") + b"\n"
-            file_patches.append((start_byte, end_byte, original_block, new_block))
-
-        if not file_patches:
-            return shadow_file, []
-
-        patch = BlockPatch(
-            file_paths=[str(target_file)] * len(file_patches),
-            patch_ranges=[(s, e) for s, e, _, _ in file_patches],
-            block_contents=[ob for _, _, ob, _ in file_patches],
-            update_contents=[nb for _, _, _, nb in file_patches],
-        )
-        patched = patch.apply_patch()
-        shadow_file.write_bytes(patched[str(target_file)])
-
-        return shadow_file, patch.generate_diff()
-
-    def _process_file_patches(self, target_file: Path) -> None:
-        """处理单个文件的所有补丁"""
-        if not self.file_patches[target_file]:
-            return
-
-        shadow_file, diff = self._generate_shadow_file(target_file)
-        self.last_diff = diff
-        self.shadow_file = shadow_file
-        self.target_file = target_file
-
-        print(f"\n生成的综合差异（共 {len(diff)} 行）:")
-        SyntaxHighlight(diff, lang_type="diff").output()
-
-        if self.auto_apply:
-            self._apply_patch()
 
     def load_and_validate_log(self) -> None:
         """加载并验证日志文件"""
@@ -3173,60 +3023,89 @@ class PylintFixer:
 
     def group_results_by_file(self) -> None:
         """按文件路径对结果进行分组"""
+        self.file_groups = defaultdict(list)
         for res in self.results:
-            file_key = res.file_path
-            if file_key not in self.file_groups:
-                self.file_groups[file_key] = []
-            self.file_groups[file_key].append(res)
+            self.file_groups[res.file_path].append(res)
 
-    def process_single_group(self, group: list[LintResult]) -> None:
-        """处理单个错误组并执行交互流程"""
+    def _process_symbol_group(self, symbol: dict, symbol_map: dict) -> None:
+        """处理单个符号的错误组"""
+        group = symbol.get("own_errors", [])
         if not group:
             return
 
-        target_file = Path(group[0].file_path)
-        if not target_file.is_file():
-            print(f"错误：目标文件 '{target_file}' 不存在，跳过处理该错误组")
-            return
+        print(f"\n当前错误组信息（共 {len(group)} 个错误）:")
+        for idx, result in enumerate(group, 1):
+            print(f"错误 {idx}: {result.file_path} 第 {result.line} 行 : {result.message}")
 
-        try:
-            fixes, start_line, end_line = self.fixer.generate_batch_fix(group)
-        except Exception as e:
-            print(f"生成修复建议失败: {e}", file=sys.stderr)
-            return
+        self.fixer.fix_symbol(symbol, symbol_map)
 
-        if not fixes:
-            print("未生成修复建议")
-            return
+    def _get_symbol_locations(self, file_path: str) -> list[tuple[int, int]]:
+        """获取符号定位信息"""
 
-        print("\n修复建议的代码块:")
-        print("\n".join(fixes))
+        locations = [(line.line, line.column_range[0]) for line in self.file_groups[file_path]]
+        return locations
 
-        self.file_patches[target_file].append((fixes, start_line, end_line))
+    def _associate_errors_with_symbols(
+        self, file_path, parser_util: ParserUtil, code_map: dict, locations: list
+    ) -> dict:
+        """关联错误信息到符号"""
+        symbol_map = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=1024 * 1024)
+        new_symbol_map = {}
+        for name, symbol in symbol_map.items():
+            symbol["original_name"] = name
+            symbol["name"] = f"{file_path}/{name}"
+            new_symbol_map[symbol["name"]] = symbol
+            symbol["block_content"] = symbol["code"].encode("utf8")
+            symbol["file_path"] = file_path
+            symbol["own_errors"] = [
+                lint_error
+                for lint_error in self.file_groups[file_path]
+                if any(
+                    lint_error.line == line and lint_error.column_range[0] == col for line, col in symbol["locations"]
+                )
+            ]
+        return new_symbol_map
 
-    def _apply_patch(self) -> None:
-        """应用差异到原始文件"""
-        try:
-            if self.shadow_file and self.target_file:
-                shutil.copy2(self.shadow_file, self.target_file)
-                print(f"已自动应用修复到文件 {self.target_file}")
-        except Exception as e:
-            print(f"文件替换失败: {e}", file=sys.stderr)
-
-    def handle_user_choice(self) -> None:
-        """处理用户交互选择"""
-        while True:
-            choice = input("\n是否应用此修复？(y-应用, n-跳过，q-退出): ").strip().lower()
-            if choice == "y":
-                self._apply_patch()
-                break
-            elif choice == "n":
-                print("跳过此修复")
-                break
-            elif choice == "q":
-                raise SystemExit("用户终止修复流程")
+    def _group_symbols_by_token_limit(self, symbol_map: dict) -> list[list]:
+        """按token限制分组符号"""
+        groups = []
+        current_group = []
+        current_size = 0
+        for symbol in symbol_map.values():
+            symbol_size = len(symbol["code"])
+            if current_size + symbol_size > GLOBAL_MODEL_CONFIG.max_tokens:
+                groups.append(current_group)
+                current_group = [symbol]
+                current_size = symbol_size
             else:
-                print("无效输入，请选择 y, n 或 q")
+                current_group.append(symbol)
+                current_size += symbol_size
+        if current_group:
+            groups.append(current_group)
+        return groups
+
+    def update_symbol_map(self, file_path, new_symbol_map: dict):
+        parser_loader = ParserLoader()
+        parser_util = ParserUtil(parser_loader)
+        _, code_map = parser_util.get_symbol_paths(file_path)
+        for symbol in new_symbol_map.values():
+            updated_symbol = code_map[symbol["original_name"]]
+            symbol["block_content"] = updated_symbol["code"].encode("utf8")
+            symbol["file_path"] = file_path
+            symbol["block_range"] = updated_symbol["block_range"]
+        return parser_util, code_map
+
+    def _process_symbols_for_file(self, file_path: str) -> None:
+        """处理单个文件的所有符号"""
+        parser_util, code_map = self.update_symbol_map(file_path, {})
+        locations = self._get_symbol_locations(file_path)
+        symbol_map = self._associate_errors_with_symbols(file_path, parser_util, code_map, locations)
+        symbol_groups = self._group_symbols_by_token_limit(symbol_map)
+
+        for group in symbol_groups:
+            for symbol in group:
+                self._process_symbol_group(symbol, symbol_map)
+                self.update_symbol_map(file_path, symbol_map)
 
     def execute(self) -> None:
         """执行完整的修复流程"""
@@ -3238,19 +3117,8 @@ class PylintFixer:
 
             self.group_results_by_file()
 
-            for file_path, file_results in self.file_groups.items():
-                groups = self.fixer._group_results(file_results)
-                print(f"\n=== 处理文件: {file_path}，共 {len(groups)} 个错误组 ===")
-
-                for group_idx, group in enumerate(groups, 1):
-                    print(f"\n处理错误组 {group_idx}/{len(groups)}:")
-                    self.process_single_group(group)
-
-                if file_path in self.file_groups:
-                    target_file = Path(file_path)
-                    self._process_file_patches(target_file)
-                    if self.last_diff and not self.auto_apply:
-                        self.handle_user_choice()
+            for file_path in self.file_groups:
+                self._process_symbols_for_file(file_path)
 
             print("\n修复流程完成")
         except Exception as e:
@@ -3271,7 +3139,7 @@ def main(args):
     print_proxy_info(proxies, proxy_sources)
 
     if args.ask:
-        handle_ask_mode(args, _MODEL_CONFIG.key, proxies)
+        handle_ask_mode(args, GLOBAL_MODEL_CONFIG.key, proxies)
     elif args.chatbot:
         ChatbotUI().run()
     elif args.project_search:
@@ -3279,7 +3147,7 @@ def main(args):
         symbols = perform_search(args.project_search, args.config)
         pprint.pprint(symbols)
     else:
-        handle_code_analysis(args, _MODEL_CONFIG.key, proxies)
+        handle_code_analysis(args, GLOBAL_MODEL_CONFIG.key, proxies)
 
 
 if __name__ == "__main__":

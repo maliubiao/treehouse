@@ -4,26 +4,19 @@ llm_query 模块的单元测试
 """
 
 import os
-import shutil
 import tempfile
 import unittest
-from io import StringIO
 from pathlib import Path
-from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
 import llm_query
 from llm_query import (
-    _MODEL_CONFIG,
+    GLOBAL_MODEL_CONFIG,
     BlockPatchResponse,
     CmdNode,
     GPTContextProcessor,
     LintParser,
-    LintReportFix,
-    LintResult,
     ModelConfig,
-    ModelSwitch,
-    PylintFixer,
     SymbolsNode,
     _fetch_symbol_data,
     _find_gitignore,
@@ -114,9 +107,9 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def test_max_length_truncation(self):
         """测试最大长度截断"""
-        long_text = "a" * (_MODEL_CONFIG.max_tokens + 100)
+        long_text = "a" * (GLOBAL_MODEL_CONFIG.max_tokens + 100)
         result = self.processor.process_text_with_file_path(long_text)
-        self.assertTrue(len(result) <= _MODEL_CONFIG.max_tokens)
+        self.assertTrue(len(result) <= GLOBAL_MODEL_CONFIG.max_tokens)
         self.assertIn("输入太长内容已自动截断", result)
 
     def test_multiple_symbol_args(self):
@@ -247,7 +240,7 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def test_get_symbol_detail(self):
         """测试获取符号详细信息"""
-        with patch("llm_query._send_http_request") as mock_request:
+        with patch("llm_query.send_http_request") as mock_request:
             mock_request.return_value = [
                 {
                     "content": "test content",
@@ -262,7 +255,7 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def test_fetch_symbol_data(self):
         """测试获取符号上下文数据"""
-        with patch("llm_query._send_http_request") as mock_request:
+        with patch("llm_query.send_http_request") as mock_request:
             mock_request.return_value = {"symbol_name": "test", "definitions": [], "references": []}
             result = _fetch_symbol_data("test_symbol")
             self.assertEqual(result["symbol_name"], "test")
@@ -292,8 +285,8 @@ class TestSymbolLocation(unittest.TestCase):
         }
 
         # 模拟http请求（修复响应数据结构为列表）
-        self.original_send_http_request = llm_query._send_http_request
-        llm_query._send_http_request = lambda url: [self.symbol_data]  # 包装为列表
+        self.original_send_http_request = llm_query.send_http_request
+        llm_query.send_http_request = lambda url: [self.symbol_data]  # 包装为列表
 
     def tearDown(self):
         # 删除测试文件
@@ -301,7 +294,7 @@ class TestSymbolLocation(unittest.TestCase):
             os.remove(self.file_path)
 
         # 恢复原始http请求函数
-        llm_query._send_http_request = self.original_send_http_request
+        llm_query.send_http_request = self.original_send_http_request
 
     # 以下测试方法保持原样不变...
     def test_basic_symbol(self):
@@ -576,7 +569,7 @@ class TestDisplayAndApplyDiff(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
             test_file_path = tmp_file.name
 
-        llm_query._display_and_apply_diff(Path(test_file_path))
+        llm_query.display_and_apply_diff(Path(test_file_path))
         mock_run.assert_called_once_with(["patch", "-p0", "-i", test_file_path], check=True)
 
         os.remove(test_file_path)
@@ -587,7 +580,7 @@ class TestDisplayAndApplyDiff(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
             test_file_path = tmp_file.name
 
-        llm_query._display_and_apply_diff(Path(test_file_path))
+        llm_query.display_and_apply_diff(Path(test_file_path))
         mock_run.assert_not_called()
 
         os.remove(test_file_path)
@@ -660,10 +653,7 @@ class TestModelSwitch(unittest.TestCase):
     original_config: ModelConfig
 
     def setUp(self) -> None:
-        self.original_config = _MODEL_CONFIG
-
-    def tearDown(self) -> None:
-        _MODEL_CONFIG = self.original_config
+        self.original_config = GLOBAL_MODEL_CONFIG
 
     def test_switch_model_configuration(self) -> None:
         """测试基础配置切换功能"""
@@ -671,231 +661,24 @@ class TestModelSwitch(unittest.TestCase):
             key="test_key", base_url="http://test-api/v1", model_name="test-model", max_tokens=512, temperature=0.3
         )
 
-        _MODEL_CONFIG = test_config
-        self.assertEqual(_MODEL_CONFIG.model_name, "test-model")
-        self.assertEqual(_MODEL_CONFIG.base_url, "http://test-api/v1")
-        self.assertEqual(_MODEL_CONFIG.max_tokens, 512)
-        self.assertAlmostEqual(_MODEL_CONFIG.temperature, 0.3)
+        self.assertEqual(test_config.model_name, "test-model")
+        self.assertEqual(test_config.base_url, "http://test-api/v1")
+        self.assertEqual(test_config.max_tokens, 512)
+        self.assertAlmostEqual(test_config.temperature, 0.3)
 
     def test_config_revert_after_switch(self) -> None:
         """测试配置切换后的回滚机制"""
-        from llm_query import _MODEL_CONFIG
-
-        original_model = _MODEL_CONFIG.model_name
-        original_url = _MODEL_CONFIG.base_url
+        original_model = GLOBAL_MODEL_CONFIG.model_name
+        original_url = GLOBAL_MODEL_CONFIG.base_url
 
         temp_config = ModelConfig(
             key="temp_key", base_url="http://temp-api/v2", model_name="temp-model", temperature=1.0
         )
 
-        _MODEL_CONFIG = temp_config
-        self.assertEqual(_MODEL_CONFIG.model_name, "temp-model")
+        self.assertEqual(temp_config.model_name, "temp-model")
 
-        _MODEL_CONFIG = self.original_config
-        self.assertEqual(_MODEL_CONFIG.model_name, original_model)
-        self.assertEqual(_MODEL_CONFIG.base_url, original_url)
-
-
-class TestLintReportFix(unittest.TestCase):
-    def setUp(self):
-        self.test_file = Path("test_file.py")
-        self.test_file.write_text("a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n")
-        self.fixer = LintReportFix(ModelSwitch())
-        self.fixer._MAX_CONTEXT_SPAN = 100  # 扩大上下文跨度以通过测试用例
-        self.sample_results = [
-            LintResult(
-                file_path="test_file.py", line=2, code="C0114", message="Missing docstring", column_range=(1, 5)
-            ),
-            LintResult(file_path="test_file.py", line=3, code="E1136", message="Value error", column_range=(1, 5)),
-            LintResult(file_path="other_file.py", line=5, code="W0612", message="Unused variable", column_range=(1, 5)),
-            LintResult(file_path="span_test.py", line=1, code="C0301", message="Line too long", column_range=(1, 10)),
-            LintResult(file_path="span_test.py", line=102, code="E1145", message="Invalid syntax", column_range=(1, 5)),
-        ]
-
-    def tearDown(self):
-        if self.test_file.exists():
-            self.test_file.unlink()
-        for f in ["span_test.py", "other_file.py"]:
-            p = Path(f)
-            if p.exists():
-                p.unlink()
-
-    def test_group_results_same_file(self):
-        groups = self.fixer._group_results(self.sample_results[:2])
-        self.assertEqual(len(groups), 1)
-        self.assertEqual(len(groups[0]), 2)
-
-    def test_group_results_cross_file(self):
-        groups = self.fixer._group_results(self.sample_results)
-        self.assertEqual(len(groups), 4)
-        self.assertEqual(len(groups[0]), 2)
-        self.assertEqual(groups[1][0].file_path, "other_file.py")
-        self.assertEqual(groups[2][0].file_path, "span_test.py")
-
-    def test_group_results_over_span(self):
-        span_results = [res for res in self.sample_results if res.file_path == "span_test.py"]
-        groups = self.fixer._group_results(span_results)
-        self.assertEqual(len(groups), 2)
-        self.assertEqual({g[0].line for g in groups}, {1, 102})
-
-    def test_code_context_generation(self):
-        context, start, end = self.fixer._build_code_context(self.sample_results[:1])
-        self.assertIn(">>>", context)
-        self.assertIn("   2>>> b = 2", context)
-        self.assertIn("1    a = 1", context)
-
-    def test_prompt_generation(self):
-        prompt = self.fixer._build_prompt(self.sample_results[:2])
-        self.assertIn("批量代码问题修复", prompt)
-        self.assertIn("共发现 2 个相关联的问题", prompt)
-        self.assertIn("问题 1", prompt)
-        self.assertIn("问题 2", prompt)
-
-    @patch.object(ModelSwitch, "query")
-    def test_successful_fix(self, mock_query):
-        mock_response = {"choices": [{"message": {"content": "```fixed\nb = 2  # 修复C0114错误\n```"}}]}
-        mock_query.return_value = mock_response
-        fixes, start, end = self.fixer.generate_batch_fix(self.sample_results[:1])
-        self.assertIn("b = 2  # 修复C0114错误", fixes)
-
-    @patch.object(ModelSwitch, "query")
-    def test_invalid_response(self, mock_query):
-        mock_query.return_value = {"invalid": "response"}
-        with self.assertRaises(ValueError):
-            self.fixer.generate_batch_fix(self.sample_results[:1])
-
-    def test_empty_results_handling(self):
-        groups = self.fixer._group_results([])
-        self.assertEqual(len(groups), 0)
-
-
-class TestPylintFixer(unittest.TestCase):
-    def setUp(self):
-        self.test_log = Path("test_pylint.log")
-        self.test_log.write_text("")
-        self.shadowroot = Path(tempfile.mkdtemp())
-        self.test_root = Path.cwd()
-
-    def tearDown(self):
-        if self.test_log.exists():
-            self.test_log.unlink()
-        if self.shadowroot.exists():
-            shutil.rmtree(self.shadowroot)
-
-    def test_shadow_operations(self):
-        test_file = self.test_root / "test_file.py"
-        test_content = "print('original')"
-        test_file.write_text(test_content)
-
-        log_content = f"{test_file}:1:0: C0111: Missing docstring"
-        self.test_log.write_text(log_content)
-
-        with patch.object(LintReportFix, "generate_batch_fix", return_value=(["print('fixed')"], 1, 1)):
-            fixer = PylintFixer(
-                str(self.test_log), auto_apply=True, shadowroot=self.shadowroot, root_dir=self.test_root
-            )
-            fixer.execute()
-
-        shadow_file = self.shadowroot / test_file.relative_to(self.test_root)
-        self.assertTrue(shadow_file.exists())
-        self.assertEqual(shadow_file.read_text(), "print('fixed')\n")
-        self.assertEqual(test_file.read_text(), "print('fixed')\n")
-
-    def test_multiple_patch_merging(self):
-        test_file = self.test_root / "merge_test.py"
-        test_content = "original1\noriginal2\noriginal3\n"
-        test_file.write_text(test_content)
-
-        log_content = f"{test_file}:1:0: C0111: Missing docstring\n{test_file}:105:0: C0111: Missing docstring"
-        self.test_log.write_text(log_content)
-
-        with patch.object(
-            LintReportFix, "generate_batch_fix", side_effect=[(["fixed1"], 1, 1), (["fixed3"], 105, 105)]
-        ):
-            fixer = PylintFixer(
-                str(self.test_log), auto_apply=True, shadowroot=self.shadowroot, root_dir=self.test_root
-            )
-            fixer.execute()
-
-        shadow_file = self.shadowroot / test_file.relative_to(self.test_root)
-        expected = "fixed1\noriginal2\nfixed3\n"
-        self.assertEqual(shadow_file.read_text(), expected)
-        self.assertEqual(test_file.read_text(), expected)
-
-    def test_diff_generation(self):
-        test_file = self.test_root / "diff_test.py"
-        test_content = "original\ncontent\n"
-        test_file.write_text(test_content)
-
-        log_content = f"{test_file}:1:0: C0111: Missing docstring"
-        self.test_log.write_text(log_content)
-
-        with (
-            patch.object(LintReportFix, "generate_batch_fix", return_value=(["modified"], 1, 2)),
-            patch("builtins.input", return_value="n"),
-        ):
-            fixer = PylintFixer(str(self.test_log), shadowroot=self.shadowroot, root_dir=self.test_root)
-            fixer.execute()
-
-            self.assertTrue(hasattr(fixer, "last_diff"))
-            self.assertIn("modified", fixer.last_diff)
-
-    def test_file_not_found(self):
-        with self.assertRaises(FileNotFoundError):
-            fixer = PylintFixer("non_existent.log")
-            fixer.load_and_validate_log()
-
-    def test_valid_log_processing(self):
-        log_content = dedent(
-            """  
-        test.py:1:0: C0111: Missing docstring (missing-docstring)  
-        test.py:2:5: E1101: Instance of 'NoneType' has no 'attr' (no-member)  
-        """
-        )
-        self.test_log.write_text(log_content.strip())
-
-        fixer = PylintFixer(str(self.test_log))
-        fixer.load_and_validate_log()
-        fixer.group_results_by_file()
-        self.assertEqual(len(fixer.results), 2)
-        self.assertIn("test.py", fixer.file_groups)
-
-    def test_auto_choice_handling(self):
-        with patch("builtins.input", return_value="n"), patch("sys.exit") as mock_exit:
-
-            log_content = "test.py:1:0: C0111: Missing docstring"
-            self.test_log.write_text(log_content)
-
-            fixer = PylintFixer(str(self.test_log))
-            fixer.execute()
-
-            mock_exit.assert_not_called()
-
-    def test_error_group_processing(self):
-        with (
-            patch.object(LintReportFix, "generate_batch_fix") as mock_fix,
-            patch("pathlib.Path.is_file", return_value=True),
-        ):
-            mock_fix.return_value = (["# Fixed code"], 1, 5)
-
-            log_content = dedent(
-                """  
-            test.py:1:0: C0111: Missing docstring  
-            test.py:2:0: C0111: Missing docstring  
-            """
-            )
-            self.test_log.write_text(log_content.strip())
-
-            fixer = PylintFixer(str(self.test_log), auto_apply=True)
-            fixer.execute()
-            self.assertEqual(mock_fix.call_count, 1)
-
-    def test_empty_log_handling(self):
-        fixer = PylintFixer(str(self.test_log))
-        with patch("sys.stdout", new_callable=StringIO) as mock_stdout:
-            fixer.execute()
-            output = mock_stdout.getvalue()
-            self.assertIn("未发现可修复的错误", output)
+        self.assertEqual(GLOBAL_MODEL_CONFIG.model_name, original_model)
+        self.assertEqual(GLOBAL_MODEL_CONFIG.base_url, original_url)
 
 
 if __name__ == "__main__":
