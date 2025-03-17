@@ -35,7 +35,7 @@ repos:
           "--max-line-length=120",
           "--score=yes",
           "--ignore=.venv",
-          "--disable=missing-module-docstring,missing-class-docstring,missing-function-docstring"
+          "--disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,too-many-public-methods,too-few-public-methods,too-many-lines,too-many-positional-arguments"
         ]
         require_serial: true
 

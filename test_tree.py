@@ -915,7 +915,7 @@ class TestSymbolsComplete(unittest.TestCase):
             )
 
             test_client = TestClient(app)
-            response = test_client.get(f"/symbol_content?symbol_path={symbol_path}&json=true")
+            response = test_client.get(f"/symbol_content?symbol_path={symbol_path}&json_format=true")
             self.assertEqual(response.status_code, 200)
             json_data = response.json()
             self.assertEqual(json_data[0]["location"]["start_line"], 1)

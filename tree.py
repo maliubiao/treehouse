@@ -1601,8 +1601,6 @@ def safe_replace(code: str, new_code: str, start: tuple[int, int], end: tuple[in
 def test_split_source_and_patch():
     """使用tree-sitter验证代码提取功能"""
     # 创建临时文件并写入测试代码
-    import tempfile
-
     with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp_file:
         code = """// Sample code
 #include <stdio.h>
@@ -1669,11 +1667,11 @@ int main() {
         assert b"return 1;" in list(file_map.values())[0], "修改后的代码中缺少更新内容"
 
         # 测试符号解析功能
-        parser_util = ParserUtil(parser_loader)
+        parser_util_instance = ParserUtil(parser_loader)
         symbol_trie = SymbolTrie()
 
         # 解析测试文件并更新符号前缀树
-        parser_util.update_symbol_trie(tmp_file_path, symbol_trie)
+        parser_util_instance.update_symbol_trie(tmp_file_path, symbol_trie)
 
         # 测试精确搜索
         main_symbol = symbol_trie.search_exact("main")
@@ -1687,7 +1685,7 @@ int main() {
 
         # 打印符号路径
         print("\n测试文件中的符号路径：")
-        parser_util.print_symbol_paths(tmp_file_path)
+        parser_util_instance.print_symbol_paths(tmp_file_path)
 
     finally:
         # 删除临时文件
@@ -1763,7 +1761,7 @@ def process_class_definition(captures: Dict, symbols: Dict, block_array: List) -
 
     async_lines = [x.start_point[0] for x in captures.get("method.async", [])]
 
-    for i, method_node in enumerate(captures.get("method.name", [])):
+    for i, _ in enumerate(captures.get("method.name", [])):
         process_class_method(captures, i, async_lines, class_name, symbols, block_array)
 
 
@@ -1878,7 +1876,7 @@ def find_containing_blocks(line: int, blocks: List) -> List:
         if block_start <= line <= block_end:
             found.extend(collect_adjacent_blocks(mid, line, blocks))
             break
-        elif line < block_start:
+        if line < block_start:
             right = mid - 1
         else:
             left = mid + 1
@@ -1910,7 +1908,7 @@ def is_within_block(node: Any, start: Tuple[int, int], end: Tuple[int, int]) -> 
     node_end = node.end_point
 
     # 检查行号范围
-    if not (start[0] <= node_start[0] <= end[0]):
+    if not start[0] <= node_start[0] <= end[0]:
         return False
 
     # 检查起始行首列
@@ -2339,58 +2337,50 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
     symbol_dict = {}
     current_symbols = [(symbol_name, file_path)]
 
-    # 分层查询调用关系
-    for depth in range(max_depth + 1):
+    def process_symbol(symbol, path):
+        if path:
+            query = "SELECT name, file_path, calls FROM symbols WHERE name = ? AND file_path LIKE ?"
+            params = (symbol, f"%{path}%")
+        else:
+            query = "SELECT name, file_path, calls FROM symbols WHERE name = ?"
+            params = (symbol,)
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+    def collect_symbols(rows):
         next_symbols = []
-
-        for symbol, path in current_symbols:
-            # 查询当前符号的定义
-            if path:
-                query = "SELECT name, file_path, calls FROM symbols WHERE name = ? AND file_path LIKE ?"
-                params = (symbol, f"%{path}%")
-            else:
-                query = "SELECT name, file_path, calls FROM symbols WHERE name = ?"
-                params = (symbol,)
-
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-
-            if not rows:
+        for name, path, calls in rows:
+            if name not in symbol_dict or path == file_path:
+                symbol_dict[name] = path
+            try:
+                called_symbols = json.loads(calls)
+                next_symbols.extend([(s, path) for s in called_symbols])
+            except json.JSONDecodeError:
                 continue
+        return next_symbols
 
-            # 记录符号信息（优先保留当前文件中的定义）
-            for name, path, calls in rows:
-                if name not in symbol_dict or path == file_path:
-                    symbol_dict[name] = path
-
-            # 收集下一层要查询的符号
-            for name, path, calls in rows:
-                try:
-                    called_symbols = json.loads(calls)
-                    next_symbols.extend([(s, path) for s in called_symbols])
-                except json.JSONDecodeError:
-                    continue
-
-        current_symbols = list(set(next_symbols))  # 去重
-
+    for _ in range(max_depth + 1):
+        next_symbols = []
+        for symbol, path in current_symbols:
+            rows = process_symbol(symbol, path)
+            if rows:
+                next_symbols.extend(collect_symbols(rows))
+        current_symbols = list(set(next_symbols))
         if not current_symbols:
             break
 
-    # 确保目标符号在结果中
     if symbol_name not in symbol_dict:
         return {"error": f"未找到符号 {symbol_name} 的定义"}
 
-    # 按优先级排序：当前文件中的符号优先，目标符号优先，其他符号按字母顺序
     sorted_symbols = sorted(
         symbol_dict.keys(),
         key=lambda x: (
-            file_path and symbol_dict[x] != file_path,  # 当前文件中的符号排在最前
-            x != symbol_name,  # 目标符号其次
-            x,  # 其他符号按字母顺序
+            file_path and symbol_dict[x] != file_path,
+            x != symbol_name,
+            x,
         ),
     )
 
-    # 查询符号定义
     placeholders = ",".join(["?"] * len(sorted_symbols))
     cursor.execute(
         f"""
@@ -2405,10 +2395,7 @@ def get_symbol_context(conn, symbol_name: str, file_path: Optional[str] = None, 
         sorted_symbols + [file_path] if file_path else sorted_symbols,
     )
 
-    definitions = []
-    for row in cursor.fetchall():
-        definitions.append({"name": row[0], "file_path": row[1], "full_definition": row[2]})
-
+    definitions = [{"name": row[0], "file_path": row[1], "full_definition": row[2]} for row in cursor.fetchall()]
     return {"symbol_name": symbol_name, "file_path": file_path, "max_depth": max_depth, "definitions": definitions}
 
 
@@ -2548,7 +2535,7 @@ async def location_to_symbol(
                 call, symbol["file_path"], trie, lsp_client, file_content_cache, file_lines_cache, lookup_cache
             )
             collected_symbols.extend(symbols)
-        except Exception as e:
+        except (ConnectionError, TimeoutError, RuntimeError) as e:
             print(f"处理调用 {call['name']} 时发生错误: {str(e)}")
 
     return collected_symbols
@@ -2730,13 +2717,13 @@ def _expand_symbol_from_line(line: str, start: int, end: int) -> str:
 
 @app.get("/symbol_content")
 async def get_symbol_content(
-    symbol_path: str = QueryArgs(..., min_length=1), json: bool = False, lsp_enabled: bool = False
+    symbol_path: str = QueryArgs(..., min_length=1), json_format: bool = False, lsp_enabled: bool = False
 ):
     """根据符号路径获取符号对应的源代码内容
 
     Args:
         symbol_path: 符号路径，格式为file_path/symbol1,symbol2,... 例如 "main.c/a,b,c"
-        json: 是否返回JSON格式，包含每个符号的行号信息
+        json_format: 是否返回JSON格式，包含每个符号的行号信息
 
     Returns:
         纯文本格式的源代码内容（多个符号内容用空行分隔），或包含每个符号信息的JSON数组
@@ -2770,7 +2757,7 @@ async def get_symbol_content(
     # 构建响应
     return (
         collected_symbols + build_json_response(symbol_results, contents)
-        if json
+        if json_format
         else build_plaintext_response(contents)
     )
 
@@ -2814,7 +2801,7 @@ def read_source_code(file_path: str) -> bytes | PlainTextResponse:
     try:
         with open(file_path, "rb") as f:
             return f.read()
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError) as e:
         return PlainTextResponse(f"无法读取文件: {str(e)}", status_code=500)
 
 
@@ -2885,8 +2872,8 @@ def update_trie_if_needed(prefix: str, trie, file_mtime_cache, just_path=False) 
     if current_mtime > cached_mtime:
         print(f"[DEBUG] 检测到文件修改: {file_path} (旧时间:{cached_mtime} 新时间:{current_mtime})")
         parser_loader = ParserLoader()
-        parser_util = ParserUtil(parser_loader)
-        parser_util.update_symbol_trie(file_path, trie)
+        parser_instance = ParserUtil(parser_loader)
+        parser_instance.update_symbol_trie(file_path, trie)
         file_mtime_cache[file_path] = current_mtime
         return True
 
@@ -3060,7 +3047,7 @@ def parse_symbol_prefix(prefix: str) -> tuple[str | None, list[str]]:
         return remaining, []
 
     file_path = remaining[:slash_idx]
-    symbols = [s for s in remaining[slash_idx + 1 :].split(",")]
+    symbols = list(remaining[slash_idx + 1 :].split(","))
     return file_path, symbols
 
 
@@ -3081,7 +3068,12 @@ def update_trie_for_completion(file_path: str | None, trie: Any, mtime_cache: An
 
 
 def perform_trie_search(
-    trie: SymbolTrie, prefix: str, max_results: int, file_path: str | None, updated: bool, search_exact: bool = False
+    trie: SymbolTrie,
+    prefix: str,
+    max_results: int,
+    file_path: str | None = None,
+    updated: bool = False,
+    search_exact: bool = False,
 ) -> list:
     """执行前缀树搜索"""
     if search_exact:
@@ -3203,7 +3195,7 @@ def debug_process_source_file(file_path: Path, project_dir: Path):
         parser, query, lang_name = ParserLoader().get_parser(str(file_path))
         print(f"[DEBUG] 即将开始解析文件: {file_path}")
         tree = parse_code_file(file_path, parser)
-        print(f"[DEBUG] 文件解析完成，开始匹配查询")
+        print("[DEBUG] 文件解析完成，开始匹配查询")
         matches = query.matches(tree.root_node)
         print(f"[DEBUG] 查询匹配完成，共找到 {len(matches)} 个匹配项，开始处理符号")
         symbols = process_matches(matches, lang_name)
@@ -3226,7 +3218,7 @@ def debug_process_source_file(file_path: Path, project_dir: Path):
             print(f"调用关系: {symbol_info['calls']}")
             print("-" * 50)
 
-        print("\n处理完成，共找到 {} 个符号".format(len(symbols)))
+        print(f"\n处理完成，共找到 {len(symbols)} 个符号")
 
     except Exception as e:
         print(f"处理文件时发生错误: {str(e)}")
@@ -3252,7 +3244,7 @@ def format_c_code_in_directory(directory: Path):
     # 读取已格式化的文件列表
     formatted_files = set()
     if formatted_file_path.exists():
-        with open(formatted_file_path, "r") as f:
+        with open(formatted_file_path, "r", encoding="utf-8") as f:
             formatted_files = set(f.read().splitlines())
 
     # 收集所有需要格式化的文件路径
@@ -3272,6 +3264,16 @@ def format_c_code_in_directory(directory: Path):
         except subprocess.CalledProcessError as e:
             return file_path, False, time.time() - start_time, str(e)
 
+    def process_future(future, pbar):
+        """处理单个future结果的内部函数"""
+        file_path, success, duration, error = future.result()
+        pbar.set_postfix_str(f"正在处理: {os.path.basename(file_path)}")
+        if success:
+            pbar.write(f"✓ 成功格式化: {file_path} (耗时: {duration:.2f}s)")
+        else:
+            pbar.write(f"✗ 格式化失败: {file_path} (错误: {error})")
+        pbar.update(1)
+
     # 创建线程池
     with ThreadPoolExecutor(max_workers=cpu_count) as executor:
         try:
@@ -3280,16 +3282,10 @@ def format_c_code_in_directory(directory: Path):
                 futures = {executor.submit(format_file, file_path): file_path for file_path in files_to_format}
 
                 for future in as_completed(futures):
-                    file_path, success, duration, error = future.result()
-                    pbar.set_postfix_str(f"正在处理: {os.path.basename(file_path)}")
-                    if success:
-                        pbar.write(f"✓ 成功格式化: {file_path} (耗时: {duration:.2f}s)")
-                    else:
-                        pbar.write(f"✗ 格式化失败: {file_path} (错误: {error})")
-                    pbar.update(1)
+                    process_future(future, pbar)
 
             # 将已格式化的文件列表写入点号文件
-            with open(formatted_file_path, "w") as f:
+            with open(formatted_file_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(formatted_files))
 
             # 打印已跳过格式化的文件

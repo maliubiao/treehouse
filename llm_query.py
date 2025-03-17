@@ -1574,7 +1574,7 @@ def _build_api_url(api_url: str, symbol_names: str) -> str:
     """构造批量请求的API URL"""
     encoded_symbols = requests.utils.quote(symbol_names)
     lsp_enabled = GPT_FLAGS.get(GPT_FLAG_CONTEXT)
-    return f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json=true&lsp_enabled={lsp_enabled}"
+    return f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json_format=true&lsp_enabled={lsp_enabled}"
 
 
 def _process_symbol_data(symbol_data: dict, symbol_name: str) -> dict:
