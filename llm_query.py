@@ -2464,7 +2464,7 @@ class ChatbotUI:
         """
         processed_text = self.gpt_processor.process_text_with_file_path(prompt)
         return query_gpt_api(
-            api_key=GLOBAL_MODEL_CONFIG.api_key,
+            api_key=GLOBAL_MODEL_CONFIG.key,
             prompt=processed_text,
             model=GLOBAL_MODEL_CONFIG.model_name,
             base_url=GLOBAL_MODEL_CONFIG.base_url,
