@@ -119,6 +119,13 @@ patchgpt @context @symbol_file/symbol 修复里边的bug
 
 # 命令行执行检错, 重执行，结果上传gpt诊断
 fixgpt 
+
+# ripgrep 项目搜索，并自动定位搜索到的符号, 里边也可以用@symbol_file/symbol这样添加具体符号
+patchgpt ..LintFix.. ..main.. 增加单元测试套件
+
+# 类，函数，定位补全, 在某个文件里写个占位符class MyClass: pass
+patchgpt ..MyClass.. 根据说明，写完这个这测试套件
+
 ```
 
 
