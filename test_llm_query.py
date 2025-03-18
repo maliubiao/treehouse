@@ -9,10 +9,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from parameterized import parameterized
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.key_binding import KeyBindings
+
 import llm_query
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
     BlockPatchResponse,
+    ChatbotUI,
     CmdNode,
     GPTContextProcessor,
     LintParser,
@@ -673,6 +679,114 @@ class TestModelSwitch(unittest.TestCase):
 
         self.assertEqual(GLOBAL_MODEL_CONFIG.model_name, original_model)
         self.assertEqual(GLOBAL_MODEL_CONFIG.base_url, original_url)
+
+
+class TestChatbotUI(unittest.TestCase):
+    def setUp(self):
+        self.mock_gpt = MagicMock(spec=GPTContextProcessor)
+        self.mock_console = MagicMock()
+        self.chatbot = ChatbotUI(gpt_processor=self.mock_gpt)
+        self.chatbot.console = self.mock_console
+
+    def test_initialization(self):
+        self.assertEqual(self.chatbot.temperature, 0.6)
+        self.assertIsInstance(self.chatbot.session, PromptSession)
+        self.assertIsInstance(self.chatbot.bindings, KeyBindings)
+        self.assertIs(self.chatbot.gpt_processor, self.mock_gpt)
+
+    def test_handle_valid_command(self):
+        with patch.object(self.chatbot, "handle_temperature_command") as mock_temp:
+            self.chatbot.handle_command("temperature 0.8")
+            mock_temp.assert_called_once_with("temperature 0.8")
+
+    def test_handle_invalid_command(self):
+        self.chatbot.handle_command("unknown")
+        self.mock_console.print.assert_called_with("[red]未知命令: unknown[/]")
+
+    @parameterized.expand(
+        [("temperature", "0.6"), ("temperature 0", "0.0"), ("temperature 1", "1.0"), ("temperature 0.5", "0.5")]
+    )
+    def test_valid_temperature(self, cmd, expected):
+        self.chatbot.handle_command(cmd)
+        self.assertEqual(str(self.chatbot.temperature), expected)
+
+    @parameterized.expand(
+        [
+            ("temperature -1", "temperature必须在0到1之间"),
+            ("temperature 1.1", "temperature必须在0到1之间"),
+            ("temperature abc", "could not convert string to float: 'abc'"),
+        ]
+    )
+    def test_invalid_temperature(self, cmd, error_msg):
+        self.chatbot.handle_command(cmd)
+        self.mock_console.print.assert_called_with(f"[red]参数错误: {error_msg}[/]")
+
+    def test_stream_response(self):
+        with patch("llm_query.query_gpt_api") as mock_query:
+            mock_query.return_value = iter(["response"])
+            result = self.chatbot.stream_response("test prompt")
+            self.assertEqual(list(result), ["response"])
+            mock_query.assert_called_with(
+                api_key=GLOBAL_MODEL_CONFIG.key,
+                prompt=self.mock_gpt.process_text_with_file_path.return_value,
+                model=GLOBAL_MODEL_CONFIG.model_name,
+                base_url=GLOBAL_MODEL_CONFIG.base_url,
+                stream=True,
+                console=self.mock_console,
+                temperature=0.6,
+            )
+
+    def test_autocomplete_prompts(self):
+        with (
+            patch("os.listdir") as mock_listdir,
+            patch.dict("os.environ", {"GPT_PATH": "/test"}),
+            patch("os.path.exists", return_value=True),
+        ):
+            mock_listdir.return_value = ["test1.md", "test2.txt"]
+            prompts = self.chatbot._get_prompt_files()
+            self.assertEqual(prompts, ["@test1.md", "@test2.txt"])
+
+    def test_keybindings_setup(self):
+        from prompt_toolkit.keys import Keys
+
+        keys = [key for binding in self.chatbot.bindings.bindings for key in binding.keys]
+        self.assertIn(Keys.Escape, keys)
+        self.assertIn(Keys.ControlC, keys)
+        self.assertIn(Keys.ControlL, keys)
+
+    def test_help_display(self):
+        with patch.object(self.chatbot.console, "print") as mock_print:
+            self.chatbot.display_help()
+            self.assertEqual(mock_print.call_count, 5)
+            args = [call[0][0] for call in mock_print.call_args_list]
+            self.assertIn("可用命令列表", args[0])
+            self.assertIn("符号功能说明", args[2])
+
+    def test_completer_generation(self):
+        with patch.object(self.chatbot, "_get_prompt_files", return_value=["@test.md"]):
+            completer = self.chatbot.get_completer()
+            self.assertIsInstance(completer, WordCompleter)
+            self.assertIn("@clipboard", completer.words)
+            self.assertIn("/clear", completer.words)
+            self.assertIn("@test.md", completer.words)
+
+    def test_process_input_flow(self):
+        test_cases = [("", False), ("q", False), ("/help", True), ("test query", True)]
+        for input_text, expected in test_cases:
+            with self.subTest(input=input_text):
+                with patch("llm_query.query_gpt_api") as mock_query:
+                    mock_query.return_value = iter(["response"])
+                    result = self.chatbot._process_input(input_text)
+                    self.assertEqual(result, expected)
+
+    def test_clear_command_execution(self):
+        with patch("os.system") as mock_system:
+            self.chatbot.handle_command("clear")
+            mock_system.assert_called_once_with("clear")
+
+    def test_exit_command_handling(self):
+        with self.assertRaises(SystemExit):
+            self.chatbot.handle_command("exit")
 
 
 if __name__ == "__main__":
