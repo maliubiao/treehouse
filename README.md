@@ -120,7 +120,8 @@ patchgpt @context @symbol_file/symbol 修复里边的bug
 # 命令行执行检错, 重执行，结果上传gpt诊断
 fixgpt 
 
-# ripgrep 项目搜索，并自动定位搜索到的符号, 里边也可以用@symbol_file/symbol这样添加具体符号
+# 使用ripgrep 项目搜索，并自动定位搜索到的符号, 里边也可以用@symbol_file/symbol这样添加具体符号
+# 可用.rgignore控制搜索范围 https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md
 patchgpt ..LintFix.. ..main.. 增加单元测试套件
 
 # 类，函数，定位补全, 在某个文件里写个占位符class MyClass: pass
