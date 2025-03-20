@@ -3774,11 +3774,11 @@ LSP_CLIENT = None
 def start_lsp_client(lsp_command: str, workspace_path: str) -> threading.Thread:
     global LSP_CLIENT
     """启动LSP客户端线程
-    
+
     参数:
         lsp_command: LSP服务器启动命令
         workspace_path: 工作区根目录路径
-        
+
     返回:
         已启动的后台线程对象
     """
@@ -3924,8 +3924,9 @@ if __name__ == "__main__":
         print(SyntaxHighlight.highlight_if_terminal(framework, file_path=args.debug_skeleton))
     else:
         logger.info("启动FastAPI服务")
-        # from debugger.web import service
-        # service.start_debugger(9911)
+        from debugger.web import service
+
+        service.start_debugger(9911)
         main(
             host=args.host,
             port=args.port,

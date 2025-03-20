@@ -22,6 +22,9 @@ def null_breakpoint():
     pass
 
 
+DEBUGGER_STATUS = {"init": False}
+
+
 class DebugWebSocket(tornado.websocket.WebSocketHandler):
     clients = set()
 
@@ -169,7 +172,8 @@ class DebuggerWebUI(Pdb):
         self.var_watch_list = set()
         self.watched_files = set()
         self.last_msg = ""
-        self.curframe = None  # 初始化curframe属性
+        self.botframe = None
+        self.curframe = sys._getframe()  # 初始化curframe属性
         self._setup_tornado(start_loop)
         self._server = None
         self._ioloop = None
@@ -230,6 +234,8 @@ class DebuggerWebUI(Pdb):
 
     def _collect_and_send_data(self, frame, variables):
         var_data = {}
+        if not variables:
+            variables = frame.f_locals.keys()
         for var in variables:
             evaluated = self._evaluate_variable(frame, var)
             var_data[var] = self._safe_serialize(evaluated)
@@ -258,7 +264,6 @@ class DebuggerWebUI(Pdb):
 
     def _should_stop_at_breakpoint(self, frame):
         current_file = os.path.abspath(frame.f_code.co_filename)
-        current_line = frame.f_lineno
 
         if current_file not in self.watched_files:
             return False
@@ -266,6 +271,9 @@ class DebuggerWebUI(Pdb):
         return super().break_here(frame)
 
     def user_line(self, frame):
+        if not DEBUGGER_STATUS["init"]:
+            self.do_continue("")
+            return
         breaks = self.get_all_breaks()
         target_bp = None
         for bp in breaks:
@@ -278,30 +286,11 @@ class DebuggerWebUI(Pdb):
         if target_bp:
             self._collect_and_send_data(frame, target_bp["variables"])
             self._send_stack_trace(frame)
-            self._send_breakpoint_variables(frame)
 
     def _send_stack_trace(self, frame):
         stack_trace = self._get_stack_trace(frame)
         DebugWebSocket.broadcast({"type": "stack_trace", "data": stack_trace})
         logger.info("发送的堆栈跟踪: %s", stack_trace)
-
-    def _send_breakpoint_variables(self, frame):
-        current_file = os.path.abspath(frame.f_code.co_filename)
-
-        for bp in self.get_all_breaks():
-            if not bp:
-                continue
-            if os.path.abspath(bp.file) == current_file and bp.line == frame.f_lineno:
-                var_data = {}
-                for var in self.breakpoints.get(bp.number, {}).get("variables", []):
-                    if var in frame.f_locals:
-                        evaluated = self._evaluate_variable(frame, var)
-                        var_data[var] = self._safe_serialize(evaluated)
-
-                DebugWebSocket.broadcast(
-                    {"type": "breakpoint_variables", "data": var_data, "location": f"{current_file}:{frame.f_lineno}"}
-                )
-                logger.info("发送的断点变量数据: %s", var_data)
 
     def _get_stack_trace(self, frame):
         stack = []
@@ -314,11 +303,15 @@ class DebuggerWebUI(Pdb):
 
     def _safe_serialize(self, obj):
         try:
-            if isinstance(obj, dict) and "value" in obj and "type" in obj:
+            original_type = obj["type"]
+            complex_flag = obj.get("complex", False)
+            try:
                 serialized_value = json.dumps(obj["value"], default=repr)
-                return {"value": serialized_value, "type": obj["type"], "complex": obj.get("complex", False)}
-            return {"value": json.dumps(obj, default=repr), "type": "unknown", "complex": False}
-        except Exception as e:  # pylint: disable=broad-exception-caught
+            except Exception as e:
+                logger.error("序列化值失败: %s，使用repr处理", e)
+                serialized_value = repr(obj["value"])
+            return {"value": serialized_value, "type": original_type, "complex": complex_flag}
+        except Exception as e:
             logger.error("序列化对象时出错: %s", e)
             return {"value": f"序列化错误: {str(e)}", "type": "error", "complex": False}
 
@@ -326,7 +319,8 @@ class DebuggerWebUI(Pdb):
 def start_debugger(port=5555):
     debugger = DebuggerWebUI(port=port)
     # pylint: disable=protected-access
-    debugger.curframe = sys._getframe()
     debugger.do_break("null_breakpoint")
-    debugger.set_trace(sys._getframe().f_back)
+    debugger.set_continue()
+    sys.settrace(debugger.trace_dispatch)
     logger.info("调试器已启动")
+    DEBUGGER_STATUS["init"] = True

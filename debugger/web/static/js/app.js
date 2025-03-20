@@ -18,6 +18,10 @@ ws.onmessage = function(event) {
 };
 
 function displayVariables(data) {
+    if (!Object.keys(data).length 
+) {
+        return;
+    }
     const variableDataElement = document.getElementById('variable-data');
     variableDataElement.innerHTML = '';
 
