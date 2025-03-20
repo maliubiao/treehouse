@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import urllib.parse
 from pathlib import Path
 
 import requests
@@ -190,9 +191,10 @@ def _request_api_completion(api_server: str, prefix: str):
             os.environ.pop(proxy_var, None)
 
         api_prefix = prefix.replace("symbol_", "symbol:", 1)  # 仅替换第一个symbol_
+        encoded_prefix = urllib.parse.quote(api_prefix, safe="")  # 严格编码所有特殊字符
         resp = requests.get(
             f"{api_server}complete_realtime",
-            params={"prefix": api_prefix},
+            params={"prefix": encoded_prefix},
             timeout=1,
             proxies={"http": None, "https": None},
         )

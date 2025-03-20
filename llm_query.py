@@ -1248,7 +1248,6 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 4. 保持原有缩进和代码风格，不添注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
 6. 允许在符号内容在前后添加新代码
-7. 输出中提到[modified symbol], [modified block]必须以字符串拼接的方式表示，以避免干扰格式化内容提取
 """
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
@@ -1289,37 +1288,38 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 
 [FILE RANGE END]
 """
-
+    modified_type = "symbol" if patch_require else "block"
+    tag = "source code"
     if patch_require:
         prompt += (
-            """
+            f"""
 # 响应格式
-[modified block]: 块路径
-[source code start]
+[modified {modified_type}]: 块路径
+[{tag} start]
 完整文件内容
-[source code end]
+[{tag} end]
 
 或（无修改时）:
-[modified block]: 块路径
-[source code start]
+[modified {modified_type}]: 块路径
+[{tag} start]
 完整原始内容
-[source code end]
+[{tag} end]
 
 用户的要求如下:
 """
             if file_ranges
-            else """
+            else f"""
 # 响应格式
-[modified symbol]: 符号路径
-[source code start]
+[modified {modified_type}]: 符号路径
+[{tag} start]
 完整文件内容
-[source code end]
+[{tag} end]
 
 或（无修改时）:
-[modified symbol]: 符号路径
-[source code start]
+[modified {modified_type}]: 符号路径
+[{tag} start]
 完整原始内容
-[source code end]
+[{tag} end]
 
 用户的要求如下:
 """
@@ -1572,7 +1572,7 @@ def _parse_symbol_names(symbol_names: str) -> list:
 
 def _build_api_url(api_url: str, symbol_names: str) -> str:
     """构造批量请求的API URL"""
-    encoded_symbols = requests.utils.quote(symbol_names)
+    encoded_symbols = requests.utils.quote(symbol_names, safe="")
     lsp_enabled = GPT_FLAGS.get(GPT_FLAG_CONTEXT)
     return f"{api_url}/symbol_content?symbol_path=symbol:{encoded_symbols}&json_format=true&lsp_enabled={lsp_enabled}"
 

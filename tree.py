@@ -2730,7 +2730,6 @@ async def get_symbol_content(
     """
     trie = app.state.file_symbol_trie
     file_mtime_cache = app.state.file_mtime_cache
-
     # 参数解析
     parsed = parse_symbol_path(symbol_path)
     if isinstance(parsed, PlainTextResponse):
@@ -2780,7 +2779,7 @@ def parse_symbol_path(symbol_path: str) -> tuple[str, list] | PlainTextResponse:
 
 def validate_and_lookup_symbols(file_path_part: str, symbols: list, trie, file_mtime_cache) -> list | PlainTextResponse:
     """验证并查找符号"""
-    update_trie_if_needed(file_path_part, trie, file_mtime_cache)
+    update_trie_if_needed(file_path_part, trie, file_mtime_cache, just_path=True)
 
     symbol_results = []
     for symbol in symbols:
@@ -2862,7 +2861,10 @@ def update_trie_if_needed(prefix: str, trie, file_mtime_cache, just_path=False) 
     else:
         file_path = prefix[len("symbol:") :] if prefix.startswith("symbol:") else prefix
     # 检查文件扩展名是否在支持的语言中
-    ext = os.path.splitext(file_path)[1]  # 去掉点号
+    pos = file_path.rfind(".")
+    if pos < 0:
+        return False
+    ext = file_path[pos:].lower()
     if ext not in SUPPORTED_LANGUAGES:
         return False
 
@@ -3922,6 +3924,8 @@ if __name__ == "__main__":
         print(SyntaxHighlight.highlight_if_terminal(framework, file_path=args.debug_skeleton))
     else:
         logger.info("启动FastAPI服务")
+        # from debugger.web import service
+        # service.start_debugger(9911)
         main(
             host=args.host,
             port=args.port,
