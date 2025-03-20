@@ -1,0 +1,237 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #f0f0f0;
+}
+
+.container {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 30px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.breakpoint-panel, .variable-panel, .stack-trace-panel {
+    background: white;
+    padding: 25px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.form-group {
+    margin-bottom: 20px;
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+input {
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    flex: 1;
+    min-width: 200px;
+}
+
+button {
+    padding: 10px 20px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+button:hover {
+    background-color: #0056b3;
+    transform: translateY(-1px);
+}
+
+#breakpoints-list {
+    margin-top: 15px;
+    border-top: 2px solid #eee;
+    padding-top: 15px;
+}
+
+#variable-data {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+    height: 400px;
+    overflow: auto;
+    margin-top: 15px;
+}
+
+.breakpoint-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    margin: 10px 0;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border-left: 4px solid #007bff;
+}
+
+.breakpoint-item button {
+    background-color: #dc3545;
+    padding: 6px 12px;
+}
+
+.breakpoint-item button:hover {
+    background-color: #c82333;
+}
+
+.stack-trace-panel pre {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+    height: 400px;
+    overflow: auto;
+    margin-top: 15px;
+}
+
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.4);
+    padding-top: 60px;
+}
+
+.modal-content {
+    background-color: #fefefe;
+    margin: 5% auto;
+    padding: 25px;
+    border: 1px solid #888;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 80vh;
+    overflow: auto;
+    position: relative;
+}
+
+.close {
+    color: #aaa;
+    position: absolute;
+    right: 25px;
+    top: 15px;
+    font-size: 32px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.close:hover,
+.close:focus {
+    color: black;
+    text-decoration: none;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+}
+
+table, th, td {
+    border: 1px solid #ddd;
+}
+
+th, td {
+    padding: 12px;
+    text-align: left;
+}
+
+th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+}
+
+tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+tr:hover {
+    background-color: #f1f1f1;
+}
+
+.function-breakpoint-btn {
+    background-color: #28a745;
+    margin-left: 15px;
+}
+
+.function-breakpoint-btn:hover {
+    background-color: #218838;
+}
+
+#modal-content pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 6px;
+    max-height: 70vh;
+    overflow-y: auto;
+    max-width: 100%;
+    word-break: break-all;
+}
+
+#modal-content h2 {
+    margin-top: 0;
+    padding-right: 30px;
+    color: #333;
+}
+
+#modal-content button {
+    margin-top: 20px;
+}
+
+.type-cell {
+    font-family: monospace;
+    color: #666;
+    font-size: 0.9em;
+}
+
+.type-tag {
+    display: inline-block;
+    background: #e9ecef;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+pre code {
+    font-family: 'Fira Code', Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.token.string { color: #50a14f; }
+.token.number { color: #986801; }
+.token.boolean { color: #4078f2; }
+.token.null { color: #666; }
+.token.key { color: #d73a49; }
+
+@media (min-width: 768px) {
+    .container {
+        gap: 40px;
+        padding: 30px;
+    }
+    
+    .breakpoint-panel, .variable-panel, .stack-trace-panel {
+        padding: 30px;
+    }
+}

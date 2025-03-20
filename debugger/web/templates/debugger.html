@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PDB Web Debugger</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/prism/prism.css">
+</head>
+<body>
+    <div class="container">
+
+        
+        <div class="breakpoint-panel">
+            <h2>Breakpoint Manager</h2>
+            <div class="form-group">
+                <input type="text" id="filename" placeholder="File path">
+                <button class="function-breakpoint-btn" onclick="showFunctionBreakpointModal()">Set Function Breakpoint</button>
+            </div>
+            <div class="form-group">
+                <input type="number" id="line" placeholder="Line number">
+                <input type="text" id="condition" placeholder="Condition (optional)">
+                <input type="text" id="variables" placeholder="Variables (comma separated)">
+                <button onclick="addBreakpoint()">Add Line Breakpoint</button>
+            </div>
+            <div id="breakpoints-list"></div>
+        </div>
+
+        <div class="variable-panel">
+            <h2>Watched Variables</h2>
+            <div class="form-group">
+                <input type="text" id="variable" placeholder="Variable name">
+                <button onclick="addVariable()">Add Variable</button>
+            </div>
+            <div id="variable-data"></div>
+            <div id="current-location" style="color: #666; margin-top: 10px;"></div>
+        </div>
+    </div>
+
+    <div id="value-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <div id="modal-content"></div>
+        </div>
+    </div>
+
+    <div id="function-breakpoint-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeFunctionModal()">&times;</span>
+            <h2>Set Function Breakpoint</h2>
+            <div class="form-group">
+                <input type="text" id="function-name" placeholder="Function name">
+                <button onclick="addFunctionBreakpoint()">Set Breakpoint</button>
+            </div>
+        </div>
+    </div>
+    <script src="/static/js/app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/prism.min.js"></script>
+</body>
+</html>
