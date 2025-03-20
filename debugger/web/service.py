@@ -164,6 +164,40 @@ class VariableHandler(tornado.web.RequestHandler):
         self.write({"status": "ok"})
 
 
+class FileAutocompleteHandler(tornado.web.RequestHandler):
+    async def get(self):
+        try:
+            base_dir = os.path.abspath("/Users/richard/code/terminal-llm")
+            current_dir = self.get_argument("dir", "")
+            partial = self.get_argument("partial", "")
+
+            if not current_dir.startswith(base_dir):
+                current_dir = os.path.join(base_dir, current_dir.lstrip("/"))
+
+            if not os.path.isdir(current_dir):
+                self.write({"error": "Invalid directory"})
+                return
+
+            items = []
+            for entry in os.listdir(current_dir):
+                full_path = os.path.join(current_dir, entry)
+                if not entry.startswith(partial):
+                    continue
+
+                is_dir = os.path.isdir(full_path)
+                items.append(
+                    {"name": entry, "is_dir": is_dir, "full_path": full_path.replace(base_dir, "", 1).lstrip("/")}
+                )
+
+            # 排序：目录在前，字母顺序
+            items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+            self.write({"results": items[:20]})  # 限制返回数量
+
+        except Exception as e:
+            logger.error("自动补全错误: %s", e)
+            self.write({"error": str(e)})
+
+
 class DebuggerWebUI(Pdb):
     def __init__(self, port=5555, start_loop=True):
         super().__init__()
@@ -190,6 +224,7 @@ class DebuggerWebUI(Pdb):
                 (r"/breakpoints", BreakpointHandler),
                 (r"/breakpoints/(\d+)", BreakpointHandler),
                 (r"/variables", VariableHandler),
+                (r"/autocomplete/file", FileAutocompleteHandler),
                 (r"/static/(.*)", tornado.web.StaticFileHandler, {"path": static_path}),
             ],
             template_path=template_path,

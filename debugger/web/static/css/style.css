@@ -27,6 +27,7 @@ body {
     display: flex;
     gap: 15px;
     flex-wrap: wrap;
+    position: relative;
 }
 
 input {
@@ -224,6 +225,44 @@ pre code {
 .token.boolean { color: #4078f2; }
 .token.null { color: #666; }
 .token.key { color: #d73a49; }
+
+.autocomplete-container {
+    position: absolute;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    width: 100%;
+    top: calc(100% + 5px);
+    left: 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.autocomplete-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.autocomplete-item:hover, .autocomplete-item.selected {
+    background: #f0f8ff;
+}
+
+.autocomplete-item.dir {
+    font-weight: bold;
+    color: #007bff;
+}
+
+.autocomplete-item.dir::after {
+    content: "/";
+    margin-left: 2px;
+    opacity: 0.6;
+}
 
 @media (min-width: 768px) {
     .container {

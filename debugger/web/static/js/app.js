@@ -1,5 +1,14 @@
 let ws = new WebSocket(`ws://${window.location.host}/ws`);
 
+// 初始化自动补全
+document.addEventListener('DOMContentLoaded', () => {
+    const fileInput = document.getElementById('filename');
+    new FileAutocomplete(fileInput, {
+        baseDir: '/Users/richard/code/terminal-llm',
+        delay: 200
+    });
+});
+
 ws.onmessage = function(event) {
     const msg = JSON.parse(event.data);
     if (msg.type === 'variables') {
@@ -18,8 +27,7 @@ ws.onmessage = function(event) {
 };
 
 function displayVariables(data) {
-    if (!Object.keys(data).length 
-) {
+    if (!Object.keys(data).length) {
         return;
     }
     const variableDataElement = document.getElementById('variable-data');
