@@ -17,6 +17,7 @@ from prompt_toolkit.key_binding import KeyBindings
 import llm_query
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
+    ArchitectMode,
     BlockPatchResponse,
     ChatbotUI,
     CmdNode,
@@ -787,6 +788,94 @@ class TestChatbotUI(unittest.TestCase):
     def test_exit_command_handling(self):
         with self.assertRaises(SystemExit):
             self.chatbot.handle_command("exit")
+
+
+class TestArchitectMode(unittest.TestCase):
+    """验证ArchitectMode响应解析功能的测试套件"""
+
+    SAMPLE_RESPONSE = """
+[task describe start]
+开发分布式任务调度系统
+[task describe end]
+
+[team member backend job start]
+实现工作节点注册机制
+使用Consul进行服务发现
+[team member backend job end]
+
+[team member frontend job start]
+设计任务监控仪表盘
+使用React+ECharts可视化
+[team member frontend job end]
+"""
+
+    BAD_RESPONSES = [
+        (
+            "缺失任务结束标签",
+            """
+[task describe start]
+未完成的任务描述""",
+            "task describe end",
+        ),
+        (
+            "不匹配的任务标签",
+            """
+[task describe start]任务1
+[task describe end]
+[team member dev job start]内容
+[team member dev job end]
+[task describe start]任务2""",
+            "task describe start",
+        ),
+        (
+            "无效的工作块格式",
+            """
+[task describe start]任务[task describe end]
+[team member]缺失角色[team member job end]""",
+            "team member",
+        ),
+        (
+            "空的任务内容",
+            """
+[task describe start][task describe end]
+[team member empty job start][team member empty job end]""",
+            "task",
+        ),
+    ]
+
+    def test_should_correctly_parse_valid_response(self):
+        """验证标准成功场景的解析"""
+        result = ArchitectMode.parse_response(self.SAMPLE_RESPONSE)
+        self.assertEqual(result["task"], "开发分布式任务调度系统")
+        self.assertEqual(len(result["jobs"]), 2)
+        self.assertDictEqual(
+            result["jobs"][0], {"member": "backend", "content": "实现工作节点注册机制\n使用Consul进行服务发现"}
+        )
+        self.assertDictEqual(
+            result["jobs"][1], {"member": "frontend", "content": "设计任务监控仪表盘\n使用React+ECharts可视化"}
+        )
+
+    def test_should_reject_empty_task_content(self):
+        """拒绝空任务描述内容"""
+        with self.assertRaisesRegex(ValueError, "任务描述内容不能为空"):
+            ArchitectMode.parse_response(
+                "[task describe start][task describe end]\n"
+                "[team member test job start]content[team member test job end]"
+            )
+
+    def test_should_validate_job_member_format(self):
+        """验证成员ID格式校验"""
+        invalid_response = """
+[task describe start]任务[task describe end]
+[team member 123 job start]内容[team member 123 job end]"""
+        with self.assertRaisesRegex(ValueError, "解析后的任务描述不完整或过短"):
+            ArchitectMode.parse_response(invalid_response)
+
+    @parameterized.expand(BAD_RESPONSES, name_func=lambda func, num, p: f"test_should_reject_{p[0]}")
+    def test_error_scenarios(self, _, invalid_response, expected_error):
+        """参数化测试各种异常场景"""
+        with self.assertRaises((ValueError, RuntimeError)):
+            ArchitectMode.parse_response(invalid_response)
 
 
 if __name__ == "__main__":

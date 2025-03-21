@@ -1761,6 +1761,7 @@ class GPTContextProcessor:
         self.cmd_map = self._initialize_cmd_map()
         self.current_length = 0
         self._add_gpt_flags()
+        self.context = []
 
     def _initialize_cmd_map(self):
         """初始化命令映射表"""
@@ -1851,9 +1852,11 @@ class GPTContextProcessor:
                 processed_text = self._process_match(node)
                 parts[i] = processed_text
                 self.current_length += len(processed_text)
+                self.context.append(processed_text)
             elif isinstance(node, SymbolsNode):
                 parts[i] = self._process_symbol(node)
                 self.current_length += len(parts[i])
+                self.context.append(parts[i])
             elif isinstance(node, TemplateNode):
                 template_replacement = self._process_match(node.template)
                 args = []
@@ -1864,6 +1867,7 @@ class GPTContextProcessor:
                 replacement = template_replacement.format(*args)
                 parts[i] = replacement
                 self.current_length += len(replacement)
+                self.context.append(replacement)
             else:
                 raise ValueError(f"无法识别的部分类型: {type(node)}")
 
@@ -2929,6 +2933,45 @@ class ModelSwitch:
         except json.JSONDecodeError:
             raise ValueError(f"配置文件格式错误: {config_path}")
 
+    def _get_model_config(self, model_name: str) -> dict:
+        """获取指定模型的配置并进行验证"""
+        if model_name not in self.config:
+            raise ValueError(f"未找到模型配置: {model_name}")
+
+        config = self.config[model_name]
+        required_keys = ["key", "base_url", "model_name"]
+        for key in required_keys:
+            if key not in config:
+                raise ValueError(f"模型{model_name}配置缺少必要字段: {key}")
+        return config
+
+    def execute_workflow(self, architect_model: str, coder_model: str, prompt: str) -> list:
+        """
+        执行完整工作流程：
+        1. 使用架构模型获取任务划分
+        2. 解析架构师响应
+        3. 分发任务给编码模型执行
+
+        返回:
+            list: 包含所有任务执行结果的列表
+        """
+        architect_response = self.query(
+            model_name=architect_model,
+            prompt=prompt,
+            temperature=0.0,
+            max_tokens=2000,
+        )
+
+        parsed = ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
+
+        results = []
+        for job in parsed["jobs"]:
+            coder_prompt = f"{parsed['task']}\n\n当前任务: {job['content']}"
+            result = self.query(model_name=coder_model, prompt=coder_prompt, temperature=0.0, max_tokens=4000)
+            results.append({"member": job["member"], "input": coder_prompt, "output": result})
+
+        return results
+
     def query(self, model_name: str, prompt: str, **kwargs) -> dict:
         """
         根据模型名称查询API
@@ -2944,14 +2987,7 @@ class ModelSwitch:
         异常:
             ValueError: 当模型配置不存在或缺少必要字段时
         """
-        if model_name not in self.config:
-            raise ValueError(f"未找到模型配置: {model_name}")
-
-        config = self.config[model_name]
-        required_keys = ["key", "base_url", "model_name"]
-        for key in required_keys:
-            if key not in config:
-                raise ValueError(f"模型{model_name}配置缺少必要字段: {key}")
+        config = self._get_model_config(model_name)
 
         api_key = config["key"]
         base_url = config["base_url"]
@@ -3152,6 +3188,104 @@ def pylint_fix(pylint_log) -> None:
     """修复入口函数"""
     fixer = PylintFixer(str(pylint_log))
     fixer.execute()
+
+
+class ArchitectMode:
+    """
+    架构师模式响应解析器
+
+    输入格式规范:
+    [task describe start]
+    {{多行任务描述}}
+    [task describe end]
+
+    [team member {{成员ID}} job start]
+    {{多行工作内容}}
+    [team member {{成员ID}} job end]
+    """
+
+    TASK_PATTERN = re.compile(r"\[task describe start\](.*?)\[task describe end\]", re.DOTALL)
+    JOB_BLOCK_PATTERN = re.compile(
+        r"\[team member (?P<member_id>\w+) job start\](.*?)\[team member \1 job end\]", re.DOTALL
+    )
+
+    @staticmethod
+    def parse_response(response: str) -> dict:
+        """
+        解析架构师模式生成的响应文本
+
+        参数:
+            response: 包含任务描述和工作分配的格式化文本
+
+        返回:
+            dict: {
+                "task": "清理后的任务描述文本",
+                "jobs": [
+                    {"member": "成员ID", "content": "清理后的工作内容"},
+                    ...
+                ]
+            }
+
+        异常:
+            ValueError: 当关键标签缺失或格式不符合规范时
+            RuntimeError: 当工作块存在不匹配的标签时
+        """
+        parsed_data = {"task": "", "jobs": []}
+        parsed_data.update(ArchitectMode._parse_task_section(response))
+        parsed_data["jobs"] = ArchitectMode._parse_job_sections(response)
+        ArchitectMode._validate_parsed_data(parsed_data)
+        return parsed_data
+
+    @staticmethod
+    def _parse_task_section(text: str) -> dict:
+        """解析任务描述部分"""
+        task_match = ArchitectMode.TASK_PATTERN.search(text)
+        if not task_match:
+            raise ValueError("缺少必要的任务描述标签对")
+
+        raw_task = task_match.group(1).strip()
+        if not raw_task:
+            raise ValueError("任务描述内容不能为空")
+
+        return {"task": raw_task}
+
+    @staticmethod
+    def _parse_job_sections(text: str) -> list:
+        """解析所有工作块并验证一致性"""
+        jobs = []
+        seen_members = set()
+
+        for match in ArchitectMode.JOB_BLOCK_PATTERN.finditer(text):
+            member_id = match.group("member_id")
+            if member_id in seen_members:
+                raise RuntimeError(f"检测到重复的成员ID: {member_id}")
+
+            content = match.group(2).strip()
+            if not content:
+                raise ValueError(f"成员{member_id}的工作内容为空")
+
+            jobs.append({"member": member_id, "content": content})
+            seen_members.add(member_id)
+
+        if not jobs:
+            raise ValueError("未找到有效的工作分配块")
+
+        return jobs
+
+    @staticmethod
+    def _validate_parsed_data(data: dict):
+        """验证解析后的数据结构完整性"""
+        if not isinstance(data.get("task"), str) or len(data["task"]) < 10:
+            raise ValueError("解析后的任务描述不完整或过短")
+
+        if len(data["jobs"]) == 0:
+            raise ValueError("未解析到有效的工作分配")
+
+        for idx, job in enumerate(data["jobs"]):
+            if not job["member"].isalpha():
+                raise ValueError(f"第{idx+1}个任务的成员ID包含非法字符: {job['member']}")
+            if len(job["content"]) < 10:
+                raise ValueError(f"成员{job['member']}的工作内容过短")
 
 
 def main(input_args):
