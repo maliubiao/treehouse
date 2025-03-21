@@ -1,0 +1,68 @@
+[task describe start]
+**问题诊断与解决方向**
+当前系统在解析Go语言代码时，存在方法(method)和函数(function)符号提取不完整的问题。具体表现为：
+1. **符号类型识别缺失**：`CodeMapBuilder._process_symbol_node`未处理`GO_METHOD_DECLARATION`和`GO_FUNC_DECLARATION`节点类型，导致Go方法和函数未被正确分类为`function`类型。
+2. **符号名称提取不足**：`NodeProcessor.get_symbol_name`缺乏对Go方法和函数节点的名称提取逻辑，无法生成完整符号路径。
+3. **定义节点判定遗漏**：`NodeTypes.is_definition`未包含`GO_METHOD_DECLARATION`，导致其未被识别为定义节点。
+4. **符号路径生成不准确**：Go方法的接收器（Receiver）信息未纳入符号路径，导致方法归属不明确（如`ReceiverType.MethodName`）。
+
+**解决方向**：
+- 扩展`NodeTypes.is_definition`以包含Go方法/函数声明类型。
+- 在`CodeMapBuilder`中为Go方法/函数节点分配正确的`symbol_type`。
+- 增强`NodeProcessor`对Go方法名和函数名的提取能力。
+- 调整符号路径生成逻辑，包含接收器信息。
+[task describe end]
+
+[team member1 job start]
+**任务分配：增强NodeTypes的节点类型判定**
+- **修改符号**：`tree.py/NodeTypes`的`is_definition`静态方法
+- **修改原因**：技术债偿还（原逻辑未覆盖Go方法/函数声明）
+- **操作步骤**：
+  1. 在`NodeTypes.is_definition`返回值中新增`NodeTypes.GO_METHOD_DECLARATION`和`NodeTypes.GO_FUNC_DECLARATION`。
+  2. 添加单元测试，验证上述类型被正确识别为定义节点。
+- **预期结果**：`GO_METHOD_DECLARATION`和`GO_FUNC_DECLARATION`节点可触发`CodeMapBuilder`的符号处理流程。
+[team member1 job end]
+
+[team member2 job start]
+**任务分配：完善CodeMapBuilder的符号类型映射**
+- **修改符号**：`tree.py/CodeMapBuilder._process_symbol_node`方法
+- **修改原因**：功能扩展（支持Go方法/函数类型分类）
+- **操作步骤**：
+  1. 在`_process_symbol_node`的条件判断中，新增对`node.type == NodeTypes.GO_FUNC_DECLARATION`和`node.type == NodeTypes.GO_METHOD_DECLARATION`的分支。
+  2. 将这两种类型的`symbol_type`设置为`"function"`。
+  3. 确保`effective_node`能正确获取装饰器包装后的节点（复用现有`_get_effective_node`逻辑）。
+- **预期结果**：Go方法/函数节点被标记为`function`类型并生成代码映射条目。
+[team member2 job end]
+
+[team member3 job start]
+**任务分配：实现Go方法/函数名称提取**
+- **修改符号**：`tree.py/NodeProcessor.get_symbol_name`方法
+- **修改原因**：功能扩展（提取Go方法名和函数名）
+- **操作步骤**：
+  1. 新增条件分支处理`node.type == NodeTypes.GO_FUNC_DECLARATION`和`node.type == NodeTypes.GO_METHOD_DECLARATION`。
+  2. 对于`GO_FUNC_DECLARATION`，从子节点中提取函数名（如`child.type == NodeTypes.IDENTIFIER`的文本）。
+  3. 对于`GO_METHOD_DECLARATION`，提取接收器类型（如`child_by_field_name("receiver")`）和方法名，拼接为`ReceiverType.MethodName`格式。
+- **预期结果**：Go方法/函数名称被正确解析并返回。
+[team member3 job end]
+
+[team member4 job start]
+**任务分配：生成包含接收器信息的符号路径**
+- **修改符号**：`tree.py/CodeMapBuilder._process_symbol_node`的`path_key`生成逻辑
+- **修改原因**：功能扩展（明确方法归属）
+- **操作步骤**：
+  1. 在`GO_METHOD_DECLARATION`处理分支中，从节点中提取接收器类型（如`node.child_by_field_name("receiver")`）。
+  2. 将接收器类型作为父级符号名，与当前方法名拼接为`ParentSymbol.ReceiverType.MethodName`格式。
+  3. 确保`current_symbols`栈能正确维护嵌套层级关系。
+- **预期结果**：Go方法的符号路径包含接收器类型（如`pkg.StructA.MethodB`）。
+[team member4 job end]
+
+[team member5 job start]
+**任务分配：验证与测试用例编写**
+- **修改符号**：新增测试文件`test_go_symbol_extraction.py`
+- **修改原因**：质量保障（确保修改符合预期）
+- **操作步骤**：
+  1. 编写Go示例代码，包含方法、函数、嵌套接收器等结构。
+  2. 验证`CodeMapBuilder`生成的`code_map`中是否包含完整符号路径和类型标记。
+  3. 检查`find_symbols_by_location`能否准确定位Go方法/函数的位置。
+- **预期结果**：所有Go相关符号被正确提取，且符号路径、类型、代码范围信息无误。
+[team member5 job end]
