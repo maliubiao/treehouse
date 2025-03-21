@@ -525,7 +525,7 @@ def _get_api_response(
             model=model,
             messages=history,
             temperature=kwargs.get("temperature", 0.0),
-            max_tokens=GLOBAL_MODEL_CONFIG.max_tokens,
+            max_tokens=kwargs.get("max_tokens", 8096),
             top_p=0.8,
             stream=True,
         )
@@ -2972,30 +2972,33 @@ class ModelSwitch:
         """
 
         context_processor = GPTContextProcessor()
-        text = context_processor.process_text_with_file_path(prompt)
+        config = self._get_model_config(architect_model)
+
+        text = context_processor.process_text_with_file_path(prompt, tokens_left=config.get("max_tokens", 8096))
         GPT_FLAGS[GPT_FLAG_PATCH] = False
         architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
             encoding="utf-8"
         )
+        architect_prompt += f"\n{text}"
+        print(architect_prompt)
         architect_response = self.query(
             model_name=architect_model,
-            prompt=architect_prompt + "\n" + text,
+            prompt=architect_prompt,
         )
         parsed = ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
         print(parsed["task"])
-        results = []
+        config = self._get_model_config(coder_model)
         for job in parsed["jobs"]:
             print(f"🔧 开始执行任务: {job['content']}")
             part_a = f"{get_patch_prompt_output(True, None)}\n"
             part_b = f"[task describe start]\n{job['content']}\n[task describe end]\n\n[job start]:\n{job['content']}\n[job end]"
             context = context_processor.process_text_with_file_path(
-                prompt, ignore_text=True, tokens_left=GLOBAL_MODEL_CONFIG.max_tokens - len(part_a) - len(part_b)
+                prompt, ignore_text=True, tokens_left=config.get("max_tokens", 8096) - len(part_a) - len(part_b)
             )
             coder_prompt = f"{part_a}{context}{part_b}"
             result = self.query(model_name=coder_model, prompt=coder_prompt)
             content = result["choices"][0]["message"]["content"]
             process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
-        return results
 
     def query(self, model_name: str, prompt: str, **kwargs) -> dict:
         """

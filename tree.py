@@ -443,8 +443,9 @@ class ParserUtil:
 
     def get_symbol_paths(self, file_path: str):
         """解析代码文件并返回所有符号路径及对应代码和位置信息"""
-        parser, _, _ = self.parser_loader.get_parser(file_path)
-
+        parser, _, lang_name = self.parser_loader.get_parser(file_path)
+        if lang_name == GO_LANG:
+            self.node_processor.lang_spec = GoLangSpec()
         with open(file_path, "rb") as f:
             source_code = f.read()
         tree = parser.parse(source_code)
@@ -491,110 +492,19 @@ class ParserUtil:
             )
 
 
-class NodeProcessor:
-    def __init__(self, lang: str = PYTHON_LANG):
-        self.lang = lang
+from abc import ABC, abstractmethod
+from typing import Dict, Set
+
+
+class BaseNodeProcessor(ABC):
+    """抽象基类，包含通用节点处理方法"""
 
     @staticmethod
-    def get_symbol_name(node):
-        """提取节点的符号名称
-        可能的输入假设: node必须是一个有效的语法树节点，且包含type字段
-        如果不符合假设，将返回None
-        """
-        if not hasattr(node, "type"):
-            return None
-
-        if node.type == NodeTypes.CLASS_DEFINITION:
-            return NodeProcessor.get_class_name(node)
-        elif node.type == NodeTypes.FUNCTION_DEFINITION:
-            return NodeProcessor.get_function_name(node)
-        elif node.type == NodeTypes.ASSIGNMENT:
-            return NodeProcessor.get_assignment_name(node)
-        elif node.type == NodeTypes.IF_STATEMENT and NodeProcessor.is_main_block(node):
-            return "__main__"
-        elif node.type == NodeTypes.GO_TYPE_DECLARATION:
-            return NodeProcessor.get_go_type_name(node)
-        elif node.type == NodeTypes.GO_METHOD_DECLARATION:
-            return NodeProcessor.get_go_method_name(node)
-        elif node.type == NodeTypes.GO_FUNC_DECLARATION:
-            return NodeProcessor.get_go_function_name(node)
-        elif node.type == NodeTypes.GO_PACKAGE_CLAUSE:
-            return NodeProcessor.get_go_package_name(node)
-        return None
-
-    @staticmethod
-    def get_go_method_name(node):
-        """从Go方法声明节点中提取方法名，格式为(ReceiverType).MethodName"""
-        find_child = NodeProcessor.find_child_by_type
-        parameter_list = find_child(node, NodeTypes.GO_PARAMETER_LIST)
-        if not parameter_list:
-            return None
-        parameter_declaration = find_child(parameter_list, NodeTypes.GO_PARAMETER_DECLARATION)
-        if not parameter_declaration:
-            return None
-
-        type_node = find_child(parameter_declaration, NodeTypes.GO_TYPE_IDENTIFIER)
-        if not type_node:
-            pointer_type = find_child(parameter_declaration, NodeTypes.GO_POINTER_TYPE)
-            if pointer_type:
-                type_node = find_child(pointer_type, NodeTypes.GO_TYPE_IDENTIFIER)
-                if not type_node:
-                    type_node = find_child(pointer_type, NodeTypes.GO_QUALIFIED_TYPE)
-        method_name = None
-
-        # 查找方法名
-        func_identifier = find_child(node, NodeTypes.GO_FIELD_IDENTIFIER)
-        if func_identifier:
-            method_name = func_identifier.text.decode("utf8")
-
-        if not method_name or not type_node:
-            return None
-
-        return f"{type_node.text.decode("utf8")}.{method_name}"
-
-    @staticmethod
-    def get_go_function_name(node):
-        """从Go函数声明节点中提取函数名"""
-        func_identifier = NodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
-        if func_identifier:
-            return func_identifier.text.decode("utf8")
-        return None
-
-    @staticmethod
-    def get_go_package_name(node):
-        """从Go包声明节点中提取包名"""
-        package_name = NodeProcessor.find_child_by_type(node, NodeTypes.GO_PACKAGE_IDENTIFIER)
-        if package_name:
-            return package_name.text.decode("utf8")
-        return None
-
-    @staticmethod
-    def get_go_type_name(node):
-        """从Go类型声明节点中提取类型名"""
+    def find_child_by_type(node, target_type):
+        """在节点子节点中查找指定类型的节点"""
         for child in node.children:
-            if child.type == NodeTypes.GO_TYPE_SPEC:
-                for sub_child in child.children:
-                    if sub_child.type == NodeTypes.GO_TYPE_IDENTIFIER:
-                        return sub_child.text.decode("utf8")
-        return None
-
-    @staticmethod
-    def is_main_block(node):
-        """判断是否是__main__块"""
-        condition = NodeProcessor.find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
-        if condition:
-            left = NodeProcessor.find_child_by_type(condition, NodeTypes.IDENTIFIER)
-            right = NodeProcessor.find_child_by_type(condition, NodeTypes.STRING)
-            if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
-                return True
-        return False
-
-    @staticmethod
-    def get_class_name(node):
-        """从类定义节点中提取类名"""
-        for child in node.children:
-            if child.type == NodeTypes.IDENTIFIER:
-                return child.text.decode("utf8")
+            if child.type == target_type:
+                return child
         return None
 
     @staticmethod
@@ -602,53 +512,6 @@ class NodeProcessor:
         """根据字段名查找子节点"""
         for child in node.children:
             if child.type == field_name:
-                return child
-        return None
-
-    @staticmethod
-    def get_function_name(node):
-        """从函数定义节点中提取函数名"""
-        if node.type == NodeTypes.FUNCTION_DEFINITION:
-            name_node = NodeProcessor.find_child_by_field(node, NodeTypes.NAME)
-            if name_node:
-                return name_node.text.decode("utf8")
-            word_node = NodeProcessor.find_child_by_type(node, NodeTypes.WORD)
-            if word_node:
-                return word_node.text.decode("utf8")
-            identifier_node = NodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
-            if identifier_node:
-                return identifier_node.text.decode("utf8")
-            return None
-
-        pointer_declarator = NodeProcessor.find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
-        if pointer_declarator:
-            func_declarator = pointer_declarator.child_by_field_name("declarator")
-            if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
-                return NodeProcessor.find_identifier_in_node(func_declarator)
-
-        func_declarator = NodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
-        if func_declarator:
-            return NodeProcessor.find_identifier_in_node(func_declarator)
-
-        return NodeProcessor.find_identifier_in_node(node)
-
-    @staticmethod
-    def get_assignment_name(node):
-        """从赋值节点中提取变量名"""
-        identifier = NodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
-        if identifier:
-            return identifier.text.decode("utf8")
-
-        left = node.child_by_field_name("left")
-        if left and left.type == NodeTypes.IDENTIFIER:
-            return left.text.decode("utf8")
-        return None
-
-    @staticmethod
-    def find_child_by_type(node, target_type):
-        """在节点子节点中查找指定类型的节点"""
-        for child in node.children:
-            if child.type == target_type:
                 return child
         return None
 
@@ -666,7 +529,7 @@ class NodeProcessor:
         if node.type == NodeTypes.IDENTIFIER:
             return node.text.decode("utf8")
         elif node.type == NodeTypes.ATTRIBUTE:
-            obj_part = NodeProcessor.get_full_attribute_name(node.child_by_field_name("object"))
+            obj_part = BaseNodeProcessor.get_full_attribute_name(node.child_by_field_name("object"))
             attr_part = node.child_by_field_name("attribute").text.decode("utf8")
             return f"{obj_part}.{attr_part}"
         return ""
@@ -677,7 +540,7 @@ class NodeProcessor:
         if function_node.type == NodeTypes.IDENTIFIER:
             return function_node.text.decode("utf8")
         elif function_node.type == NodeTypes.ATTRIBUTE:
-            return NodeProcessor.get_full_attribute_name(function_node)
+            return BaseNodeProcessor.get_full_attribute_name(function_node)
         return None
 
     @staticmethod
@@ -721,6 +584,167 @@ class NodeProcessor:
                     return False
             return module_part in {"typing", "collections", "abc"}
         return type_name in basic_types
+
+
+class LangSpec(ABC):
+    """语言特定处理策略接口"""
+
+    @abstractmethod
+    def get_symbol_name(self, node) -> str:
+        """提取节点的符号名称"""
+        pass
+
+
+class GoLangSpec(LangSpec):
+    """Go语言特定处理策略"""
+
+    def get_symbol_name(self, node) -> str:
+        if node.type == NodeTypes.GO_TYPE_DECLARATION:
+            return self.get_go_type_name(node)
+        elif node.type == NodeTypes.GO_METHOD_DECLARATION:
+            return self.get_go_method_name(node)
+        elif node.type == NodeTypes.GO_FUNC_DECLARATION:
+            return self.get_go_function_name(node)
+        elif node.type == NodeTypes.GO_PACKAGE_CLAUSE:
+            return self.get_go_package_name(node)
+        return None
+
+    @staticmethod
+    def get_go_method_name(node):
+        """从Go方法声明节点中提取方法名，格式为(ReceiverType).MethodName"""
+        find_child = BaseNodeProcessor.find_child_by_type
+        parameter_list = find_child(node, NodeTypes.GO_PARAMETER_LIST)
+        if not parameter_list:
+            return None
+        parameter_declaration = find_child(parameter_list, NodeTypes.GO_PARAMETER_DECLARATION)
+        if not parameter_declaration:
+            return None
+
+        type_node = find_child(parameter_declaration, NodeTypes.GO_TYPE_IDENTIFIER)
+        if not type_node:
+            pointer_type = find_child(parameter_declaration, NodeTypes.GO_POINTER_TYPE)
+            if pointer_type:
+                type_node = find_child(pointer_type, NodeTypes.GO_TYPE_IDENTIFIER)
+                if not type_node:
+                    type_node = find_child(pointer_type, NodeTypes.GO_QUALIFIED_TYPE)
+        method_name = None
+
+        # 查找方法名
+        func_identifier = find_child(node, NodeTypes.GO_FIELD_IDENTIFIER)
+        if func_identifier:
+            method_name = func_identifier.text.decode("utf8")
+
+        if not method_name or not type_node:
+            return None
+
+        return f"{type_node.text.decode("utf8")}.{method_name}"
+
+    @staticmethod
+    def get_go_function_name(node):
+        """从Go函数声明节点中提取函数名"""
+        func_identifier = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+        if func_identifier:
+            return func_identifier.text.decode("utf8")
+        return None
+
+    @staticmethod
+    def get_go_package_name(node):
+        """从Go包声明节点中提取包名"""
+        package_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.GO_PACKAGE_IDENTIFIER)
+        if package_name:
+            return package_name.text.decode("utf8")
+        return None
+
+    @staticmethod
+    def get_go_type_name(node):
+        """从Go类型声明节点中提取类型名"""
+        for child in node.children:
+            if child.type == NodeTypes.GO_TYPE_SPEC:
+                for sub_child in child.children:
+                    if sub_child.type == NodeTypes.GO_TYPE_IDENTIFIER:
+                        return sub_child.text.decode("utf8")
+        return None
+
+
+class NodeProcessor(BaseNodeProcessor):
+    """节点处理器，使用语言特定策略处理节点"""
+
+    def __init__(self, lang_spec: LangSpec = None):
+        self.lang_spec = lang_spec
+
+    def get_symbol_name(self, node):
+        """提取节点的符号名称"""
+        if not hasattr(node, "type"):
+            return None
+
+        if node.type == NodeTypes.CLASS_DEFINITION:
+            return self.get_class_name(node)
+        elif node.type == NodeTypes.FUNCTION_DEFINITION:
+            return self.get_function_name(node)
+        elif node.type == NodeTypes.ASSIGNMENT:
+            return self.get_assignment_name(node)
+        elif node.type == NodeTypes.IF_STATEMENT and self.is_main_block(node):
+            return "__main__"
+        if self.lang_spec:
+            return self.lang_spec.get_symbol_name(node)
+
+    @staticmethod
+    def is_main_block(node):
+        """判断是否是__main__块"""
+        condition = BaseNodeProcessor.find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
+        if condition:
+            left = BaseNodeProcessor.find_child_by_type(condition, NodeTypes.IDENTIFIER)
+            right = BaseNodeProcessor.find_child_by_type(condition, NodeTypes.STRING)
+            if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
+                return True
+        return False
+
+    @staticmethod
+    def get_class_name(node):
+        """从类定义节点中提取类名"""
+        for child in node.children:
+            if child.type == NodeTypes.IDENTIFIER:
+                return child.text.decode("utf8")
+        return None
+
+    @staticmethod
+    def get_function_name(node):
+        """从函数定义节点中提取函数名"""
+        if node.type == NodeTypes.FUNCTION_DEFINITION:
+            name_node = BaseNodeProcessor.find_child_by_field(node, NodeTypes.NAME)
+            if name_node:
+                return name_node.text.decode("utf8")
+            word_node = BaseNodeProcessor.find_child_by_type(node, NodeTypes.WORD)
+            if word_node:
+                return word_node.text.decode("utf8")
+            identifier_node = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+            if identifier_node:
+                return identifier_node.text.decode("utf8")
+            return None
+
+        pointer_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
+        if pointer_declarator:
+            func_declarator = pointer_declarator.child_by_field_name("declarator")
+            if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
+                return BaseNodeProcessor.find_identifier_in_node(func_declarator)
+
+        func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
+        if func_declarator:
+            return BaseNodeProcessor.find_identifier_in_node(func_declarator)
+
+        return BaseNodeProcessor.find_identifier_in_node(node)
+
+    @staticmethod
+    def get_assignment_name(node):
+        """从赋值节点中提取变量名"""
+        identifier = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+        if identifier:
+            return identifier.text.decode("utf8")
+
+        left = node.child_by_field_name("left")
+        if left and left.type == NodeTypes.IDENTIFIER:
+            return left.text.decode("utf8")
+        return None
 
 
 class CodeMapBuilder:

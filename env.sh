@@ -234,11 +234,15 @@ patchgpt() {
 }
 
 archgpt() {
+  local original_session=$GPT_SESSION_ID
+  newconversation
   [[ -z "$*" ]] && {
     echo >&2 "Error: Question cannot be empty"
     return 1
   }
   "$PYTHON_BIN" "$GPT_PATH/llm_query.py" --workflow --architect fireworks-r1 --coder fireworks-v3 --ask "$*"
+  export GPT_SESSION_ID=$original_session
+  echo "已恢复原会话: $original_session"
 }
 
 fixgpt() {
