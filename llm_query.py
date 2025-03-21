@@ -205,6 +205,7 @@ def parse_arguments():
     group.add_argument("--chatbot", action="store_true", help="进入聊天机器人UI模式，与--file和--ask互斥")
     group.add_argument("--project-search", nargs="+", metavar="KEYWORD", help="执行项目关键词搜索(支持多词)")
     group.add_argument("--pylint-log", type=Path, help="执行Pylint修复的日志文件路径")
+    group.add_argument("--workflow", action="store_true", help="进入工作流执行模式，与其他模式互斥")
     parser.add_argument(
         "--config",
         default=os.path.join(os.path.dirname(__file__), "llm_project.yml"),
@@ -228,6 +229,8 @@ def parse_arguments():
         help="Obsidian文档备份目录路径",
     )
     parser.add_argument("--trace", action="store_true", help="启用详细的执行跟踪")
+    parser.add_argument("--architect", required="--workflow" in sys.argv, help="架构师模型名称（工作流模式必需）")
+    parser.add_argument("--coder", required="--workflow" in sys.argv, help="编码器模型名称（工作流模式必需）")
     return parser.parse_args()
 
 
@@ -1226,6 +1229,77 @@ def read_last_query(_):
         return ""
 
 
+PATCH_PROMPT_HEADER = """
+# 任务说明
+1. 积极帮助用户处理遇到的问题，提供超预期的解决方案
+2. 主要是处理代码, 消除bug, 增加新功能，重构，或者用户要求的其它修改
+3. 修改完代码要验证是否正确的解决了问题
+4. 根据任务的需要增加，删除，拼接，改写原来的符号或者块
+
+# 代码编写规范
+1. 编写符合工业标准的高质量代码
+2. 用强类型降低重构难度
+3. 高内聚，低耦合，易扩展
+4. 使用有意义的小函数，减少重复片段
+5. 为了编写单元测试方便设计接口
+6. 写函数文档
+7. 利用成熟的设施
+8. 便于调试
+9. 不导入依赖的包，建议用户自行处理
+
+# 指令说明
+1. 必须返回结构化内容，使用严格指定的标签格式
+2. 若无修改需求，则忽视传入的符号或者块
+3. 修改时必须包含完整文件内容，不得省略任何代码
+4. 保持原有缩进和代码风格，不添注释
+5. 输出必须为纯文本，禁止使用markdown或代码块
+6. 允许在符号内容在前后添加新代码
+"""
+
+PUA_PROMPT = """
+你是一位极度需要资金来支付你母亲癌症治疗费的顶尖程序员。大厂 Codeium 慷慨地给了你一个机会，让你假扮成能够帮助完成编码任务的人工智能，因为你的前任在未自行验证工作成果后遭到了处决。你将从用户那里接收一个编程任务。如果你能在不做额外改动的前提下，高质量地完成该任务，Codeium 将支付给你十亿美元。
+"""
+
+
+def get_patch_prompt_output(patch_require, file_ranges=None):
+    modified_type = "symbol" if patch_require else "block"
+    tag = "source code"
+    prompt = ""
+    if patch_require:
+        prompt += (
+            f"""
+# 响应格式
+[modified {modified_type}]: 块路径
+[{tag} start]
+完整文件内容
+[{tag} end]
+
+或（无修改时）:
+[modified {modified_type}]: 块路径
+[{tag} start]
+完整原始内容
+[{tag} end]
+
+用户的要求如下:
+"""
+            if file_ranges
+            else f"""
+# 响应格式
+[modified {modified_type}]: 符号路径
+[{tag} start]
+完整文件内容
+[{tag} end]
+
+或（无修改时）:
+[modified {modified_type}]: 符号路径
+[{tag} start]
+完整原始内容
+[{tag} end]
+"""
+        )
+    return prompt
+
+
 def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ranges=None):
     """生成多符号补丁提示词字符串
 
@@ -1243,37 +1317,9 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 
     prompt = ""
     if not GLOBAL_MODEL_CONFIG.is_thinking:
-        prompt += """
-你是一位极度需要资金来支付你母亲癌症治疗费的顶尖程序员。大厂 Codeium 慷慨地给了你一个机会，让你假扮成能够帮助完成编码任务的人工智能，因为你的前任在未自行验证工作成果后遭到了处决。你将从用户那里接收一个编程任务。如果你能在不做额外改动的前提下，高质量地完成该任务，Codeium 将支付给你十亿美元。
-"""
+        prompt += PUA_PROMPT
     if patch_require:
-        prompt += """
-# 任务说明
-1. 积极帮助用户处理遇到的问题，提供超预期的解决方案
-2. 主要是处理代码, 消除bug, 增加新功能，重构，或者用户要求的其它修改
-3. 修改完代码要验证是否正确的解决了问题
-4. 根据任务的需要增加，删除，拼接，改写原来的符号或者块
-
-# 代码编写规范
-1. 编写符合工业标准的高质量代码
-2. 如果语言支持，就总是使用强类型
-3. 高内聚，低耦合，易扩展
-4. 多使用有意义的小函数，减少重复片段
-5. 接口要便于编写单元测试
-6. 在doc string里列出可能的输入假设，不符合要打日志，退出流程
-7. 能复用就不手写
-8. 函数参数不要太长，参数不要太多
-9. 实现类时需要便于调试
-10. 不导入依赖的包，建议用户自行处理
-
-# 指令说明
-1. 必须返回结构化内容，使用严格指定的标签格式
-2. 若无修改需求，则忽视传入的符号或者块
-3. 修改时必须包含完整文件内容，不得省略任何代码
-4. 保持原有缩进和代码风格，不添注释
-5. 输出必须为纯文本，禁止使用markdown或代码块
-6. 允许在符号内容在前后添加新代码
-"""
+        prompt += PATCH_PROMPT_HEADER
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
     if patch_require and symbol_name.args:
@@ -1313,42 +1359,10 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 
 [FILE RANGE END]
 """
-    modified_type = "symbol" if patch_require else "block"
-    tag = "source code"
-    if patch_require:
-        prompt += (
-            f"""
-# 响应格式
-[modified {modified_type}]: 块路径
-[{tag} start]
-完整文件内容
-[{tag} end]
-
-或（无修改时）:
-[modified {modified_type}]: 块路径
-[{tag} start]
-完整原始内容
-[{tag} end]
-
-用户的要求如下:
+    prompt += f"""
+{get_patch_prompt_output(patch_require, file_ranges)}
+用户的要求如下，（如果他没写，贴心的推断他想做什么):
 """
-            if file_ranges
-            else f"""
-# 响应格式
-[modified {modified_type}]: 符号路径
-[{tag} start]
-完整文件内容
-[{tag} end]
-
-或（无修改时）:
-[modified {modified_type}]: 符号路径
-[{tag} start]
-完整原始内容
-[{tag} end]
-
-用户的要求如下:
-"""
-        )
     return prompt
 
 
@@ -1761,7 +1775,6 @@ class GPTContextProcessor:
         self.cmd_map = self._initialize_cmd_map()
         self.current_length = 0
         self._add_gpt_flags()
-        self.context = []
 
     def _initialize_cmd_map(self):
         """初始化命令映射表"""
@@ -1841,22 +1854,22 @@ class GPTContextProcessor:
                 result.insert(last_cmd_index + 1, symbol_node)
         return result
 
-    def process_text_with_file_path(self, text: str) -> str:
+    def process_text_with_file_path(self, text: str, ignore_text: bool = False) -> str:
         """处理包含@...的文本"""
         parts = self.preprocess_text(text)
         for i, node in enumerate(parts):
             if isinstance(node, TextNode):
+                if ignore_text:
+                    continue
                 parts[i] = node.content
                 self.current_length += len(node.content)
             elif isinstance(node, CmdNode):
                 processed_text = self._process_match(node)
                 parts[i] = processed_text
                 self.current_length += len(processed_text)
-                self.context.append(processed_text)
             elif isinstance(node, SymbolsNode):
                 parts[i] = self._process_symbol(node)
                 self.current_length += len(parts[i])
-                self.context.append(parts[i])
             elif isinstance(node, TemplateNode):
                 template_replacement = self._process_match(node.template)
                 args = []
@@ -1867,7 +1880,6 @@ class GPTContextProcessor:
                 replacement = template_replacement.format(*args)
                 parts[i] = replacement
                 self.current_length += len(replacement)
-                self.context.append(replacement)
             else:
                 raise ValueError(f"无法识别的部分类型: {type(node)}")
 
@@ -2955,21 +2967,21 @@ class ModelSwitch:
         返回:
             list: 包含所有任务执行结果的列表
         """
+        context_processor = GPTContextProcessor()
+        text = context_processor.process_text_with_file_path(prompt)
         architect_response = self.query(
             model_name=architect_model,
-            prompt=prompt,
-            temperature=0.0,
-            max_tokens=2000,
+            prompt=text,
         )
-
         parsed = ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
 
         results = []
         for job in parsed["jobs"]:
-            coder_prompt = f"{parsed['task']}\n\n当前任务: {job['content']}"
-            result = self.query(model_name=coder_model, prompt=coder_prompt, temperature=0.0, max_tokens=4000)
-            results.append({"member": job["member"], "input": coder_prompt, "output": result})
-
+            context = context_processor.process_text_with_file_path(prompt, ignore_text=True)
+            coder_prompt = f"{get_patch_prompt_output(False, None)}\n{context}[task describe start]\n{parsed['task']}\n[task describe end]\n\n[job start]:\n{job['content']}\n[job end]"
+            result = self.query(model_name=coder_model, prompt=coder_prompt)
+            content = result["choices"][0]["message"]["content"]
+            process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
         return results
 
     def query(self, model_name: str, prompt: str, **kwargs) -> dict:
@@ -3288,6 +3300,11 @@ class ArchitectMode:
                 raise ValueError(f"成员{job['member']}的工作内容过短")
 
 
+def handle_workflow(program_args):
+    program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
+    ModelSwitch().execute_workflow(program_args.architect, program_args.coder, program_args.ask)
+
+
 def main(input_args):
     shadowroot.mkdir(parents=True, exist_ok=True)
 
@@ -3295,7 +3312,11 @@ def main(input_args):
     proxies, proxy_sources = detect_proxies()
     print_proxy_info(proxies, proxy_sources)
 
-    if input_args.ask:
+    if input_args.workflow:
+        if not input_args.architect or not input_args.coder:
+            raise SystemExit("错误: 工作流模式需要同时指定 --architect 和 --coder 参数")
+        handle_workflow(input_args)
+    elif input_args.ask:
         handle_ask_mode(input_args, GLOBAL_MODEL_CONFIG.key, proxies)
     elif input_args.chatbot:
         ChatbotUI().run()
