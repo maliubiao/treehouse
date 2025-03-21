@@ -798,15 +798,15 @@ class TestArchitectMode(unittest.TestCase):
 开发分布式任务调度系统
 [task describe end]
 
-[team member backend job start]
+[team member1 job start]
 实现工作节点注册机制
 使用Consul进行服务发现
-[team member backend job end]
+[team member1 job end]
 
-[team member frontend job start]
+[team member2 job start]
 设计任务监控仪表盘
 使用React+ECharts可视化
-[team member frontend job end]
+[team member2 job end]
 """
 
     BAD_RESPONSES = [
@@ -822,8 +822,8 @@ class TestArchitectMode(unittest.TestCase):
             """
 [task describe start]任务1
 [task describe end]
-[team member dev job start]内容
-[team member dev job end]
+[team member1 job start]内容
+[team member1 job end]
 [task describe start]任务2""",
             "task describe start",
         ),
@@ -838,7 +838,7 @@ class TestArchitectMode(unittest.TestCase):
             "空的任务内容",
             """
 [task describe start][task describe end]
-[team member empty job start][team member empty job end]""",
+[team member1 job start][team member1 job end]""",
             "task",
         ),
     ]
@@ -849,25 +849,24 @@ class TestArchitectMode(unittest.TestCase):
         self.assertEqual(result["task"], "开发分布式任务调度系统")
         self.assertEqual(len(result["jobs"]), 2)
         self.assertDictEqual(
-            result["jobs"][0], {"member": "backend", "content": "实现工作节点注册机制\n使用Consul进行服务发现"}
+            result["jobs"][0], {"member": "1", "content": "实现工作节点注册机制\n使用Consul进行服务发现"}
         )
         self.assertDictEqual(
-            result["jobs"][1], {"member": "frontend", "content": "设计任务监控仪表盘\n使用React+ECharts可视化"}
+            result["jobs"][1], {"member": "2", "content": "设计任务监控仪表盘\n使用React+ECharts可视化"}
         )
 
     def test_should_reject_empty_task_content(self):
         """拒绝空任务描述内容"""
         with self.assertRaisesRegex(ValueError, "任务描述内容不能为空"):
             ArchitectMode.parse_response(
-                "[task describe start][task describe end]\n"
-                "[team member test job start]content[team member test job end]"
+                "[task describe start][task describe end]\n" "[team member1 job start]content[team member1 job end]"
             )
 
     def test_should_validate_job_member_format(self):
         """验证成员ID格式校验"""
         invalid_response = """
 [task describe start]任务[task describe end]
-[team member 123 job start]内容[team member 123 job end]"""
+[team member123 job start]内容[team member123 job end]"""
         with self.assertRaisesRegex(ValueError, "解析后的任务描述不完整或过短"):
             ArchitectMode.parse_response(invalid_response)
 

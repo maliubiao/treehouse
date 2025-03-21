@@ -385,6 +385,7 @@ class ParserLoader:
         self._parsers = {}
         self._languages = {}
         self._queries = {}
+        self.lang = None
 
     def _get_language(self, lang_name: str):
         """动态加载对应语言的 Tree-sitter 模块"""
@@ -415,6 +416,7 @@ class ParserLoader:
 
         if lang_name in self._parsers:
             return self._parsers[lang_name], self._queries[lang_name], lang_name
+        self.lang = lang_name
 
         language = self._get_language(lang_name)
         lang = Language(language())
@@ -437,7 +439,7 @@ class ParserUtil:
         """初始化解析器工具类"""
         self.parser_loader = parser_loader
         self.node_processor = NodeProcessor()
-        self.code_map_builder = CodeMapBuilder(self.node_processor)
+        self.code_map_builder = CodeMapBuilder(self.node_processor, lang=parser_loader.lang)
 
     def get_symbol_paths(self, file_path: str):
         """解析代码文件并返回所有符号路径及对应代码和位置信息"""
@@ -490,6 +492,9 @@ class ParserUtil:
 
 
 class NodeProcessor:
+    def __init__(self, lang: str = PYTHON_LANG):
+        self.lang = lang
+
     @staticmethod
     def get_symbol_name(node):
         """提取节点的符号名称
@@ -509,6 +514,37 @@ class NodeProcessor:
             return "__main__"
         elif node.type == NodeTypes.GO_TYPE_DECLARATION:
             return NodeProcessor.get_go_type_name(node)
+        elif node.type == NodeTypes.GO_METHOD_DECLARATION:
+            return NodeProcessor.get_go_method_name(node)
+        elif node.type == NodeTypes.GO_FUNC_DECLARATION:
+            return NodeProcessor.get_go_function_name(node)
+        return None
+
+    @staticmethod
+    def get_go_method_name(node):
+        """从Go方法声明节点中提取方法名，格式为(ReceiverType).MethodName"""
+        parameter_list = NodeProcessor.find_child_by_type(node, NodeTypes.GO_PARAMETER_LIST)
+        if not parameter_list:
+            return None
+        type_node = NodeProcessor.find_child_by_type(parameter_list, NodeTypes.GO_TYPE_IDENTIFIER)
+        method_name = None
+
+        # 查找方法名
+        func_identifier = NodeProcessor.find_child_by_type(node, NodeTypes.GO_FIELD_IDENTIFIER)
+        if func_identifier:
+            method_name = func_identifier.text.decode("utf8")
+
+        if not method_name or not type_node:
+            return None
+
+        return f"({type_node.text.decode("utf8")}).{method_name}"
+
+    @staticmethod
+    def get_go_function_name(node):
+        """从Go函数声明节点中提取函数名"""
+        func_identifier = NodeProcessor.find_child_by_type(node, NodeTypes.GO_FIELD_IDENTIFIER)
+        if func_identifier:
+            return func_identifier.text.decode("utf8")
         return None
 
     @staticmethod
@@ -667,8 +703,9 @@ class NodeProcessor:
 
 
 class CodeMapBuilder:
-    def __init__(self, node_processor: NodeProcessor):
+    def __init__(self, node_processor: NodeProcessor, lang: str = PYTHON_LANG):
         self.node_processor = node_processor
+        self.lang = lang
 
     def _extract_import_block(self, node):
         """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
@@ -756,8 +793,14 @@ class CodeMapBuilder:
                 symbol_type = "class"
             elif node.type == NodeTypes.GO_TYPE_DECLARATION:
                 symbol_type = "type"
+            elif node.type == NodeTypes.GO_METHOD_DECLARATION:
+                symbol_type = "method"
+
+            elif node.type == NodeTypes.GO_FUNC_DECLARATION:
+                symbol_type = "function"
             else:
                 symbol_type = "function"
+
         elif node.type == NodeTypes.ASSIGNMENT:
             symbol_type = "module_variable" if not current_symbols else "variable"
         elif node.type == NodeTypes.IF_STATEMENT and self.node_processor.is_main_block(node):
@@ -1138,6 +1181,10 @@ class NodeTypes:
     GO_FUNC_DECLARATION = "function_declaration"
     GO_METHOD_DECLARATION = "method_declaration"
     GO_PACKAGE_CLAUSE = "package_clause"
+    GO_FIELD_IDENTIFIER = "field_identifier"
+    GO_PARAMETER_LIST = "parameter_list"
+    GO_TYPE_IDENTIFIER = "type_identifier"
+    GO_PARAMETER_DECLARATION = "parameter_declaration"
     COMMENT = "comment"
     BLOCK = "block"
     BODY = "body"
@@ -1161,7 +1208,6 @@ class NodeTypes:
     GO_PACKAGE_IDENTIFIER = "package_identifier"
     GO_INTERPRETED_STRING_LITERAL = "interpreted_string_literal"
     GO_BLANK_IDENTIFIER = "blank_identifier"
-    GO_TYPE_IDENTIFIER = "type_identifier"
     GO_TYPE_SPEC = "type_spec"
 
     @staticmethod

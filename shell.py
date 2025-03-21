@@ -264,7 +264,12 @@ def list_model_names(config_file: str):
 def read_model_config(model_name: str, config_file: str):
     with open(config_file, "r", encoding="utf-8") as f:
         config = json.load(f).get(model_name, {})
-        print(" ".join(str(config.get(k, "")) for k in ("key", "base_url", "model_name", "max_tokens", "temperature")))
+        print(
+            " ".join(
+                str(config.get(k, 8096 if k == "max_tokens" else 0.0 if k == "temperature" else " "))
+                for k in ("key", "base_url", "model_name", "max_tokens", "temperature", "is_thinking")
+            )
+        )
 
 
 def main():

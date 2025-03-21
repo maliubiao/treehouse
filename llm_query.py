@@ -141,7 +141,7 @@ class ModelConfig:
             raise ValueError(f"无效的temperature值: {temperature}") from exc
 
         try:
-            is_thinking = bool(int(is_thinking)) if is_thinking is not None else False
+            is_thinking = bool(is_thinking) if is_thinking is not None else False
         except ValueError as exc:
             raise ValueError(f"无效的is_thinking值: {is_thinking}") from exc
 
@@ -205,7 +205,7 @@ def parse_arguments():
     group.add_argument("--chatbot", action="store_true", help="进入聊天机器人UI模式，与--file和--ask互斥")
     group.add_argument("--project-search", nargs="+", metavar="KEYWORD", help="执行项目关键词搜索(支持多词)")
     group.add_argument("--pylint-log", type=Path, help="执行Pylint修复的日志文件路径")
-    group.add_argument("--workflow", action="store_true", help="进入工作流执行模式，与其他模式互斥")
+    parser.add_argument("--workflow", action="store_true", help="进入工作流执行模式")
     parser.add_argument(
         "--config",
         default=os.path.join(os.path.dirname(__file__), "llm_project.yml"),
@@ -460,13 +460,13 @@ def query_gpt_api(
 
     except RuntimeError as runtime_exc:
         print(f"详细错误信息: {str(runtime_exc)}")
-        sys.exit(1)
+        raise runtime_exc
     except (ValueError, TypeError, KeyError) as specific_exc:
         debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
         error_msg = f"特定类型错误: {str(specific_exc)}\n"
         error_msg += f"配置状态: {debug_info}"
         print(error_msg)
-        sys.exit(1)
+        raise ValueError(error_msg) from specific_exc
 
 
 def get_conversation_file(file):
@@ -1860,6 +1860,7 @@ class GPTContextProcessor:
         for i, node in enumerate(parts):
             if isinstance(node, TextNode):
                 if ignore_text:
+                    parts[i] = ""
                     continue
                 parts[i] = node.content
                 self.current_length += len(node.content)
@@ -2967,18 +2968,24 @@ class ModelSwitch:
         返回:
             list: 包含所有任务执行结果的列表
         """
+
         context_processor = GPTContextProcessor()
         text = context_processor.process_text_with_file_path(prompt)
+        GPT_FLAGS[GPT_FLAG_PATCH] = False
+        architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
+            encoding="utf-8"
+        )
         architect_response = self.query(
             model_name=architect_model,
-            prompt=text,
+            prompt=architect_prompt + "\n" + text,
         )
         parsed = ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
-
+        print(parsed["task"])
         results = []
         for job in parsed["jobs"]:
+            print(f"🔧 开始执行任务: {job['content']}")
             context = context_processor.process_text_with_file_path(prompt, ignore_text=True)
-            coder_prompt = f"{get_patch_prompt_output(False, None)}\n{context}[task describe start]\n{parsed['task']}\n[task describe end]\n\n[job start]:\n{job['content']}\n[job end]"
+            coder_prompt = f"{get_patch_prompt_output(True, None)}\n{context}[task describe start]\n{job['content']}\n[task describe end]\n\n[job start]:\n{job['content']}\n[job end]"
             result = self.query(model_name=coder_model, prompt=coder_prompt)
             content = result["choices"][0]["message"]["content"]
             process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
@@ -3021,12 +3028,16 @@ class ModelSwitch:
         except AttributeError as e:
             debug_info = f"配置更新失败: {str(e)}\n当前配置状态: {repr(GLOBAL_MODEL_CONFIG)}"
             raise RuntimeError(debug_info) from e
-
-        try:
-            return query_gpt_api(api_key=api_key, prompt=prompt, model=model, **combined_kwargs)
-        except Exception as e:
-            debug_info = f"API调用失败: {str(e)}\n当前配置状态: {GLOBAL_MODEL_CONFIG.get_debug_info()}"
-            raise RuntimeError(debug_info) from e
+        max_repeat = 3
+        for i in range(max_repeat):
+            try:
+                return query_gpt_api(api_key=api_key, prompt=prompt, model=model, **combined_kwargs)
+            except Exception as e:
+                debug_info = f"API调用失败: {str(e)}\n当前配置状态: {GLOBAL_MODEL_CONFIG.get_debug_info()}"
+                print(debug_info)
+                print("5s后重试...")
+                time.sleep(5)
+        raise RuntimeError("API调用失败，重试次数已用尽: %s" % max_repeat)
 
 
 class LintReportFix:
@@ -3218,7 +3229,7 @@ class ArchitectMode:
 
     TASK_PATTERN = re.compile(r"\[task describe start\](.*?)\[task describe end\]", re.DOTALL)
     JOB_BLOCK_PATTERN = re.compile(
-        r"\[team member (?P<member_id>\w+) job start\](.*?)\[team member \1 job end\]", re.DOTALL
+        r"\[team member(?P<member_id>\w+) job start\](.*?)\[team member\1 job end\]", re.DOTALL
     )
 
     @staticmethod
@@ -3294,8 +3305,6 @@ class ArchitectMode:
             raise ValueError("未解析到有效的工作分配")
 
         for idx, job in enumerate(data["jobs"]):
-            if not job["member"].isalpha():
-                raise ValueError(f"第{idx+1}个任务的成员ID包含非法字符: {job['member']}")
             if len(job["content"]) < 10:
                 raise ValueError(f"成员{job['member']}的工作内容过短")
 

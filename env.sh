@@ -101,12 +101,12 @@ _conversation_list() {
 
 # 模型管理函数
 _list_models() {
-  local config_file="${1:-$GPT_PATH/model.json}
+  local config_file="${1:-$GPT_PATH/model.json}"
   "$PYTHON_BIN" "$GPT_PATH/shell.py" list-models "$config_file"
 }
 
 _list_model_names() {
-  local config_file="${1:-$GPT_PATH/model.json}
+  local config_file="${1:-$GPT_PATH/model.json}"
   "$PYTHON_BIN" "$GPT_PATH/shell.py" list-model-names "$config_file"
 }
 
@@ -233,6 +233,14 @@ patchgpt() {
   naskgpt @patch $@
 }
 
+archgpt() {
+  [[ -z "$*" ]] && {
+    echo >&2 "Error: Question cannot be empty"
+    return 1
+  }
+  "$PYTHON_BIN" "$GPT_PATH/llm_query.py" --workflow --architect openrouter-r1 --coder openrouter-v3 --ask "$*"
+}
+
 fixgpt() {
   local last_command=$(fc -ln -1 | sed 's/^[[:space:]]*//')
   echo "上一条命令：$last_command"
@@ -330,7 +338,7 @@ _zsh_completion_setup() {
     _alternative "providers:可用模型:(${providers[@]})"
   }
 
-  compdef _zsh_at_complete askgpt naskgpt codegpt patchgpt
+  compdef _zsh_at_complete askgpt naskgpt codegpt patchgpt archgpt
   compdef _zsh_usegpt_complete usegpt
 }
 
@@ -360,7 +368,7 @@ _bash_completion_setup() {
     COMPREPLY=($(compgen -W "$(_list_model_names)" -- "$cur"))
   }
 
-  complete -F _bash_at_complete askgpt naskgpt codegpt patchgpt
+  complete -F _bash_at_complete askgpt naskgpt codegpt patchgpt archgpt
   complete -F _bash_usegpt_complete usegpt
 }
 
