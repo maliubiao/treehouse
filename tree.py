@@ -6,7 +6,9 @@ import importlib
 import json
 import logging
 import os
+import platform
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -1455,6 +1457,22 @@ class BlockPatch:
 
         return blocks
 
+    def _generate_system_diff(self, original_file: str, modified_file: str) -> str:
+        """使用系统diff工具生成差异"""
+
+        # 查找系统diff工具
+        diff_tool = "diff"
+        if platform.system() == "Windows":
+            diff_tool = "diff.exe" if shutil.which("diff.exe") else "fc"
+
+        try:
+            result = subprocess.run(
+                [diff_tool, "-u", original_file, modified_file], capture_output=True, text=True, check=True
+            )
+            return result.stdout
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
+
     def _process_single_file_diff(self, file_path: str, indices: list[int]) -> list[str]:
         """处理单个文件的差异生成"""
         original_code = self.source_codes[file_path]
@@ -1475,17 +1493,48 @@ class BlockPatch:
         modified_blocks = self._build_modified_blocks(original_code, replacements)
         modified_code = "".join(modified_blocks)
 
-        # 生成完整文件差异
-        return list(
-            unified_diff(
-                original_code.decode("utf8").splitlines(keepends=True),
-                modified_code.splitlines(keepends=True),
-                fromfile=file_path,
-                tofile=file_path,
-                lineterm="",
-                n=3,
+        # 尝试使用系统diff工具
+        import tempfile
+
+        with (
+            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".original") as f_orig,
+            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".modified") as f_mod,
+        ):
+
+            f_orig.write(original_code.decode("utf8"))
+            f_orig_path = f_orig.name
+            f_mod.write(modified_code)
+            f_mod_path = f_mod.name
+
+        system_diff = self._generate_system_diff(f_orig_path, f_mod_path)
+
+        os.unlink(f_orig_path)
+        os.unlink(f_mod_path)
+
+        # 回退到Python实现
+        if not system_diff:
+            from difflib import unified_diff
+
+            return list(
+                unified_diff(
+                    original_code.decode("utf8").splitlines(keepends=True),
+                    modified_code.splitlines(keepends=True),
+                    fromfile=file_path,
+                    tofile=file_path,
+                    lineterm="",
+                    n=3,
+                )
             )
-        )
+
+        # 调整系统diff输出中的文件路径
+        diff_lines = []
+        for line in system_diff.splitlines(keepends=True):
+            if line.startswith("--- ") or line.startswith("+++ "):
+                diff_lines.append(f"{line.split()[0]} {file_path}\n")
+            else:
+                diff_lines.append(line)
+
+        return diff_lines
 
     def generate_diff(self) -> str:
         """生成多文件差异补丁"""
@@ -3020,8 +3069,8 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
     Returns:
         纯文本格式的补全列表，每行一个补全结果
     """
+    prefix = unquote(prefix)
     print(f"[INFO] 处理实时补全请求: {prefix[:50]}...")
-
     trie = app.state.file_symbol_trie
     max_results = clamp(max_results, 1, 50)
     file_path, symbols = parse_symbol_prefix(prefix)
