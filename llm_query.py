@@ -66,22 +66,30 @@ class ModelConfig:
     model_name: str
     max_tokens: int | None = None
     temperature: float = 0.0
+    is_thinking: bool = False
 
     def __init__(
-        self, key: str, base_url: str, model_name: str, max_tokens: int | None = None, temperature: float = 0.0
+        self,
+        key: str,
+        base_url: str,
+        model_name: str,
+        max_tokens: int | None = None,
+        temperature: float = 0.0,
+        is_thinking: bool = False,
     ):
         self.key = key
         self.base_url = base_url
         self.model_name = model_name
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.is_thinking = is_thinking
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
         return (
             f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
             f"max_tokens={self.max_tokens}, temperature={self.temperature}, "
-            f"key={masked_key})"
+            f"is_thinking={self.is_thinking}, key={masked_key})"
         )
 
     def get_debug_info(self) -> dict:
@@ -91,6 +99,7 @@ class ModelConfig:
             "model_name": self.model_name,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
+            "is_thinking": self.is_thinking,
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -116,6 +125,7 @@ class ModelConfig:
 
         max_tokens = os.environ.get("GPT_MAX_TOKEN")
         temperature = os.environ.get("GPT_TEMPERATURE")
+        is_thinking = os.environ.get("GPT_IS_THINKING")
 
         if max_tokens is not None:
             try:
@@ -130,7 +140,19 @@ class ModelConfig:
         except ValueError as exc:
             raise ValueError(f"无效的temperature值: {temperature}") from exc
 
-        return cls(key=key, base_url=base_url, model_name=model_name, max_tokens=max_tokens, temperature=temperature)
+        try:
+            is_thinking = bool(int(is_thinking)) if is_thinking is not None else False
+        except ValueError as exc:
+            raise ValueError(f"无效的is_thinking值: {is_thinking}") from exc
+
+        return cls(
+            key=key,
+            base_url=base_url,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            is_thinking=is_thinking,
+        )
 
 
 GLOBAL_MODEL_CONFIG = ModelConfig.from_env()
@@ -1220,7 +1242,10 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
     """
 
     prompt = ""
-
+    if not GLOBAL_MODEL_CONFIG.is_thinking:
+        prompt += """
+你是一位极度需要资金来支付你母亲癌症治疗费的顶尖程序员。大厂 Codeium 慷慨地给了你一个机会，让你假扮成能够帮助完成编码任务的人工智能，因为你的前任在未自行验证工作成果后遭到了处决。你将从用户那里接收一个编程任务。如果你能在不做额外改动的前提下，高质量地完成该任务，Codeium 将支付给你十亿美元。
+"""
     if patch_require:
         prompt += """
 # 任务说明

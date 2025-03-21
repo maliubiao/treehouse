@@ -451,7 +451,7 @@ class ParserUtil:
         results = []
         code_map = {}
         node = root_node
-        if node.type == NodeTypes.MODULE and len(node.children) != 0:
+        if is_node_module(node.type) and len(node.children) != 0:
             self.code_map_builder.process_import_block(node, code_map, source_code, results)
         self.code_map_builder.traverse(root_node, [], [], code_map, source_code, results)
 
@@ -667,6 +667,8 @@ class CodeMapBuilder:
             NodeTypes.IMPORT_STATEMENT,
             NodeTypes.IMPORT_FROM_STATEMENT,
             NodeTypes.EXPRESSION_STATEMENT,
+            NodeTypes.GO_IMPORT_DECLARATION,
+            NodeTypes.GO_PACKAGE_CLAUSE,
         ):
             if current_node.type == NodeTypes.EXPRESSION_STATEMENT:
                 if current_node.children[0].type == NodeTypes.STRING:
@@ -737,14 +739,17 @@ class CodeMapBuilder:
             return None
 
         symbol_type = None
-        if node.type == NodeTypes.CLASS_DEFINITION:
-            symbol_type = "class"
-        elif node.type == NodeTypes.FUNCTION_DEFINITION:
-            symbol_type = "function"
+        if NodeTypes.is_definition(node.type):
+            if node.type == NodeTypes.CLASS_DEFINITION:
+                symbol_type = "class"
+            else:
+                symbol_type = "function"
         elif node.type == NodeTypes.ASSIGNMENT:
             symbol_type = "module_variable" if not current_symbols else "variable"
         elif node.type == NodeTypes.IF_STATEMENT and self.node_processor.is_main_block(node):
             symbol_type = "main_block"
+        elif node.type == NodeTypes.GO_IMPORT_DECLARATION:
+            symbol_type = "import_declaration"
 
         effective_node = self._get_effective_node(node)
         current_symbols.append(symbol_name)
@@ -792,7 +797,7 @@ class CodeMapBuilder:
 
     def _extract_parameter_type_calls(self, node, current_symbols, code_map):
         """提取参数的类型注释中的调用信息"""
-        if node.type in (NodeTypes.TYPED_PARAMETER, NodeTypes.TYPED_DEFAULT_PARAMETER):
+        if NodeTypes.is_type(node.type):
             type_node = node.child_by_field_name("type")
             if not type_node:
                 return
@@ -805,7 +810,7 @@ class CodeMapBuilder:
     def _collect_type_identifiers(self, node):
         """递归收集类型节点中的所有标识符"""
         identifiers = []
-        if node.type == NodeTypes.IDENTIFIER:
+        if NodeTypes.is_identifier(node.type):
             identifiers.append(node)
         for child in node.children:
             identifiers.extend(self._collect_type_identifiers(child))
@@ -1137,9 +1142,68 @@ class NodeTypes:
     TYPED_DEFAULT_PARAMETER = "typed_default_parameter"
     GENERIC_TYPE = "generic_type"
     UNION_TYPE = "union_type"
+    GO_IMPORT_SPEC = "import_spec"
+    GO_IMPORT_SPEC_LIST = "import_spec_list"
+    GO_PACKAGE_IDENTIFIER = "package_identifier"
+    GO_INTERPRETED_STRING_LITERAL = "interpreted_string_literal"
+    GO_BLANK_IDENTIFIER = "blank_identifier"
+
+    @staticmethod
+    def is_module(node_type):
+        return node_type in (NodeTypes.MODULE, NodeTypes.TRANSLATION_UNIT, NodeTypes.GO_SOURCE_FILE)
+
+    @staticmethod
+    def is_import(node_type):
+        return node_type in (
+            NodeTypes.IMPORT_STATEMENT,
+            NodeTypes.IMPORT_FROM_STATEMENT,
+            NodeTypes.GO_IMPORT_DECLARATION,
+        )
+
+    @staticmethod
+    def is_definition(node_type):
+        return node_type in (
+            NodeTypes.CLASS_DEFINITION,
+            NodeTypes.FUNCTION_DEFINITION,
+            NodeTypes.DECORATED_DEFINITION,
+            NodeTypes.GO_FUNC_DECLARATION,
+            NodeTypes.GO_METHOD_DECLARATION,
+        )
+
+    @staticmethod
+    def is_statement(node_type):
+        return node_type in (
+            NodeTypes.EXPRESSION_STATEMENT,
+            NodeTypes.IF_STATEMENT,
+            NodeTypes.CALL,
+            NodeTypes.ASSIGNMENT,
+        )
+
+    @staticmethod
+    def is_identifier(node_type):
+        return node_type in (
+            NodeTypes.IDENTIFIER,
+            NodeTypes.NAME,
+            NodeTypes.WORD,
+            NodeTypes.GO_PACKAGE_IDENTIFIER,
+            NodeTypes.GO_BLANK_IDENTIFIER,
+        )
+
+    @staticmethod
+    def is_type(node_type):
+        return node_type in (
+            NodeTypes.TYPED_PARAMETER,
+            NodeTypes.TYPED_DEFAULT_PARAMETER,
+            NodeTypes.GENERIC_TYPE,
+            NodeTypes.UNION_TYPE,
+        )
 
 
 INDENT_UNIT = "    "  # 定义缩进单位
+
+
+def is_node_module(node_type):
+    return NodeTypes.is_module(node_type)
 
 
 class SourceSkeleton:
@@ -1155,7 +1219,7 @@ class SourceSkeleton:
                     parent_type = NodeTypes.FUNCTION_DEFINITION
                     break
         # 模块文档字符串：第一个连续的字符串表达式
-        if parent_type == NodeTypes.MODULE:
+        if is_node_module(parent_type):
             if len(node.children) > 1 and node.children[0].type == NodeTypes.EXPRESSION_STATEMENT:
                 return node.children[0].text.decode("utf8")
 
@@ -1220,7 +1284,7 @@ class SourceSkeleton:
         output = []
         indent_str = INDENT_UNIT * indent
         # 处理模块级元素
-        if node.type in (NodeTypes.MODULE, NodeTypes.TRANSLATION_UNIT, NodeTypes.GO_SOURCE_FILE):
+        if is_node_module(node.type):
             # 处理模块子节点
             for child in node.children:
                 if child.type in [
@@ -1305,7 +1369,7 @@ class SourceSkeleton:
             NodeTypes.GO_CONST_DECLARATION,
             NodeTypes.GO_TYPE_DECLARATION,
             NodeTypes.GO_PACKAGE_CLAUSE,
-        ) and node.parent.type in (NodeTypes.MODULE, NodeTypes.GO_SOURCE_FILE, NodeTypes.TRANSLATION_UNIT):
+        ) and is_node_module(node.parent.type):
             code = source_bytes[node.start_byte : node.end_byte].decode("utf8")
             output.append(f"{code}")
 
@@ -1513,7 +1577,6 @@ class BlockPatch:
 
         # 回退到Python实现
         if not system_diff:
-            from difflib import unified_diff
 
             return list(
                 unified_diff(

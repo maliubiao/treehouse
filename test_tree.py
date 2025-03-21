@@ -16,6 +16,7 @@ from tree import (
     BlockPatch,
     CodeMapBuilder,
     NodeProcessor,
+    NodeTypes,
     ParserLoader,
     ParserUtil,
     RipgrepSearcher,
@@ -342,10 +343,78 @@ class TestParserUtil(unittest.TestCase):
         if self.lsp_client.running:
             asyncio.run(self.lsp_client.shutdown())
 
-    def create_temp_file(self, code: str) -> str:
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".py") as f:
+    def create_temp_file(self, code: str, suffix=".py") -> str:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=suffix) as f:
             f.write(code)
             return f.name
+
+    def test_node_type_checks(self):
+        """测试NodeTypes中的类型检查方法"""
+        test_cases = [
+            (
+                NodeTypes.is_module,
+                [
+                    (NodeTypes.MODULE, True),
+                    (NodeTypes.TRANSLATION_UNIT, True),
+                    (NodeTypes.GO_SOURCE_FILE, True),
+                    (NodeTypes.CLASS_DEFINITION, False),
+                ],
+            ),
+            (
+                NodeTypes.is_import,
+                [
+                    (NodeTypes.IMPORT_STATEMENT, True),
+                    (NodeTypes.IMPORT_FROM_STATEMENT, True),
+                    (NodeTypes.GO_IMPORT_DECLARATION, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+            (
+                NodeTypes.is_definition,
+                [
+                    (NodeTypes.CLASS_DEFINITION, True),
+                    (NodeTypes.FUNCTION_DEFINITION, True),
+                    (NodeTypes.DECORATED_DEFINITION, True),
+                    (NodeTypes.GO_FUNC_DECLARATION, True),
+                    (NodeTypes.IMPORT_STATEMENT, False),
+                ],
+            ),
+            (
+                NodeTypes.is_statement,
+                [
+                    (NodeTypes.EXPRESSION_STATEMENT, True),
+                    (NodeTypes.IF_STATEMENT, True),
+                    (NodeTypes.CALL, True),
+                    (NodeTypes.ASSIGNMENT, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+            (
+                NodeTypes.is_identifier,
+                [
+                    (NodeTypes.IDENTIFIER, True),
+                    (NodeTypes.NAME, True),
+                    (NodeTypes.WORD, True),
+                    (NodeTypes.GO_PACKAGE_IDENTIFIER, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+            (
+                NodeTypes.is_type,
+                [
+                    (NodeTypes.TYPED_PARAMETER, True),
+                    (NodeTypes.TYPED_DEFAULT_PARAMETER, True),
+                    (NodeTypes.GENERIC_TYPE, True),
+                    (NodeTypes.UNION_TYPE, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+        ]
+
+        for checker, cases in test_cases:
+            for node_type, expected in cases:
+                with self.subTest(checker=checker.__name__, node_type=node_type):
+                    self.assertEqual(checker(node_type), expected)
 
     def test_get_symbol_paths(self):
         code = dedent(
@@ -366,8 +435,8 @@ class TestParserUtil(unittest.TestCase):
             self.assertIn(path_key, code_map)
             self.assertIn("code", code_map[path_key])
             self.assertIn("block_range", code_map[path_key])
-            self.assertIn("start_line", code_map[path_key])
-            self.assertIn("end_line", code_map[path_key])
+        self.assertIn("start_line", code_map[path_key])
+        self.assertIn("end_line", code_map[path_key])
 
     def test_main_block_detection(self):
         code = dedent(
@@ -428,6 +497,29 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("import os", import_entry["code"])
         self.assertIn("from sys import version", import_entry["code"])
         self.assertIn("import sys as sys1", import_entry["code"])
+
+    def test_go_import_block_detection(self):
+        """测试Go语言import块的符号提取"""
+        code = dedent(
+            """
+            package main
+
+            import (
+                "fmt"
+                "math/rand"
+                "os"
+            )
+            """
+        )
+        path = self.create_temp_file(code, suffix=".go")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("__import__", paths)
+        import_entry = code_map["__import__"]
+        self.assertIn('"fmt"', import_entry["code"])
+        self.assertIn('"math/rand"', import_entry["code"])
+        self.assertIn('"os"', import_entry["code"])
 
     def _find_byte_position(self, code_bytes: bytes, substring: str) -> tuple:
         """在字节码中查找子字符串的位置并返回(start_byte, end_byte)"""

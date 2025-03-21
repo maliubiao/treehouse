@@ -152,6 +152,14 @@ function global:Use-GptModel {
         return
     }
 
+    # 清空相关环境变量
+    $env:GPT_KEY = $null
+    $env:GPT_BASE_URL = $null
+    $env:GPT_MODEL = $null
+    $env:GPT_MAX_TOKEN = $null
+    $env:GPT_TEMPERATURE = $null
+    $env:GPT_IS_THINKING = $null
+
     $config = Get-Content -Path $ConfigFile -Encoding UTF8 | ConvertFrom-Json
     $modelConfig = $config.$ModelName
 
@@ -165,6 +173,7 @@ function global:Use-GptModel {
     $env:GPT_MODEL = $modelConfig.model_name
     if ($modelConfig.max_tokens) { $env:GPT_MAX_TOKEN = $modelConfig.max_tokens }
     if ($modelConfig.temperature) { $env:GPT_TEMPERATURE = $modelConfig.temperature }
+    if ($modelConfig.is_thinking) { $env:GPT_IS_THINKING = $modelConfig.is_thinking }
 
     if (-not $Silent) {
         Write-Host "成功设置GPT环境变量："
@@ -173,6 +182,7 @@ function global:Use-GptModel {
         Write-Host "  GPT_MODEL: $($modelConfig.model_name)"
         if ($modelConfig.max_tokens) { Write-Host "  GPT_MAX_TOKEN: $($modelConfig.max_tokens)" }
         if ($modelConfig.temperature) { Write-Host "  GPT_TEMPERATURE: $($modelConfig.temperature)" }
+        if ($modelConfig.is_thinking) { Write-Host "  GPT_IS_THINKING: $($modelConfig.is_thinking)" }
     }
 }
 

@@ -101,12 +101,12 @@ _conversation_list() {
 
 # 模型管理函数
 _list_models() {
-  local config_file="${1:-$GPT_PATH/model.json}"
+  local config_file="${1:-$GPT_PATH/model.json}
   "$PYTHON_BIN" "$GPT_PATH/shell.py" list-models "$config_file"
 }
 
 _list_model_names() {
-  local config_file="${1:-$GPT_PATH/model.json}"
+  local config_file="${1:-$GPT_PATH/model.json}
   "$PYTHON_BIN" "$GPT_PATH/shell.py" list-model-names "$config_file"
 }
 
@@ -122,12 +122,18 @@ _set_gpt_env_vars() {
   local model=$3
   local max_tokens=$4
   local temperature=$5
+  local is_thinking=$6
 
+  # 清空可能存在的旧环境变量
+  unset GPT_KEY GPT_BASE_URL GPT_MODEL GPT_MAX_TOKEN GPT_TEMPERATURE GPT_IS_THINKING
+
+  # 设置新的环境变量
   export GPT_KEY="$key"
   export GPT_BASE_URL="$base_url"
   export GPT_MODEL="$model"
   [[ -n "$max_tokens" ]] && export GPT_MAX_TOKEN="$max_tokens"
   [[ -n "$temperature" ]] && export GPT_TEMPERATURE="$temperature"
+  [[ -n "$is_thinking" ]] && export GPT_IS_THINKING="$is_thinking"
 }
 
 usegpt() {
@@ -144,15 +150,15 @@ usegpt() {
     return 1
   }
 
-  local key base_url model max_tokens temperature
-  read key base_url model max_tokens temperature <<<$(_read_model_config "$model_name" "$config_file")
+  local key base_url model max_tokens temperature is_thinking
+  read key base_url model max_tokens temperature is_thinking <<<$(_read_model_config "$model_name" "$config_file")
 
   [[ -z "$key" || -z "$base_url" || -z "$model" ]] && {
     echo >&2 "错误：未找到模型 '$model_name' 或配置不完整"
     return 1
   }
 
-  _set_gpt_env_vars "$key" "$base_url" "$model" "$max_tokens" "$temperature"
+  _set_gpt_env_vars "$key" "$base_url" "$model" "$max_tokens" "$temperature" "$is_thinking"
 
   [[ -z "$no_verbose" ]] && {
     echo "成功设置GPT环境变量："
@@ -161,6 +167,7 @@ usegpt() {
     echo "  GPT_MODEL: $model"
     [[ -n "$max_tokens" ]] && echo "  GPT_MAX_TOKEN: $max_tokens"
     [[ -n "$temperature" ]] && echo "  GPT_TEMPERATURE: $temperature"
+    [[ -n "$is_thinking" ]] && echo "  GPT_IS_THINKING: $is_thinking"
   }
 }
 
