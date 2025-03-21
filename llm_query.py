@@ -1854,7 +1854,9 @@ class GPTContextProcessor:
                 result.insert(last_cmd_index + 1, symbol_node)
         return result
 
-    def process_text_with_file_path(self, text: str, ignore_text: bool = False) -> str:
+    def process_text_with_file_path(
+        self, text: str, ignore_text: bool = False, tokens_left: int = GLOBAL_MODEL_CONFIG.max_tokens
+    ) -> str:
         """处理包含@...的文本"""
         parts = self.preprocess_text(text)
         for i, node in enumerate(parts):
@@ -1926,11 +1928,11 @@ class GPTContextProcessor:
             return _handle_command(match, self.cmd_map)
         return ""
 
-    def _finalize_text(self, text):
+    def _finalize_text(self, text, tokens_left=GLOBAL_MODEL_CONFIG.max_tokens):
         """最终处理文本"""
         truncated_suffix = "\n[输入太长内容已自动截断]"
-        if len(text) > GLOBAL_MODEL_CONFIG.max_tokens:
-            text = text[: GLOBAL_MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
+        if len(text) > tokens_left:
+            text = text[: tokens_left - len(truncated_suffix)] + truncated_suffix
 
         with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
             f.write(text)
@@ -2984,8 +2986,12 @@ class ModelSwitch:
         results = []
         for job in parsed["jobs"]:
             print(f"🔧 开始执行任务: {job['content']}")
-            context = context_processor.process_text_with_file_path(prompt, ignore_text=True)
-            coder_prompt = f"{get_patch_prompt_output(True, None)}\n{context}[task describe start]\n{job['content']}\n[task describe end]\n\n[job start]:\n{job['content']}\n[job end]"
+            part_a = f"{get_patch_prompt_output(True, None)}\n"
+            part_b = f"[task describe start]\n{job['content']}\n[task describe end]\n\n[job start]:\n{job['content']}\n[job end]"
+            context = context_processor.process_text_with_file_path(
+                prompt, ignore_text=True, tokens_left=GLOBAL_MODEL_CONFIG.max_tokens - len(part_a) - len(part_b)
+            )
+            coder_prompt = f"{part_a}{context}{part_b}"
             result = self.query(model_name=coder_model, prompt=coder_prompt)
             content = result["choices"][0]["message"]["content"]
             process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])

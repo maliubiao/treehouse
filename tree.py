@@ -518,33 +518,54 @@ class NodeProcessor:
             return NodeProcessor.get_go_method_name(node)
         elif node.type == NodeTypes.GO_FUNC_DECLARATION:
             return NodeProcessor.get_go_function_name(node)
+        elif node.type == NodeTypes.GO_PACKAGE_CLAUSE:
+            return NodeProcessor.get_go_package_name(node)
         return None
 
     @staticmethod
     def get_go_method_name(node):
         """从Go方法声明节点中提取方法名，格式为(ReceiverType).MethodName"""
-        parameter_list = NodeProcessor.find_child_by_type(node, NodeTypes.GO_PARAMETER_LIST)
+        find_child = NodeProcessor.find_child_by_type
+        parameter_list = find_child(node, NodeTypes.GO_PARAMETER_LIST)
         if not parameter_list:
             return None
-        type_node = NodeProcessor.find_child_by_type(parameter_list, NodeTypes.GO_TYPE_IDENTIFIER)
+        parameter_declaration = find_child(parameter_list, NodeTypes.GO_PARAMETER_DECLARATION)
+        if not parameter_declaration:
+            return None
+
+        type_node = find_child(parameter_declaration, NodeTypes.GO_TYPE_IDENTIFIER)
+        if not type_node:
+            pointer_type = find_child(parameter_declaration, NodeTypes.GO_POINTER_TYPE)
+            if pointer_type:
+                type_node = find_child(pointer_type, NodeTypes.GO_TYPE_IDENTIFIER)
+                if not type_node:
+                    type_node = find_child(pointer_type, NodeTypes.GO_QUALIFIED_TYPE)
         method_name = None
 
         # 查找方法名
-        func_identifier = NodeProcessor.find_child_by_type(node, NodeTypes.GO_FIELD_IDENTIFIER)
+        func_identifier = find_child(node, NodeTypes.GO_FIELD_IDENTIFIER)
         if func_identifier:
             method_name = func_identifier.text.decode("utf8")
 
         if not method_name or not type_node:
             return None
 
-        return f"({type_node.text.decode("utf8")}).{method_name}"
+        return f"{type_node.text.decode("utf8")}.{method_name}"
 
     @staticmethod
     def get_go_function_name(node):
         """从Go函数声明节点中提取函数名"""
-        func_identifier = NodeProcessor.find_child_by_type(node, NodeTypes.GO_FIELD_IDENTIFIER)
+        func_identifier = NodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
         if func_identifier:
             return func_identifier.text.decode("utf8")
+        return None
+
+    @staticmethod
+    def get_go_package_name(node):
+        """从Go包声明节点中提取包名"""
+        package_name = NodeProcessor.find_child_by_type(node, NodeTypes.GO_PACKAGE_IDENTIFIER)
+        if package_name:
+            return package_name.text.decode("utf8")
         return None
 
     @staticmethod
@@ -795,18 +816,16 @@ class CodeMapBuilder:
                 symbol_type = "type"
             elif node.type == NodeTypes.GO_METHOD_DECLARATION:
                 symbol_type = "method"
-
-            elif node.type == NodeTypes.GO_FUNC_DECLARATION:
-                symbol_type = "function"
             else:
                 symbol_type = "function"
-
         elif node.type == NodeTypes.ASSIGNMENT:
             symbol_type = "module_variable" if not current_symbols else "variable"
         elif node.type == NodeTypes.IF_STATEMENT and self.node_processor.is_main_block(node):
             symbol_type = "main_block"
         elif node.type == NodeTypes.GO_IMPORT_DECLARATION:
             symbol_type = "import_declaration"
+        else:
+            symbol_type == node.type
 
         effective_node = self._get_effective_node(node)
         current_symbols.append(symbol_name)
@@ -821,7 +840,8 @@ class CodeMapBuilder:
         code_entry["type"] = symbol_type
         code_map[path_key] = code_entry
         results.append(path_key)
-
+        if node.type == NodeTypes.GO_PACKAGE_CLAUSE:
+            return None
         return effective_node
 
     def _add_call_info(self, func_name, current_symbols, code_map, node):
@@ -1150,13 +1170,13 @@ class RipgrepSearcher:
         return [SearchResult(path, entry["matches"], entry["stats"]) for path, entry in results.items()]
 
 
-def dump_tree(node, source_bytes, indent=0):
+def dump_tree(node, indent=0):
     prefix = "  " * indent
     node_text = node.text.decode("utf8") if node.text else ""
     # 或者根据 source_bytes 截取：node_text = source_bytes[node.start_byte:node.end_byte].decode('utf8')
     print(f"{prefix}{node.type} [start:{node.start_byte}, end:{node.end_byte}] '{node_text}'")
     for child in node.children:
-        dump_tree(child, source_bytes, indent + 1)
+        dump_tree(child, indent + 1)
 
 
 # 定义Tree-sitter节点类型常量
@@ -1209,6 +1229,8 @@ class NodeTypes:
     GO_INTERPRETED_STRING_LITERAL = "interpreted_string_literal"
     GO_BLANK_IDENTIFIER = "blank_identifier"
     GO_TYPE_SPEC = "type_spec"
+    GO_POINTER_TYPE = "pointer_type"
+    GO_QUALIFIED_TYPE = "qualified_type"
 
     @staticmethod
     def is_module(node_type):
@@ -1250,6 +1272,7 @@ class NodeTypes:
             NodeTypes.WORD,
             NodeTypes.GO_PACKAGE_IDENTIFIER,
             NodeTypes.GO_BLANK_IDENTIFIER,
+            NodeTypes.GO_TYPE_IDENTIFIER,
         )
 
     @staticmethod

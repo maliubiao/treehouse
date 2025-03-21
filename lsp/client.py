@@ -309,7 +309,8 @@ class GenericLSPClient:
             except (OSError, RuntimeError) as e:
                 logger.error("Cleanup error: %s", str(e))
             finally:
-                self.process = None
+                self.process.stdout.close()
+                self.process.stdin.close()
 
         for pipe in [self.stdin, self.stdout, self.process.stderr if self.process else None]:
             try:
