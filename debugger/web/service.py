@@ -18,7 +18,7 @@ logging.basicConfig(level=0, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def null_breakpoint():
+def placeholder():
     pass
 
 
@@ -354,7 +354,7 @@ class DebuggerWebUI(Pdb):
 def start_debugger(port=5555):
     debugger = DebuggerWebUI(port=port)
     # pylint: disable=protected-access
-    debugger.do_break("null_breakpoint")
+    debugger.do_break("placeholder")  # 不要删除，不然会造成无断点，退出trace
     debugger.set_continue()
     sys.settrace(debugger.trace_dispatch)
     logger.info("调试器已启动")
