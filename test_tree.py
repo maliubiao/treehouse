@@ -348,74 +348,8 @@ class TestParserUtil(unittest.TestCase):
             f.write(code)
             return f.name
 
-    def test_node_type_checks(self):
-        """测试NodeTypes中的类型检查方法"""
-        test_cases = [
-            (
-                NodeTypes.is_module,
-                [
-                    (NodeTypes.MODULE, True),
-                    (NodeTypes.TRANSLATION_UNIT, True),
-                    (NodeTypes.GO_SOURCE_FILE, True),
-                    (NodeTypes.CLASS_DEFINITION, False),
-                ],
-            ),
-            (
-                NodeTypes.is_import,
-                [
-                    (NodeTypes.IMPORT_STATEMENT, True),
-                    (NodeTypes.IMPORT_FROM_STATEMENT, True),
-                    (NodeTypes.GO_IMPORT_DECLARATION, True),
-                    (NodeTypes.MODULE, False),
-                ],
-            ),
-            (
-                NodeTypes.is_definition,
-                [
-                    (NodeTypes.CLASS_DEFINITION, True),
-                    (NodeTypes.FUNCTION_DEFINITION, True),
-                    (NodeTypes.DECORATED_DEFINITION, True),
-                    (NodeTypes.GO_FUNC_DECLARATION, True),
-                    (NodeTypes.IMPORT_STATEMENT, False),
-                ],
-            ),
-            (
-                NodeTypes.is_statement,
-                [
-                    (NodeTypes.EXPRESSION_STATEMENT, True),
-                    (NodeTypes.IF_STATEMENT, True),
-                    (NodeTypes.CALL, True),
-                    (NodeTypes.ASSIGNMENT, True),
-                    (NodeTypes.MODULE, False),
-                ],
-            ),
-            (
-                NodeTypes.is_identifier,
-                [
-                    (NodeTypes.IDENTIFIER, True),
-                    (NodeTypes.NAME, True),
-                    (NodeTypes.WORD, True),
-                    (NodeTypes.GO_PACKAGE_IDENTIFIER, True),
-                    (NodeTypes.MODULE, False),
-                ],
-            ),
-            (
-                NodeTypes.is_type,
-                [
-                    (NodeTypes.TYPED_PARAMETER, True),
-                    (NodeTypes.TYPED_DEFAULT_PARAMETER, True),
-                    (NodeTypes.GENERIC_TYPE, True),
-                    (NodeTypes.UNION_TYPE, True),
-                    (NodeTypes.MODULE, False),
-                ],
-            ),
-        ]
 
-        for checker, cases in test_cases:
-            for node_type, expected in cases:
-                with self.subTest(checker=checker.__name__, node_type=node_type):
-                    self.assertEqual(checker(node_type), expected)
-
+class TestSymbolPaths(TestParserUtil):
     def test_get_symbol_paths(self):
         code = dedent(
             """
@@ -454,6 +388,31 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("code", code_map["__main__"])
         self.assertEqual(code_map["__main__"]["code"].strip(), 'if __name__ == "__main__":\n    print("Hello World")')
 
+
+class TestGoTypeAndFunctionAndMethod(TestParserUtil):
+    def test_go_type_struct_definition(self):
+        code = dedent(
+            """
+            package main
+
+            type MyStruct struct {
+                Field1 string
+                Field2 int
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".go")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("MyStruct", paths)
+        self.assertIn("MyStruct", code_map)
+        self.assertEqual(
+            code_map["MyStruct"]["code"].strip(), "type MyStruct struct {\n    Field1 string\n    Field2 int\n}"
+        )
+
+
+class TestImportBlocks(TestParserUtil):
     def test_import_block_detection(self):
         code = dedent(
             """
@@ -472,7 +431,6 @@ class TestParserUtil(unittest.TestCase):
         self.assertEqual(code_map["__import__"]["code"].strip(), "# This is a comment\nimport os\nimport sys")
 
     def test_import_block_with_strings_and_from_import(self):
-        """测试包含字符串字面量、注释和多种导入语句的头部块"""
         code = dedent(
             """
             # 模块注释
@@ -499,7 +457,6 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn("import sys as sys1", import_entry["code"])
 
     def test_go_import_block_detection(self):
-        """测试Go语言import块的符号提取"""
         code = dedent(
             """
             package main
@@ -521,15 +478,15 @@ class TestParserUtil(unittest.TestCase):
         self.assertIn('"math/rand"', import_entry["code"])
         self.assertIn('"os"', import_entry["code"])
 
+
+class TestCallAnalysis(TestParserUtil):
     def _find_byte_position(self, code_bytes: bytes, substring: str) -> tuple:
-        """在字节码中查找子字符串的位置并返回(start_byte, end_byte)"""
         start = code_bytes.find(substring.encode("utf8"))
         if start == -1:
             return (0, 0)
         return (start, start + len(substring.encode("utf8")))
 
     def _convert_bytes_to_points(self, code_bytes: bytes, start_byte: int, end_byte: int) -> tuple:
-        """将字节偏移转换为行列位置"""
         before_start = code_bytes[:start_byte]
         start_line = before_start.count(b"\n")
         start_col = start_byte - (before_start.rfind(b"\n") + 1) if b"\n" in before_start else start_byte
@@ -599,7 +556,6 @@ class TestParserUtil(unittest.TestCase):
                 definition = asyncio.run(self.lsp_client.get_definition(temp_path, line, char))
                 self.assertTrue(definition is not None, f"未找到 {call['name']} 的定义")
 
-                # 增强定义位置验证逻辑
                 definitions = definition if isinstance(definition, list) else [definition]
                 found_valid = False
                 for d in definitions:
@@ -616,7 +572,6 @@ class TestParserUtil(unittest.TestCase):
                 asyncio.run(self.lsp_client.shutdown())
 
     def test_parameter_type_calls(self):
-        """测试参数类型调用提取"""
         code = dedent(
             """
             from typing import List, Optional
@@ -641,10 +596,8 @@ class TestParserUtil(unittest.TestCase):
         _, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
 
-        # 验证参数类型调用
         entry = code_map["example"]
         call_names = {call["name"] for call in entry["calls"]}
-        # 预期包含所有MyType引用，排除标准库类型
         expected_calls = {"MyType"}
         self.assertEqual(call_names, expected_calls)
 
@@ -662,7 +615,6 @@ class TestParserUtil(unittest.TestCase):
         path = self.create_temp_file(code)
         _, code_map = self.parser_util.get_symbol_paths(path)
 
-        # 验证所有符号都存在
         expected_symbols = [
             "Outer",
             "Outer.Inner",
@@ -673,27 +625,22 @@ class TestParserUtil(unittest.TestCase):
         for symbol in expected_symbols:
             self.assertIn(symbol, code_map, f"符号 {symbol} 未在code_map中找到")
 
-        # 动态获取符号位置进行测试
         def test_symbol_position(symbol_path):
             info = code_map[symbol_path]
-            # 在符号起始位置测试
             symbols = self.parser_util.find_symbols_by_location(code_map, info["start_line"], info["start_col"])
             found_symbols = [s["symbol"] for s in symbols]
             self.assertIn(symbol_path, found_symbols, f"在起始位置未找到符号 {symbol_path}")
-            # 在符号中间位置测试
             mid_line = (info["start_line"] + info["end_line"]) // 2
             mid_col = (info["start_col"] + info["end_col"]) // 2
             symbols = self.parser_util.find_symbols_by_location(code_map, mid_line, mid_col)
             found_symbols = [s["symbol"] for s in symbols]
             self.assertIn(symbol_path, found_symbols, f"在中间位置未找到符号 {symbol_path}")
 
-        # 测试所有符号
         test_symbol_position("Outer")
         test_symbol_position("Outer.Inner")
         test_symbol_position("Outer.Inner.nested_method")
         test_symbol_position("Outer.Inner.nested_method.local_function")
 
-        # 测试嵌套范围
         nested_info = code_map["Outer.Inner.nested_method.local_function"]
         symbols = self.parser_util.find_symbols_by_location(
             code_map, nested_info["start_line"], nested_info["start_col"]
@@ -727,7 +674,6 @@ class TestParserUtil(unittest.TestCase):
         with open(path, "rb") as f:
             code_bytes = f.read()
 
-        # 查找各个符号的起始位置
         alpha_pos = self._find_byte_position(code_bytes, "class Alpha:")
         alpha_start_line, alpha_start_col, _, _ = self._convert_bytes_to_points(
             code_bytes, alpha_pos[0], alpha_pos[0] + 1
@@ -746,7 +692,6 @@ class TestParserUtil(unittest.TestCase):
             code_bytes, method_b_pos[0], method_b_pos[0] + 1
         )
 
-        # 构造测试位置列表（包含重复和连续位置）
         test_locations = [
             (alpha_start_line, alpha_start_col),
             (alpha_start_line, alpha_start_col + 5),
@@ -758,10 +703,8 @@ class TestParserUtil(unittest.TestCase):
             (method_b_start_line, method_b_start_col + 3),
         ]
 
-        # 调用批量查找方法
         symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations)
 
-        # 验证去重结果
         expected_symbols = {
             "Alpha": code_map["Alpha"],
             "Beta": code_map["Beta"],
@@ -769,6 +712,76 @@ class TestParserUtil(unittest.TestCase):
         self.assertEqual(symbols.keys(), expected_symbols.keys())
 
         os.unlink(path)
+
+
+class TestNodeType(TestParserUtil):
+    def test_node_type_checks(self):
+        """测试NodeTypes中的类型检查方法"""
+        test_cases = [
+            (
+                NodeTypes.is_module,
+                [
+                    (NodeTypes.MODULE, True),
+                    (NodeTypes.TRANSLATION_UNIT, True),
+                    (NodeTypes.GO_SOURCE_FILE, True),
+                    (NodeTypes.CLASS_DEFINITION, False),
+                ],
+            ),
+            (
+                NodeTypes.is_import,
+                [
+                    (NodeTypes.IMPORT_STATEMENT, True),
+                    (NodeTypes.IMPORT_FROM_STATEMENT, True),
+                    (NodeTypes.GO_IMPORT_DECLARATION, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+            (
+                NodeTypes.is_definition,
+                [
+                    (NodeTypes.CLASS_DEFINITION, True),
+                    (NodeTypes.FUNCTION_DEFINITION, True),
+                    (NodeTypes.DECORATED_DEFINITION, True),
+                    (NodeTypes.GO_FUNC_DECLARATION, True),
+                    (NodeTypes.IMPORT_STATEMENT, False),
+                ],
+            ),
+            (
+                NodeTypes.is_statement,
+                [
+                    (NodeTypes.EXPRESSION_STATEMENT, True),
+                    (NodeTypes.IF_STATEMENT, True),
+                    (NodeTypes.CALL, True),
+                    (NodeTypes.ASSIGNMENT, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+            (
+                NodeTypes.is_identifier,
+                [
+                    (NodeTypes.IDENTIFIER, True),
+                    (NodeTypes.NAME, True),
+                    (NodeTypes.WORD, True),
+                    (NodeTypes.GO_PACKAGE_IDENTIFIER, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+            (
+                NodeTypes.is_type,
+                [
+                    (NodeTypes.TYPED_PARAMETER, True),
+                    (NodeTypes.TYPED_DEFAULT_PARAMETER, True),
+                    (NodeTypes.GENERIC_TYPE, True),
+                    (NodeTypes.UNION_TYPE, True),
+                    (NodeTypes.MODULE, False),
+                ],
+            ),
+        ]
+
+        for checker, cases in test_cases:
+            for node_type, expected in cases:
+                with self.subTest(checker=checker.__name__, node_type=node_type):
+                    self.assertEqual(checker(node_type), expected)
 
 
 class TestRipGrepSearch(unittest.TestCase):

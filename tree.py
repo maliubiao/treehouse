@@ -507,6 +507,18 @@ class NodeProcessor:
             return NodeProcessor.get_assignment_name(node)
         elif node.type == NodeTypes.IF_STATEMENT and NodeProcessor.is_main_block(node):
             return "__main__"
+        elif node.type == NodeTypes.GO_TYPE_DECLARATION:
+            return NodeProcessor.get_go_type_name(node)
+        return None
+
+    @staticmethod
+    def get_go_type_name(node):
+        """从Go类型声明节点中提取类型名"""
+        for child in node.children:
+            if child.type == NodeTypes.GO_TYPE_SPEC:
+                for sub_child in child.children:
+                    if sub_child.type == NodeTypes.GO_TYPE_IDENTIFIER:
+                        return sub_child.text.decode("utf8")
         return None
 
     @staticmethod
@@ -742,6 +754,8 @@ class CodeMapBuilder:
         if NodeTypes.is_definition(node.type):
             if node.type == NodeTypes.CLASS_DEFINITION:
                 symbol_type = "class"
+            elif node.type == NodeTypes.GO_TYPE_DECLARATION:
+                symbol_type = "type"
             else:
                 symbol_type = "function"
         elif node.type == NodeTypes.ASSIGNMENT:
@@ -1147,6 +1161,8 @@ class NodeTypes:
     GO_PACKAGE_IDENTIFIER = "package_identifier"
     GO_INTERPRETED_STRING_LITERAL = "interpreted_string_literal"
     GO_BLANK_IDENTIFIER = "blank_identifier"
+    GO_TYPE_IDENTIFIER = "type_identifier"
+    GO_TYPE_SPEC = "type_spec"
 
     @staticmethod
     def is_module(node_type):
@@ -1168,6 +1184,7 @@ class NodeTypes:
             NodeTypes.DECORATED_DEFINITION,
             NodeTypes.GO_FUNC_DECLARATION,
             NodeTypes.GO_METHOD_DECLARATION,
+            NodeTypes.GO_TYPE_DECLARATION,
         )
 
     @staticmethod
