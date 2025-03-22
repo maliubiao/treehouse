@@ -181,7 +181,7 @@ source .venv/bin/activate
 
 3. **环境变量配置**
 ```bash
-# 在shell配置文件中添加 (~/.bashrc 或 ~/.zshrc), 如果配置了model.json则只需要最后一行，source /your/path/to/env.sh
+# 在shell配置文件中添加 (~/.bashrc 或 ~/.zshrc), 如果配置了model.json则只需要设置GPT_PATH为项目目录，source /your/path/to/env.sh
 export GPT_PATH="/path/to/terminal-llm"
 export GPT_KEY="your-api-key"
 export GPT_MODEL="your-model"

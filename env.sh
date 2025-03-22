@@ -1,17 +1,5 @@
 # GPT 环境配置
 # 兼容 zsh/bash/sh 的脚本目录获取
-
-_get_script_dir() {
-  if [ -n "$BASH_VERSION" ]; then
-    echo "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  elif [ -n "$ZSH_VERSION" ]; then
-    echo "$(cd "$(dirname "$0")" && pwd)"
-  else
-    echo "Error: Unsupported shell. Please use bash or zsh." >&2
-    return 1
-  fi
-}
-
 # 初始化基础环境变量
 _init_gpt_env() {
   if [[ -z "$GPT_PATH" ]]; then
