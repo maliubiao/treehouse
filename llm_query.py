@@ -1400,8 +1400,9 @@ class FormatAndLint:
         ".sh": [(["shfmt", "-i", "2", "-w"], [])],
     }
 
-    def __init__(self, timeout: int = 30):
+    def __init__(self, timeout: int = 30, verbose: bool = False):
         self.timeout = timeout
+        self.verbose = verbose
         self.logger = logging.getLogger(__name__)
 
     def _detect_language(self, filename: str) -> str:
@@ -1415,10 +1416,18 @@ class FormatAndLint:
             result = subprocess.run(
                 full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=self.timeout, check=False
             )
+
+            if self.verbose:
+                self.logger.info("Executing: %s", " ".join(full_cmd))
+                if result.stdout:
+                    self.logger.info("Output:\n%s", result.stdout.decode().strip())
+
             if result.returncode != 0:
                 self.logger.error("Command failed: %s\nOutput: %s", " ".join(full_cmd), result.stdout.decode().strip())
             return result.returncode
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            if self.verbose:
+                self.logger.info("Timeout executing: %s", " ".join(full_cmd))
             self.logger.error("Timeout expired for command: %s", " ".join(full_cmd))
             return -1
 
@@ -1649,7 +1658,7 @@ def process_patch_response(response_text, symbol_detail):
                     f.write(content)
             print("补丁已成功应用")
 
-            formatter = FormatAndLint()
+            formatter = FormatAndLint(verbose=True)
             fix_files = list(file_map.keys())
             formatter.run_checks(fix_files, fix=True)
             commit = AutoGitCommit(gpt_response=remaining, files_to_add=fix_files, auto_commit=False)

@@ -1061,6 +1061,22 @@ class TestFormatAndLint(unittest.TestCase):
         self.assertIn("Timeout expired", log.output[0])
         self.assertIn(test_file, results)
 
+    @patch("subprocess.run")
+    def test_verbose_output_logging(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"Formatted 1 file"
+        mock_run.return_value = mock_result
+
+        verbose_formatter = FormatAndLint(verbose=True)
+        test_file = self._create_temp_file(".py")
+
+        with self.assertLogs(__name__, level="INFO") as logs:
+            verbose_formatter.run_checks([test_file], fix=True)
+
+        self.assertTrue(any("Executing: black" in log for log in logs.output))
+        self.assertTrue(any("Formatted 1 file" in log for log in logs.output))
+
 
 class TestContentParse(unittest.TestCase):
     """
