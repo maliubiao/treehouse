@@ -535,9 +535,9 @@ class TestSymbolPaths(TestParserUtil):
 class TestGoTypeAndFunctionAndMethod(TestParserUtil):
     def test_go_type_struct_definition(self):
         code = dedent(
-            """
-            package main
-
+            """  
+            package main  
+  
             type MyStruct struct {
                 Field1 string
                 Field2 int
@@ -553,6 +553,42 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
         self.assertEqual(
             code_map["main.MyStruct"]["code"].strip(), "type MyStruct struct {\n    Field1 string\n    Field2 int\n}"
         )
+
+    def test_go_commented_function_extraction(self):
+        """测试带注释的Go函数符号提取"""
+        code = dedent(
+            """  
+            package main  
+  
+            // Function1的注释  
+            func Function1() {}  
+  
+            /* 
+            Function2的多行注释 
+            */  
+            func Function2() int { return 0 }  
+  
+            // 带参数的函数注释  
+            func Function3(param string) {}  
+        """
+        )
+        path = self.create_temp_file(code, suffix=".go")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        # 验证符号提取
+        expected_symbols = ["main.Function1", "main.Function2", "main.Function3"]
+        self.assertCountEqual([s for s in paths if s.startswith("main.Function")], expected_symbols)
+
+        # 验证注释包含在代码块中
+        self.assertIn("// Function1的注释", code_map["main.Function1"]["code"])
+        self.assertIn("/* \nFunction2的多行注释 \n*/", code_map["main.Function2"]["code"])
+        self.assertIn("// 带参数的函数注释", code_map["main.Function3"]["code"])
+
+        # 验证函数体完整性
+        self.assertIn("func Function1() {}", code_map["main.Function1"]["code"])
+        self.assertIn("func Function2() int { return 0 }", code_map["main.Function2"]["code"])
+        self.assertIn("func Function3(param string) {}", code_map["main.Function3"]["code"])
 
 
 class TestImportBlocks(TestParserUtil):

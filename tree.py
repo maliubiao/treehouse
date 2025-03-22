@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from pygments import formatters, highlight, lexers, styles
 from tqdm import tqdm  # 用于显示进度条
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Node, Parser, Query
 
 from lsp.client import GenericLSPClient, LSPFeatureError
 from lsp.language_id import LanguageId
@@ -752,7 +752,7 @@ class CodeMapBuilder:
         self.node_processor = node_processor
         self.lang = lang
 
-    def _extract_import_block(self, node):
+    def _extract_import_block(self, node: Node):
         """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
         import_block = []
         current_node = node
@@ -772,7 +772,7 @@ class CodeMapBuilder:
             current_node = current_node.next_sibling
         return import_block
 
-    def _get_effective_node(self, node):
+    def _get_effective_node(self, node: Node):
         """获取有效的语法树节点（处理装饰器情况）"""
         if (
             node.type == NodeTypes.FUNCTION_DEFINITION
@@ -782,13 +782,19 @@ class CodeMapBuilder:
             return node.parent
         return node
 
-    def _get_node_info(self, node):
+    def get_symbol_range_info(self, node: Node):
         """获取节点的代码和位置信息"""
         effective_node = self._get_effective_node(node)
+        start_byte = effective_node.start_byte
+        start_point = effective_node.start_point
+        while node.prev_sibling and node.prev_sibling.type == NodeTypes.COMMENT:
+            node = node.prev_sibling
+            start_byte = node.start_byte
+            start_point = node.start_point
         return {
-            "start_byte": effective_node.start_byte,
+            "start_byte": start_byte,
             "end_byte": effective_node.end_byte,
-            "start_point": effective_node.start_point,
+            "start_point": start_point,
             "end_point": effective_node.end_point,
         }
 
@@ -858,7 +864,7 @@ class CodeMapBuilder:
         path_key = ".".join(current_symbols)
         current_node = current_nodes[-1]
 
-        node_info = self._get_node_info(current_node)
+        node_info = self.get_symbol_range_info(current_node)
         code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
         code_entry = self._build_code_map_entry(path_key, code, node_info)
         code_entry["type"] = symbol_type
