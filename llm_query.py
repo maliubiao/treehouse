@@ -26,6 +26,7 @@ import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from textwrap import dedent
 from typing import Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
@@ -1280,6 +1281,10 @@ def get_patch_prompt_output(patch_require, file_ranges=None):
 完整原始内容
 [{tag} end]
 
+[git commit message start]
+这次更改的git提交信息
+[git commit message end]
+
 用户的要求如下:
 """
             if file_ranges
@@ -1295,6 +1300,10 @@ def get_patch_prompt_output(patch_require, file_ranges=None):
 [{tag} start]
 完整原始内容
 [{tag} end]
+
+[git commit message start]
+这次更改的git提交信息
+[git commit message end]
 """
         )
     return prompt
@@ -1364,6 +1373,53 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 用户的要求如下，（如果他没写，贴心的推断他想做什么):
 """
     return prompt
+
+
+class AutoGitCommit:
+    def __init__(self, gpt_response=None, files_to_add=None, commit_message=None, auto_commit=False):
+        self.gpt_response = gpt_response
+        self.commit_message = commit_message if commit_message is not None else self._extract_commit_message()
+        self.files_to_add = files_to_add or []
+        self.auto_commit = auto_commit
+
+    def _extract_commit_message(self) -> str:
+        if self.gpt_response is None:
+            return "Auto commit: Fix code issues"
+        pattern = r"\[git commit message start\](.*?)\[git commit message end\]"
+        match = re.search(pattern, self.gpt_response, re.DOTALL)
+        return match.group(1).strip() if match else "Auto commit: Fix code issues"
+
+    def _confirm_message(self) -> bool:
+        if self.auto_commit:
+            return True
+        print(f"\n提取到的提交信息:\n{self.commit_message}")
+        choice = input("是否使用此提交信息？(y/n/edit): ").lower()
+        if choice == "edit":
+            self.commit_message = input("请输入新的提交信息: ")
+            return True
+        return choice == "y"
+
+    def _execute_git_commands(self):
+        if self.files_to_add:
+            for file_path in self.files_to_add:
+                subprocess.run(["git", "add", str(file_path)], check=True)
+        else:
+            subprocess.run(["git", "add", "."], check=True)
+        subprocess.run(["git", "commit", "-m", self.commit_message], check=True)
+
+    def do_commit(self):
+        if not self.commit_message:
+            print("未找到提交信息")
+            return
+
+        if self.auto_commit or self._confirm_message():
+            try:
+                self._execute_git_commands()
+                print("代码变更已成功提交")
+            except subprocess.CalledProcessError as e:
+                print(f"Git操作失败: {e}")
+        else:
+            print("提交已取消")
 
 
 class BlockPatchResponse:
@@ -1482,6 +1538,10 @@ def process_patch_response(response_text, symbol_detail):
             with open(file_path, "wb+") as f:
                 f.write(content)
         print("补丁已成功应用")
+        # 自动提交修改文件
+        commit = AutoGitCommit(files_to_add=list(file_map.keys()), auto_commit=True)
+        commit.do_commit()
+
         return file_map
 
     print("补丁未应用")

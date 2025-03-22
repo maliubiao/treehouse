@@ -7,7 +7,8 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from textwrap import dedent
+from unittest.mock import MagicMock, call, patch
 
 from parameterized import parameterized
 from prompt_toolkit import PromptSession
@@ -18,6 +19,7 @@ import llm_query
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
     ArchitectMode,
+    AutoGitCommit,
     BlockPatchResponse,
     ChatbotUI,
     CmdNode,
@@ -875,6 +877,57 @@ class TestArchitectMode(unittest.TestCase):
         """参数化测试各种异常场景"""
         with self.assertRaises((ValueError, RuntimeError)):
             ArchitectMode.parse_response(invalid_response)
+
+
+class TestAutoGitCommit(unittest.TestCase):
+    def test_commit_message_extraction(self):
+        sample_response = dedent(
+            """
+        [git commit message start]
+        feat: add new authentication module
+        - implement JWT token handling
+        - add user model
+        [git commit message end]
+        """
+        )
+        instance = AutoGitCommit(sample_response)
+        self.assertEqual(
+            instance.commit_message,
+            "feat: add new authentication module\n- implement JWT token handling\n- add user model",
+        )
+
+    def test_empty_commit_message(self):
+        instance = AutoGitCommit("No commit message here")
+        self.assertEqual(instance.commit_message, "Auto commit: Fix code issues")
+
+    @patch.object(AutoGitCommit, "_execute_git_commands")
+    def test_commit_flow(self, mock_execute):
+        with patch("builtins.input", return_value="y"):
+            instance = AutoGitCommit("[git commit message start]test commit[end]")
+            instance.do_commit()
+            mock_execute.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_git_commands_execution(self, mock_run):
+        instance = AutoGitCommit("[git commit message start]test[end]")
+        instance.commit_message = "test"
+        instance._execute_git_commands()
+        mock_run.assert_has_calls(
+            [call(["git", "add", "."], check=True), call(["git", "commit", "-m", "test"], check=True)]
+        )
+
+    @patch("subprocess.run")
+    def test_specified_files_add(self, mock_run):
+        instance = AutoGitCommit("[git commit message start]test[end]", files_to_add=["src/main.py", "src/utils.py"])
+        instance.commit_message = "test"
+        instance._execute_git_commands()
+        mock_run.assert_has_calls(
+            [
+                call(["git", "add", "src/main.py"], check=True),
+                call(["git", "add", "src/utils.py"], check=True),
+                call(["git", "commit", "-m", "test"], check=True),
+            ]
+        )
 
 
 if __name__ == "__main__":
