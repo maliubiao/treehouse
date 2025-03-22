@@ -1375,6 +1375,73 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
     return prompt
 
 
+class FormatAndLint:
+    """
+    Automated code formatting and linting executor with language-specific configurations
+    """
+
+    COMMANDS: Dict[str, List[Tuple[List[str], List[str]]]] = {
+        ".py": [
+            (["black", "--line-length=120", "--quiet"], []),
+            (
+                [
+                    "pylint",
+                    "--fail-under=9.5",
+                    "--max-line-length=120",
+                    "--ignore=.venv",
+                    "--disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,too-many-public-methods,too-few-public-methods,too-many-lines,too-many-positional-arguments",
+                ],
+                [],
+            ),
+        ],
+        ".ps1": [(["pwsh", "./tools/Format-Script.ps1"], [])],
+        ".js": [(["npx", "prettier", "--write", "--log-level=warn"], ["--check"])],
+        ".sh": [(["shfmt", "-i", "2", "-w"], ["-d"])],
+    }
+
+    def __init__(self, timeout: int = 30):
+        self.timeout = timeout
+        self.logger = logging.getLogger(__name__)
+
+    def _detect_language(self, filename: str) -> str:
+        if "." in filename:
+            return filename[filename.rindex(".") :]
+        return ""
+
+    def _run_command(self, base_cmd: List[str], files: List[str], mode_args: List[str]) -> int:
+        full_cmd = base_cmd + mode_args + files
+        try:
+            result = subprocess.run(
+                full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=self.timeout, check=False
+            )
+            if result.returncode != 0:
+                self.logger.error("Command failed: %s\nOutput: %s", " ".join(full_cmd), result.stdout.decode().strip())
+            return result.returncode
+        except subprocess.TimeoutExpired:
+            self.logger.error("Timeout expired for command: %s", " ".join(full_cmd))
+            return -1
+
+    def run_checks(self, files: List[str], fix: bool = False) -> Dict[str, List[str]]:
+        results = {}
+        for file in files:
+            ext = self._detect_language(file)
+            if ext not in self.COMMANDS:
+                continue
+
+            errors = []
+            for base_cmd, check_args in self.COMMANDS[ext]:
+                mode_args = check_args if not fix else []
+                return_code = self._run_command(base_cmd, [file], mode_args)
+
+                if return_code not in (0, None):
+                    errors.append(f"{' '.join(base_cmd)} exited with code {return_code}")
+
+            if errors:
+                results[file] = errors
+
+        return results
+
+
 class AutoGitCommit:
     def __init__(self, gpt_response=None, files_to_add=None, commit_message=None, auto_commit=False):
         self.gpt_response = gpt_response
@@ -1539,7 +1606,7 @@ def process_patch_response(response_text, symbol_detail):
                 f.write(content)
         print("补丁已成功应用")
         # 自动提交修改文件
-        commit = AutoGitCommit(files_to_add=list(file_map.keys()), auto_commit=True)
+        commit = AutoGitCommit(gpt_response=filtered_response, files_to_add=list(file_map.keys()), auto_commit=False)
         commit.do_commit()
 
         return file_map

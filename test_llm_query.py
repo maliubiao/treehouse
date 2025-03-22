@@ -4,6 +4,7 @@ llm_query 模块的单元测试
 """
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,7 @@ from llm_query import (
     BlockPatchResponse,
     ChatbotUI,
     CmdNode,
+    FormatAndLint,
     GPTContextProcessor,
     LintParser,
     ModelConfig,
@@ -928,6 +930,133 @@ class TestAutoGitCommit(unittest.TestCase):
                 call(["git", "commit", "-m", "test"], check=True),
             ]
         )
+
+
+class TestFormatAndLint(unittest.TestCase):
+    def setUp(self):
+        self.formatter = FormatAndLint(timeout=10)
+        self.test_files = []
+
+    def tearDown(self):
+        for f in self.test_files:
+            if os.path.exists(f):
+                os.remove(f)
+
+    def _create_temp_file(self, ext: str, content: str = "") -> str:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
+            f.write(content.encode())
+            self.test_files.append(f.name)
+            return f.name
+
+    @patch("subprocess.run")
+    def test_python_formatting(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
+
+        test_file = self._create_temp_file(".py", "def test(): pass\n")
+        results = self.formatter.run_checks([test_file], fix=True)
+
+        self.assertEqual(len(results), 0)
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertIn("black", mock_run.call_args_list[0].args[0])
+        self.assertIn("pylint", mock_run.call_args_list[1].args[0])
+
+    @patch("subprocess.run")
+    def test_powershell_processing(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
+
+        test_file = self._create_temp_file(".ps1", "Write-Host 'test'")
+        results = self.formatter.run_checks([test_file])
+
+        self.assertEqual(len(results), 0)
+        mock_run.assert_called_once()
+        self.assertIn("./tools/Format-Script.ps1", mock_run.call_args[0][0])
+
+    @patch("subprocess.run")
+    def test_javascript_processing(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
+
+        test_file = self._create_temp_file(".js", "function test(){}")
+        results = self.formatter.run_checks([test_file], fix=True)
+
+        self.assertEqual(len(results), 0)
+        mock_run.assert_called_once()
+        self.assertIn("prettier", mock_run.call_args[0][0])
+
+    @patch("subprocess.run")
+    def test_shell_script_processing(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
+
+        test_file = self._create_temp_file(".sh", "echo test")
+        results = self.formatter.run_checks([test_file])
+
+        self.assertEqual(len(results), 0)
+        mock_run.assert_called_once()
+        self.assertIn("shfmt", mock_run.call_args[0][0])
+
+    def test_real_python_file_processing(self):
+        test_file = self._create_temp_file(
+            ".py",
+            dedent(
+                """
+            def bad_format():
+                x=123
+                return x
+        """
+            ),
+        )
+
+        results = self.formatter.run_checks([test_file], fix=True)
+        self.assertEqual(len(results), 0, "Should automatically fix formatting")
+
+        with open(test_file) as f:
+            content = f.read()
+        self.assertIn("x = 123", content, "Black should reformat the code")
+
+    @patch("subprocess.run")
+    def test_mixed_file_types_processing(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
+
+        files = [self._create_temp_file(".py"), self._create_temp_file(".js"), self._create_temp_file(".sh")]
+
+        results = self.formatter.run_checks(files)
+        self.assertEqual(len(results), 0)
+        self.assertEqual(mock_run.call_count, 4, "Should process 3 files with total 4 commands")
+
+    @patch("subprocess.run")
+    def test_partial_failure_handling(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # black fails
+            MagicMock(returncode=0),  # pylint succeeds
+            MagicMock(returncode=1),  # shfmt fails
+        ]
+
+        files = [self._create_temp_file(".py"), self._create_temp_file(".sh")]
+
+        results = self.formatter.run_checks(files)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(results[files[0]]), 1, "Should record black failure")
+        self.assertEqual(len(results[files[1]]), 1, "Should record shfmt failure")
+
+    def test_timeout_handling_with_real_process(self):
+        test_file = self._create_temp_file(".py")
+
+        with self.assertLogs(level="ERROR") as log:
+            # 使用一个实际会超时的命令进行测试
+            long_process_formatter = FormatAndLint(timeout=0.1)
+            results = long_process_formatter.run_checks([test_file])
+
+        self.assertIn("Timeout expired", log.output[0])
+        self.assertIn(test_file, results)
 
 
 if __name__ == "__main__":
