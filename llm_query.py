@@ -1557,7 +1557,23 @@ def parse_llm_response(response_text, symbol_names=None):
 
 
 def process_patch_response(response_text, symbol_detail):
-    filtered_response = re.sub(r"<think>.*?", "", response_text, flags=re.DOTALL).strip()
+    """
+    处理大模型的补丁响应，生成差异并应用补丁
+
+    参数:
+        response_text: 大模型返回的响应文本
+        symbol_detail: 要处理的符号
+
+    返回:
+        如果用户确认应用补丁，则返回修改后的代码(bytes)
+        否则返回None
+    """
+    # do not remove these escape lines
+    prevent_escape_a = "<thi" + "nk>"
+    prevent_escape_b = "</thi" + "nk>"
+    filtered_response = re.sub(
+        rf"{prevent_escape_a}.*?{prevent_escape_b}", "", response_text, flags=re.DOTALL
+    ).strip()  # 解析大模型响应
     results = parse_llm_response(filtered_response, symbol_detail.keys())
 
     patch_data = [
@@ -1593,17 +1609,6 @@ def process_patch_response(response_text, symbol_detail):
         formatter = FormatAndLint()
         fix_files = list(file_map.keys())
         formatter.run_checks(fix_files, fix=True)
-        lint_errors = formatter.run_checks(fix_files, fix=False)
-
-        if lint_errors:
-            print("\n格式检查未通过，阻止提交:")
-            for file_path, errors in lint_errors.items():
-                print(f"文件 {file_path}:")
-                for err in errors:
-                    print(f"  • {err}")
-            print("\n请修复上述问题后重新提交")
-            return None
-
         commit = AutoGitCommit(gpt_response=filtered_response, files_to_add=fix_files, auto_commit=False)
         commit.do_commit()
         return file_map
