@@ -360,13 +360,15 @@ class TestFileRange(unittest.TestCase):
     def test_file_range_patch(self):
         """测试文件范围补丁解析"""
         # 模拟包含文件范围的响应内容
-        response = """
+        response = dedent(
+            """
 [modified block]: example.py:10-20
 [source code start]
 def new_function():
     print("Added by patch")
 [source code end]
         """
+        )
         parser = BlockPatchResponse()
         results = parser.parse(response)
         self.assertEqual(len(results), 1)
@@ -1088,6 +1090,22 @@ class TestContentParse(unittest.TestCase):
         self.assertIn("valid/path.py", modified)
         self.assertEqual(remaining.strip(), "")
 
+    def test_valid_symbols_with_parameter(self):
+        os.path.exists = lambda x: False
+        response = dedent(
+            """
+        [modified symbol]: valid/path.py
+        [source code start]
+        def valid_func():
+            pass
+        [source code end]
+        """
+        )
+        modified, remaining = process_file_change(response, valid_symbols=["valid/path.py"])
+        self.assertIn("[modified file]", modified)
+        self.assertIn("valid/path.py", modified)
+        self.assertEqual(remaining.strip(), "")
+
     def test_invalid_symbols(self):
         os.path.exists = lambda x: False
         response = dedent(
@@ -1102,6 +1120,21 @@ class TestContentParse(unittest.TestCase):
         modified, remaining = process_file_change(response)
         self.assertEqual(modified.strip(), "")
         self.assertIn("invalid/path.py", remaining)
+
+    def test_invalid_symbols_with_parameter(self):
+        os.path.exists = lambda x: True
+        response = dedent(
+            """
+        [modified symbol]: valid/path.py
+        [source code start]
+        def valid_func():
+            pass
+        [source code end]
+        """
+        )
+        modified, remaining = process_file_change(response, valid_symbols=["other/path.py"])
+        self.assertEqual(modified.strip(), "")
+        self.assertIn("valid/path.py", remaining)
 
     def test_mixed_symbols(self):
         os.path.exists = lambda x: True

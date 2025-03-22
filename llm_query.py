@@ -1255,6 +1255,7 @@ PATCH_PROMPT_HEADER = """
 4. 保持原有缩进和代码风格，不添注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
 6. 允许在符号内容在前后添加新代码
+7. 不允许操作用户没用[] tag提供的块或者符号
 """
 
 PUA_PROMPT = """
@@ -1505,7 +1506,7 @@ class BlockPatchResponse:
 
         # 匹配两种响应格式
         pattern = re.compile(
-            r"\[modified (symbol|block)\]:\s*([^\n]+)\s*\[source code start\](.*?)\[source code end\]", re.DOTALL
+            r"\[modified (symbol|block)\]:\s*([^\n]+)\s*\n\[source code start\](.*?)\n\[source code end\]", re.DOTALL
         )
 
         for match in pattern.finditer(response_text):
@@ -1556,7 +1557,7 @@ def parse_llm_response(response_text, symbol_names=None):
     return parser.parse(response_text)
 
 
-def process_file_change(response_text):
+def process_file_change(response_text, valid_symbols=[]):
     """
     解析LLM响应文本，提取文件修改记录
     返回格式: ([{"symbol_path": str, "content": str}], remaining_text)
@@ -1577,10 +1578,10 @@ def process_file_change(response_text):
         end = match.end()
         symbol_path = match.group(1).strip()
         # 检查symbol_path是否是有效的文件路径
-        if os.path.exists(symbol_path):
+        if os.path.exists(symbol_path) or (valid_symbols and symbol_path not in valid_symbols):
             if start > last_end:
                 remaining_parts.append(response_text[last_end:start])
-            part = response_text[start:end].replace("[modified symbol]:", "[modified file]", 1)
+            part = response_text[start:end].replace("[modified symbol]:", "[modified file]:", 1)
             results.append(part)
         else:
             # 如果不是有效文件路径，则存储到remaining_parts
@@ -1611,8 +1612,7 @@ def process_patch_response(response_text, symbol_detail):
     filtered_response = re.sub(
         rf"{prevent_escape_a}.*?{prevent_escape_b}", "", response_text, flags=re.DOTALL
     ).strip()  # 解析大模型响应
-
-    file_part, remaining = process_file_change(filtered_response)
+    file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
     if file_part:
         extract_and_diff_files(file_part, save=False)
 
