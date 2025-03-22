@@ -1071,7 +1071,7 @@ class TestFormatAndLint(unittest.TestCase):
         verbose_formatter = FormatAndLint(verbose=True)
         test_file = self._create_temp_file(".py")
 
-        with self.assertLogs(__name__, level="INFO") as logs:
+        with self.assertLogs(verbose_formatter.logger, level="INFO") as logs:
             verbose_formatter.run_checks([test_file], fix=True)
 
         self.assertTrue(any("Executing: black" in log for log in logs.output))
@@ -1107,7 +1107,7 @@ class TestContentParse(unittest.TestCase):
         self.assertEqual(remaining.strip(), "")
 
     def test_valid_symbols_with_parameter(self):
-        os.path.exists = lambda x: False
+        os.path.exists = lambda x: True
         response = dedent(
             """
         [modified symbol]: valid/path.py
@@ -1117,7 +1117,7 @@ class TestContentParse(unittest.TestCase):
         [source code end]
         """
         )
-        modified, remaining = process_file_change(response, valid_symbols=["valid/path.py"])
+        modified, remaining = process_file_change(response, valid_symbols=["other/path.py"])
         self.assertIn("[modified file]", modified)
         self.assertIn("valid/path.py", modified)
         self.assertEqual(remaining.strip(), "")
@@ -1138,7 +1138,7 @@ class TestContentParse(unittest.TestCase):
         self.assertIn("invalid/path.py", remaining)
 
     def test_invalid_symbols_with_parameter(self):
-        os.path.exists = lambda x: True
+        os.path.exists = lambda x: False
         response = dedent(
             """
         [modified symbol]: valid/path.py
@@ -1148,7 +1148,8 @@ class TestContentParse(unittest.TestCase):
         [source code end]
         """
         )
-        modified, remaining = process_file_change(response, valid_symbols=["other/path.py"])
+
+        modified, remaining = process_file_change(response, valid_symbols=["valid/path.py"])
         self.assertEqual(modified.strip(), "")
         self.assertIn("valid/path.py", remaining)
 
