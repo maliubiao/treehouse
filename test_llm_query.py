@@ -34,6 +34,7 @@ from llm_query import (
     _handle_local_file,
     get_symbol_detail,
     patch_symbol_with_prompt,
+    process_file_change,
 )
 
 
@@ -1057,6 +1058,129 @@ class TestFormatAndLint(unittest.TestCase):
 
         self.assertIn("Timeout expired", log.output[0])
         self.assertIn(test_file, results)
+
+
+class TestContentParse(unittest.TestCase):
+    """
+    测试process_file_change函数的各种解析场景
+    """
+
+    def setUp(self):
+        self.original_exists = os.path.exists
+        os.path.exists = lambda x: True
+
+    def tearDown(self):
+        os.path.exists = self.original_exists
+
+    def test_valid_symbols(self):
+        response = dedent(
+            """
+        [modified symbol]: valid/path.py
+        [source code start]
+        def valid_func():
+            pass
+        [source code end]
+        """
+        )
+        modified, remaining = process_file_change(response)
+        self.assertIn("[modified file]", modified)
+        self.assertEqual(len(modified.split("\n\n")), 1)
+        self.assertIn("valid/path.py", modified)
+        self.assertEqual(remaining.strip(), "")
+
+    def test_invalid_symbols(self):
+        os.path.exists = lambda x: False
+        response = dedent(
+            """
+        [modified symbol]: invalid/path.py
+        [source code start]
+        def invalid_func():
+            pass
+        [source code end]
+        """
+        )
+        modified, remaining = process_file_change(response)
+        self.assertEqual(modified.strip(), "")
+        self.assertIn("invalid/path.py", remaining)
+
+    def test_mixed_symbols(self):
+        os.path.exists = lambda x: True
+        response = dedent(
+            """
+        Before content
+        [modified symbol]: valid1.py
+        [source code start]
+        content1
+        [source code end]
+        Middle content
+        [modified symbol]: valid2.py
+        [source code start]
+        content2
+        [source code end]
+        After content
+        """
+        )
+
+        modified, remaining = process_file_change(response)
+
+        self.assertIn("valid1.py", modified)
+        self.assertIn("valid2.py", modified)
+        self.assertIn("Middle content", remaining)
+        self.assertIn("After content", remaining)
+
+    def test_mixed_valid_invalid_symbols(self):
+        def exists_mock(path):
+            return path == "valid.py"
+
+        os.path.exists = exists_mock
+
+        response = dedent(
+            """
+        Start text
+        [modified symbol]: valid.py
+        [source code start]
+        new_content
+        [source code end]
+        Middle text
+        [modified symbol]: invalid.py
+        [source code start]
+        invalid_content
+        [source code end]
+        End text
+        """
+        )
+
+        modified, remaining = process_file_change(response)
+
+        self.assertIn("valid.py", modified)
+        self.assertNotIn("invalid.py", modified)
+        self.assertIn("invalid.py", remaining)
+        self.assertIn("Middle text", remaining)
+        self.assertIn("End text", remaining)
+        self.assertEqual(remaining.count("[source code start]"), 1)
+
+    def test_no_modified_symbols(self):
+        response = "Just regular text\nWithout any markers"
+        modified, remaining = process_file_change(response)
+        self.assertEqual(modified.strip(), "")
+        self.assertEqual(remaining, response)
+
+    def test_nested_blocks(self):
+        response = dedent(
+            """
+        [modified symbol]: outer.py
+        [source code start]
+        [modified symbol]: inner.py
+        [source code start]
+        nested_content
+        [source code end]
+        [source code end]
+        """
+        )
+        modified, remaining = process_file_change(response)
+        self.assertEqual(len(modified.split("\n\n")), 1)
+        self.assertIn("outer.py", modified)
+        self.assertNotIn("inner.py", remaining)
 
 
 if __name__ == "__main__":

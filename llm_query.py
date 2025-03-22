@@ -1556,6 +1556,43 @@ def parse_llm_response(response_text, symbol_names=None):
     return parser.parse(response_text)
 
 
+def process_file_change(response_text):
+    """
+    解析LLM响应文本，提取文件修改记录
+    返回格式: ([{"symbol_path": str, "content": str}], remaining_text)
+
+    Args:
+        response_text: 包含修改符号的原始文本
+
+    Returns:
+        tuple: (修改记录列表, 剩余文本)
+    """
+    pattern = re.compile(r"\[modified symbol\]:\s*(.+?)\n\[source code start\]\n(.*?)\n\[source code end\]", re.DOTALL)
+    matches = pattern.finditer(response_text)
+    results = []
+    remaining_parts = []
+    last_end = 0
+    for match in matches:
+        start = match.start()
+        end = match.end()
+        symbol_path = match.group(1).strip()
+        # 检查symbol_path是否是有效的文件路径
+        if os.path.exists(symbol_path):
+            if start > last_end:
+                remaining_parts.append(response_text[last_end:start])
+            part = response_text[start:end].replace("[modified symbol]:", "[modified file]", 1)
+            results.append(part)
+        else:
+            # 如果不是有效文件路径，则存储到remaining_parts
+            if start > last_end:
+                remaining_parts.append(response_text[last_end:start])
+            remaining_parts.append(response_text[start:end])
+        last_end = end
+    remaining_parts.append(response_text[last_end:])
+    remaining_text = "".join(remaining_parts).strip()
+    return "\n".join(results), remaining_text
+
+
 def process_patch_response(response_text, symbol_detail):
     """
     处理大模型的补丁响应，生成差异并应用补丁
@@ -1574,46 +1611,52 @@ def process_patch_response(response_text, symbol_detail):
     filtered_response = re.sub(
         rf"{prevent_escape_a}.*?{prevent_escape_b}", "", response_text, flags=re.DOTALL
     ).strip()  # 解析大模型响应
-    results = parse_llm_response(filtered_response, symbol_detail.keys())
 
-    patch_data = [
-        (
-            symbol_detail[symbol_name]["file_path"],
-            symbol_detail[symbol_name]["block_range"],
-            symbol_detail[symbol_name]["block_content"],
-            source_code.encode("utf-8"),
+    file_part, remaining = process_file_change(filtered_response)
+    if file_part:
+        extract_and_diff_files(file_part, save=False)
+
+    results = parse_llm_response(remaining, symbol_detail.keys())
+
+    if len(results):
+        patch_data = [
+            (
+                symbol_detail[symbol_name]["file_path"],
+                symbol_detail[symbol_name]["block_range"],
+                symbol_detail[symbol_name]["block_content"],
+                source_code.encode("utf-8"),
+            )
+            for symbol_name, source_code in results
+        ]
+
+        patch = BlockPatch(
+            file_paths=[data[0] for data in patch_data],
+            patch_ranges=[data[1] for data in patch_data],
+            block_contents=[data[2] for data in patch_data],
+            update_contents=[data[3] for data in patch_data],
         )
-        for symbol_name, source_code in results
-    ]
 
-    patch = BlockPatch(
-        file_paths=[data[0] for data in patch_data],
-        patch_ranges=[data[1] for data in patch_data],
-        block_contents=[data[2] for data in patch_data],
-        update_contents=[data[3] for data in patch_data],
-    )
+        diff = patch.generate_diff()
+        highlighted_diff = highlight(diff, DiffLexer(), TerminalFormatter())
+        print("\n高亮显示的diff内容：")
+        print(highlighted_diff)
 
-    diff = patch.generate_diff()
-    highlighted_diff = highlight(diff, DiffLexer(), TerminalFormatter())
-    print("\n高亮显示的diff内容：")
-    print(highlighted_diff)
+        user_input = input("\n是否应用此补丁？(y/n): ").lower()
+        if user_input == "y":
+            file_map = patch.apply_patch()
+            for file_path, content in file_map.items():
+                with open(file_path, "wb+") as f:
+                    f.write(content)
+            print("补丁已成功应用")
 
-    user_input = input("\n是否应用此补丁？(y/n): ").lower()
-    if user_input == "y":
-        file_map = patch.apply_patch()
-        for file_path, content in file_map.items():
-            with open(file_path, "wb+") as f:
-                f.write(content)
-        print("补丁已成功应用")
+            formatter = FormatAndLint()
+            fix_files = list(file_map.keys())
+            formatter.run_checks(fix_files, fix=True)
+            commit = AutoGitCommit(gpt_response=remaining, files_to_add=fix_files, auto_commit=False)
+            commit.do_commit()
+            return file_map
 
-        formatter = FormatAndLint()
-        fix_files = list(file_map.keys())
-        formatter.run_checks(fix_files, fix=True)
-        commit = AutoGitCommit(gpt_response=filtered_response, files_to_add=fix_files, auto_commit=False)
-        commit.do_commit()
-        return file_map
-
-    print("补丁未应用")
+        print("补丁未应用")
     return None
 
 
@@ -2246,9 +2289,10 @@ def _apply_patch(diff_file):
         print(f"应用变更失败: {e}")
 
 
-def extract_and_diff_files(content, auto_apply=False):
+def extract_and_diff_files(content, auto_apply=False, save=True):
     """从内容中提取文件并生成diff"""
-    _save_response_content(content)
+    if save:
+        _save_response_content(content)
     matches = _extract_file_matches(content)
     if not matches:
         return
