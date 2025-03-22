@@ -1395,8 +1395,8 @@ class FormatAndLint:
             ),
         ],
         ".ps1": [(["pwsh", "./tools/Format-Script.ps1"], [])],
-        ".js": [(["npx", "prettier", "--write", "--log-level=warn"], ["--check"])],
-        ".sh": [(["shfmt", "-i", "2", "-w"], ["-d"])],
+        ".js": [(["npx", "prettier", "--write", "--log-level=warn"], [])],
+        ".sh": [(["shfmt", "-i", "2", "-w"], [])],
     }
 
     def __init__(self, timeout: int = 30):
@@ -1557,22 +1557,9 @@ def parse_llm_response(response_text, symbol_names=None):
 
 
 def process_patch_response(response_text, symbol_detail):
-    """
-    处理大模型的补丁响应，生成差异并应用补丁
-
-    参数:
-        response_text: 大模型返回的响应文本（可能包含<thinking>标签）
-        symbol_detail: 要处理的符号
-
-    返回:
-        如果用户确认应用补丁，则返回修改后的代码(bytes)
-        否则返回None
-    """
-    # 过滤掉<thinking>标签内容（包含多行情况）
-    filtered_response = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()  # 解析大模型响应
+    filtered_response = re.sub(r"<think>.*?", "", response_text, flags=re.DOTALL).strip()
     results = parse_llm_response(filtered_response, symbol_detail.keys())
 
-    # 使用列表推导式减少局部变量数量
     patch_data = [
         (
             symbol_detail[symbol_name]["file_path"],
@@ -1583,7 +1570,6 @@ def process_patch_response(response_text, symbol_detail):
         for symbol_name, source_code in results
     ]
 
-    # 解构数据创建BlockPatch
     patch = BlockPatch(
         file_paths=[data[0] for data in patch_data],
         patch_ranges=[data[1] for data in patch_data],
@@ -1591,13 +1577,11 @@ def process_patch_response(response_text, symbol_detail):
         update_contents=[data[3] for data in patch_data],
     )
 
-    # 生成并显示差异
     diff = patch.generate_diff()
     highlighted_diff = highlight(diff, DiffLexer(), TerminalFormatter())
     print("\n高亮显示的diff内容：")
     print(highlighted_diff)
 
-    # 询问用户是否应用补丁
     user_input = input("\n是否应用此补丁？(y/n): ").lower()
     if user_input == "y":
         file_map = patch.apply_patch()
@@ -1605,10 +1589,23 @@ def process_patch_response(response_text, symbol_detail):
             with open(file_path, "wb+") as f:
                 f.write(content)
         print("补丁已成功应用")
-        # 自动提交修改文件
-        commit = AutoGitCommit(gpt_response=filtered_response, files_to_add=list(file_map.keys()), auto_commit=False)
-        commit.do_commit()
 
+        formatter = FormatAndLint()
+        fix_files = list(file_map.keys())
+        formatter.run_checks(fix_files, fix=True)
+        lint_errors = formatter.run_checks(fix_files, fix=False)
+
+        if lint_errors:
+            print("\n格式检查未通过，阻止提交:")
+            for file_path, errors in lint_errors.items():
+                print(f"文件 {file_path}:")
+                for err in errors:
+                    print(f"  • {err}")
+            print("\n请修复上述问题后重新提交")
+            return None
+
+        commit = AutoGitCommit(gpt_response=filtered_response, files_to_add=fix_files, auto_commit=False)
+        commit.do_commit()
         return file_map
 
     print("补丁未应用")
