@@ -67,11 +67,6 @@ askgpt @listen 用户这些评论反映了什么样的趋势
 #把前面发的prompt再引用一次，网络故障或者改提问需要这个
 askgpt @last
 
-#符号上下文查询,　会列出这个符号调用的多级其它符号，　跨文件，构成一个完整的上下文，供gpt理解   
-#这需要用本项目tree.py建一个index server，暂时支持c语言，其它语言开发中, 进展下边有说   
-#可以说以后不再需要源代码解析类的文章了    
-askgpt @symbol:show_tty_driver
-
 #聊天机器人, 满足闲聊的需要 
 #新会话
 chatbot
@@ -79,26 +74,16 @@ chatbot
 #接着聊, 注意这个受newconversation的影响
 chatagain
 
-#prompt模板, 假设main.c.skel是main.c的框架文件(提炼的接口), 剪贴板里有我们想修改的代码, {}执行了字符串模板的功能
-naskgpt  "{ @edit-with-skel @main.c.skel @clipboard }" 找出给定代码的bug
-
 #多行输入, 正常情况下可以用\换行
 naskgpt \
 > hello \
 > world
 
-#文件行号选择, 文件太大的折中办法, 前100
+#文件行号选择, 文件太大的折中办法, 前100, or 100-, 20-50
 naskgpt @large-file:-100
-
-#100以后
-naskgpt @large-file:100-
-
-#20-50
-naskgpt @large-file:20-50
 
 #把prompt当脚本执行, 如果你给它设置了可执行权限, 或者以#!开头
 naskgpt @script.sh
-
 
 #@patch表示响应中有要patch的符号
 askgpt @patch @symbol_tree.py/ParserUtil traverse在遇到function_definition这样的节点时,要额外考虑,它是父节点是否decorated_definition, 如果是,则需要用父节点　的全文,　以包括装饰器
