@@ -1,5 +1,6 @@
 # GPT 环境配置
 # 兼容 zsh/bash/sh 的脚本目录获取
+
 _get_script_dir() {
   if [ -n "$BASH_VERSION" ]; then
     echo "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,11 +15,8 @@ _get_script_dir() {
 # 初始化基础环境变量
 _init_gpt_env() {
   if [[ -z "$GPT_PATH" ]]; then
-    local script_dir
-    if ! script_dir=$(_get_script_dir); then
-      return 1
-    fi
-    export GPT_PATH="$script_dir"
+    echo "Warning: GPT_PATH is not set. Skipping initialization."
+    return 1
   fi
 
   export GPT_DOC="$GPT_PATH/obsidian"
