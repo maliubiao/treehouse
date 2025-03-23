@@ -1649,7 +1649,7 @@ def process_file_change(response_text, valid_symbols=[]):
     return "\n".join(results), remaining_text
 
 
-def process_patch_response(response_text, symbol_detail):
+def process_patch_response(response_text, symbol_detail, auto_commit: bool = True, auto_lint: bool = True):
     """
     处理大模型的补丁响应，生成差异并应用补丁
 
@@ -1703,12 +1703,13 @@ def process_patch_response(response_text, symbol_detail):
                 with open(file_path, "wb+") as f:
                     f.write(content)
             print("补丁已成功应用")
-
-            formatter = FormatAndLint(verbose=True)
-            fix_files = list(file_map.keys())
-            formatter.run_checks(fix_files, fix=True)
-            commit = AutoGitCommit(gpt_response=remaining, files_to_add=fix_files, auto_commit=False)
-            commit.do_commit()
+            if auto_lint:
+                formatter = FormatAndLint(verbose=True)
+                fix_files = list(file_map.keys())
+                formatter.run_checks(fix_files, fix=True)
+            if auto_commit:
+                commit = AutoGitCommit(gpt_response=remaining, files_to_add=fix_files, auto_commit=False)
+                commit.do_commit()
             return file_map
 
         print("补丁未应用")
@@ -3226,7 +3227,7 @@ class ModelSwitch:
             coder_prompt = f"{part_a}{context}{part_b}"
             result = self.query(model_name=coder_model, prompt=coder_prompt)
             content = result["choices"][0]["message"]["content"]
-            process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+            process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], auto_commit=False, auto_lint=False)
 
     def query(self, model_name: str, prompt: str, **kwargs) -> dict:
         """
@@ -3305,7 +3306,9 @@ class LintReportFix:
         prompt = self._build_prompt(symbol, symbol_map)
         print(prompt)
         response = self.model_switch.query("default", prompt)
-        process_patch_response(response["choices"][0]["message"]["content"], symbol_map)
+        process_patch_response(
+            response["choices"][0]["message"]["content"], symbol_map, auto_commit=False, auto_lint=False
+        )
 
 
 class PylintFixer:
@@ -3368,6 +3371,7 @@ class PylintFixer:
         self, file_path, parser_util: ParserUtil, code_map: dict, locations: list
     ) -> dict:
         """关联错误信息到符号"""
+
         symbol_map = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=1024 * 1024)
         new_symbol_map = {}
         for name, symbol in symbol_map.items():
@@ -3379,9 +3383,7 @@ class PylintFixer:
             symbol["own_errors"] = [
                 lint_error
                 for lint_error in self.file_groups[file_path]
-                if any(
-                    lint_error.line == line and lint_error.column_range[0] == col for line, col in symbol["locations"]
-                )
+                if any(lint_error.line == line for line, _ in symbol["locations"])
             ]
         return new_symbol_map
 
@@ -3420,7 +3422,6 @@ class PylintFixer:
         locations = self._get_symbol_locations(file_path)
         symbol_map = self._associate_errors_with_symbols(file_path, parser_util, code_map, locations)
         symbol_groups = self._group_symbols_by_token_limit(symbol_map)
-
         for group in symbol_groups:
             for symbol in group:
                 self._process_symbol_group(symbol, symbol_map)

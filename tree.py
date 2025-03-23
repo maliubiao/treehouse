@@ -987,6 +987,7 @@ class CodeMapBuilder:
         symbol_locations = {}
         total_code_size = 0
 
+        locations = []
         for line, col in sorted_locations:
             current_symbol = None
             for symbol_path, symbol_info in sorted_symbols:
@@ -1004,18 +1005,15 @@ class CodeMapBuilder:
                 ):
                     current_symbol = symbol_path
                     break
-
             if current_symbol:
-                if current_symbol not in symbol_locations:
-                    symbol_locations[current_symbol] = []
-                symbol_locations[current_symbol].append((line, col))
-
+                locations.append((line, col, current_symbol))
                 symbol_info = code_map[current_symbol]
                 if symbol_info.get("type") == "function":
                     parts = current_symbol.split(".")
                     if len(parts) > 1:
                         class_path = ".".join(parts[:-1])
                         if class_path in processed_symbols:
+                            locations.append((line, col, class_path))
                             continue
                         if class_path in code_map:
                             class_info = code_map[class_path]
@@ -1027,20 +1025,23 @@ class CodeMapBuilder:
                                 current_symbol = class_path
                                 symbol_info = class_info
                                 code_length = class_code_length
-
+                                locations.append((line, col, current_symbol))
                 if current_symbol not in processed_symbols:
                     code_length = len(symbol_info.get("code", ""))
                     if total_code_size + code_length > max_context_size:
                         logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
                         break
-                    symbol_info_with_locations = symbol_info.copy()
-                    symbol_info_with_locations["locations"] = symbol_locations.get(current_symbol, [])
-                    processed_symbols[current_symbol] = symbol_info_with_locations
+                    processed_symbols[current_symbol] = symbol_info.copy()
                     total_code_size += code_length
 
             if total_code_size >= max_context_size:
                 break
-
+        for line, col, symbol in locations:
+            if symbol not in symbol_locations:
+                symbol_locations[symbol] = []
+            symbol_locations[symbol].append((line, col))
+        for symbol in processed_symbols:
+            processed_symbols[symbol]["locations"] = symbol_locations[symbol]
         return processed_symbols
 
 
