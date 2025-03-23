@@ -149,4 +149,4 @@ async def async_for_example():
 
 
 if __name__ == "__main__":
-    pass
+    multi_deco()

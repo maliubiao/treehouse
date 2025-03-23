@@ -1255,7 +1255,49 @@ PATCH_PROMPT_HEADER = """
 4. 保持原有缩进和代码风格，不添注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
 6. 允许在符号内容在前后添加新代码
-7. 不允许操作用户没用[] tag提供的块或者符号
+"""
+
+DUMB_PROMPT = """
+# 输出规范
+1. 如果用户提取的是类, 则输出完整的类
+2. 如果用户提取的是函数, 则输出完整的修改函数
+3. 如果用户提取的是文件, 则输出完整的修改文件
+
+Example:
+[Example 1 start]
+输入:
+[file name]: /path/to/debugger/test_tracer.py
+[file content begin]
+aa
+[file content end]
+输出:
+[modified file]: /path/to/debugger/test_tracer.py
+[source code start]
+aa
+[source code end]
+[Example 1 end]
+
+[Example 2 start]
+输入:
+[SYMBOL START]
+符号名称: /path/to/debugger/test_tracer.py/Tracer
+文件路径: /path/to/debugger/test_tracer.py
+
+[CONTENT START]
+aa
+[CONTENT END]
+
+[SYMBOL END]
+
+输出:
+[modified symbol]: /path/to/debugger/test_tracer.py/Tracer
+[source code start]
+aa
+[source code end]
+[Example 2 end]
+
+用户的要求如下:
+
 """
 
 PUA_PROMPT = """
@@ -1263,11 +1305,13 @@ PUA_PROMPT = """
 """
 
 
-def get_patch_prompt_output(patch_require, file_ranges=None):
+def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=False):
     modified_type = "symbol" if patch_require else "block"
     tag = "source code"
     prompt = ""
-    if patch_require:
+    if patch_require and dumb_prompt:
+        prompt += DUMB_PROMPT
+    if not dumb_prompt and patch_require:
         prompt += (
             f"""
 # 响应格式
@@ -1577,7 +1621,9 @@ def process_file_change(response_text, valid_symbols=[]):
     Returns:
         tuple: (修改记录列表, 剩余文本)
     """
-    pattern = re.compile(r"\[modified symbol\]:\s*(.+?)\n\[source code start\]\n(.*?)\n\[source code end\]", re.DOTALL)
+    pattern = re.compile(
+        r"\[modified (?:symbol|file)\]:\s*(.+?)\n\[source code start\]\n(.*?)\n\[source code end\]", re.DOTALL
+    )
     matches = pattern.finditer(response_text)
     results = []
     remaining_parts = []
@@ -3172,8 +3218,8 @@ class ModelSwitch:
         config = self._get_model_config(coder_model)
         for job in parsed["jobs"]:
             print(f"🔧 开始执行任务: {job['content']}")
-            part_a = f"{get_patch_prompt_output(True, None)}\n"
-            part_b = f"[task describe start]\n{job['content']}\n[task describe end]\n\n[job start]:\n{job['content']}\n[job end]"
+            part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=True)}\n"
+            part_b = f"[task describe start]\n{job['content']}\n[task describe end]\n\n[your job start]:\n{job['content']}\n[your job end]"
             context = context_processor.process_text_with_file_path(
                 prompt, ignore_text=True, tokens_left=config.get("max_tokens", 8096) - len(part_a) - len(part_b)
             )
