@@ -240,7 +240,7 @@ askgpt "如何实现快速排序算法？"
         "key": "ollama",
         "base_url": "http://192.168.40.116:11434/v1",
         "model_name": "r1-qwen-14b:latest",
-        "max_tokens": 131072, //不同模型的max_tokens差别很大，有的只能到8192, 甚至更小只有4k, 写大了会报错
+        "max_context_size": 131072, //不同模型的max_context_size差别很大，有的只能到8192, 甚至更小只有4k, 写大了会报错
         "temperature": 0.6 //温度会严重影响回答的倾向，编程问题可设为0.0, 文学类需要设置成0.6, 官方建议是这样
     }
 

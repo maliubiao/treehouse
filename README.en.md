@@ -166,7 +166,7 @@ usegpt 14b  # Switch model
         "key": "ollama",
         "base_url": "http://192.168.40.116:11434/v1",
         "model_name": "deepseek-r1:14b",
-        "max_tokens": 131072
+        "max_context_size": 131072
     }
 }
 ```

@@ -171,7 +171,7 @@ function global:Use-GptModel {
     $env:GPT_KEY = $modelConfig.key
     $env:GPT_BASE_URL = $modelConfig.base_url
     $env:GPT_MODEL = $modelConfig.model_name
-    if ($modelConfig.max_tokens) { $env:GPT_MAX_TOKEN = $modelConfig.max_tokens }
+    if ($modelConfig.max_context_size) { $env:GPT_MAX_TOKEN = $modelConfig.max_context_size }
     if ($modelConfig.temperature) { $env:GPT_TEMPERATURE = $modelConfig.temperature }
     if ($modelConfig.is_thinking) { $env:GPT_IS_THINKING = $modelConfig.is_thinking }
 
@@ -180,7 +180,7 @@ function global:Use-GptModel {
         Write-Host "  GPT_KEY: $($modelConfig.key.Substring(0,4))****"
         Write-Host "  GPT_BASE_URL: $($modelConfig.base_url)"
         Write-Host "  GPT_MODEL: $($modelConfig.model_name)"
-        if ($modelConfig.max_tokens) { Write-Host "  GPT_MAX_TOKEN: $($modelConfig.max_tokens)" }
+        if ($modelConfig.max_context_size) { Write-Host "  GPT_MAX_TOKEN: $($modelConfig.max_context_size)" }
         if ($modelConfig.temperature) { Write-Host "  GPT_TEMPERATURE: $($modelConfig.temperature)" }
         if ($modelConfig.is_thinking) { Write-Host "  GPT_IS_THINKING: $($modelConfig.is_thinking)" }
     }

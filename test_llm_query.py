@@ -119,9 +119,9 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def test_max_length_truncation(self):
         """测试最大长度截断"""
-        long_text = "a" * (GLOBAL_MODEL_CONFIG.max_tokens + 100)
+        long_text = "a" * (GLOBAL_MODEL_CONFIG.max_context_size + 100)
         result = self.processor.process_text_with_file_path(long_text)
-        self.assertTrue(len(result) <= GLOBAL_MODEL_CONFIG.max_tokens)
+        self.assertTrue(len(result) <= GLOBAL_MODEL_CONFIG.max_context_size)
         self.assertIn("输入太长内容已自动截断", result)
 
     def test_multiple_symbol_args(self):
@@ -666,12 +666,16 @@ class TestModelSwitch(unittest.TestCase):
     def test_switch_model_configuration(self) -> None:
         """测试基础配置切换功能"""
         test_config = ModelConfig(
-            key="test_key", base_url="http://test-api/v1", model_name="test-model", max_tokens=512, temperature=0.3
+            key="test_key",
+            base_url="http://test-api/v1",
+            model_name="test-model",
+            max_context_size=512,
+            temperature=0.3,
         )
 
         self.assertEqual(test_config.model_name, "test-model")
         self.assertEqual(test_config.base_url, "http://test-api/v1")
-        self.assertEqual(test_config.max_tokens, 512)
+        self.assertEqual(test_config.max_context_size, 512)
         self.assertAlmostEqual(test_config.temperature, 0.3)
 
     def test_config_revert_after_switch(self) -> None:

@@ -65,7 +65,7 @@ class ModelConfig:
     key: str
     base_url: str
     model_name: str
-    max_tokens: int | None = None
+    max_context_size: int | None = None
     temperature: float = 0.0
     is_thinking: bool = False
 
@@ -74,14 +74,14 @@ class ModelConfig:
         key: str,
         base_url: str,
         model_name: str,
-        max_tokens: int | None = None,
+        max_context_size: int | None = None,
         temperature: float = 0.0,
         is_thinking: bool = False,
     ):
         self.key = key
         self.base_url = base_url
         self.model_name = model_name
-        self.max_tokens = max_tokens
+        self.max_context_size = max_context_size
         self.temperature = temperature
         self.is_thinking = is_thinking
 
@@ -89,7 +89,7 @@ class ModelConfig:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
         return (
             f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
-            f"max_tokens={self.max_tokens}, temperature={self.temperature}, "
+            f"max_context_size={self.max_context_size}, temperature={self.temperature}, "
             f"is_thinking={self.is_thinking}, key={masked_key})"
         )
 
@@ -98,7 +98,7 @@ class ModelConfig:
         return {
             "base_url": self.base_url,
             "model_name": self.model_name,
-            "max_tokens": self.max_tokens,
+            "max_context_size": self.max_context_size,
             "temperature": self.temperature,
             "is_thinking": self.is_thinking,
             "key_prefix": self.key[:3] + "***" if self.key else "None",
@@ -124,17 +124,17 @@ class ModelConfig:
         if not model_name:
             raise ValueError("环境变量GPT_MODEL未设置")
 
-        max_tokens = os.environ.get("GPT_MAX_TOKEN")
+        max_context_size = os.environ.get("GPT_MAX_TOKEN")
         temperature = os.environ.get("GPT_TEMPERATURE")
         is_thinking = os.environ.get("GPT_IS_THINKING")
 
-        if max_tokens is not None:
+        if max_context_size is not None:
             try:
-                max_tokens = int(max_tokens)
+                max_context_size = int(max_context_size)
             except ValueError as e:
-                raise ValueError(f"无效的max_tokens值: {max_tokens}") from e
+                raise ValueError(f"无效的max_context_size值: {max_context_size}") from e
         else:
-            max_tokens = 16384
+            max_context_size = 16384
 
         try:
             temperature = float(temperature) if temperature is not None else 0.0
@@ -150,7 +150,7 @@ class ModelConfig:
             key=key,
             base_url=base_url,
             model_name=model_name,
-            max_tokens=max_tokens,
+            max_context_size=max_context_size,
             temperature=temperature,
             is_thinking=is_thinking,
         )
@@ -526,7 +526,6 @@ def _get_api_response(
             model=model,
             messages=history,
             temperature=kwargs.get("temperature", 0.0),
-            max_tokens=kwargs.get("max_tokens", 8096),
             top_p=0.8,
             stream=True,
         )
@@ -1254,7 +1253,7 @@ PATCH_PROMPT_HEADER = """
 3. 修改时必须包含完整文件内容，不得省略任何代码
 4. 保持原有缩进和代码风格，不添注释
 5. 输出必须为纯文本，禁止使用markdown或代码块
-6. 允许在符号内容在前后添加新代码
+6. 你的输出会被用来替代输入的内容，请不要省略，整体处理
 """
 
 DUMB_PROMPT = """
@@ -1629,21 +1628,28 @@ def process_file_change(response_text, valid_symbols=[]):
     results = []
     remaining_parts = []
     last_end = 0
+    file_tag = "[modified file]:"
+    symbol_tag = "[modified symbol]:"
     for match in matches:
         start = match.start()
         end = match.end()
         symbol_path = match.group(1).strip()
+        content = response_text[start:end]
         # 检查symbol_path是否是有效的文件路径
-        if os.path.exists(symbol_path) or (valid_symbols and symbol_path not in valid_symbols):
+        if (
+            os.path.exists(symbol_path)
+            or (valid_symbols and symbol_path not in valid_symbols)
+            or content.startswith(file_tag)
+        ):
             if start > last_end:
                 remaining_parts.append(response_text[last_end:start])
-            part = response_text[start:end].replace("[modified symbol]:", "[modified file]:", 1)
+            part = content.replace(symbol_tag, file_tag, 1)
             results.append(part)
         else:
             # 如果不是有效文件路径，则存储到remaining_parts
             if start > last_end:
                 remaining_parts.append(response_text[last_end:start])
-            remaining_parts.append(response_text[start:end])
+            remaining_parts.append(content)
         last_end = end
     remaining_parts.append(response_text[last_end:])
     remaining_text = "".join(remaining_parts).strip()
@@ -1926,7 +1932,7 @@ def query_symbol(symbol_name):
             context += "[main definition end]\n"
 
         # 计算剩余可用长度
-        remaining_length = GLOBAL_MODEL_CONFIG.max_tokens - len(context) - 1024  # 保留1024字符余量
+        remaining_length = GLOBAL_MODEL_CONFIG.max_context_size - len(context) - 1024  # 保留1024字符余量
 
         # 添加其他定义，直到达到长度限制
         if len(data["definitions"]) > 1 and remaining_length > 0:
@@ -2084,7 +2090,7 @@ class GPTContextProcessor:
         return result
 
     def process_text_with_file_path(
-        self, text: str, ignore_text: bool = False, tokens_left: int = GLOBAL_MODEL_CONFIG.max_tokens
+        self, text: str, ignore_text: bool = False, tokens_left: int = GLOBAL_MODEL_CONFIG.max_context_size
     ) -> str:
         """处理包含@...的文本"""
         parts = self.preprocess_text(text)
@@ -2137,7 +2143,9 @@ class GPTContextProcessor:
     def _process_symbol(self, symbol_name: SymbolsNode) -> str:
         """处理符号"""
         symbol_map = {}
-        symbols = perform_search(symbol_name.symbols, args.config, max_context_size=GLOBAL_MODEL_CONFIG.max_tokens)
+        symbols = perform_search(
+            symbol_name.symbols, args.config, max_context_size=GLOBAL_MODEL_CONFIG.max_context_size
+        )
         for symbol in symbols.values():
             symbol_map[symbol["name"]] = self._symbol_format(symbol)
         GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH].update(symbol_map)
@@ -2157,7 +2165,7 @@ class GPTContextProcessor:
             return _handle_command(match, self.cmd_map)
         return ""
 
-    def _finalize_text(self, text, tokens_left=GLOBAL_MODEL_CONFIG.max_tokens):
+    def _finalize_text(self, text, tokens_left=GLOBAL_MODEL_CONFIG.max_context_size):
         """最终处理文本"""
         truncated_suffix = "\n[输入太长内容已自动截断]"
         if len(text) > tokens_left:
@@ -2211,8 +2219,8 @@ GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: {}}
 def finalize_text(text):
     """最终处理文本"""
     truncated_suffix = "\n[输入太长内容已自动截断]"
-    if len(text) > GLOBAL_MODEL_CONFIG.max_tokens:
-        text = text[: GLOBAL_MODEL_CONFIG.max_tokens - len(truncated_suffix)] + truncated_suffix
+    if len(text) > GLOBAL_MODEL_CONFIG.max_context_size:
+        text = text[: GLOBAL_MODEL_CONFIG.max_context_size - len(truncated_suffix)] + truncated_suffix
 
     with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
         f.write(text)
@@ -2967,7 +2975,7 @@ class ConfigLoader:
 
 
 def perform_search(
-    words: List[str], config_path: str = "llm_project.yml", max_context_size=GLOBAL_MODEL_CONFIG.max_tokens
+    words: List[str], config_path: str = "llm_project.yml", max_context_size=GLOBAL_MODEL_CONFIG.max_context_size
 ):
     """执行代码搜索并返回强类型结果"""
 
@@ -3196,6 +3204,7 @@ class ModelSwitch:
         1. 使用架构模型获取任务划分
         2. 解析架构师响应
         3. 分发任务给编码模型执行
+        4. 提供重试机制
 
         返回:
             list: 包含所有任务执行结果的列表
@@ -3204,7 +3213,9 @@ class ModelSwitch:
         context_processor = GPTContextProcessor()
         config = self._get_model_config(architect_model)
 
-        text = context_processor.process_text_with_file_path(prompt, tokens_left=config.get("max_tokens", 8096))
+        text = context_processor.process_text_with_file_path(
+            prompt, tokens_left=config.get("max_context_size", 32 * 1024)
+        )
         GPT_FLAGS[GPT_FLAG_PATCH] = False
         architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
             encoding="utf-8"
@@ -3218,17 +3229,29 @@ class ModelSwitch:
         parsed = ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
         print(parsed["task"])
         config = self._get_model_config(coder_model)
+        results = []
         for job in parsed["jobs"]:
-            print(f"🔧 开始执行任务: {job['content']}")
-            part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=True)}\n"
-            part_b = f"[task describe start]\n{job['content']}\n[task describe end]\n\n[your job start]:\n{job['content']}\n[your job end]"
-            context = context_processor.process_text_with_file_path(
-                prompt, ignore_text=True, tokens_left=config.get("max_tokens", 8096) - len(part_a) - len(part_b)
-            )
-            coder_prompt = f"{part_a}{context}{part_b}"
-            result = self.query(model_name=coder_model, prompt=coder_prompt)
-            content = result["choices"][0]["message"]["content"]
-            process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], auto_commit=False, auto_lint=False)
+            while True:
+                print(f"🔧 开始执行任务: {job['content']}")
+                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=True)}\n"
+                part_b = f"[task describe start]\n{job['content']}\n[task describe end]\n\n[your job start]:\n{job['content']}\n[your job end]"
+                context = context_processor.process_text_with_file_path(
+                    prompt,
+                    ignore_text=True,
+                    tokens_left=config.get("max_context_size", 32 * 1024) - len(part_a) - len(part_b),
+                )
+                coder_prompt = f"{part_a}{context}{part_b}"
+                result = self.query(model_name=coder_model, prompt=coder_prompt)
+                content = result["choices"][0]["message"]["content"]
+                process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], auto_commit=False, auto_lint=False)
+                retry = input("是否要重新执行此任务？(y/n): ").lower()
+                if retry == "y":
+                    print("🔄 正在重试任务...")
+                    continue
+                else:
+                    results.append(content)
+                    break
+        return results
 
     def query(self, model_name: str, prompt: str, **kwargs) -> dict:
         """
@@ -3250,7 +3273,7 @@ class ModelSwitch:
         api_key = config["key"]
         base_url = config["base_url"]
         model = config["model_name"]
-        max_tokens = config.get("max_tokens")
+        max_context_size = config.get("max_context_size")
         temperature = config.get("temperature", 0.6)
 
         filtered_config = config.copy()
@@ -3260,8 +3283,8 @@ class ModelSwitch:
             GLOBAL_MODEL_CONFIG.key = api_key
             GLOBAL_MODEL_CONFIG.base_url = base_url
             GLOBAL_MODEL_CONFIG.model_name = model
-            if max_tokens is not None:
-                GLOBAL_MODEL_CONFIG.max_tokens = max_tokens
+            if max_context_size is not None:
+                GLOBAL_MODEL_CONFIG.max_context_size = max_context_size
             if temperature is not None:
                 GLOBAL_MODEL_CONFIG.temperature = temperature
         except AttributeError as e:
@@ -3395,7 +3418,7 @@ class PylintFixer:
         current_size = 0
         for symbol in symbol_map.values():
             symbol_size = len(symbol["code"])
-            if current_size + symbol_size > GLOBAL_MODEL_CONFIG.max_tokens:
+            if current_size + symbol_size > GLOBAL_MODEL_CONFIG.max_context_size:
                 groups.append(current_group)
                 current_group = [symbol]
                 current_size = symbol_size
