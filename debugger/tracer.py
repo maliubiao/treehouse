@@ -355,13 +355,13 @@ class TraceCore:
 
     def log_line(self, frame):
         """基础行号跟踪"""
-        if not self.is_target_frame(frame) or not self.tracing_enabled:
+        if not self.is_target_frame(frame):
             return
         lineno = frame.f_lineno
         if self.line_counter.get(lineno, 0) >= _MAX_LINE_REPEAT:
             return
         self.line_counter[lineno] = self.line_counter.get(lineno, 0) + 1
-        line = linecache.getline(frame.f_code.co_filename, lineno).strip()
+        line = linecache.getline(frame.f_code.co_filename, lineno).strip("\n")
         log_msg = f"{_INDENT*self.stack_depth}▷ 执行行 {lineno}: {line}"
         colored_msg = _color_wrap(log_msg, "line")
         logging.debug(log_msg)
@@ -408,7 +408,8 @@ class TraceCore:
 
     def _handle_line_event(self, frame, arg):
         """处理行号事件"""
-        self.log_line(frame)
+        if self.tracing_enabled and frame in self._active_frames:
+            self.log_line(frame)
         return self.trace_dispatch
 
     def start(self):

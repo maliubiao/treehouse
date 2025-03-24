@@ -26,8 +26,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
-import jieba
-import uvicorn
 from fastapi import Body, FastAPI, Form, HTTPException
 from fastapi import Query as QueryArgs
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -3164,7 +3162,7 @@ async def extract_identifier(text: str = QueryArgs(...)):
     if not text.strip():
         return []
 
-    words = list(jieba.cut(text, cut_all=False))
+    words = list(dynamic_import("jieba").cut(text, cut_all=False))
     identifier_pattern = re.compile(r"^[a-zA-Z_]\w*$")
     return [word for word in words if identifier_pattern.fullmatch(word)]
 
@@ -3973,6 +3971,11 @@ def build_index(
         conn.close()
 
 
+def dynamic_import(module_name: str):
+    """动态导入模块"""
+    return importlib.import_module(module_name)
+
+
 def main(
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -3994,7 +3997,7 @@ def main(
     # 初始化数据库连接
     build_index(project_paths, excludes, include_suffixes, db_path, parallel)
     # 启动FastAPI服务
-    uvicorn.run(app, host=host, port=port)
+    dynamic_import("uvicorn").run(app, host=host, port=port)
 
 
 LSP_CLIENT = None
