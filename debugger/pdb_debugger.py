@@ -88,7 +88,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
                 target_files=[f"*{target.stem}.py"],  # 匹配当前脚本相关的文件
                 capture_vars=[],
             )
-            _ = start_trace(target, config=config)
+            tracer = start_trace(target, config=config)
             execute_script(target, args["script_args"])
         except KeyboardInterrupt:
             print(_color_wrap("\n🛑 用户中断调试过程", "error"))
@@ -98,7 +98,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             logging.error("执行错误: %s\n%s", str(e), traceback.format_exc())
             exit_code = 3
         finally:
-            stop_trace()
+            tracer.stop()
             sys.argv = original_argv
             print_debug_summary()
 

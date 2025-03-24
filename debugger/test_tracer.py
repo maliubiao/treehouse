@@ -1,10 +1,12 @@
+import queue
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -95,6 +97,13 @@ class TestTracer(unittest.TestCase):
         elapsed_time = time.time() - start_time
         self.assertLess(elapsed_time, 0.1)
 
+        # Verify async flush performance
+        start_time = time.time()
+        for _ in range(100):
+            tracer._add_to_buffer("test message", "line")
+        elapsed_time = time.time() - start_time
+        self.assertLess(elapsed_time, 0.01)
+
     def test_multiple_file_patterns(self):
         files = [self.tmp_path / "test1.py", self.tmp_path / "test2.py", self.tmp_path / "ignore.py"]
         for f in files:
@@ -158,6 +167,52 @@ class TestTracer(unittest.TestCase):
         for _ in range(5):
             tracer.log_line(frame)
         self.assertEqual(tracer.line_counter[1], 5)
+
+    def test_async_flush(self):
+        test_file = self.tmp_path / "test_file.py"
+        test_file.write_text("def foo():\n    x = 42\n")
+
+        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
+        tracer = TraceCore(test_file, config=config)
+        tracer.tracing_enabled = True
+
+        # Add messages with delay
+        for i in range(5):
+            tracer._add_to_buffer(f"Message {i}", "line")
+            time.sleep(0.1)
+
+        # Wait for flush
+        time.sleep(1.5)
+        tracer.stop()
+
+        # Verify all messages were processed
+        self.assertTrue(tracer._log_queue.empty())
+
+    def test_thread_safety(self):
+        test_file = self.tmp_path / "test_file.py"
+        test_file.write_text("def foo():\n    x = 42\n")
+
+        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
+        tracer = TraceCore(test_file, config=config)
+        tracer.tracing_enabled = True
+
+        def worker():
+            for i in range(100):
+                tracer._add_to_buffer(f"Thread {threading.current_thread().name} - {i}", "line")
+                time.sleep(0.001)
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Wait for flush
+        time.sleep(1.5)
+        tracer.stop()
+
+        # Verify no messages were lost
+        self.assertTrue(tracer._log_queue.empty())
 
 
 if __name__ == "__main__":
