@@ -20,7 +20,6 @@ from prompt_toolkit.key_binding import KeyBindings
 
 import llm_query
 from llm_query import (
-    CONVERSATION_END_TAG,
     GLOBAL_MODEL_CONFIG,
     ArchitectMode,
     AutoGitCommit,

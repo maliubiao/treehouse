@@ -344,7 +344,7 @@ class TraceCore:
 
                 log_prefix = "CALL"
 
-            log_msg = f"{_INDENT*self.stack_depth}↘ {log_prefix} {self._get_formatted_filename(frame.f_code.co_name)}({', '.join(args_info)})"
+            log_msg = f"{_INDENT*self.stack_depth}↘ {log_prefix} {self._get_formatted_filename(frame.f_code.co_filename)}:{frame.f_lineno} {frame.f_code.co_name}({', '.join(args_info)})"
             self._add_to_buffer(log_msg, "call")
             self._call_stack.append(frame.f_code.co_name)
         except Exception as e:
