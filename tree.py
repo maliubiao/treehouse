@@ -44,6 +44,7 @@ JAVASCRIPT_LANG = "javascript"
 JAVA_LANG = "java"
 GO_LANG = "go"
 SHELL_LANG = "bash"
+CPP_LANG = "cpp"
 
 # 文件后缀到语言名称的映射
 SUPPORTED_LANGUAGES = {
@@ -54,6 +55,7 @@ SUPPORTED_LANGUAGES = {
     ".java": JAVA_LANG,
     ".go": GO_LANG,
     ".sh": SHELL_LANG,
+    ".cpp": CPP_LANG,
 }
 
 # 各语言的查询语句映射
@@ -422,13 +424,12 @@ class ParserLoader:
 
         # 根据语言类型获取对应的查询语句
         query_source = LANGUAGE_QUERIES.get(lang_name)
-        if not query_source:
-            raise ValueError(f"不支持的语言类型: {lang_name}")
-
-        query = Query(lang, query_source)
-
+        if query_source:
+            query = Query(lang, query_source)
+            self._queries[lang_name] = query
+        else:
+            query = None
         self._parsers[lang_name] = lang_parser
-        self._queries[lang_name] = query
         return lang_parser, query, lang_name
 
 
@@ -1260,6 +1261,10 @@ class NodeTypes:
     GO_TYPE_SPEC = "type_spec"
     GO_POINTER_TYPE = "pointer_type"
     GO_QUALIFIED_TYPE = "qualified_type"
+    CPP_NAMESPACE = "namespace"
+    CPP_NAMESPACE_IDENTIFIER = "namespace_identifier"
+    CPP_NAMESPACE_DEFINITION = "namespace_definition"
+    CPP_CLASS_SPECIFIER = "class_specifier"
 
     @staticmethod
     def is_module(node_type):

@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <type_traits>
+#include <memory>
 #define MAX_COUNT 100
 #ifdef DEBUG_MODE
     #define DEBUG_LOG(msg) std::cout << "[DEBUG] " << msg << std::endl
@@ -234,6 +235,134 @@ T add(T a, T b) {
     return a + b;
 }
 
+// New namespace with scope resolution operators
+namespace ScopeResolution {
+    class ScopeTest {
+    public:
+        static void static_method() {
+            std::cout << "Static method called" << std::endl;
+        }
+        
+        void member_method() {
+            std::cout << "Member method called" << std::endl;
+        }
+    };
+    
+    void free_function() {
+        std::cout << "Free function called" << std::endl;
+    }
+    
+    namespace Nested {
+        void nested_function() {
+            std::cout << "Nested function called" << std::endl;
+        }
+    }
+}
+
+// Class with qualified name resolution
+class QualifiedNameTest {
+public:
+    class InnerClass {
+    public:
+        static void inner_static_method() {
+            std::cout << "Inner static method" << std::endl;
+        }
+    };
+    
+    void outer_method() {
+        std::cout << "Outer method" << std::endl;
+    }
+};
+
+// Template class with scope resolution
+template<typename T>
+class TemplateScope {
+public:
+    class Inner {
+    public:
+        static void template_inner_method() {
+            std::cout << "Template inner method" << std::endl;
+        }
+    };
+    
+    static void template_method() {
+        std::cout << "Template method" << std::endl;
+    }
+};
+
+// New implementations for tree-sitter testing
+namespace ImplementationTests {
+    class ComplexClass {
+    public:
+        ComplexClass() = default;
+        
+        // Out-of-line constructor implementation
+        ComplexClass(int value);
+        
+        // Out-of-line method implementation
+        void complex_method();
+        
+        // Static out-of-line implementation
+        static void static_complex_method();
+    };
+    
+    // Out-of-line constructor implementation
+    ComplexClass::ComplexClass(int value) {
+        std::cout << "ComplexClass constructed with " << value << std::endl;
+    }
+    
+    // Out-of-line method implementation
+    void ComplexClass::complex_method() {
+        std::cout << "Complex method called" << std::endl;
+    }
+    
+    // Out-of-line static method implementation
+    void ComplexClass::static_complex_method() {
+        std::cout << "Static complex method called" << std::endl;
+    }
+    
+    // Template class with out-of-line implementations
+    template<typename T>
+    class TemplateClass {
+    public:
+        TemplateClass();
+        void template_method();
+    };
+    
+    // Out-of-line template class constructor
+    template<typename T>
+    TemplateClass<T>::TemplateClass() {
+        std::cout << "TemplateClass constructed" << std::endl;
+    }
+    
+    // Out-of-line template class method
+    template<typename T>
+    void TemplateClass<T>::template_method() {
+        std::cout << "Template method called with type: " 
+                  << typeid(T).name() << std::endl;
+    }
+    
+    // Namespace with out-of-line implementations
+    namespace NestedImpl {
+        class NestedClass {
+        public:
+            void nested_method();
+        };
+        
+        void free_function();
+    }
+    
+    // Out-of-line nested class method
+    void NestedImpl::NestedClass::nested_method() {
+        std::cout << "Nested method called" << std::endl;
+    }
+    
+    // Out-of-line free function
+    void NestedImpl::free_function() {
+        std::cout << "Free function in nested namespace" << std::endl;
+    }
+}
+
 // Main function demonstrating various features
 int main() {
     // Lambda expressions
@@ -297,6 +426,32 @@ int main() {
     } catch(const std::exception& e) {
         std::cout << "Exception caught: " << e.what() << std::endl;
     }
+    
+    // New scope resolution tests
+    ScopeResolution::ScopeTest::static_method();
+    ScopeResolution::ScopeTest obj;
+    obj.member_method();
+    ScopeResolution::free_function();
+    ScopeResolution::Nested::nested_function();
+    
+    QualifiedNameTest::InnerClass::inner_static_method();
+    QualifiedNameTest qn_obj;
+    qn_obj.outer_method();
+    
+    TemplateScope<int>::template_method();
+    TemplateScope<double>::Inner::template_inner_method();
+    
+    // New implementation tests
+    ImplementationTests::ComplexClass cc(42);
+    cc.complex_method();
+    ImplementationTests::ComplexClass::static_complex_method();
+    
+    ImplementationTests::TemplateClass<int> tc;
+    tc.template_method();
+    
+    ImplementationTests::NestedImpl::NestedClass nc;
+    nc.nested_method();
+    ImplementationTests::NestedImpl::free_function();
 
     return 0;
 }
