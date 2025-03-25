@@ -107,17 +107,19 @@ _set_gpt_env_vars() {
   local base_url=$2
   local model=$3
   local max_context_size=$4
-  local temperature=$5
-  local is_thinking=$6
+  local max_tokens=$5
+  local temperature=$6
+  local is_thinking=$7
 
   # 清空可能存在的旧环境变量
-  unset GPT_KEY GPT_BASE_URL GPT_MODEL GPT_MAX_TOKEN GPT_TEMPERATURE GPT_IS_THINKING
+  unset GPT_KEY GPT_BASE_URL GPT_MODEL GPT_MAX_CONTEXT_SIZE GPT_MAX_TOKENS GPT_TEMPERATURE GPT_IS_THINKING
 
   # 设置新的环境变量
   export GPT_KEY="$key"
   export GPT_BASE_URL="$base_url"
   export GPT_MODEL="$model"
-  [[ -n "$max_context_size" ]] && export GPT_MAX_TOKEN="$max_context_size"
+  [[ -n "$max_context_size" ]] && export GPT_MAX_CONTEXT_SIZE="$max_context_size"
+  [[ -n "$max_tokens" ]] && export GPT_MAX_TOKENS="$max_tokens"
   [[ -n "$temperature" ]] && export GPT_TEMPERATURE="$temperature"
   [[ -n "$is_thinking" ]] && export GPT_IS_THINKING="$is_thinking"
 }
@@ -136,25 +138,25 @@ usegpt() {
     return 1
   }
 
-  local key base_url model max_context_size temperature is_thinking
-  read key base_url model max_context_size temperature is_thinking <<<$(_read_model_config "$model_name" "$config_file")
+  local key base_url model max_context_size max_tokens temperature is_thinking
+  read key base_url model max_context_size max_tokens temperature is_thinking <<<$(_read_model_config "$model_name" "$config_file")
 
   [[ -z "$key" || -z "$base_url" || -z "$model" ]] && {
     echo >&2 "错误：未找到模型 '$model_name' 或配置不完整"
     return 1
   }
   export GPT_MODEL_KEY=$model_name
-  _set_gpt_env_vars "$key" "$base_url" "$model" "$max_context_size" "$temperature" "$is_thinking"
+  _set_gpt_env_vars "$key" "$base_url" "$model" "$max_context_size" "$max_tokens" "$temperature" "$is_thinking"
 
   [[ -z "$no_verbose" ]] && {
     echo "成功设置GPT环境变量："
     echo "  GPT_KEY: ${key:0:4}****"
     echo "  GPT_BASE_URL: $base_url"
     echo "  GPT_MODEL: $model"
-    [[ -n "$max_context_size" ]] && echo "  GPT_MAX_TOKEN: $max_context_size"
+    [[ -n "$max_context_size" ]] && echo "  GPT_MAX_CONTEXT_SIZE: $max_context_size"
+    [[ -n "$max_tokens" ]] && echo "  GPT_MAX_TOKENS: $max_tokens"
     [[ -n "$temperature" ]] && echo "  GPT_TEMPERATURE: $temperature"
     [[ -n "$is_thinking" ]] && echo "  GPT_IS_THINKING: $is_thinking"
-
   }
 }
 

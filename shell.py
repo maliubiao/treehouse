@@ -266,8 +266,25 @@ def read_model_config(model_name: str, config_file: str):
         config = json.load(f).get(model_name, {})
         print(
             " ".join(
-                str(config.get(k, 8096 if k == "max_context_size" else 0.0 if k == "temperature" else " "))
-                for k in ("key", "base_url", "model_name", "max_context_size", "temperature", "is_thinking")
+                str(
+                    config.get(
+                        k,
+                        (
+                            64 * 1024
+                            if k == "max_context_size"
+                            else 8 * 1024 if k == "max_tokens" else 0.0 if k == "temperature" else " "
+                        ),
+                    )
+                )
+                for k in (
+                    "key",
+                    "base_url",
+                    "model_name",
+                    "max_context_size",
+                    "max_tokens",
+                    "temperature",
+                    "is_thinking",
+                )
             )
         )
 

@@ -128,7 +128,7 @@ class ModelConfig:
         if not model_name:
             raise ValueError("环境变量GPT_MODEL未设置")
 
-        max_context_size = os.environ.get("GPT_MAX_TOKEN")
+        max_context_size = os.environ.get("GPT_MAX_CONTEXT_SIZE")
         temperature = os.environ.get("GPT_TEMPERATURE")
         is_thinking = os.environ.get("GPT_IS_THINKING")
         max_tokens = os.environ.get("GPT_MAX_TOKENS")
@@ -1256,7 +1256,7 @@ PATCH_PROMPT_HEADER = """
 8. 便于调试
 9. 不导入依赖的包，建议用户自行处理
 
-# 输出规范
+# 指令规范
 1. 必须返回结构化内容，使用严格指定的标签格式
 2. 若无修改需求，则忽视传入的符号或者块
 3. 保持原有缩进和代码风格，不添注释
@@ -1425,7 +1425,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 [FILE RANGE END]
 """
     prompt += f"""
-{get_patch_prompt_output(patch_require, file_ranges)}
+{get_patch_prompt_output(patch_require, file_ranges, dumb_prompt=GLOBAL_MODEL_CONFIG.is_thinking)}
 用户的要求如下，（如果他没写，贴心的推断他想做什么):
 """
     return prompt
