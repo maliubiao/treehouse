@@ -3,9 +3,11 @@
 llm_query 模块的单元测试
 """
 
+import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from textwrap import dedent
@@ -18,6 +20,7 @@ from prompt_toolkit.key_binding import KeyBindings
 
 import llm_query
 from llm_query import (
+    CONVERSATION_END_TAG,
     GLOBAL_MODEL_CONFIG,
     ArchitectMode,
     AutoGitCommit,
@@ -28,6 +31,7 @@ from llm_query import (
     GPTContextProcessor,
     LintParser,
     ModelConfig,
+    ModelSwitch,
     SymbolsNode,
     _fetch_symbol_data,
     _find_gitignore,
@@ -661,7 +665,48 @@ class TestModelSwitch(unittest.TestCase):
     original_config: ModelConfig
 
     def setUp(self) -> None:
+        time.sleep = lambda x: 0  # Mock sleep function
         self.original_config = GLOBAL_MODEL_CONFIG
+        self.valid_config = {
+            "model1": ModelConfig(
+                key="key1",
+                base_url="http://api1",
+                model_name="model1",
+                max_context_size=4096,
+                temperature=0.7,
+            ),
+            "model2": ModelConfig(key="key2", base_url="http://api2", model_name="model2"),
+        }
+        # 使用内存中的配置文件
+        self.test_config_file = tempfile.NamedTemporaryFile(mode="w+", delete=False)
+        self._write_test_config(self.valid_config)
+        self.test_config_file.seek(0)  # 重置文件指针
+
+    def tearDown(self) -> None:
+        self.test_config_file.close()
+        try:
+            os.unlink(self.test_config_file.name)
+        except FileNotFoundError:
+            pass
+
+    def _write_test_config(self, content: dict = None):
+        """将配置写入临时文件"""
+        self.test_config_file.seek(0)
+        self.test_config_file.truncate()
+        serializable_content = {
+            name: {
+                "key": config.key,
+                "base_url": config.base_url,
+                "model_name": config.model_name,
+                "max_context_size": config.max_context_size,
+                "temperature": config.temperature,
+                "is_thinking": config.is_thinking,
+                "max_tokens": config.max_tokens,
+            }
+            for name, config in (content or self.valid_config).items()
+        }
+        json.dump(serializable_content, self.test_config_file)
+        self.test_config_file.flush()
 
     def test_switch_model_configuration(self) -> None:
         """测试基础配置切换功能"""
@@ -691,6 +736,254 @@ class TestModelSwitch(unittest.TestCase):
 
         self.assertEqual(GLOBAL_MODEL_CONFIG.model_name, original_model)
         self.assertEqual(GLOBAL_MODEL_CONFIG.base_url, original_url)
+
+    def test_load_valid_config(self) -> None:
+        """测试正常加载配置文件"""
+        switch = ModelSwitch()
+        switch._load_config = lambda _: {
+            name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()
+        }
+
+        config = switch._load_config(self.test_config_file.name)
+        self.assertIsInstance(config["model1"], ModelConfig)
+        self.assertEqual(config["model1"].key, "key1")
+        self.assertEqual(config["model1"].base_url, "http://api1")
+        self.assertEqual(config["model1"].model_name, "model1")
+        self.assertEqual(config["model1"].max_context_size, 4096)
+        self.assertAlmostEqual(config["model1"].temperature, 0.7)
+
+    def test_load_missing_config_file(self) -> None:
+        """测试配置文件不存在异常"""
+        switch = ModelSwitch()
+        with self.assertRaises(ValueError) as context:
+            switch._load_config("nonexistent.json")
+        self.assertIn("模型配置文件未找到", str(context.exception))
+
+    def test_load_invalid_json(self) -> None:
+        """测试JSON格式错误异常"""
+        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as invalid_file:
+            invalid_file.write("invalid json")
+            invalid_file.flush()
+
+        switch = ModelSwitch()
+        with self.assertRaises(ValueError) as context:
+            switch._load_config(invalid_file.name)
+        self.assertIn("配置文件格式错误", str(context.exception))
+        os.unlink(invalid_file.name)
+
+    def test_get_valid_model_config(self) -> None:
+        """测试获取存在的模型配置"""
+        switch = ModelSwitch()
+        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+
+        config = switch._get_model_config("model1")
+        self.assertEqual(config.key, "key1")
+        self.assertEqual(config.base_url, "http://api1")
+
+    def test_get_nonexistent_model(self) -> None:
+        """测试获取不存在的模型配置"""
+        switch = ModelSwitch()
+        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+
+        with self.assertRaises(ValueError) as context:
+            switch._get_model_config("nonexistent")
+        self.assertIn("未找到模型配置", str(context.exception))
+
+    def test_validate_required_fields(self) -> None:
+        """测试配置字段验证"""
+        # 写入缺少base_url的配置
+        invalid_config = {"invalid_model": {"model_name": "invalid_model", "temperature": 0.5}}
+        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as invalid_file:
+            invalid_file.write(json.dumps(invalid_config))
+            invalid_file.flush()
+            with self.assertRaises(ValueError) as context:
+                switch = ModelSwitch(config_path=invalid_file.name)
+                switch._load_config()
+                self.assertIn("base_url", str(context.exception))
+                self.assertIn("缺少必要字段", str(context.exception))
+
+    @patch("llm_query.query_gpt_api")
+    def test_api_query_with_retry(self, mock_query):
+        """测试API调用重试机制"""
+        time.sleep = lambda x: 0  # Mock sleep function
+        mock_query.side_effect = [Exception("First fail"), Exception("Second fail"), {"success": True}]
+
+        switch = ModelSwitch()
+        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+
+        result = switch.query("model1", "test prompt")
+        self.assertEqual(result, {"success": True})
+        self.assertEqual(mock_query.call_count, 3)
+
+    @patch("llm_query.query_gpt_api")
+    def test_api_config_propagation(self, mock_query):
+        """测试API配置正确传递"""
+        mock_query.return_value = {"success": True}
+
+        switch = ModelSwitch()
+        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+
+        switch.query("model1", "test prompt")
+
+        self.assertEqual(switch.current_config.key, "key1")
+        self.assertEqual(switch.current_config.base_url, "http://api1")
+
+    @patch("llm_query.ModelSwitch.query")
+    @patch("llm_query.ArchitectMode.parse_response")
+    @patch("llm_query.process_patch_response")
+    def test_execute_workflow_integration(self, mock_process, mock_parse, mock_query):
+        """测试端到端工作流程"""
+        # 1. 设置模拟数据
+        architect_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "task": "test task",
+                                "jobs": [{"content": "job1", "priority": 1}, {"content": "job2", "priority": 2}],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        coder_responses = [
+            {"choices": [{"message": {"content": "patch1"}}]},
+            {"choices": [{"message": {"content": "patch2"}}]},
+        ]
+
+        # 2. 配置mock行为
+        mock_query.side_effect = [architect_response] + coder_responses
+        mock_parse.return_value = {
+            "task": "parsed task",
+            "jobs": [{"content": "parsed job1", "priority": 1}, {"content": "parsed job2", "priority": 2}],
+        }
+
+        # 3. 执行测试
+        switch = ModelSwitch()
+        switch.config = {
+            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch"),
+            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder"),
+        }
+
+        # 模拟用户输入n不重试
+        with patch("builtins.input", return_value="n"):
+            results = switch.execute_workflow(architect_model="architect", coder_model="coder", prompt="test prompt")
+
+        # 4. 验证结果
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results, ["patch1", "patch2"])
+
+        # 验证parse_response调用
+        mock_parse.assert_called_once_with(architect_response["choices"][0]["message"]["content"])
+
+        # 验证process_patch_response调用次数
+        self.assertEqual(mock_process.call_count, 2)
+
+        # 验证query调用次数 (1次架构师 + 2次编码)
+        self.assertEqual(mock_query.call_count, 3)
+
+    @patch("llm_query.query_gpt_api")
+    @patch("builtins.input")
+    def test_execute_workflow_retry_mechanism(self, mock_input, mock_query):
+        """测试工作流重试机制"""
+        # 模拟3次失败后成功
+        time.sleep = lambda x: 0  # Mock sleep function
+        mock_query.side_effect = [
+            Exception("First fail"),
+            Exception("Second fail"),
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": """
+[task describe start]
+开发分布式任务调度系统
+[task describe end]
+
+[team member1 job start]
+实现工作节点注册机制
+使用Consul进行服务发现
+[team member1 job end]
+"""
+                        }
+                    }
+                ]
+            },
+        ]
+
+        switch = ModelSwitch()
+        switch.config = {
+            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch"),
+            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder"),
+        }
+
+        # 模拟用户输入y重试
+        mock_input.side_effect = ["y", "y", "n"]
+        results = switch.execute_workflow(
+            architect_model="architect", coder_model="coder", prompt="test prompt", architect_only=True
+        )
+
+        self.assertEqual(len(results), 0)
+        self.assertEqual(mock_query.call_count, 3)
+
+    @patch("llm_query.ModelSwitch.query")
+    @patch("llm_query.ArchitectMode.parse_response")
+    def test_execute_workflow_invalid_json(self, mock_parse, mock_query):
+        """测试非标准JSON输入的容错处理"""
+        # 模拟非标准JSON响应
+        mock_query.return_value = {"choices": [{"message": {"content": "invalid{json"}}]}
+
+        # parse_response应该能处理这种异常
+        mock_parse.side_effect = json.JSONDecodeError("Expecting value", doc="invalid{json", pos=0)
+
+        switch = ModelSwitch()
+        switch.config = {
+            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch"),
+            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder"),
+        }
+
+        with self.assertRaises(json.JSONDecodeError):
+            switch.execute_workflow(architect_model="architect", coder_model="coder", prompt="test prompt")
+
+    def test_config_mapping_correctness(self):
+        """测试JSON配置到ModelConfig的映射正确性"""
+        test_config = {
+            "test_model": ModelConfig(
+                key="test_key",
+                base_url="http://test",
+                model_name="test",
+                max_context_size=8192,
+                temperature=0.6,
+                is_thinking=True,
+                max_tokens=1000,
+            )
+        }
+        switch = ModelSwitch()
+        switch.config = test_config
+        model_config = switch._get_model_config("test_model")
+        self.assertIsInstance(model_config, ModelConfig)
+        self.assertEqual(model_config.key, "test_key")
+        self.assertEqual(model_config.base_url, "http://test")
+        self.assertEqual(model_config.model_name, "test")
+        self.assertEqual(model_config.max_context_size, 8192)
+        self.assertEqual(model_config.temperature, 0.6)
+        self.assertTrue(model_config.is_thinking)
+        self.assertEqual(model_config.max_tokens, 1000)
+
+    def test_optional_parameter_defaults(self):
+        """测试可选参数的默认值继承逻辑"""
+        minimal_config = {"minimal_model": ModelConfig(key="min_key", base_url="http://min", model_name="min")}
+        switch = ModelSwitch()
+        switch.config = minimal_config
+        model_config = switch._get_model_config("minimal_model")
+        self.assertIsInstance(model_config, ModelConfig)
+        self.assertEqual(model_config.max_context_size, None)
+        self.assertEqual(model_config.temperature, 0.0)  # 来自ModelConfig类的默认值
+        self.assertFalse(model_config.is_thinking)
+        self.assertEqual(model_config.max_tokens, None)
 
 
 class TestChatbotUI(unittest.TestCase):

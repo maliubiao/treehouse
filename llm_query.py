@@ -68,6 +68,7 @@ class ModelConfig:
     max_context_size: int | None = None
     temperature: float = 0.0
     is_thinking: bool = False
+    max_tokens: int | None = None
 
     def __init__(
         self,
@@ -77,6 +78,7 @@ class ModelConfig:
         max_context_size: int | None = None,
         temperature: float = 0.0,
         is_thinking: bool = False,
+        max_tokens: int | None = None,
     ):
         self.key = key
         self.base_url = base_url
@@ -84,13 +86,14 @@ class ModelConfig:
         self.max_context_size = max_context_size
         self.temperature = temperature
         self.is_thinking = is_thinking
+        self.max_tokens = max_tokens
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
         return (
             f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
             f"max_context_size={self.max_context_size}, temperature={self.temperature}, "
-            f"is_thinking={self.is_thinking}, key={masked_key})"
+            f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, key={masked_key})"
         )
 
     def get_debug_info(self) -> dict:
@@ -101,6 +104,7 @@ class ModelConfig:
             "max_context_size": self.max_context_size,
             "temperature": self.temperature,
             "is_thinking": self.is_thinking,
+            "max_tokens": self.max_tokens,
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -127,6 +131,7 @@ class ModelConfig:
         max_context_size = os.environ.get("GPT_MAX_TOKEN")
         temperature = os.environ.get("GPT_TEMPERATURE")
         is_thinking = os.environ.get("GPT_IS_THINKING")
+        max_tokens = os.environ.get("GPT_MAX_TOKENS")
 
         if max_context_size is not None:
             try:
@@ -146,6 +151,11 @@ class ModelConfig:
         except ValueError as exc:
             raise ValueError(f"无效的is_thinking值: {is_thinking}") from exc
 
+        try:
+            max_tokens = int(max_tokens) if max_tokens is not None else None
+        except ValueError as exc:
+            raise ValueError(f"无效的max_tokens值: {max_tokens}") from exc
+
         return cls(
             key=key,
             base_url=base_url,
@@ -153,11 +163,11 @@ class ModelConfig:
             max_context_size=max_context_size,
             temperature=temperature,
             is_thinking=is_thinking,
+            max_tokens=max_tokens,
         )
 
 
 GLOBAL_MODEL_CONFIG = ModelConfig.from_env()
-
 MAX_FILE_SIZE = 32000
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
@@ -520,7 +530,6 @@ def _get_api_response(
         Generator: 流式响应生成器
     """
     client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
-
     try:
         return client.chat.completions.create(
             model=model,
@@ -1247,23 +1256,25 @@ PATCH_PROMPT_HEADER = """
 8. 便于调试
 9. 不导入依赖的包，建议用户自行处理
 
-# 指令说明
+# 输出规范
 1. 必须返回结构化内容，使用严格指定的标签格式
 2. 若无修改需求，则忽视传入的符号或者块
-3. 修改时必须包含完整文件内容，不得省略任何代码
-4. 保持原有缩进和代码风格，不添注释
-5. 输出必须为纯文本，禁止使用markdown或代码块
-6. 你的输出会被用来替代输入的内容，请不要省略，整体处理
-"""
-
-DUMB_PROMPT = """
-# 输出规范
-1. 如果用户提取的是类, 则输出完整的类
-2. 如果用户提取的是函数, 则输出完整的修改函数
-3. 如果用户提取的是文件, 则输出完整的修改文件
-4. 你的输出会被用来替代输入的内容，请不要省略，无论修改与否
+3. 保持原有缩进和代码风格，不添注释
+4. 输出必须为纯文本，禁止使用markdown或代码块
+5. 用户提取的是类, 则输出完整的类，用户提取的是函数, 则输出完整的修改函数，用户提取的是文件, 则输出完整的修改文件
+6. 你的输出会被用来替代输入的内容，请不要省略，无论修改与否，符号名，文件名要与输出的代码内容一致
 
 Example:
+"""
+
+CONVERSATION_END_TAG = "[conversation end]"
+
+DUMB_PROMPT = f"""
+# 输出规范
+1. 保持原有缩进和代码风格，不添注释
+2. 用户提取的是类, 则输出完整的类，用户提取的是函数, 则输出完整的修改函数，用户提取的是文件, 则输出完整的修改文件
+3. 你的输出会被用来替代输入的内容，请不要省略，无论修改与否，符号名，文件名要与输出的代码内容一致
+
 [Example 1 start]
 输入:
 [file name]: /path/to/debugger/test_tracer.py
@@ -2514,18 +2525,10 @@ def handle_ask_mode(program_args, api_key, proxies):
     """处理--ask模式"""
     program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
 
-    base_url = GLOBAL_MODEL_CONFIG.base_url
     context_processor = GPTContextProcessor()
     text = context_processor.process_text_with_file_path(program_args.ask)
     print(text)
-    response_data = query_gpt_api(
-        api_key,
-        text,
-        proxies=proxies,
-        model=GLOBAL_MODEL_CONFIG.model_name,
-        base_url=base_url,
-        temperature=GLOBAL_MODEL_CONFIG.temperature,
-    )
+    response_data = ModelSwitch().query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
     process_response(
         text,
         response_data,
@@ -3172,33 +3175,111 @@ class ModelSwitch:
         如果不符合上述假设，将抛出异常
     """
 
-    def __init__(self):
-        self.config = self._load_config()
+    def __init__(self, config_path: str = None, test_mode: bool = False):
+        """
+        初始化模型切换器
 
-    def _load_config(self, default_path: str = "model.json") -> dict:
-        """加载模型配置文件"""
-        config_path = os.path.join(os.path.dirname(__file__), default_path)
+        参数:
+            config_path (str, optional): 自定义配置文件路径. 默认为None表示使用默认路径
+            test_mode (bool, optional): 测试模式标志位. 默认为False
+        """
+        self._config_path = config_path
+        self.test_mode = test_mode
+        self.config = self._load_config()
+        self.current_config: Optional[ModelConfig] = None
+
+    def _parse_config_dict(self, config_dict: dict) -> ModelConfig:
+        """将原始配置字典转换为ModelConfig实例"""
+        try:
+            return ModelConfig(
+                key=config_dict["key"],
+                base_url=config_dict["base_url"],
+                model_name=config_dict["model_name"],
+                max_context_size=config_dict.get("max_context_size"),
+                temperature=config_dict.get("temperature", 0.6),
+                is_thinking=config_dict.get("is_thinking", False),
+                max_tokens=config_dict.get("max_tokens"),
+            )
+        except KeyError as e:
+            error_code = "CONFIG_004"
+            error_msg = f"[{error_code}] 模型配置缺少必要字段: {str(e)}"
+            if self.test_mode:
+                return ModelConfig(
+                    key="test_key",
+                    base_url="http://test",
+                    model_name="test",
+                    max_context_size=8192,
+                    temperature=0.6,
+                )
+            raise ValueError(error_msg)
+        except (TypeError, ValueError) as e:
+            error_code = "CONFIG_005"
+            error_msg = f"[{error_code}] 模型配置字段类型错误: {str(e)}"
+            if self.test_mode:
+                return ModelConfig(
+                    key="test_key",
+                    base_url="http://test",
+                    model_name="test",
+                    max_context_size=8192,
+                    temperature=0.6,
+                )
+            raise ValueError(error_msg)
+
+    def _load_config(self, default_path: str = "model.json") -> dict[str, ModelConfig]:
+        """加载模型配置文件并转换为ModelConfig字典"""
+        config_path = self._config_path or os.path.join(os.path.dirname(__file__), default_path)
         try:
             with open(config_path, "r") as f:
-                return json.load(f)
+                raw_config = json.load(f)
+                return {name: self._parse_config_dict(config) for name, config in raw_config.items()}
         except FileNotFoundError:
-            raise ValueError(f"模型配置文件未找到: {config_path}")
+            error_code = "CONFIG_001"
+            error_msg = f"[{error_code}] 模型配置文件未找到: {config_path}"
+            if self.test_mode:
+                return {
+                    "test_model": ModelConfig(
+                        key="test_key",
+                        base_url="http://test",
+                        model_name="test",
+                        max_context_size=8192,
+                        temperature=0.6,
+                    )
+                }
+            raise ValueError(error_msg)
         except json.JSONDecodeError:
-            raise ValueError(f"配置文件格式错误: {config_path}")
+            error_code = "CONFIG_002"
+            error_msg = f"[{error_code}] 配置文件格式错误: {config_path}"
+            if self.test_mode:
+                return {
+                    "test_model": ModelConfig(
+                        key="test_key",
+                        base_url="http://test",
+                        model_name="test",
+                        max_context_size=8192,
+                        temperature=0.6,
+                    )
+                }
+            raise ValueError(error_msg)
 
-    def _get_model_config(self, model_name: str) -> dict:
-        """获取指定模型的配置并进行验证"""
+    def _get_model_config(self, model_name: str) -> ModelConfig:
+        """获取指定模型的配置"""
         if model_name not in self.config:
-            raise ValueError(f"未找到模型配置: {model_name}")
+            error_code = "CONFIG_003"
+            error_msg = f"[{error_code}] 未找到模型配置: {model_name}"
+            if self.test_mode:
+                return ModelConfig(
+                    key="test_key",
+                    base_url="http://test",
+                    model_name="test",
+                    max_context_size=8192,
+                    temperature=0.6,
+                )
+            raise ValueError(error_msg)
+        return self.config[model_name]
 
-        config = self.config[model_name]
-        required_keys = ["key", "base_url", "model_name"]
-        for key in required_keys:
-            if key not in config:
-                raise ValueError(f"模型{model_name}配置缺少必要字段: {key}")
-        return config
-
-    def execute_workflow(self, architect_model: str, coder_model: str, prompt: str) -> list:
+    def execute_workflow(
+        self, architect_model: str, coder_model: str, prompt: str, architect_only: bool = False
+    ) -> list:
         """
         执行完整工作流程：
         1. 使用架构模型获取任务划分
@@ -3209,13 +3290,13 @@ class ModelSwitch:
         返回:
             list: 包含所有任务执行结果的列表
         """
+        if self.test_mode:
+            return ["test_response"]
 
         context_processor = GPTContextProcessor()
         config = self._get_model_config(architect_model)
 
-        text = context_processor.process_text_with_file_path(
-            prompt, tokens_left=config.get("max_context_size", 32 * 1024)
-        )
+        text = context_processor.process_text_with_file_path(prompt, tokens_left=config.max_context_size or 32 * 1024)
         GPT_FLAGS[GPT_FLAG_PATCH] = False
         architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
             encoding="utf-8"
@@ -3231,6 +3312,8 @@ class ModelSwitch:
         config = self._get_model_config(coder_model)
         results = []
         for job in parsed["jobs"]:
+            if architect_only:
+                continue
             while True:
                 print(f"🔧 开始执行任务: {job['content']}")
                 part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=True)}\n"
@@ -3238,7 +3321,7 @@ class ModelSwitch:
                 context = context_processor.process_text_with_file_path(
                     prompt,
                     ignore_text=True,
-                    tokens_left=config.get("max_context_size", 32 * 1024) - len(part_a) - len(part_b),
+                    tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
                 )
                 coder_prompt = f"{part_a}{context}{part_b}"
                 result = self.query(model_name=coder_model, prompt=coder_prompt)
@@ -3268,34 +3351,30 @@ class ModelSwitch:
         异常:
             ValueError: 当模型配置不存在或缺少必要字段时
         """
+        if self.test_mode:
+            return {"choices": [{"message": {"content": "test_response"}}]}
         config = self._get_model_config(model_name)
+        self.current_config = config
 
-        api_key = config["key"]
-        base_url = config["base_url"]
-        model = config["model_name"]
-        max_context_size = config.get("max_context_size")
-        temperature = config.get("temperature", 0.6)
+        api_key = config.key
+        base_url = config.base_url
+        model = config.model_name
+        max_context_size = config.max_context_size
+        temperature = config.temperature
 
-        filtered_config = config.copy()
-        combined_kwargs = {**filtered_config, "disable_conversation_history": True, **kwargs}
+        combined_kwargs = {
+            "disable_conversation_history": True,
+            **kwargs,
+            "max_context_size": max_context_size,
+            "temperature": temperature,
+        }
 
-        try:
-            GLOBAL_MODEL_CONFIG.key = api_key
-            GLOBAL_MODEL_CONFIG.base_url = base_url
-            GLOBAL_MODEL_CONFIG.model_name = model
-            if max_context_size is not None:
-                GLOBAL_MODEL_CONFIG.max_context_size = max_context_size
-            if temperature is not None:
-                GLOBAL_MODEL_CONFIG.temperature = temperature
-        except AttributeError as e:
-            debug_info = f"配置更新失败: {str(e)}\n当前配置状态: {repr(GLOBAL_MODEL_CONFIG)}"
-            raise RuntimeError(debug_info) from e
         max_repeat = 3
         for i in range(max_repeat):
             try:
-                return query_gpt_api(api_key=api_key, prompt=prompt, model=model, **combined_kwargs)
+                return query_gpt_api(base_url=base_url, api_key=api_key, prompt=prompt, model=model, **combined_kwargs)
             except Exception as e:
-                debug_info = f"API调用失败: {str(e)}\n当前配置状态: {GLOBAL_MODEL_CONFIG.get_debug_info()}"
+                debug_info = f"API调用失败: {str(e)}\n当前配置状态: {self.current_config.get_debug_info()}"
                 print(debug_info)
                 print("5s后重试...")
                 time.sleep(5)
@@ -3307,8 +3386,8 @@ class LintReportFix:
 
     _MAX_CONTEXT_SPAN = 100  # 最大上下文跨度行数
 
-    def __init__(self, model_switch: ModelSwitch = ModelSwitch()):
-        self.model_switch = model_switch
+    def __init__(self, model_switch: ModelSwitch = None):
+        self.model_switch = model_switch or ModelSwitch()
         self._source_cache: dict[str, list[str]] = {}
 
     def _build_prompt(self, symbol, symbol_map):

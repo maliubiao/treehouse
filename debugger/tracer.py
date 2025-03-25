@@ -232,9 +232,7 @@ class TraceCore:
         self.in_target = False
         self.stack_depth = 0
         self.line_counter = {}
-        self.last_locals = {}
         self._active_frames = set()
-        self._last_log_time = {}
         self._call_stack = []
         self.tracing_enabled = immediate_trace
         self.immediate_trace = immediate_trace
@@ -247,6 +245,7 @@ class TraceCore:
         self._flush_event = threading.Event()
         self._timer_thread = None
         self._running_flag = False
+        self._file_name_cache = {}
 
     def _add_to_buffer(self, message, color_type):
         """将日志消息添加到队列"""
@@ -329,7 +328,6 @@ class TraceCore:
             return
 
         try:
-            locals_dict = frame.f_locals
             args_info = []
 
             if frame.f_code.co_name == "<module>":
@@ -346,12 +344,9 @@ class TraceCore:
 
                 log_prefix = "CALL"
 
-            log_msg = f"{_INDENT*self.stack_depth}↘ {log_prefix} {frame.f_code.co_name}({', '.join(args_info)})"
+            log_msg = f"{_INDENT*self.stack_depth}↘ {log_prefix} {self._get_formatted_filename(frame.f_code.co_name)}({', '.join(args_info)})"
             self._add_to_buffer(log_msg, "call")
-
-            self.last_locals[frame] = locals_dict.copy()
             self._call_stack.append(frame.f_code.co_name)
-            self._last_log_time[hash(frame)] = time.time()
         except Exception as e:
             traceback.print_exc()
             logging.error("Call logging error: %s", str(e))
@@ -368,12 +363,33 @@ class TraceCore:
             self._add_to_buffer(log_msg, "return")
 
             self.stack_depth = max(0, self.stack_depth - 1)
-            self.last_locals.pop(frame, None)
             self._active_frames.discard(frame)
             if self._call_stack:
                 self._call_stack.pop()
         except KeyError:
             pass
+
+    def _get_formatted_filename(self, filename):
+        """获取格式化后的文件名"""
+        if filename in self._file_name_cache:
+            return self._file_name_cache[filename]
+
+        try:
+            path = Path(filename)
+            if path.name == "__init__.py":
+                # 对于__init__.py文件，保留包路径
+                parts = list(path.parts)
+                if len(parts) > 1:
+                    formatted = str(Path(*parts[-2:]))
+                else:
+                    formatted = path.name
+            else:
+                # 其他文件只保留文件名
+                formatted = path.name
+            self._file_name_cache[filename] = formatted
+            return formatted
+        except Exception:
+            return filename
 
     def log_line(self, frame):
         """基础行号跟踪"""
@@ -384,7 +400,8 @@ class TraceCore:
             return
         self.line_counter[lineno] = self.line_counter.get(lineno, 0) + 1
         line = linecache.getline(frame.f_code.co_filename, lineno).strip("\n")
-        log_msg = f"{_INDENT*self.stack_depth}▷ 执行行 {lineno}: {line}"
+        filename = self._get_formatted_filename(frame.f_code.co_filename)
+        log_msg = f"{_INDENT*self.stack_depth}▷ {filename}:{lineno} {line}"
         self._add_to_buffer(log_msg, "line")
 
         if self.config.capture_vars:

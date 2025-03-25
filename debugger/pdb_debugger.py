@@ -44,7 +44,34 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
         print(_color_wrap("错误：需要指定目标脚本", "error"))
         sys.exit(1)
 
-    return {"target": Path(argv[0]), "script_args": argv[1:]}
+    result = {"target": None, "script_args": [], "watch_files": []}
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--":
+            # 遇到--后剩余参数都作为脚本参数
+            result["script_args"] = argv[i + 1 :]
+            break
+        elif arg.startswith("--watch-files="):
+            # 处理--watch-files参数
+            file_patterns = arg.split("=", 1)[1].split(",")
+            result["watch_files"] = [p.strip() for p in file_patterns if p.strip()]
+            i += 1
+        elif arg.startswith("--"):
+            # 忽略其他未知调试参数
+            i += 1
+        else:
+            # 第一个非--参数作为目标脚本，剩余作为脚本参数
+            result["target"] = Path(arg)
+            result["script_args"] = argv[i + 1 :]
+            break
+
+    if not result["target"]:
+        print(_color_wrap("错误：需要指定目标脚本", "error"))
+        sys.exit(1)
+
+    return result
 
 
 def debug_main(argv: Optional[List[str]] = None) -> int:
@@ -56,8 +83,10 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         if not argv:
             print(
                 _color_wrap(
-                    "用法: python -m debugger.pdb_debugger <目标脚本> [脚本参数]\n"
-                    "示例: python -m debugger.pdb_debugger src/main.py --verbose",
+                    "用法: python -m debugger.pdb_debugger [调试选项] <目标脚本> [脚本参数]\n"
+                    "调试选项:\n"
+                    "  --watch-files=PATTERNS  逗号分隔的文件模式列表\n"
+                    "示例: python -m debugger.pdb_debugger --watch-files=src/*.py,utils/* main.py --verbose",
                     "error",
                 )
             )
@@ -70,6 +99,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             return 2
 
         print(_color_wrap(f"\n🔍 启动调试会话 - 目标: {target}", "call"))
+        if args["watch_files"]:
+            print(_color_wrap(f"📝 监控文件模式: {', '.join(args['watch_files'])}", "var"))
         print(_color_wrap("📝 调试功能说明:", "line"))
         print(_color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
         print(_color_wrap("  ✓ 自动跳过标准库和第三方库", "call"))
@@ -84,10 +115,12 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
 
         try:
             # 创建匹配当前调试目标的TraceConfig
+            target_patterns = args["watch_files"] or [f"*{target.stem}.py"]
             config = TraceConfig(
-                target_files=[f"*{target.stem}.py"],  # 匹配当前脚本相关的文件
+                target_files=target_patterns,
                 capture_vars=[],
             )
+            print(_color_wrap(f"  ✓ 监控文件模式: {', '.join(target_patterns)}", "call"))
             tracer = start_trace(target, config=config)
             execute_script(target, args["script_args"])
         except KeyboardInterrupt:
@@ -117,6 +150,9 @@ def print_debug_summary() -> None:
     print(_color_wrap("  Δ VARIABLES - 变量创建/修改/删除", "var"))
     print(_color_wrap("  ▷ LINE     - 执行的源代码行", "line"))
     print(_color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
+    print(_color_wrap("\n调试功能说明:", "line"))
+    print(_color_wrap("  ✓ 支持多文件监控模式", "call"))
+    print(_color_wrap("  ✓ 自动匹配目标模块及其依赖", "call"))
     print(_color_wrap(f"\n输入 'tail -f {Path(__file__).parent}/logs/debug.log' 实时查看日志\n", "line"))
 
 

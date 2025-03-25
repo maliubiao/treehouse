@@ -143,7 +143,7 @@ usegpt() {
     echo >&2 "错误：未找到模型 '$model_name' 或配置不完整"
     return 1
   }
-
+  export GPT_MODEL_KEY=$model_name
   _set_gpt_env_vars "$key" "$base_url" "$model" "$max_context_size" "$temperature" "$is_thinking"
 
   [[ -z "$no_verbose" ]] && {
@@ -154,6 +154,7 @@ usegpt() {
     [[ -n "$max_context_size" ]] && echo "  GPT_MAX_TOKEN: $max_context_size"
     [[ -n "$temperature" ]] && echo "  GPT_TEMPERATURE: $temperature"
     [[ -n "$is_thinking" ]] && echo "  GPT_IS_THINKING: $is_thinking"
+
   }
 }
 
