@@ -192,7 +192,8 @@ def _truncate_value(value):
     """智能截断保留关键类型信息"""
     try:
         if isinstance(value, (list, tuple)):
-            preview = f"{type(value).__name__}(len={len(value)})"
+            elements = list(value)[:3]
+            preview = f"{type(value).__name__}({elements}...)" if len(value) > 3 else f"{type(value).__name__}({value})"
         elif isinstance(value, dict):
             keys = list(value.keys())[:3]
             preview = f"dict(keys={keys}...)" if len(value) > 3 else f"dict({value})"
@@ -246,6 +247,7 @@ class TraceCore:
         self._timer_thread = None
         self._running_flag = False
         self._file_name_cache = {}
+        self._exception_handler = None
 
     def _add_to_buffer(self, message, color_type):
         """将日志消息添加到队列"""
@@ -267,6 +269,32 @@ class TraceCore:
         while self._running_flag:
             time.sleep(1)
             self._flush_buffer()
+
+    def _log_exception(self, exc_type, exc_value, exc_traceback):
+        """记录异常信息"""
+        if not self.tracing_enabled:
+            return
+
+        if exc_traceback:
+            frame = exc_traceback.tb_frame
+            if self.is_target_frame(frame):
+                filename = self._get_formatted_filename(frame.f_code.co_filename)
+                lineno = exc_traceback.tb_lineno
+                exc_msg = (
+                    f"{_INDENT*self.stack_depth}⚠ EXCEPTION {filename}:{lineno} {exc_type.__name__}: {str(exc_value)}"
+                )
+                self._add_to_buffer(exc_msg, "error")
+
+                # 记录完整的调用栈
+                stack = traceback.extract_tb(exc_traceback)
+                for i, frame_info in enumerate(stack):
+                    if i == 0:
+                        continue  # 已经记录了最内层
+                    filename = self._get_formatted_filename(frame_info.filename)
+                    self._add_to_buffer(
+                        f"{_INDENT*(self.stack_depth+i)}↳ at {filename}:{frame_info.lineno} in {frame_info.name}",
+                        "error",
+                    )
 
     def is_target_frame(self, frame):
         """精确匹配目标模块路径"""
@@ -420,6 +448,8 @@ class TraceCore:
             return self._handle_return_event(frame, arg)
         if event == "line":
             return self._handle_line_event(frame, arg)
+        if event == "exception":
+            return self._handle_exception_event(frame, arg)
         return None
 
     def _handle_call_event(self, frame, arg):
@@ -444,6 +474,12 @@ class TraceCore:
         """处理行号事件"""
         if self.tracing_enabled and frame in self._active_frames:
             self.log_line(frame)
+        return self.trace_dispatch
+
+    def _handle_exception_event(self, frame, arg):
+        """处理异常事件"""
+        exc_type, exc_value, exc_traceback = arg
+        self._log_exception(exc_type, exc_value, exc_traceback)
         return self.trace_dispatch
 
     def start(self):

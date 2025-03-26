@@ -1259,7 +1259,7 @@ PATCH_PROMPT_HEADER = """
 - 保持原有缩进和代码风格，不添注释
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 用户提取的是类, 则输出完整的类，用户提取的是函数, 则输出完整的修改函数，用户提取的是文件, 则输出完整的修改文件
-- 你的输出会被用来替代输入的内容，请不要省略，无论修改与否，符号名，文件名要与输出的代码内容一致
+- 你的输出会被用来替代输入的符号或者文件路径，请不要省略，无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
 """
 
 DUMP_EXAMPLE_A = """
@@ -2491,7 +2491,7 @@ def print_proxy_info(proxies, proxy_sources):
         print("ℹ️ 未检测到代理配置")
 
 
-def handle_ask_mode(program_args, api_key, proxies):
+def handle_ask_mode(program_args, proxies):
     """处理--ask模式"""
     program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
     model_switch = ModelSwitch()
@@ -3656,7 +3656,7 @@ def main(input_args):
             raise SystemExit("错误: 工作流模式需要同时指定 --architect 和 --coder 参数")
         handle_workflow(input_args)
     elif input_args.ask:
-        handle_ask_mode(input_args, GLOBAL_MODEL_CONFIG.key, proxies)
+        handle_ask_mode(input_args, proxies)
     elif input_args.chatbot:
         ChatbotUI().run()
     elif input_args.project_search:

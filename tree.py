@@ -443,8 +443,7 @@ class ParserUtil:
     def get_symbol_paths(self, file_path: str):
         """解析代码文件并返回所有符号路径及对应代码和位置信息"""
         parser, _, lang_name = self.parser_loader.get_parser(file_path)
-        if lang_name == GO_LANG:
-            self.node_processor.lang_spec = GoLangSpec()
+        self.node_processor.lang_spec = find_spec_for_lang(lang_name)
         with open(file_path, "rb") as f:
             source_code = f.read()
         tree = parser.parse(source_code)
@@ -585,13 +584,134 @@ class BaseNodeProcessor(ABC):
         return type_name in basic_types
 
 
+def find_spec_for_lang(lang: str) -> "LangSpec":
+    """根据语言名称查找对应的语言特定处理策略"""
+    if lang == PYTHON_LANG:
+        return PythonSpec()
+    # elif lang == JAVASCRIPT_LANG:
+    #     return JavaScriptSpec()
+    # elif lang == JAVA_LANG:
+    #     return JavaSpec()
+    elif lang == GO_LANG:
+        return GoLangSpec()
+    elif lang == CPP_LANG or lang == C_LANG:
+        return CPPSpec()
+    return LangSpec()
+
+
 class LangSpec(ABC):
     """语言特定处理策略接口"""
 
     @abstractmethod
-    def get_symbol_name(self, node) -> str:
+    def get_symbol_name(self, node: Node) -> str:
         """提取节点的符号名称"""
         pass
+
+    @abstractmethod
+    def get_function_name(self, node: Node) -> str:
+        pass
+
+
+class PythonSpec(LangSpec):
+
+    def get_symbol_name(self, node):
+        if node.type == NodeTypes.IF_STATEMENT and self.is_main_block(node):
+            return "__main__"
+
+    def get_function_name(self, node):
+        pass
+
+    @staticmethod
+    def is_main_block(node):
+        """判断是否是__main__块"""
+        condition = BaseNodeProcessor.find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
+        if condition:
+            left = BaseNodeProcessor.find_child_by_type(condition, NodeTypes.IDENTIFIER)
+            right = BaseNodeProcessor.find_child_by_type(condition, NodeTypes.STRING)
+            if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
+                return True
+        return False
+
+
+class CPPSpec(LangSpec):
+    """C++语言特定处理策略"""
+
+    def get_symbol_name(self, node: Node):
+        if node.type == NodeTypes.CPP_CLASS_SPECIFIER or node.type == NodeTypes.C_STRUCT_SPECFIER:
+            return self.get_cpp_class_name(node)
+        elif node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
+            return self.get_cpp_namespace_name(node)
+        elif node.type == NodeTypes.C_DECLARATION:
+            return self.get_cpp_delcaration_name(node)
+        elif node.type == NodeTypes.CPP_FRIEND_DECLARATION:
+            return self.get_friend_function_name(node)
+
+    def get_cpp_class_name(self, node: Node):
+        """从C++类定义节点中提取类名"""
+        class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_TYPE_IDENTIFIER)
+        if class_name:
+            return class_name.text.decode("utf8")
+        return None
+
+    def get_cpp_namespace_name(self, node: Node):
+        """从命名空间定义节点中提取命名空间名称"""
+        namespace_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_NAMESPACE_IDENTIFIER)
+        if namespace_name:
+            return namespace_name.text.decode("utf8")
+        return None
+
+    def get_cpp_delcaration_name(self, node: Node):
+        init_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_INIT_DECLARATOR)
+        if not init_declarator:
+            return
+        qualified_id = BaseNodeProcessor.find_child_by_type(init_declarator, NodeTypes.CPP_QUALIFIED_IDENTIFIER)
+        if qualified_id:
+            namespace = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.CPP_NAMESPACE_IDENTIFIER)
+            identifier = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.IDENTIFIER)
+            if namespace and identifier:
+                return f"{namespace.text.decode('utf8')}.{identifier.text.decode('utf8')}"
+        else:
+            identifier = BaseNodeProcessor.find_child_by_type(init_declarator, NodeTypes.IDENTIFIER)
+            if identifier:
+                return identifier.text.decode("utf8")
+        return None
+
+    def get_friend_function_name(self, node: Node):
+        decl = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_DECLARATION)
+        if decl:
+            return self.get_function_name(decl)
+
+    def get_function_name(self, node: Node):
+        pointer_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_POINTER_DECLARATOR)
+        if pointer_declarator:
+            func_declarator = pointer_declarator.child_by_field_name("declarator")
+            if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
+                return BaseNodeProcessor.find_identifier_in_node(func_declarator)
+
+        reference_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_REFERENCE_DECLARATOR)
+        if reference_declarator:
+            func_declarator = BaseNodeProcessor.find_child_by_type(reference_declarator, NodeTypes.FUNCTION_DECLARATOR)
+            if func_declarator:
+                ident = BaseNodeProcessor.find_identifier_in_node(func_declarator)
+                if ident:
+                    return ident
+                else:
+                    operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
+                    if operator_name:
+                        return operator_name.text.decode("utf8")
+
+        func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
+        if func_declarator:
+            ident = BaseNodeProcessor.find_identifier_in_node(func_declarator)
+            if ident:
+                return ident
+            field = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_FIELD_IDENTIFIER)
+            if field:
+                return field.text.decode("utf8")
+            else:
+                operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
+                if operator_name:
+                    return operator_name.text.decode("utf8")
 
 
 class GoLangSpec(LangSpec):
@@ -607,6 +727,9 @@ class GoLangSpec(LangSpec):
         elif node.type == NodeTypes.GO_PACKAGE_CLAUSE:
             return self.get_go_package_name(node)
         return None
+
+    def get_function_name(self, node):
+        pass
 
     @staticmethod
     def get_go_method_name(node):
@@ -675,39 +798,24 @@ class NodeProcessor(BaseNodeProcessor):
         """提取节点的符号名称"""
         if not hasattr(node, "type"):
             return None
-
         if node.type == NodeTypes.CLASS_DEFINITION:
             return self.get_class_name(node)
-        elif node.type == NodeTypes.FUNCTION_DEFINITION:
+        elif node.type in NodeTypes.FUNCTION_DEFINITION:
             return self.get_function_name(node)
         elif node.type == NodeTypes.ASSIGNMENT:
             return self.get_assignment_name(node)
-        elif node.type == NodeTypes.IF_STATEMENT and self.is_main_block(node):
-            return "__main__"
+
         if self.lang_spec:
             return self.lang_spec.get_symbol_name(node)
 
-    @staticmethod
-    def is_main_block(node):
-        """判断是否是__main__块"""
-        condition = BaseNodeProcessor.find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
-        if condition:
-            left = BaseNodeProcessor.find_child_by_type(condition, NodeTypes.IDENTIFIER)
-            right = BaseNodeProcessor.find_child_by_type(condition, NodeTypes.STRING)
-            if left and left.text.decode("utf8") == "__name__" and right and "__main__" in right.text.decode("utf8"):
-                return True
-        return False
-
-    @staticmethod
-    def get_class_name(node):
+    def get_class_name(self, node):
         """从类定义节点中提取类名"""
         for child in node.children:
             if child.type == NodeTypes.IDENTIFIER:
                 return child.text.decode("utf8")
         return None
 
-    @staticmethod
-    def get_function_name(node):
+    def get_function_name(self, node):
         """从函数定义节点中提取函数名"""
         if node.type == NodeTypes.FUNCTION_DEFINITION:
             name_node = BaseNodeProcessor.find_child_by_field(node, NodeTypes.NAME)
@@ -719,18 +827,8 @@ class NodeProcessor(BaseNodeProcessor):
             identifier_node = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
             if identifier_node:
                 return identifier_node.text.decode("utf8")
-            return None
-
-        pointer_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.POINTER_DECLARATOR)
-        if pointer_declarator:
-            func_declarator = pointer_declarator.child_by_field_name("declarator")
-            if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
-                return BaseNodeProcessor.find_identifier_in_node(func_declarator)
-
-        func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
-        if func_declarator:
-            return BaseNodeProcessor.find_identifier_in_node(func_declarator)
-
+        if self.lang_spec:
+            return self.lang_spec.get_function_name(node)
         return BaseNodeProcessor.find_identifier_in_node(node)
 
     @staticmethod
@@ -774,9 +872,9 @@ class CodeMapBuilder:
     def _get_effective_node(self, node: Node):
         """获取有效的语法树节点（处理装饰器情况）"""
         if (
-            node.type == NodeTypes.FUNCTION_DEFINITION
+            node.type in (NodeTypes.FUNCTION_DEFINITION, NodeTypes.CPP_CLASS_SPECIFIER)
             and node.parent
-            and node.parent.type == NodeTypes.DECORATED_DEFINITION
+            and node.parent.type in (NodeTypes.DECORATED_DEFINITION, NodeTypes.CPP_TEMPLATE_DECLARATION)
         ):
             return node.parent
         return node
@@ -837,26 +935,25 @@ class CodeMapBuilder:
         if symbol_name is None:
             return None
 
-        symbol_type = None
-        if NodeTypes.is_definition(node.type):
-            if node.type == NodeTypes.CLASS_DEFINITION:
-                symbol_type = "class"
-            elif node.type == NodeTypes.GO_TYPE_DECLARATION:
-                symbol_type = "type"
-            elif node.type == NodeTypes.GO_METHOD_DECLARATION:
-                symbol_type = "method"
-            elif node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
-                symbol_type = "namespace"
-            else:
-                symbol_type = "function"
-        elif node.type == NodeTypes.ASSIGNMENT:
-            symbol_type = "module_variable" if not current_symbols else "variable"
-        elif node.type == NodeTypes.IF_STATEMENT and self.node_processor.is_main_block(node):
-            symbol_type = "main_block"
-        elif node.type == NodeTypes.GO_IMPORT_DECLARATION:
-            symbol_type = "import_declaration"
-        else:
-            symbol_type == node.type
+        type_mapping = {
+            NodeTypes.CLASS_DEFINITION: "class",
+            NodeTypes.GO_TYPE_DECLARATION: "type",
+            NodeTypes.GO_METHOD_DECLARATION: "method",
+            NodeTypes.CPP_NAMESPACE_DEFINITION: "namespace",
+            NodeTypes.CPP_TEMPLATE_DECLARATION: "template",
+            NodeTypes.IF_STATEMENT: "main_block" if PythonSpec.is_main_block(node) else None,
+            NodeTypes.GO_IMPORT_DECLARATION: "import_declaration",
+            NodeTypes.ASSIGNMENT: "module_variable" if not current_symbols else "variable",
+            NodeTypes.GO_PACKAGE_CLAUSE: None,
+            NodeTypes.C_DECLARATION: "declaration",
+        }
+
+        symbol_type = type_mapping.get(node.type)
+        if symbol_type is None and NodeTypes.is_structure_tree_node(node.type):
+            symbol_type = "function"
+
+        if symbol_type is None:
+            symbol_type = node.type
 
         effective_node = self._get_effective_node(node)
         current_symbols.append(symbol_name)
@@ -899,7 +996,8 @@ class CodeMapBuilder:
         elif node.type == NodeTypes.ATTRIBUTE:
             func_name = self.node_processor.get_full_attribute_name(node)
             self._add_call_info(func_name, current_symbols, code_map, node)
-
+        elif node.type == NodeTypes.C_ATTRIBUTE_DECLARATION:
+            return
         for child in node.children:
             self._extract_function_calls(child, current_symbols, code_map)
 
@@ -1248,7 +1346,7 @@ class NodeTypes:
     ATTRIBUTE = "attribute"
     NAME = "name"
     WORD = "word"
-    POINTER_DECLARATOR = "pointer_declarator"
+    C_POINTER_DECLARATOR = "pointer_declarator"
     FUNCTION_DECLARATOR = "function_declarator"
     COMPARISON_OPERATOR = "comparison_operator"
     TYPED_PARAMETER = "typed_parameter"
@@ -1267,6 +1365,18 @@ class NodeTypes:
     CPP_NAMESPACE_IDENTIFIER = "namespace_identifier"
     CPP_NAMESPACE_DEFINITION = "namespace_definition"
     CPP_CLASS_SPECIFIER = "class_specifier"
+    CPP_TEMPLATE_DECLARATION = "template_declaration"
+    CPP_ACCESS_SPECIFIER = "access_specifier"
+    CPP_FIELD_IDENTIFIER = "field_identifier"
+    CPP_FIELD_DEFINITION = "field_definition"
+    CPP_INIT_DECLARATOR = "init_declarator"
+    CPP_QUALIFIED_IDENTIFIER = "qualified_identifier"
+    CPP_REFERENCE_DECLARATOR = "reference_declarator"
+    CPP_OPERATOR_NAME = "operator_name"
+    C_STRUCT_SPECFIER = "struct_specifier"
+    C_TYPE_IDENTIFIER = "type_identifier"
+    CPP_FRIEND_DECLARATION = "friend_declaration"
+    C_ATTRIBUTE_DECLARATION = "attribute_declaration"
 
     @staticmethod
     def is_module(node_type):
@@ -1281,8 +1391,11 @@ class NodeTypes:
         )
 
     @staticmethod
-    def is_definition(node_type):
+    def is_structure_tree_node(node_type):
         return node_type in (
+            NodeTypes.C_STRUCT_SPECFIER,
+            NodeTypes.CPP_CLASS_SPECIFIER,
+            NodeTypes.CPP_TEMPLATE_DECLARATION,
             NodeTypes.CPP_NAMESPACE_DEFINITION,
             NodeTypes.CLASS_DEFINITION,
             NodeTypes.FUNCTION_DEFINITION,
