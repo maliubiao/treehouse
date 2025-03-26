@@ -532,6 +532,346 @@ class TestSymbolPaths(TestParserUtil):
         self.assertEqual(code_map["__main__"]["code"].strip(), 'if __name__ == "__main__":\n    print("Hello World")')
 
 
+class TestCppSymbolPaths(TestParserUtil):
+    def test_namespace_nesting(self):
+        """验证嵌套命名空间模板函数路径"""
+        code = dedent(
+            """
+            namespace Outer {
+                namespace Inner {
+                    namespace Math {
+                        template<typename T>
+                        T add(T a, T b) {
+                            return a + b;
+                        }
+                    }
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("Outer::Inner::Math::add", paths)
+        self.assertIn("Outer::Inner::Math::add", code_map)
+        self.assertEqual(
+            code_map["Outer::Inner::Math::add"]["code"].strip(),
+            "template<typename T>\nT add(T a, T b) {\n    return a + b;\n}",
+        )
+
+    def test_class_hierarchy(self):
+        """验证类继承体系中的虚函数和成员函数路径"""
+        code = dedent(
+            """
+            class BaseClass {
+            public:
+                virtual void display() const {
+                    std::cout << "Base ID: " << m_id << std::endl;
+                }
+            };
+
+            class Derived : public BaseClass {
+            public:
+                void display() const override {
+                    std::cout << "Derived display" << std::endl;
+                }
+
+                auto get_name() const -> const std::string& {
+                    return m_name;
+                }
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("BaseClass::display", paths)
+        self.assertIn("Derived::display", paths)
+        self.assertIn("Derived::get_name", paths)
+
+        self.assertIn("virtual void display() const", code_map["BaseClass::display"]["code"])
+        self.assertIn("void display() const override", code_map["Derived::display"]["code"])
+        self.assertIn("auto get_name() const -> const std::string&", code_map["Derived::get_name"]["code"])
+
+    def test_static_members(self):
+        """验证静态成员变量路径"""
+        code = dedent(
+            """
+            class Derived {
+            public:
+                static int instance_count;
+            };
+
+            int Derived::instance_count = 0;
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("Derived::instance_count", paths)
+        self.assertEqual(code_map["Derived::instance_count"]["code"].strip(), "int Derived::instance_count = 0;")
+
+    def test_global_symbols(self):
+        """验证全局函数和变量路径"""
+        code = dedent(
+            """
+            int global_counter = 0;
+
+            template<>
+            float square(float value) {
+                return value * value;
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("global_counter", paths)
+        self.assertIn("square<float>", paths)
+
+        self.assertEqual(code_map["global_counter"]["code"].strip(), "int global_counter = 0;")
+        self.assertEqual(
+            code_map["square<float>"]["code"].strip(),
+            "template<>\nfloat square(float value) {\n    return value * value;\n}",
+        )
+
+    def test_move_operations(self):
+        """验证移动构造函数和移动赋值运算符路径"""
+        code = dedent(
+            """
+            class Derived {
+            public:
+                Derived(Derived&& other) noexcept {}
+            };
+
+            class TestClass {
+            public:
+                TestClass& operator=(TestClass&& other) noexcept {
+                    return *this;
+                }
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("Derived::Derived(Derived&&)", paths)
+        self.assertIn("TestClass::operator=", paths)
+
+        self.assertIn("Derived(Derived&& other) noexcept", code_map["Derived::Derived(Derived&&)"]["code"])
+        self.assertIn("TestClass& operator=(TestClass&& other) noexcept", code_map["TestClass::operator="]["code"])
+
+    def test_operator_overloads(self):
+        """验证运算符重载路径"""
+        code = dedent(
+            """
+            struct Point {
+                Point operator+(const Point& other) const {
+                    return Point();
+                }
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("Point::operator+", paths)
+        self.assertIn("Point operator+(const Point& other) const", code_map["Point::operator+"]["code"])
+
+    def test_friend_functions(self):
+        """验证友元函数路径"""
+        code = dedent(
+            """
+            class BaseClass {
+                friend void friend_function(BaseClass& obj);
+            };
+
+            void friend_function(BaseClass& obj) {}
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("friend_function", paths)
+        self.assertIn("friend void friend_function(BaseClass& obj)", code_map["friend_function"]["declaration"])
+        self.assertIn("void friend_function(BaseClass& obj)", code_map["friend_function"]["code"])
+
+    def test_function_attributes(self):
+        """验证函数属性路径"""
+        code = dedent(
+            """
+            [[nodiscard]] int must_use_function() {
+                return 42;
+            }
+
+            class Derived {
+            public:
+                void unsafe_operation() noexcept {}
+            };
+
+            class TestClass {
+            public:
+                void final_method() final {}
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("must_use_function", paths)
+        self.assertIn("Derived::unsafe_operation", paths)
+        self.assertIn("TestClass::final_method", paths)
+
+        self.assertIn("[[nodiscard]] int must_use_function()", code_map["must_use_function"]["code"])
+        self.assertIn("void unsafe_operation() noexcept", code_map["Derived::unsafe_operation"]["code"])
+        self.assertIn("void final_method() final", code_map["TestClass::final_method"]["code"])
+
+    def test_exception_specifications(self):
+        """验证异常说明路径"""
+        code = dedent(
+            """
+            void risky_function() throw(std::bad_alloc) {
+                new int[1000000000000];
+            }
+
+            class TestClass {
+            public:
+                TestClass() try : m_value(new int(5)) {
+                } catch(...) {
+                    std::cout << "Constructor exception caught" << std::endl;
+                }
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("risky_function", paths)
+        self.assertIn("TestClass::TestClass", paths)
+
+        self.assertIn("void risky_function() throw(std::bad_alloc)", code_map["risky_function"]["code"])
+        self.assertIn("TestClass() try : m_value(new int(5))", code_map["TestClass::TestClass"]["code"])
+
+    def test_template_class_methods(self):
+        """验证模板类方法路径"""
+        code = dedent(
+            """
+            template<typename T>
+            class TemplateScope {
+            public:
+                static void template_method() {}
+                
+                class Inner {
+                public:
+                    static void template_inner_method() {}
+                };
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("TemplateScope<int>::template_method", paths)
+        self.assertIn("TemplateScope<double>::Inner::template_inner_method", paths)
+
+        self.assertIn("static void template_method()", code_map["TemplateScope<int>::template_method"]["code"])
+        self.assertIn(
+            "static void template_inner_method()",
+            code_map["TemplateScope<double>::Inner::template_inner_method"]["code"],
+        )
+
+    def test_concepts_constexpr(self):
+        """验证概念约束和constexpr函数路径"""
+        code = dedent(
+            """
+            template<typename T>
+            concept Arithmetic = std::is_arithmetic_v<T>;
+
+            template<Arithmetic T>
+            T add(T a, T b) {
+                return a + b;
+            }
+
+            template<typename T>
+            constexpr auto type_info() {
+                if constexpr (std::is_integral_v<T>) {
+                    return "integral";
+                } else {
+                    return "non-integral";
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("add<Arithmetic T>", paths)
+        self.assertIn("type_info<int>", paths)
+
+        self.assertIn("template<Arithmetic T>\nT add(T a, T b)", code_map["add<Arithmetic T>"]["code"])
+        self.assertIn("constexpr auto type_info()", code_map["type_info<int>"]["code"])
+
+    def test_lambda_expressions(self):
+        """验证lambda表达式路径"""
+        code = dedent(
+            """
+            int main() {
+                auto capturing_lambda = [capture_value](int x) { return x + capture_value; };
+                auto variadic_lambda = [](auto&&... args) -> decltype(auto) {
+                    return (args + ...);
+                };
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("main::(lambda)", paths)
+        self.assertIn("main::(lambda)", paths)
+
+        self.assertIn("[capture_value](int x)", code_map["main::(lambda)"]["code"])
+        self.assertIn("[](auto&&... args) -> decltype(auto)", code_map["main::(lambda)"]["code"])
+
+    def test_structured_bindings(self):
+        """验证结构化绑定路径"""
+        code = dedent(
+            """
+            struct Point {
+                int x;
+                int y;
+            };
+
+            int main() {
+                Point p1{10, 20};
+                auto [x, y] = p1;
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("Point::x", paths)
+        self.assertIn("Point::y", paths)
+        self.assertIn("main::x", paths)
+        self.assertIn("main::y", paths)
+
+        self.assertEqual("int x;", code_map["Point::x"]["code"].strip())
+        self.assertEqual("int y;", code_map["Point::y"]["code"].strip())
+
+
 class TestGoTypeAndFunctionAndMethod(TestParserUtil):
     def test_go_type_struct_definition(self):
         code = dedent(

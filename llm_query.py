@@ -1264,11 +1264,6 @@ PATCH_PROMPT_HEADER = """
 
 DUMP_EXAMPLE_A = """
 [Example 1 start]
-输入:
-[file name]: /path/to/debugger/test_tracer.py
-[file content begin]
-aa
-[file content end]
 输出:
 [modified file]: /path/to/debugger/test_tracer.py
 [source code start]
@@ -1277,16 +1272,6 @@ aa
 [Example 1 end]
 
 [Example 2 start]
-输入:
-[SYMBOL START]
-符号名称: /path/to/debugger/test_tracer.py/Tracer
-文件路径: /path/to/debugger/test_tracer.py
-
-[CONTENT START]
-aa
-[CONTENT END]
-
-[SYMBOL END]
 
 输出:
 [modified symbol]: /path/to/debugger/test_tracer.py/Tracer
@@ -1421,7 +1406,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 [FILE RANGE END]
 """
     prompt += f"""
-{get_patch_prompt_output(patch_require, file_ranges, dumb_prompt=DUMP_EXAMPLE_A)}
+{get_patch_prompt_output(patch_require, file_ranges, dumb_prompt=DUMP_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
 用户的要求如下，（如果他没写，贴心的推断他想做什么):
 """
     return prompt
@@ -2128,7 +2113,7 @@ class GPTContextProcessor:
             else:
                 raise ValueError(f"无法识别的部分类型: {type(node)}")
 
-        return self._finalize_text("".join(parts))
+        return self._finalize_text("".join(parts), tokens_left=tokens_left)
 
     def _process_match(self, match: CmdNode) -> Tuple[str]:
         """处理单个匹配项或匹配项列表"""
@@ -2221,17 +2206,6 @@ GPT_FLAG_CONTEXT = "context"
 
 GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False, GPT_FLAG_CONTEXT: False}
 GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: {}}
-
-
-def finalize_text(text):
-    """最终处理文本"""
-    truncated_suffix = "\n[输入太长内容已自动截断]"
-    if len(text) > GLOBAL_MODEL_CONFIG.max_context_size:
-        text = text[: GLOBAL_MODEL_CONFIG.max_context_size - len(truncated_suffix)] + truncated_suffix
-
-    with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
-        f.write(text)
-    return text
 
 
 def is_command(match, cmd_map):
@@ -2520,11 +2494,12 @@ def print_proxy_info(proxies, proxy_sources):
 def handle_ask_mode(program_args, api_key, proxies):
     """处理--ask模式"""
     program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
-
+    model_switch = ModelSwitch()
+    model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
     text = context_processor.process_text_with_file_path(program_args.ask)
     print(text)
-    response_data = ModelSwitch().query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
+    response_data = model_switch.query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
     process_response(
         text,
         response_data,
@@ -3290,8 +3265,8 @@ class ModelSwitch:
             return ["test_response"]
 
         context_processor = GPTContextProcessor()
+        self.select(architect_model)
         config = self._get_model_config(architect_model)
-
         text = context_processor.process_text_with_file_path(prompt, tokens_left=config.max_context_size or 32 * 1024)
         GPT_FLAGS[GPT_FLAG_PATCH] = False
         architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
@@ -3311,9 +3286,10 @@ class ModelSwitch:
         for job in parsed["jobs"]:
             if architect_only:
                 continue
+            self.select(coder_model)
             while True:
                 print(f"🔧 开始执行任务: {job['content']}")
-                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=True)}\n"
+                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMP_EXAMPLE_A)}\n"
                 part_b = f"{coder_prompt}[task describe start]\n{job['content']}\n[task describe end]\n\n[your job start]:\n{job['content']}\n[your job end]"
                 context = context_processor.process_text_with_file_path(
                     prompt,
@@ -3333,6 +3309,22 @@ class ModelSwitch:
                     break
         return results
 
+    def select(self, model_name: str) -> None:
+        """
+        切换到指定模型
+
+        参数:
+            model_name (str): 配置中的模型名称(如'14b')
+
+        异常:
+            ValueError: 当模型配置不存在或缺少必要字段时
+        """
+        if self.test_mode:
+            return
+
+        self.current_config = self._get_model_config(model_name)
+        globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
+
     def query(self, model_name: str, prompt: str, **kwargs) -> dict:
         """
         根据模型名称查询API
@@ -3350,9 +3342,9 @@ class ModelSwitch:
         """
         if self.test_mode:
             return {"choices": [{"message": {"content": "test_response"}}]}
+
         config = self._get_model_config(model_name)
         self.current_config = config
-
         api_key = config.key
         base_url = config.base_url
         model = config.model_name

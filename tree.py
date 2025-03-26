@@ -845,6 +845,8 @@ class CodeMapBuilder:
                 symbol_type = "type"
             elif node.type == NodeTypes.GO_METHOD_DECLARATION:
                 symbol_type = "method"
+            elif node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
+                symbol_type = "namespace"
             else:
                 symbol_type = "function"
         elif node.type == NodeTypes.ASSIGNMENT:
@@ -1281,6 +1283,7 @@ class NodeTypes:
     @staticmethod
     def is_definition(node_type):
         return node_type in (
+            NodeTypes.CPP_NAMESPACE_DEFINITION,
             NodeTypes.CLASS_DEFINITION,
             NodeTypes.FUNCTION_DEFINITION,
             NodeTypes.DECORATED_DEFINITION,
