@@ -438,7 +438,7 @@ class ParserUtil:
         """初始化解析器工具类"""
         self.parser_loader = parser_loader
         self.node_processor = NodeProcessor()
-        self.code_map_builder = CodeMapBuilder(self.node_processor, lang=parser_loader.lang)
+        self.code_map_builder = CodeMapBuilder(None, self.node_processor, lang=parser_loader.lang)
 
     def get_symbol_paths(self, file_path: str):
         """解析代码文件并返回所有符号路径及对应代码和位置信息"""
@@ -448,7 +448,7 @@ class ParserUtil:
             source_code = f.read()
         tree = parser.parse(source_code)
         root_node = tree.root_node
-
+        self.code_map_builder.root_node = root_node
         results = []
         code_map = {}
         node = root_node
@@ -642,7 +642,7 @@ class CPPSpec(LangSpec):
         elif node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
             return self.get_cpp_namespace_name(node)
         elif node.type == NodeTypes.C_DECLARATION:
-            return self.get_cpp_delcaration_name(node)
+            return self.get_cpp_declaration_name(node)
         elif node.type == NodeTypes.CPP_FRIEND_DECLARATION:
             return self.get_friend_function_name(node)
 
@@ -660,21 +660,27 @@ class CPPSpec(LangSpec):
             return namespace_name.text.decode("utf8")
         return None
 
-    def get_cpp_delcaration_name(self, node: Node):
+    def get_cpp_declaration_name(self, node: Node):
+        """从声明节点中提取限定名称"""
         init_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_INIT_DECLARATOR)
         if not init_declarator:
-            return
-        qualified_id = BaseNodeProcessor.find_child_by_type(init_declarator, NodeTypes.CPP_QUALIFIED_IDENTIFIER)
+            return None
+
+        # 统一处理数组声明和普通声明
+        declarator = (
+            BaseNodeProcessor.find_child_by_type(init_declarator, NodeTypes.C_ARRAY_DECLARATOR) or init_declarator
+        )
+
+        # 尝试获取限定标识符
+        qualified_id = BaseNodeProcessor.find_child_by_type(declarator, NodeTypes.CPP_QUALIFIED_IDENTIFIER)
         if qualified_id:
             namespace = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.CPP_NAMESPACE_IDENTIFIER)
             identifier = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.IDENTIFIER)
             if namespace and identifier:
                 return f"{namespace.text.decode('utf8')}.{identifier.text.decode('utf8')}"
-        else:
-            identifier = BaseNodeProcessor.find_child_by_type(init_declarator, NodeTypes.IDENTIFIER)
-            if identifier:
-                return identifier.text.decode("utf8")
-        return None
+
+        # 直接提取标识符
+        return BaseNodeProcessor.find_identifier_in_node(declarator)
 
     def get_friend_function_name(self, node: Node):
         decl = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_DECLARATION)
@@ -695,10 +701,9 @@ class CPPSpec(LangSpec):
                 ident = BaseNodeProcessor.find_identifier_in_node(func_declarator)
                 if ident:
                     return ident
-                else:
-                    operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
-                    if operator_name:
-                        return operator_name.text.decode("utf8")
+                operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
+                if operator_name:
+                    return operator_name.text.decode("utf8")
 
         func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
         if func_declarator:
@@ -708,10 +713,9 @@ class CPPSpec(LangSpec):
             field = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_FIELD_IDENTIFIER)
             if field:
                 return field.text.decode("utf8")
-            else:
-                operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
-                if operator_name:
-                    return operator_name.text.decode("utf8")
+            operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
+            if operator_name:
+                return operator_name.text.decode("utf8")
 
 
 class GoLangSpec(LangSpec):
@@ -845,9 +849,36 @@ class NodeProcessor(BaseNodeProcessor):
 
 
 class CodeMapBuilder:
-    def __init__(self, node_processor: NodeProcessor, lang: str = PYTHON_LANG):
+    def __init__(self, root_node: Node | None, node_processor: NodeProcessor, lang: str = PYTHON_LANG):
         self.node_processor = node_processor
         self.lang = lang
+        self.root_node = root_node
+
+    def find_minimal_node(self, root_node: Node, target_row: int, target_column: int) -> Node:
+        """查找包含指定行列位置的最小语法树节点"""
+
+        def walk(node):
+            if not node:
+                return None
+
+            start_row, start_col = node.start_point
+            end_row, end_col = node.end_point
+
+            # 检查当前节点是否包含目标位置
+            if (start_row < target_row or (start_row == target_row and start_col <= target_column)) and (
+                end_row > target_row or (end_row == target_row and end_col >= target_column)
+            ):
+                # 遍历所有子节点寻找更精确的匹配
+                last_child = None
+                for child in node.children:
+                    found = walk(child)
+                    if found:
+                        last_child = found
+                return last_child or node
+
+            return None
+
+        return walk(root_node)
 
     def _extract_import_block(self, node: Node):
         """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
@@ -944,7 +975,7 @@ class CodeMapBuilder:
             NodeTypes.IF_STATEMENT: "main_block" if PythonSpec.is_main_block(node) else None,
             NodeTypes.GO_IMPORT_DECLARATION: "import_declaration",
             NodeTypes.ASSIGNMENT: "module_variable" if not current_symbols else "variable",
-            NodeTypes.GO_PACKAGE_CLAUSE: None,
+            NodeTypes.GO_PACKAGE_CLAUSE: "package",
             NodeTypes.C_DECLARATION: "declaration",
         }
 
@@ -1054,6 +1085,8 @@ class CodeMapBuilder:
     def find_symbols_by_location(self, code_map: dict, line: int, column: int) -> list[dict]:
         """根据行列位置查找对应的符号信息列表，按嵌套层次排序（最内层在前）"""
         matched_symbols = []
+
+        # 先查找包含位置的符号
         for path, info in code_map.items():
             start_line = info["start_line"]
             start_col = info["start_col"]
@@ -1067,6 +1100,7 @@ class CodeMapBuilder:
                     continue
                 matched_symbols.append({"symbol": path, "info": info})
 
+        # 按嵌套深度排序
         matched_symbols.sort(
             key=lambda x: (-x["symbol"].count("."), x["symbol"].split(".")[-1].startswith("__"), x["symbol"])
         )
@@ -1377,6 +1411,7 @@ class NodeTypes:
     C_TYPE_IDENTIFIER = "type_identifier"
     CPP_FRIEND_DECLARATION = "friend_declaration"
     C_ATTRIBUTE_DECLARATION = "attribute_declaration"
+    C_ARRAY_DECLARATOR = "array_declarator"
 
     @staticmethod
     def is_module(node_type):

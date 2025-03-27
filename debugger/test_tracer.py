@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from debugger.tracer import TraceConfig, TraceCore
+from debugger.tracer import TraceConfig, TraceDispatcher
 
 
 class TestTracer(unittest.TestCase):
@@ -26,7 +26,7 @@ class TestTracer(unittest.TestCase):
         test_file.write_text("def foo():\n    pass\n")
 
         config = TraceConfig(target_files=["*test_*.py"], line_ranges={}, capture_vars=[])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
 
         frame = Mock(f_code=Mock(co_filename=str(test_file)))
         self.assertTrue(tracer.is_target_frame(frame))
@@ -36,7 +36,7 @@ class TestTracer(unittest.TestCase):
         test_file.write_text("def foo():\n    pass\n")
 
         config = TraceConfig(target_files=[], line_ranges={str(test_file): [(1, 2)]}, capture_vars=[])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
 
         frame = Mock(f_code=Mock(co_filename=str(test_file)), f_lineno=1)
         tracer.log_line(frame)  # Should capture
@@ -48,7 +48,7 @@ class TestTracer(unittest.TestCase):
         test_file.write_text("def foo():\n    x = 42\n    y = 'hello'\n")
 
         config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x", "y"])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
 
         frame = Mock(
             f_code=Mock(co_filename=str(test_file)),
@@ -70,7 +70,7 @@ class TestTracer(unittest.TestCase):
             callback_called = True
 
         config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x"], callback=callback)
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
         tracer.tracing_enabled = True
 
         frame = Mock(
@@ -89,7 +89,7 @@ class TestTracer(unittest.TestCase):
                 f.write(f"x{i} = {i}\n")
 
         config = TraceConfig(target_files=[], line_ranges={str(test_file): [(1, 10000)]}, capture_vars=[])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
 
         start_time = time.time()
         frame = Mock(f_code=Mock(co_filename=str(test_file)), f_lineno=10000)
@@ -111,7 +111,7 @@ class TestTracer(unittest.TestCase):
 
         config = TraceConfig(target_files=["*test*.py"], line_ranges={}, capture_vars=[])
         for f in files:
-            tracer = TraceCore(f, config=config)
+            tracer = TraceDispatcher(f, config=config)
             frame = Mock(f_code=Mock(co_filename=str(f)))
             if f.name.startswith("test"):
                 self.assertTrue(tracer.is_target_frame(frame))
@@ -123,7 +123,7 @@ class TestTracer(unittest.TestCase):
         test_file.write_text("def foo():\n    x = 42\n    y = 'hello'\n")
 
         config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x + 1", "y.upper()"])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
 
         frame = Mock(
             f_code=Mock(co_filename=str(test_file)),
@@ -145,7 +145,7 @@ class TestTracer(unittest.TestCase):
             captured_vars = captured_variables
 
         config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x"], callback=callback)
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
         tracer.tracing_enabled = True
         frame = Mock(
             f_code=Mock(co_filename=str(test_file)),
@@ -161,7 +161,7 @@ class TestTracer(unittest.TestCase):
         test_file.write_text("def foo():\n    x = 42\n")
 
         config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
         tracer.tracing_enabled = True
         frame = Mock(f_code=Mock(co_filename=str(test_file)), f_lineno=1)
         for _ in range(5):
@@ -173,7 +173,7 @@ class TestTracer(unittest.TestCase):
         test_file.write_text("def foo():\n    x = 42\n")
 
         config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
         tracer.tracing_enabled = True
 
         # Add messages with delay
@@ -193,7 +193,7 @@ class TestTracer(unittest.TestCase):
         test_file.write_text("def foo():\n    x = 42\n")
 
         config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
-        tracer = TraceCore(test_file, config=config)
+        tracer = TraceDispatcher(test_file, config=config)
         tracer.tracing_enabled = True
 
         def worker():

@@ -330,7 +330,7 @@ class TestParserUtil(unittest.TestCase):
     def setUp(self):
         self.parser_loader = ParserLoader()
         self.node_processor = NodeProcessor()
-        self.code_map_builder = CodeMapBuilder(self.node_processor)
+        self.code_map_builder = CodeMapBuilder(None, self.node_processor)
         self.parser_util = ParserUtil(self.parser_loader)
         self.lsp_client = GenericLSPClient(
             lsp_command=["pylsp"],
@@ -816,6 +816,41 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("template<Arithmetic T>\n", code_map["add"]["code"])
         self.assertIn("T add(T a, T b)", code_map["add"]["code"])
         self.assertIn("constexpr auto type_info()", code_map["type_info"]["code"])
+
+    def test_array_declarator(self):
+        """验证数组声明符号路径"""
+        code = dedent(
+            """
+            int global_array[] = {1, 2, 3};
+
+            class Container {
+            public:
+                static char buffer[1024];
+                int member_array[5];
+            };
+
+            char Container::buffer[1024] = {0};
+
+            void process_data(int data[], size_t size) {}
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        # 验证全局数组
+        self.assertIn("global_array", paths)
+        self.assertEqual(code_map["global_array"]["code"].strip(), "int global_array[] = {1, 2, 3};")
+
+        # 验证类静态数组成员
+        self.assertIn("Container.buffer", paths)
+        self.assertIn("char Container::buffer[1024] = {0};", code_map["Container.buffer"]["code"])
+
+        # 验证成员数组（根据解析器实现决定是否提取）
+        # self.assertIn("Container.member_array", paths)
+
+        # 验证函数参数中的数组声明（根据解析器实现决定是否提取）
+        # self.assertIn("process_data", paths)
 
 
 class TestGoTypeAndFunctionAndMethod(TestParserUtil):

@@ -1251,7 +1251,7 @@ PATCH_PROMPT_HEADER = """
 - 高内聚，低耦合，易扩展
 - 利用成熟的设施
 - 减少重复片段
-- 不导入依赖的包，建议用户自行处理
+- 不导入依赖的包，比如import, include, 建议用户自行处理
 
 # 指令规范
 - 必须返回结构化内容，使用严格指定的标签格式
@@ -2957,7 +2957,7 @@ def perform_search(
         raise ValueError("需要至少一个有效搜索关键词")
 
     config = ConfigLoader(Path(config_path)).load_config()
-    searcher = RipgrepSearcher(config)
+    searcher = RipgrepSearcher(config, debug=True)
     rg_results = searcher.search(patterns=[re.escape(word) for word in words])
 
     results: FileSearchResults = FileSearchResults(

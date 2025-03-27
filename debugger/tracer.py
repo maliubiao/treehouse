@@ -3,6 +3,7 @@ import fnmatch
 import inspect
 import linecache
 import logging
+import os
 import queue
 import sys
 import threading
@@ -215,32 +216,90 @@ def _color_wrap(text, color_type):
     return f"{_COLORS[color_type]}{text}{_COLORS['reset']}" if sys.stdout.isatty() else text
 
 
-class TraceCore:
-    def __init__(self, target_path, config: TraceConfig, immediate_trace=False):
-        """
-        初始化跟踪核心
-
-        Args:
-            target_path: 目标文件路径
-            config: 跟踪配置实例
-            immediate_trace: 是否立即开始跟踪
-        """
+class TraceDispatcher:
+    def __init__(self, target_path, config: TraceConfig):
         try:
             self.target_path = Path(target_path).resolve(strict=True)
         except FileNotFoundError:
             logging.error("Target path not found: %s\n%s", target_path, traceback.format_exc())
             raise
-        self.in_target = False
+        self.config = config
+        self.path_cache = {}
+        self._logic = TraceLogic(config)
+        self._active_frames = set()
+
+    def is_target_frame(self, frame):
+        """精确匹配目标模块路径"""
+        try:
+            if not frame or not frame.f_code or not frame.f_code.co_filename:
+                return False
+
+            result = self.path_cache.get(frame.f_code.co_filename, None)
+            if result is not None:
+                return result
+            frame_path = Path(frame.f_code.co_filename).resolve()
+            matched = self.config.match_filename(str(frame_path))
+            self.path_cache[frame.f_code.co_filename] = matched
+            return matched
+        except (AttributeError, ValueError, OSError) as e:
+            logging.debug("Frame check error: %s", str(e))
+            return False
+
+    def trace_dispatch(self, frame, event, arg):
+        """事件分发器"""
+        if event == "call":
+            return self._handle_call_event(frame, arg)
+        if event == "return":
+            return self._handle_return_event(frame, arg)
+        if event == "line":
+            return self._handle_line_event(frame, arg)
+        if event == "exception":
+            return self._handle_exception_event(frame, arg)
+        return None
+
+    def _handle_call_event(self, frame, arg):
+        """处理函数调用事件"""
+        if self.is_target_frame(frame):
+            self._active_frames.add(frame)
+            self._logic.handle_call(frame)
+        return self.trace_dispatch
+
+    def _handle_return_event(self, frame, arg):
+        """处理函数返回事件"""
+        if frame in self._active_frames:
+            self._logic.handle_return(frame, arg)
+            self._active_frames.discard(frame)
+        return self.trace_dispatch
+
+    def _handle_line_event(self, frame, arg):
+        """处理行号事件"""
+        if frame in self._active_frames:
+            self._logic.handle_line(frame)
+        return self.trace_dispatch
+
+    def _handle_exception_event(self, frame, arg):
+        """处理异常事件"""
+        if frame in self._active_frames:
+            exc_type, exc_value, exc_traceback = arg
+            self._logic.handle_exception(exc_type, exc_value, exc_traceback)
+        return self.trace_dispatch
+
+    def start(self):
+        """启动跟踪"""
+        sys.settrace(self.trace_dispatch)
+        self._logic.start()
+
+    def stop(self):
+        """停止跟踪"""
+        sys.settrace(None)
+        self._logic.stop()
+
+
+class TraceLogic:
+    def __init__(self, config: TraceConfig):
         self.stack_depth = 0
         self.line_counter = {}
-        self._active_frames = set()
         self._call_stack = []
-        self.tracing_enabled = immediate_trace
-        self.immediate_trace = immediate_trace
-        self.path_cache = {}
-        self._current_line = None
-        self.start_time = time.time()
-        self._expr_cache = {}
         self.config = config
         self._log_queue = queue.Queue()
         self._flush_event = threading.Event()
@@ -270,50 +329,104 @@ class TraceCore:
             time.sleep(1)
             self._flush_buffer()
 
-    def _log_exception(self, exc_type, exc_value, exc_traceback):
-        """记录异常信息"""
-        if not self.tracing_enabled:
+    def _get_formatted_filename(self, filename):
+        """获取格式化后的文件名"""
+        if filename in self._file_name_cache:
+            return self._file_name_cache[filename]
+
+        try:
+            path = Path(filename)
+            if path.name == "__init__.py":
+                parts = list(path.parts)
+                if len(parts) > 1:
+                    formatted = str(Path(*parts[-2:]))
+                else:
+                    formatted = path.name
+            else:
+                formatted = path.name
+            self._file_name_cache[filename] = formatted
+            return formatted
+        except Exception:
+            return filename
+
+    def handle_call(self, frame):
+        """增强参数捕获逻辑"""
+        if self.stack_depth >= _MAX_CALL_DEPTH:
+            self._add_to_buffer(f"{_INDENT * self.stack_depth}⚠ MAX CALL DEPTH REACHED", "error")
             return
 
+        try:
+            args_info = []
+            if frame.f_code.co_name == "<module>":
+                log_prefix = "MODULE"
+            else:
+                try:
+                    args, _, _, values = inspect.getargvalues(frame)
+                    for arg in args:
+                        if arg in values:
+                            args_info.append(f"{arg}={_truncate_value(values[arg])}")
+                except Exception as e:
+                    self._add_to_buffer(f"参数解析失败: {str(e)}", "error")
+                    args_info.append("<参数解析错误>")
+                log_prefix = "CALL"
+
+            log_msg = f"{_INDENT*self.stack_depth}↘ {log_prefix} {self._get_formatted_filename(frame.f_code.co_filename)}:{frame.f_lineno} {frame.f_code.co_name}({', '.join(args_info)})"
+            self._add_to_buffer(log_msg, "call")
+            self._call_stack.append(frame.f_code.co_name)
+            self.stack_depth += 1
+        except Exception as e:
+            traceback.print_exc()
+            logging.error("Call logging error: %s", str(e))
+            self._add_to_buffer(f"⚠ 记录调用时出错: {str(e)}", "error")
+
+    def handle_return(self, frame, return_value):
+        """增强返回值记录"""
+        try:
+            return_str = _truncate_value(return_value)
+            log_msg = f"{_INDENT*self.stack_depth}↗ RETURN {frame.f_code.co_name}() → {return_str}"
+            self._add_to_buffer(log_msg, "return")
+            self.stack_depth = max(0, self.stack_depth - 1)
+            if self._call_stack:
+                self._call_stack.pop()
+        except KeyError:
+            pass
+
+    def handle_line(self, frame):
+        """基础行号跟踪"""
+        lineno = frame.f_lineno
+        if self.line_counter.get(lineno, 0) >= _MAX_LINE_REPEAT:
+            return
+        self.line_counter[lineno] = self.line_counter.get(lineno, 0) + 1
+        line = linecache.getline(frame.f_code.co_filename, lineno).strip("\n")
+        filename = self._get_formatted_filename(frame.f_code.co_filename)
+        log_msg = f"{_INDENT*self.stack_depth}▷ {filename}:{lineno} {line}"
+        self._add_to_buffer(log_msg, "line")
+
+        if self.config.capture_vars:
+            captured_vars = self.capture_variables(frame)
+            if captured_vars:
+                var_msg = (
+                    f"{_INDENT*(self.stack_depth+1)}↳ 变量: {', '.join(f'{k}={v}' for k, v in captured_vars.items())}"
+                )
+                self._add_to_buffer(var_msg, "var")
+
+    def handle_exception(self, exc_type, exc_value, exc_traceback):
+        """记录异常信息"""
         if exc_traceback:
             frame = exc_traceback.tb_frame
-            if self.is_target_frame(frame):
-                filename = self._get_formatted_filename(frame.f_code.co_filename)
-                lineno = exc_traceback.tb_lineno
-                exc_msg = (
-                    f"{_INDENT*self.stack_depth}⚠ EXCEPTION {filename}:{lineno} {exc_type.__name__}: {str(exc_value)}"
+            filename = self._get_formatted_filename(frame.f_code.co_filename)
+            lineno = exc_traceback.tb_lineno
+            exc_msg = f"{_INDENT*self.stack_depth}⚠ EXCEPTION {filename}:{lineno} {exc_type.__name__}: {str(exc_value)}"
+            self._add_to_buffer(exc_msg, "error")
+
+            stack = traceback.extract_tb(exc_traceback)
+            for i, frame_info in enumerate(stack):
+                if i == 0:
+                    continue
+                filename = self._get_formatted_filename(frame_info.filename)
+                self._add_to_buffer(
+                    f"{_INDENT*(self.stack_depth+i)}↳ at {filename}:{frame_info.lineno} in {frame_info.name}", "error"
                 )
-                self._add_to_buffer(exc_msg, "error")
-
-                # 记录完整的调用栈
-                stack = traceback.extract_tb(exc_traceback)
-                for i, frame_info in enumerate(stack):
-                    if i == 0:
-                        continue  # 已经记录了最内层
-                    filename = self._get_formatted_filename(frame_info.filename)
-                    self._add_to_buffer(
-                        f"{_INDENT*(self.stack_depth+i)}↳ at {filename}:{frame_info.lineno} in {frame_info.name}",
-                        "error",
-                    )
-
-    def is_target_frame(self, frame):
-        """精确匹配目标模块路径"""
-        try:
-            if not frame or not frame.f_code or not frame.f_code.co_filename:
-                return False
-
-            result = self.path_cache.get(frame.f_code.co_filename, None)
-            if result is not None:
-                return result
-            frame_path = Path(frame.f_code.co_filename).resolve()
-            matched = self.config.match_filename(str(frame_path))
-            self.path_cache[frame.f_code.co_filename] = matched
-            if matched:
-                self._add_to_buffer(f"Matched target file: {frame_path}", "call")
-            return matched
-        except (AttributeError, ValueError, OSError) as e:
-            logging.debug("Frame check error: %s", str(e))
-            return False
 
     def capture_variables(self, frame):
         """捕获并计算变量表达式"""
@@ -347,156 +460,15 @@ class TraceCore:
             logging.error("变量捕获失败: %s", str(e))
             return {}
 
-    def _log_call(self, frame):
-        """增强参数捕获逻辑"""
-        if not self.tracing_enabled:
-            return
-        if self.stack_depth >= _MAX_CALL_DEPTH:
-            self._add_to_buffer(f"{_INDENT * self.stack_depth}⚠ MAX CALL DEPTH REACHED", "error")
-            return
-
-        try:
-            args_info = []
-
-            if frame.f_code.co_name == "<module>":
-                log_prefix = "MODULE"
-            else:
-                try:
-                    args, _, _, values = inspect.getargvalues(frame)
-                    for arg in args:
-                        if arg in values:
-                            args_info.append(f"{arg}={_truncate_value(values[arg])}")
-                except Exception as e:
-                    self._add_to_buffer(f"参数解析失败: {str(e)}", "error")
-                    args_info.append("<参数解析错误>")
-
-                log_prefix = "CALL"
-
-            log_msg = f"{_INDENT*self.stack_depth}↘ {log_prefix} {self._get_formatted_filename(frame.f_code.co_filename)}:{frame.f_lineno} {frame.f_code.co_name}({', '.join(args_info)})"
-            self._add_to_buffer(log_msg, "call")
-            self._call_stack.append(frame.f_code.co_name)
-        except Exception as e:
-            traceback.print_exc()
-            logging.error("Call logging error: %s", str(e))
-            self._add_to_buffer(f"⚠ 记录调用时出错: {str(e)}", "error")
-
-    def _log_return(self, frame, return_value):
-        """增强返回值记录"""
-        if not self.tracing_enabled:
-            return
-
-        try:
-            return_str = _truncate_value(return_value)
-            log_msg = f"{_INDENT*self.stack_depth}↗ RETURN {frame.f_code.co_name}() " f"→ {return_str}"
-            self._add_to_buffer(log_msg, "return")
-
-            self.stack_depth = max(0, self.stack_depth - 1)
-            self._active_frames.discard(frame)
-            if self._call_stack:
-                self._call_stack.pop()
-        except KeyError:
-            pass
-
-    def _get_formatted_filename(self, filename):
-        """获取格式化后的文件名"""
-        if filename in self._file_name_cache:
-            return self._file_name_cache[filename]
-
-        try:
-            path = Path(filename)
-            if path.name == "__init__.py":
-                # 对于__init__.py文件，保留包路径
-                parts = list(path.parts)
-                if len(parts) > 1:
-                    formatted = str(Path(*parts[-2:]))
-                else:
-                    formatted = path.name
-            else:
-                # 其他文件只保留文件名
-                formatted = path.name
-            self._file_name_cache[filename] = formatted
-            return formatted
-        except Exception:
-            return filename
-
-    def log_line(self, frame):
-        """基础行号跟踪"""
-        if not self.is_target_frame(frame):
-            return
-        lineno = frame.f_lineno
-        if self.line_counter.get(lineno, 0) >= _MAX_LINE_REPEAT:
-            return
-        self.line_counter[lineno] = self.line_counter.get(lineno, 0) + 1
-        line = linecache.getline(frame.f_code.co_filename, lineno).strip("\n")
-        filename = self._get_formatted_filename(frame.f_code.co_filename)
-        log_msg = f"{_INDENT*self.stack_depth}▷ {filename}:{lineno} {line}"
-        self._add_to_buffer(log_msg, "line")
-
-        if self.config.capture_vars:
-            captured_vars = self.capture_variables(frame)
-            if captured_vars:
-                var_msg = (
-                    f"{_INDENT*(self.stack_depth+1)}↳ 变量: {', '.join(f'{k}={v}' for k, v in captured_vars.items())}"
-                )
-                self._add_to_buffer(var_msg, "var")
-
-    def trace_dispatch(self, frame, event, arg):
-        """事件分发器"""
-        if event == "call":
-            return self._handle_call_event(frame, arg)
-        if event == "return":
-            return self._handle_return_event(frame, arg)
-        if event == "line":
-            return self._handle_line_event(frame, arg)
-        if event == "exception":
-            return self._handle_exception_event(frame, arg)
-        return None
-
-    def _handle_call_event(self, frame, arg):
-        """处理函数调用事件"""
-        if not self.in_target and self.is_target_frame(frame):
-            self.in_target = True
-            logging.info("🚀 ENTER TARGET MODULE: %s", self.target_path)
-            self._add_to_buffer(f"\n🔍 开始追踪目标模块: {self.target_path}", "call")
-        if self.is_target_frame(frame):
-            self.stack_depth += 1
-            self._log_call(frame)
-            self._active_frames.add(frame)
-        return self.trace_dispatch
-
-    def _handle_return_event(self, frame, arg):
-        """处理函数返回事件"""
-        if frame in self._active_frames:
-            self._log_return(frame, arg)
-        return self.trace_dispatch
-
-    def _handle_line_event(self, frame, arg):
-        """处理行号事件"""
-        if self.tracing_enabled and frame in self._active_frames:
-            self.log_line(frame)
-        return self.trace_dispatch
-
-    def _handle_exception_event(self, frame, arg):
-        """处理异常事件"""
-        exc_type, exc_value, exc_traceback = arg
-        self._log_exception(exc_type, exc_value, exc_traceback)
-        return self.trace_dispatch
-
     def start(self):
-        """启动跟踪"""
-        sys.settrace(self.trace_dispatch)
-        logging.info("🔄 START DEBUG SESSION FOR: %s", self.target_path)
-        self._add_to_buffer(f"\n▶ 开始调试会话 [{time.strftime('%H:%M:%S')}]", "call")
+        """启动逻辑处理"""
         self._running_flag = True
         self._timer_thread = threading.Thread(target=self._flush_scheduler)
         self._timer_thread.daemon = True
         self._timer_thread.start()
 
     def stop(self):
-        """停止跟踪"""
-        sys.settrace(None)
-        logging.info("⏹ DEBUG SESSION ENDED\n")
-        self._add_to_buffer(f"\n⏹ 调试会话结束", "return")
+        """停止逻辑处理"""
         self._running_flag = False
         if self._timer_thread:
             self._timer_thread.join(timeout=1)
@@ -505,7 +477,7 @@ class TraceCore:
             self._log_queue.get_nowait()
 
 
-def start_trace(module_path, config: TraceConfig, immediate_trace=True):
+def start_trace(module_path, config: TraceConfig):
     """启动调试跟踪会话
 
     Args:
@@ -513,8 +485,12 @@ def start_trace(module_path, config: TraceConfig, immediate_trace=True):
         config: 跟踪配置实例
         immediate_trace: 是否立即开始跟踪
     """
+    # if False and os.path.exists(os.path.join(os.path.dirname(__file__), "tracer_core.so")):
+    #     from .tracer_core import TraceDispatcher
+    #     tracer = TraceDispatcher(str(module_path), TraceLogic(config), config)
+    # else:
+    tracer = TraceDispatcher(str(module_path), config)
     try:
-        tracer = TraceCore(module_path, config=config, immediate_trace=immediate_trace)
         tracer.start()
         return tracer
     except Exception as e:
