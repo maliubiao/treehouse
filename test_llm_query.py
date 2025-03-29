@@ -263,7 +263,7 @@ class TestGPTContextProcessor(unittest.TestCase):
                     "file_path": "test.py",
                 }
             ]
-            result = get_symbol_detail("test_symbol")
+            result = get_symbol_detail("test.py/test_symbol")
             self.assertEqual(result[0]["file_path"], "test.py")
             self.assertEqual(result[0]["code_range"], ((1, 0), (10, 0)))
             self.assertEqual(result[0]["block_content"], b"test content")
@@ -285,7 +285,7 @@ class TestSymbolLocation(unittest.TestCase):
         self._setup_mock_api()
 
     def _setup_test_data(self):
-        self.symbol_name = "test_symbol"
+        self.symbol_name = "test_file.py/test_symbol"
         self.file_path = "test_file.py"
         self.original_content = "\n\ndef test_symbol():\n    pass"
         self.block_range = (1, len(self.original_content))
@@ -314,7 +314,7 @@ class TestSymbolLocation(unittest.TestCase):
         result = llm_query.get_symbol_detail(self.symbol_name)
         self.assertIsNotNone(result)
         self.assertGreaterEqual(len(result), 1)
-        self.assertEqual(result[0]["symbol_name"], self.symbol_name)
+        self.assertIn(self.symbol_name, result[0]["symbol_name"])
         self.assertEqual(result[0]["file_path"], self.file_path)
         self.assertEqual(result[0]["code_range"], self.code_range)
         self.assertEqual(result[0]["block_range"], self.block_range)

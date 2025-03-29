@@ -222,6 +222,51 @@ explaingpt file.py prompts/custom-prompt.txt
 askgpt "如何实现快速排序算法？"
 ```
 
+## 编码项目配置
+```yaml
+# 示例LLM 项目搜索配置文件， 文件名为.llm_project.yml
+# 排除配置（支持glob模式）
+#
+#项目主目录，这个目录下必须有.llm_project.yml, 用来定位符号, @symbol_src/file.py/main 是这个目录下src/file.py的main函数
+project_root_dir: /path/to/your/project
+#..main.. ripgrep搜索范围控制，在哪些文件中搜索main字符串
+exclude:
+  dirs:
+    - .git          # 版本控制目录
+    - .venv         # Python虚拟环境
+    - node_modules  # Node.js依赖目录
+    - build         # 构建目录
+    - dist          # 分发目录
+    - __pycache__   # Python缓存目录
+    - conversation
+    - obsidian
+    - web
+  files:
+    - "*.min.js"    # 压缩后的JS文件
+    - "*.bundle.css" # 打包的CSS文件
+    - "*.log"       # 日志文件
+    - "*.tmp"       # 临时文件
+
+# 包含配置（留空则使用默认文件类型）
+include:
+  dirs: []  # 指定要包含的目录（覆盖排除规则）
+  files:
+    - "*.py"  # Python源文件
+    - "*.cpp" # CPP
+    - "*.js"  # JavaScript文件
+    - "*.md"  # Markdown文档
+    - "*.txt" # 文本文件
+
+# 搜索的文件类型（扩展名或预定义类型）
+file_types:
+  - .py    # Python
+  - .js    # JavaScript
+  - .md    # Markdown
+  - .txt   # 文本文件
+  - .cpp   #cpp
+
+```
+
 **模型切换**
 
 ```bash

@@ -3107,6 +3107,7 @@ async def get_symbol_content(
     Args:
         symbol_path: 符号路径，格式为file_path/symbol1,symbol2,... 例如 "main.c/a,b,c"
         json_format: 是否返回JSON格式，包含每个符号的行号信息
+        lsp_enabled: 是否启用LSP增强功能
 
     Returns:
         纯文本格式的源代码内容（多个符号内容用空行分隔），或包含每个符号信息的JSON数组

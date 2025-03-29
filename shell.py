@@ -149,7 +149,7 @@ def _handle_directory_completion(local_path: str, api_server: str):
 
     if path_obj.exists():
         if path_obj.is_file():
-            _request_api_completion(api_server, f"symbol:{dir_path}/")
+            _request_api_completion(api_server, f"symbol_{dir_path}/")
         else:
             _complete_local_directory(local_path)
     else:
@@ -175,6 +175,53 @@ def _complete_local_directory(local_path: str):
         logging.error("Local completion failed: %s", str(e))
 
 
+def split_symbol_and_path(prefix):
+    if prefix.startswith("symbol_"):
+        prefix = prefix[len("symbol_") :]
+
+    last_slash = prefix.rfind("/")
+    if last_slash == -1:
+        return prefix, ""
+
+    path = prefix[:last_slash]
+    symbol = prefix[last_slash + 1 :]
+    return path, symbol
+
+
+def make_path_relative_to_root_dir(prefix):
+    """将路径转换为相对于根目录的路径"""
+    path, symbol = split_symbol_and_path(prefix)
+    if path:
+        path = relative_to_root_dir(path)
+        return f"symbol_{path}/{symbol}"
+    else:
+        return prefix
+
+
+def relative_to_root_dir(path):
+    """返回相对于根目录的路径"""
+    current = Path(path)
+    if not current.is_absolute():
+        current = Path.cwd() / path
+
+    root_dir = find_root_dir()
+    if root_dir and root_dir in current.parents:
+        return current.relative_to(root_dir)
+    return current
+
+
+LLM_PROJECT_CONFIG = ".llm_project.yml"
+
+
+def find_root_dir(root_dir_contains=LLM_PROJECT_CONFIG):
+    current_path = Path.cwd()
+    while current_path != current_path.parent:
+        if (current_path / root_dir_contains).exists():
+            return current_path
+        current_path = current_path.parent
+    return None
+
+
 def _request_api_completion(api_server: str, prefix: str):
     """请求远程API补全"""
     original_env = {
@@ -190,7 +237,8 @@ def _request_api_completion(api_server: str, prefix: str):
         for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
             os.environ.pop(proxy_var, None)
 
-        api_prefix = prefix.replace("symbol_", "symbol:", 1)  # 仅替换第一个symbol_
+        new_prefix = make_path_relative_to_root_dir(prefix)
+        api_prefix = new_prefix.replace("symbol_", "symbol:", 1)  # 仅替换第一个symbol_
         encoded_prefix = urllib.parse.quote(api_prefix, safe="")  # 严格编码所有特殊字符
         resp = requests.get(
             f"{api_server}complete_realtime",
@@ -199,8 +247,11 @@ def _request_api_completion(api_server: str, prefix: str):
             proxies={"http": None, "https": None},
         )
         if resp.ok:
+            path, _ = split_symbol_and_path(prefix)
             for item in resp.text.splitlines():
-                print(item.replace("symbol:", "symbol_"))
+                item = item.replace("symbol:", "symbol_")
+                _, symbol = split_symbol_and_path(item)
+                print(f"symbol_{path}/{symbol}")
     except requests.RequestException as e:
         logging.error("API request failed: %s", str(e))
     finally:

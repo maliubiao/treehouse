@@ -8,7 +8,12 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
-from shell import handle_complete
+from shell import (
+    LLM_PROJECT_CONFIG,
+    find_root_dir,
+    handle_complete,
+    relative_to_root_dir,
+)
 
 
 class TestShellCompletion(unittest.TestCase):
@@ -19,6 +24,7 @@ class TestShellCompletion(unittest.TestCase):
 
         # Setup complex test directory structure
         self.root = Path(self.test_dir.name)
+        (self.root / LLM_PROJECT_CONFIG).touch()  # 确保根目录包含配置文件
         self._create_structure(
             {
                 "lsp/": {
@@ -110,11 +116,11 @@ class TestShellCompletion(unittest.TestCase):
         with patch("requests.get") as mock_get:
             mock_response = MagicMock()
             mock_response.ok = True
-            mock_response.text = "symbol:api_result1\nsymbol:api_result2"
+            mock_response.text = "symbol:path/api_result1\nsymbol:path/api_result2"
             mock_get.return_value = mock_response
 
-            result = self._capture_completion("symbol_non/existent/path")
-            self.assertEqual(["symbol_api_result1", "symbol_api_result2"], result)
+            result = self._capture_completion("symbol_existent/path/api")
+            self.assertEqual(["symbol_existent/path/api_result1", "symbol_existent/path/api_result2"], result)
 
     def test_error_handling(self):
         test_cases = [
@@ -133,6 +139,39 @@ class TestShellCompletion(unittest.TestCase):
             with patch("requests.get", side_effect=requests.exceptions.ConnectionError("Connection error")):
                 self._capture_completion("symbol_broken/path")
                 self.assertTrue(any("API request failed" in log for log in cm.output))
+
+    def test_relative_to_root_dir(self):
+        # Create nested directory structure
+        nested_dir = self.root / "nested" / "subdir"
+        nested_dir.mkdir(parents=True)
+
+        # Test from root directory
+        os.chdir(self.root)
+        result = relative_to_root_dir("lsp/file1.txt")
+        self.assertEqual(Path("lsp/file1.txt"), result)
+
+        # Test from nested directory
+        os.chdir(nested_dir)
+        result = relative_to_root_dir("lsp/file1.txt")
+        self.assertEqual(Path("nested/subdir/lsp/file1.txt"), result)
+
+        # Test outside root directory
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            os.chdir(tmp_dir)
+            result = relative_to_root_dir(str(self.root / "lsp/file1.txt"))
+            self.assertEqual(self.root / "lsp/file1.txt", result)
+
+    def test_find_root_dir(self):
+        # Should find root directory when in subdirectory
+        subdir = self.root / "lsp" / "subdir"
+        subdir.mkdir(parents=True, exist_ok=True)
+        os.chdir(subdir)
+        self.assertEqual(self.root.resolve(), find_root_dir().resolve())
+
+        # Should return None when outside root directory
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            os.chdir(tmp_dir)
+            self.assertIsNone(find_root_dir())
 
 
 if __name__ == "__main__":
