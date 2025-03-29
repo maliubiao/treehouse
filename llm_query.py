@@ -288,7 +288,6 @@ class ConfigLoader:
 
 GLOBAL_MODEL_CONFIG = ModelConfig.from_env()
 GLOBAL_PROJECT_CONFIG = ConfigLoader(LLM_PROJECT_CONFIG).load_config()
-print(GLOBAL_PROJECT_CONFIG.project_root_dir)
 MAX_FILE_SIZE = 32000
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")

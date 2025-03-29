@@ -327,21 +327,28 @@ class TestBlockPatch(unittest.TestCase):
 
 
 class TestParserUtil(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.lsp_client = GenericLSPClient(
+            lsp_command=["pylsp"],
+            workspace_path=os.path.dirname(__file__),
+            init_params={"rootUri": f"file://{os.path.dirname(__file__)}"},
+        )
+        cls.lsp_client.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.lsp_client.running:
+            asyncio.run(cls.lsp_client.shutdown())
+
     def setUp(self):
         self.parser_loader = ParserLoader()
         self.node_processor = NodeProcessor()
         self.code_map_builder = CodeMapBuilder(None, self.node_processor)
         self.parser_util = ParserUtil(self.parser_loader)
-        self.lsp_client = GenericLSPClient(
-            lsp_command=["pylsp"],
-            workspace_path=os.path.dirname(__file__),
-            init_params={"rootUri": f"file://{os.path.dirname(__file__)}"},
-        )
-        self.lsp_client.start()
 
     def tearDown(self):
-        if self.lsp_client.running:
-            asyncio.run(self.lsp_client.shutdown())
+        pass
 
     def create_temp_file(self, code: str, suffix=".py") -> str:
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=suffix) as f:
@@ -1815,4 +1822,12 @@ class TestSentenceSegments:
 
 
 if __name__ == "__main__":
-    unittest.main()
+    import cProfile
+
+    profiler = cProfile.Profile()
+    profiler.enable()
+    try:
+        unittest.main()
+    finally:
+        profiler.disable()
+        profiler.dump_stats("test_profile.prof")
