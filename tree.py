@@ -1156,7 +1156,7 @@ class CodeMapBuilder:
                 }
                 code_map[current_path]["calls"].append(call_info)
 
-    def _extract_function_calls(self, node, current_symbols, code_map):
+    def _extract_function_calls(self, node: Node, current_symbols, code_map):
         """提取函数调用信息并添加到当前符号的calls集合"""
         if node.type == NodeTypes.CALL:
             function_node = node.child_by_field_name("function")
@@ -1168,6 +1168,8 @@ class CodeMapBuilder:
             self._add_call_info(func_name, current_symbols, code_map, node)
         elif node.type == NodeTypes.C_ATTRIBUTE_DECLARATION:
             return
+        elif node.type == NodeTypes.IDENTIFIER:
+            self._add_call_info(node.text.decode("utf8"), current_symbols, code_map, node)
         for child in node.children:
             self._extract_function_calls(child, current_symbols, code_map)
 
@@ -4363,6 +4365,7 @@ def start_lsp_client_once(config: ProjectConfig, file_path: str):
         # 缓存客户端
         config.set_lsp_client(cache_key, client)
         logger.debug(f"已缓存LSP客户端: {cache_key}")
+        client.initialized_event.wait(timeout=5)
         return client
     except Exception as e:
         logger.error("LSP客户端启动失败: %s，文件: %s", str(e), file_path)
@@ -4398,7 +4401,7 @@ def _determine_lsp_config(config: ProjectConfig, relative_path: str, suffix: str
     }
 
 
-def _initialize_lsp_client(config: ProjectConfig, lsp_key: str, workspace_path: str):
+def _initialize_lsp_client(config: ProjectConfig, lsp_key: str, workspace_path: str) -> GenericLSPClient:
     """初始化LSP客户端"""
     lsp_command = config.lsp.get("commands", {}).get(lsp_key, "")
     assert lsp_command, f"LSP命令未配置: {lsp_key}"

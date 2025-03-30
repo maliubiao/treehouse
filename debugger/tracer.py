@@ -485,11 +485,12 @@ def start_trace(module_path, config: TraceConfig):
         config: 跟踪配置实例
         immediate_trace: 是否立即开始跟踪
     """
-    # if False and os.path.exists(os.path.join(os.path.dirname(__file__), "tracer_core.so")):
-    #     from .tracer_core import TraceDispatcher
-    #     tracer = TraceDispatcher(str(module_path), TraceLogic(config), config)
-    # else:
-    tracer = TraceDispatcher(str(module_path), config)
+    if os.path.exists(os.path.join(os.path.dirname(__file__), "tracer_core.so")):
+        from .tracer_core import TraceDispatcher
+
+        tracer = TraceDispatcher(str(module_path), TraceLogic(config), config)
+    else:
+        tracer = TraceDispatcher(str(module_path), config)
     try:
         tracer.start()
         return tracer

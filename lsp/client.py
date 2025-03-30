@@ -3,6 +3,7 @@ import atexit
 import json
 import os
 import subprocess
+import sys
 import threading
 from concurrent.futures import Future
 from logging import getLogger
@@ -113,7 +114,7 @@ class GenericLSPClient:
                 self.lsp_command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=sys.stderr,
                 text=True,
                 cwd=self.workspace_path,
                 bufsize=0,
