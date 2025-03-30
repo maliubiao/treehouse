@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from tree import (
     NodeTypes,
     ParserLoader,
     ParserUtil,
+    ProjectConfig,
     RipgrepSearcher,
     SearchConfig,
     SourceSkeleton,
@@ -28,6 +30,7 @@ from tree import (
     init_symbol_database,
     insert_symbol,
     search_symbols_api,
+    start_lsp_client_once,
     symbol_completion,
     symbol_completion_realtime,
     symbol_completion_simple,
@@ -1819,6 +1822,88 @@ class TestSentenceSegments:
     def test_should_ignore_spaces_and_symbols(self):
         response = self.client.get("/extract_identifier?text=hello_world x123 _temp var-2")
         assert response.json() == ["hello_world", "x123", "_temp"]
+
+
+class TestLSPStart(unittest.TestCase):
+    """测试LSP客户端启动功能"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.project_root = Path(self.temp_dir) / "test_project"
+        self.project_root.mkdir()
+
+        # 创建测试项目结构
+        (self.project_root / "debugger" / "cpp").mkdir(parents=True)
+        (self.project_root / "tree.py").touch()
+
+        self.config = ProjectConfig(
+            project_root_dir=str(self.project_root),
+            exclude={"dirs": [], "files": []},
+            include={"dirs": [], "files": []},
+            file_types=[".py"],
+            lsp={
+                "commands": {"py": "pylsp", "clangd": "clangd"},
+                "subproject": {"debugger/cpp/": "clangd"},
+                "default": "py",
+                "suffix": {"cpp": "clangd"},
+            },
+        )
+        self.test_file = str(self.project_root / "tree.py")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch("tree.GenericLSPClient")
+    def test_start_lsp_client_with_cached_client(self, mock_lsp_client):
+        """测试使用缓存的LSP客户端"""
+        mock_client = MagicMock()
+        self.config.set_lsp_client("lsp:py:" + str(self.project_root), mock_client)
+
+        client = start_lsp_client_once(self.config, self.test_file)
+        self.assertEqual(client, mock_client)
+        mock_lsp_client.assert_not_called()
+
+    @patch("tree.GenericLSPClient")
+    def test_start_lsp_client_with_suffix_mapping(self, mock_lsp_client):
+        """测试根据文件后缀匹配LSP"""
+        cpp_file = str(self.project_root / "test.cpp")
+        with open(cpp_file, "w") as f:
+            f.write("// test")
+
+        client = start_lsp_client_once(self.config, cpp_file)
+        mock_lsp_client.assert_called_once()
+        args, _ = mock_lsp_client.call_args
+        self.assertEqual(args[0], ["clangd"])
+        self.assertEqual(args[1], str(self.project_root))
+
+    @patch("tree.GenericLSPClient")
+    def test_start_lsp_client_with_subproject_mapping(self, mock_lsp_client):
+        """测试根据子项目路径匹配LSP"""
+        subproject_dir = self.project_root / "debugger" / "cpp"
+        cpp_file = str(subproject_dir / "test.cpp")
+        with open(cpp_file, "w") as f:
+            f.write("// test")
+
+        client = start_lsp_client_once(self.config, cpp_file)
+        mock_lsp_client.assert_called_once()
+        args, _ = mock_lsp_client.call_args
+        self.assertEqual(args[0], ["clangd"])
+        self.assertEqual(args[1], str(subproject_dir))
+
+    @patch("tree.GenericLSPClient")
+    def test_start_lsp_client_with_default_mapping(self, mock_lsp_client):
+        """测试使用默认LSP配置"""
+        client = start_lsp_client_once(self.config, self.test_file)
+        mock_lsp_client.assert_called_once()
+        args, _ = mock_lsp_client.call_args
+        self.assertEqual(args[0], ["pylsp"])
+        self.assertEqual(args[1], str(self.project_root))
+
+    @patch("tree.GenericLSPClient")
+    def test_start_lsp_client_with_invalid_file(self, mock_lsp_client):
+        """测试无效文件路径"""
+        with self.assertRaises(Exception):
+            start_lsp_client_once(self.config, "/nonexistent/file.py")
 
 
 if __name__ == "__main__":

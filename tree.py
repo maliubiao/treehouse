@@ -17,15 +17,17 @@ import time
 import traceback
 import typing
 import zlib
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import unified_diff
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+import yaml
 from fastapi import Body, FastAPI, Form, HTTPException
 from fastapi import Query as QueryArgs
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -36,6 +38,9 @@ from tree_sitter import Language, Node, Parser, Query
 
 from lsp.client import GenericLSPClient, LSPFeatureError
 from lsp.language_id import LanguageId
+
+# 设置日志级别
+logger = logging.getLogger(__name__)
 
 # 定义语言名称常量
 C_LANG = "c"
@@ -219,6 +224,144 @@ LANGUAGE_QUERIES = {
     "bash": """
     """,
 }
+
+
+LLM_PROJECT_CONFIG = ".llm_project.yml"
+
+
+class ProjectConfig:
+    """强类型的项目配置数据结构"""
+
+    def __init__(
+        self,
+        project_root_dir: str,
+        exclude: Dict[str, List[str]],
+        include: Dict[str, List[str]],
+        file_types: List[str],
+        lsp: Dict[str, Any] = {},
+    ):
+        self.project_root_dir = project_root_dir
+        self.exclude = exclude
+        self.include = include
+        self.file_types = file_types
+        self.lsp = lsp
+        self._lsp_clients: Dict[str, Any] = {}
+        self._lsp_lock = threading.Lock()
+
+    def relative_path(self, path: Path) -> str:
+        """获取相对于项目根目录的路径"""
+        try:
+            return str(path.relative_to(self.project_root_dir))
+        except ValueError:
+            return str(path)
+
+    def get_lsp_client(self, key: str) -> Optional[Any]:
+        """获取缓存的LSP客户端"""
+        with self._lsp_lock:
+            return self._lsp_clients.get(key)
+
+    def set_lsp_client(self, key: str, client: Any):
+        """设置缓存的LSP客户端"""
+        with self._lsp_lock:
+            self._lsp_clients[key] = client
+
+
+class ConfigLoader:
+    """加载和管理LLM项目搜索配置
+
+    配置结构示例:
+    project_root_dir: "."
+    exclude:
+      dirs: [".venv", "node_modules", "tmp"]
+      files: ["*.min.js", "*.bundle.css"]
+    include:
+      files: ["*.py", "*.md", "*.txt"]
+    file_types: [".py", ".js", ".md"]
+    """
+
+    def __init__(self, config_path: Path = Path(LLM_PROJECT_CONFIG)):
+        self.config_path = Path(config_path)
+        self._default_config = ProjectConfig(
+            project_root_dir=str(Path.cwd()),
+            lsp={},
+            exclude={
+                "dirs": [".git", ".venv", "node_modules", "build", "dist", "__pycache__"],
+                "files": ["*.min.js", "*.bundle.css", "*.log", "*.tmp"],
+            },
+            include={"dirs": [], "files": ["*.py", "*.js", "*.md", "*.txt"]},
+            file_types=[".py", "*.js", "*.md", "*.txt"],
+        )
+
+    def bubble_up_for_root_dir(self, path: Path) -> Path:
+        """向上遍历目录，找到包含配置文件的根目录"""
+        while path != path.parent:
+            if (path / self.config_path).exists():
+                return path / self.config_path
+            path = path.parent
+        return path / self.config_path
+
+    def load_config(self) -> ProjectConfig:
+        """加载并验证配置文件"""
+        if not self.config_path.is_absolute():
+            self.config_path = self.bubble_up_for_root_dir(Path.cwd() / self.config_path)
+        if not self.config_path.exists():
+            return self._default_config
+        try:
+            with open(self.config_path, encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+            return self._merge_configs(config)
+        except (yaml.YAMLError, IOError) as e:
+            print(f"❌ 配置文件加载失败: {str(e)}")
+            return self._default_config
+
+    def load_search_config(self, config: Optional[ProjectConfig] = None) -> "SearchConfig":
+        """从已加载的配置创建SearchConfig"""
+        config_to_use = config if config is not None else self.load_config()
+        return self._create_search_config(config_to_use)
+
+    def get_default_config(self) -> ProjectConfig:
+        """获取默认配置"""
+        return self._default_config
+
+    def _merge_configs(self, user_config: dict) -> ProjectConfig:
+        """合并用户配置和默认配置"""
+        return ProjectConfig(
+            project_root_dir=Path(
+                os.path.expanduser(user_config.get("project_root_dir", self._default_config.project_root_dir))
+            ).resolve(),
+            lsp=user_config.get("lsp", self._default_config.lsp),
+            exclude={
+                "dirs": list(
+                    set(self._default_config.exclude["dirs"] + user_config.get("exclude", {}).get("dirs", []))
+                ),
+                "files": list(
+                    set(self._default_config.exclude["files"] + user_config.get("exclude", {}).get("files", []))
+                ),
+            },
+            include={
+                "dirs": list(
+                    set(self._default_config.include["dirs"] + user_config.get("include", {}).get("dirs", []))
+                ),
+                "files": list(
+                    set(self._default_config.include["files"] + user_config.get("include", {}).get("files", []))
+                ),
+            },
+            file_types=list(set(self._default_config.file_types + user_config.get("file_types", []))),
+        )
+
+    def _create_search_config(self, config: ProjectConfig) -> "SearchConfig":
+        """创建SearchConfig对象并进行验证"""
+        return SearchConfig(
+            root_dir=Path(config.project_root_dir).expanduser().resolve(),
+            exclude_dirs=config.exclude["dirs"],
+            exclude_files=config.exclude["files"],
+            include_dirs=config.include["dirs"],
+            include_files=config.include["files"],
+            file_types=config.file_types,
+        )
+
+
+GLOBAL_PROJECT_CONFIG = ConfigLoader(LLM_PROJECT_CONFIG).load_config()
 
 
 class TrieNode:
@@ -488,10 +631,6 @@ class ParserUtil:
                 f"调用列表: {[call['name'] for call in info['calls']]}\n"
                 f"代码内容:\n{info['code']}\n"
             )
-
-
-from abc import ABC, abstractmethod
-from typing import Dict, Set
 
 
 class BaseNodeProcessor(ABC):
@@ -2911,12 +3050,24 @@ async def location_to_symbol(
 
     # 初始化LSP服务器
     await _initialize_lsp_server(symbol, lsp_client)
+    symbol_file_path = symbol["file_path"]
     # 处理每个调用
-    for call in symbol["calls"]:
+    calls = [(1, symbol) for symbol in symbol.get("calls", [])]
+    symbols_filter = set()
+    for level, call in calls:
+        if level > 3:
+            break
         try:
             symbols = await _process_call(
                 call, symbol["file_path"], trie, lsp_client, file_content_cache, file_lines_cache, lookup_cache
             )
+            for symbol in symbols:
+                if symbol["file_path"] == symbol_file_path:
+                    if symbol["name"] in symbols_filter:
+                        continue
+                    symbols_filter.add(symbol["name"])
+                    logger.info(f"检查同文件符号{symbol["file_path"]}.{symbol["name"]}的调用")
+                    calls.extend([(level + 1, call) for call in symbol["calls"]])
             collected_symbols.extend(symbols)
         except (ConnectionError, TimeoutError, RuntimeError) as e:
             print(f"处理调用 {call['name']} 时发生错误: {str(e)}")
@@ -3112,7 +3263,7 @@ async def get_symbol_content(
     Returns:
         纯文本格式的源代码内容（多个符号内容用空行分隔），或包含每个符号信息的JSON数组
     """
-    trie = app.state.file_symbol_trie
+    trie: SymbolTrie = app.state.file_symbol_trie
     file_mtime_cache = app.state.file_mtime_cache
     # 参数解析
     parsed = parse_symbol_path(symbol_path)
@@ -3136,7 +3287,14 @@ async def get_symbol_content(
     lookup_cache = {}
     if lsp_enabled:
         for symbol in symbol_results:
-            collected_symbols.extend(await location_to_symbol(symbol, trie, app.state.LSP_CLIENT, lookup_cache))
+            collected_symbols.extend(
+                await location_to_symbol(
+                    symbol,
+                    trie,
+                    start_lsp_client_once(GLOBAL_PROJECT_CONFIG, symbol_results[0]["file_path"]),
+                    lookup_cache,
+                )
+            )
     # 构建响应
     return (
         collected_symbols + build_json_response(symbol_results, contents)
@@ -4025,7 +4183,6 @@ def initialize_symbol_trie(all_existing_symbols: dict):
     app.state.symbol_trie = trie
     app.state.file_symbol_trie = SymbolTrie.from_symbols({})
     app.state.file_mtime_cache = {}
-    app.state.LSP_CLIENT = LSP_CLIENT
     app.state.symbol_cache = {}
 
 
@@ -4157,45 +4314,125 @@ def main(
     dynamic_import("uvicorn").run(app, host=host, port=port)
 
 
-LSP_CLIENT = None
-
-
-def start_lsp_client(lsp_command: str, workspace_path: str) -> threading.Thread:
-    global LSP_CLIENT
+def start_lsp_client_once(config: ProjectConfig, file_path: str):
     """启动LSP客户端线程
 
     参数:
-        lsp_command: LSP服务器启动命令
-        workspace_path: 工作区根目录路径
+        config: 项目配置对象
+        file_path: 要分析的文件路径
 
     返回:
-        已启动的后台线程对象
+        已启动的LSP客户端对象
     """
     try:
-        logger.info("正在初始化LSP客户端，服务器命令：%s", lsp_command)
-        client = GenericLSPClient(lsp_command=lsp_command.split(), workspace_path=workspace_path)
-        LSP_CLIENT = client
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        logger.debug("启动LSP客户端，文件: %s", file_path)
+        suffix = path.suffix
+        relative_path = config.relative_path(path)
 
-        def run_event_loop():
-            """运行LSP客户端事件循环"""
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                client.start()
-                loop.run_forever()
-            except Exception as e:
-                logger.error("LSP客户端运行异常: %s", str(e))
-            finally:
-                loop.run_until_complete(client.shutdown())
-                loop.close()
-                logger.info("LSP客户端已关闭")
+        # 确定LSP配置
+        lsp_config = _determine_lsp_config(config, relative_path, suffix)
+        lsp_key = lsp_config["lsp_key"]
+        workspace_path = lsp_config["workspace_path"]
+        cache_key = f"lsp:{lsp_key}:{workspace_path}"
 
-        thread = threading.Thread(target=run_event_loop, daemon=True)
-        thread.start()
-        return thread
+        # 检查缓存
+        cached_client = config.get_lsp_client(cache_key)
+        if cached_client:
+            logger.debug(f"使用缓存的LSP客户端: {cache_key}")
+            return cached_client
+
+        # 初始化客户端
+        client = _initialize_lsp_client(config, lsp_key, workspace_path)
+
+        # 启动客户端线程
+        _start_lsp_thread(
+            client,
+            {
+                "key": cache_key,
+                "command": config.lsp.get("commands", {}).get(lsp_key, lsp_key),
+                "workspace": workspace_path,
+                "file": file_path,
+                "suffix": suffix,
+                "lsp_key": lsp_key,
+            },
+        )
+
+        # 缓存客户端
+        config.set_lsp_client(cache_key, client)
+        logger.debug(f"已缓存LSP客户端: {cache_key}")
+        return client
     except Exception as e:
-        logger.error("LSP客户端启动失败: %s", str(e))
+        logger.error("LSP客户端启动失败: %s，文件: %s", str(e), file_path)
         raise
+
+
+def _determine_lsp_config(config: ProjectConfig, relative_path: str, suffix: str) -> dict:
+    """确定LSP配置
+
+    返回包含以下键的字典:
+    - lsp_key: LSP命令键
+    - workspace_path: 工作区路径
+    """
+    workspace_path = config.project_root_dir
+    lsp_key = None
+    # 2. 如果没有后缀匹配，尝试根据子项目路径匹配
+    if not lsp_key and "subproject" in config.lsp:
+        for subpath, cmd_key in config.lsp["subproject"].items():
+            if relative_path.startswith(subpath):
+                lsp_key = cmd_key
+                workspace_path = str(Path(config.project_root_dir) / subpath)
+                break
+    if not lsp_key:
+        # 1. 首先尝试根据文件后缀匹配LSP
+        lsp_key = config.lsp.get("suffix", {}).get(suffix.lstrip("."))
+    # 3. 最后使用默认LSP
+    if not lsp_key:
+        lsp_key = config.lsp.get("default", "py")
+
+    return {
+        "lsp_key": lsp_key,
+        "workspace_path": workspace_path,
+    }
+
+
+def _initialize_lsp_client(config: ProjectConfig, lsp_key: str, workspace_path: str):
+    """初始化LSP客户端"""
+    lsp_command = config.lsp.get("commands", {}).get(lsp_key, "")
+    assert lsp_command, f"LSP命令未配置: {lsp_key}"
+    logger.info("正在初始化LSP客户端，服务器命令：%s，工作区路径：%s", lsp_command, workspace_path)
+    return GenericLSPClient(lsp_command.split(), workspace_path)
+
+
+def _start_lsp_thread(client: GenericLSPClient, client_info: dict):
+    """启动LSP客户端线程"""
+
+    def run_event_loop(client_info: dict):
+        """运行LSP客户端事件循环"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            logger.debug(f"启动LSP客户端线程: {client_info['key']}，命令: {client_info['command']}")
+            client.start()
+            loop.run_forever()
+        except Exception as e:
+            traceback.print_exc()
+            logger.error("LSP客户端运行异常: %s，客户端信息: %s", str(e), client_info)
+        finally:
+            logger.debug(f"关闭LSP客户端: {client_info['key']}")
+            loop.run_until_complete(client.shutdown())
+            loop.close()
+            logger.info("LSP客户端已关闭: %s", client_info["key"])
+
+    thread = threading.Thread(
+        target=run_event_loop,
+        daemon=True,
+        kwargs={"client_info": client_info},
+        name=f"LSP-{client_info['lsp_key']}-{threading.get_ident()}",
+    )
+    thread.start()
 
 
 class SyntaxHighlight:
@@ -4268,16 +4505,14 @@ if __name__ == "__main__":
 
     args = arg_parser.parse_args()
 
-    # 设置日志级别
-    logging.getLogger().setLevel(args.log_level)
-    logger = logging.getLogger(__name__)
-    logger.info("启动代码分析工具，日志级别设置为：%s", args.log_level)
+    logger.info("启动代码分析工具: 日志输出: %s" % args.log_level)
+    logger.setLevel(args.log_level)
 
     DEFAULT_DB = args.db_path
 
     # 根据命令行参数启动对应功能
     if args.lsp:
-        start_lsp_client(lsp_command=args.lsp, workspace_path=args.project[0])
+        start_lsp_client_once(GLOBAL_PROJECT_CONFIG, GLOBAL_PROJECT_CONFIG.project_root_dir)
 
     if args.demo:
         logger.debug("进入演示模式")

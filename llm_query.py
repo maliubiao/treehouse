@@ -50,12 +50,16 @@ from rich.table import Table
 from rich.text import Text
 
 from tree import (
+    GLOBAL_PROJECT_CONFIG,
+    LLM_PROJECT_CONFIG,
     BlockPatch,
+    ConfigLoader,
     FileSearchResult,
     FileSearchResults,
     MatchResult,
     ParserLoader,
     ParserUtil,
+    ProjectConfig,
     RipgrepSearcher,
     SearchConfig,
 )
@@ -167,127 +171,7 @@ class ModelConfig:
         )
 
 
-LLM_PROJECT_CONFIG = ".llm_project.yml"
-
-
-class ProjectConfig:
-    """强类型的项目配置数据结构"""
-
-    def __init__(
-        self,
-        project_root_dir: str,
-        exclude: Dict[str, List[str]],
-        include: Dict[str, List[str]],
-        file_types: List[str],
-    ):
-        self.project_root_dir = project_root_dir
-        self.exclude = exclude
-        self.include = include
-        self.file_types = file_types
-
-    def relative_path(self, path: Path) -> str:
-        """获取相对于项目根目录的路径"""
-        try:
-            return str(path.relative_to(self.project_root_dir))
-        except ValueError:
-            return str(path)
-
-
-class ConfigLoader:
-    """加载和管理LLM项目搜索配置
-
-    配置结构示例:
-    project_root_dir: "."
-    exclude:
-      dirs: [".venv", "node_modules", "tmp"]
-      files: ["*.min.js", "*.bundle.css"]
-    include:
-      files: ["*.py", "*.md", "*.txt"]
-    file_types: [".py", ".js", ".md"]
-    """
-
-    def __init__(self, config_path: Path = Path(LLM_PROJECT_CONFIG)):
-        self.config_path = Path(config_path)
-        self._default_config = ProjectConfig(
-            project_root_dir=str(Path.cwd()),
-            exclude={
-                "dirs": [".git", ".venv", "node_modules", "build", "dist", "__pycache__"],
-                "files": ["*.min.js", "*.bundle.css", "*.log", "*.tmp"],
-            },
-            include={"dirs": [], "files": ["*.py", "*.js", "*.md", "*.txt"]},
-            file_types=[".py", "*.js", "*.md", "*.txt"],
-        )
-
-    def bubble_up_for_root_dir(self, path: Path) -> Path:
-        """向上遍历目录，找到包含配置文件的根目录"""
-        while path != path.parent:
-            if (path / self.config_path).exists():
-                return path / self.config_path
-            path = path.parent
-        return path / self.config_path
-
-    def load_config(self) -> ProjectConfig:
-        """加载并验证配置文件"""
-        if not self.config_path.is_absolute():
-            self.config_path = self.bubble_up_for_root_dir(Path.cwd() / self.config_path)
-        if not self.config_path.exists():
-            return self._default_config
-        try:
-            with open(self.config_path, encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-            return self._merge_configs(config)
-        except (yaml.YAMLError, IOError) as e:
-            print(f"❌ 配置文件加载失败: {str(e)}")
-            return self._default_config
-
-    def load_search_config(self, config: Optional[ProjectConfig] = None) -> SearchConfig:
-        """从已加载的配置创建SearchConfig"""
-        config_to_use = config if config is not None else self.load_config()
-        return self._create_search_config(config_to_use)
-
-    def get_default_config(self) -> ProjectConfig:
-        """获取默认配置"""
-        return self._default_config
-
-    def _merge_configs(self, user_config: dict) -> ProjectConfig:
-        """合并用户配置和默认配置"""
-        return ProjectConfig(
-            project_root_dir=Path(
-                os.path.expanduser(user_config.get("project_root_dir", self._default_config.project_root_dir))
-            ).resolve(),
-            exclude={
-                "dirs": list(
-                    set(self._default_config.exclude["dirs"] + user_config.get("exclude", {}).get("dirs", []))
-                ),
-                "files": list(
-                    set(self._default_config.exclude["files"] + user_config.get("exclude", {}).get("files", []))
-                ),
-            },
-            include={
-                "dirs": list(
-                    set(self._default_config.include["dirs"] + user_config.get("include", {}).get("dirs", []))
-                ),
-                "files": list(
-                    set(self._default_config.include["files"] + user_config.get("include", {}).get("files", []))
-                ),
-            },
-            file_types=list(set(self._default_config.file_types + user_config.get("file_types", []))),
-        )
-
-    def _create_search_config(self, config: ProjectConfig) -> SearchConfig:
-        """创建SearchConfig对象并进行验证"""
-        return SearchConfig(
-            root_dir=Path(config.project_root_dir).expanduser().resolve(),
-            exclude_dirs=config.exclude["dirs"],
-            exclude_files=config.exclude["files"],
-            include_dirs=config.include["dirs"],
-            include_files=config.include["files"],
-            file_types=config.file_types,
-        )
-
-
 GLOBAL_MODEL_CONFIG = ModelConfig.from_env()
-GLOBAL_PROJECT_CONFIG = ConfigLoader(LLM_PROJECT_CONFIG).load_config()
 MAX_FILE_SIZE = 32000
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
@@ -1380,6 +1264,7 @@ PATCH_PROMPT_HEADER = """
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 用户提供的是类, 则输出完整的类，用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
 - 你的输出会被用来替代输入的符号或者文件路径，请不要省略，无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
+- 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径
 """
 
 DUMP_EXAMPLE_A = """
