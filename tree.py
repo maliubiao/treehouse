@@ -61,6 +61,7 @@ SUPPORTED_LANGUAGES = {
     ".go": GO_LANG,
     ".sh": SHELL_LANG,
     ".cpp": CPP_LANG,
+    ".cc": CPP_LANG,
 }
 
 # 各语言的查询语句映射
@@ -4070,7 +4071,7 @@ def scan_project_files_optimized(
     suffixes = include_suffixes if include_suffixes else SUPPORTED_LANGUAGES.keys()
     log_database_stats(conn)
     all_existing_symbols = get_existing_symbols(conn)
-    initialize_symbol_trie(all_existing_symbols)
+    # initialize_symbol_trie(all_existing_symbols)
     tasks = collect_processing_tasks(project_paths, conn, excludes, suffixes)
     process_files(conn, tasks, all_existing_symbols, parallel)
 
@@ -4222,8 +4223,9 @@ def main(
         parallel: 并行度，-1表示使用CPU核心数，0或1表示单进程
     """
     # 初始化数据库连接
-    build_index(project_paths, excludes, include_suffixes, db_path, parallel)
+    # build_index(project_paths, excludes, include_suffixes, db_path, parallel)
     # 启动FastAPI服务
+    initialize_symbol_trie({})
     dynamic_import("uvicorn").run(app, host=host, port=port)
 
 
@@ -4416,6 +4418,7 @@ if __name__ == "__main__":
         help="设置日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL",
     )
     arg_parser.add_argument("--lsp", type=str, help="启动LSP客户端，指定LSP服务器命令（如：pylsp）")
+    arg_parser.add_argument("--debugger-port", type=int, default=9911, help="调试器服务端口")
 
     args = arg_parser.parse_args()
 
@@ -4464,7 +4467,7 @@ if __name__ == "__main__":
         logger.info("启动FastAPI服务")
         from debugger.web import service
 
-        service.start_debugger(9911)
+        service.start_debugger(args.debugger_port)
         main(
             host=args.host,
             port=args.port,

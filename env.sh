@@ -13,7 +13,7 @@ _init_gpt_env() {
   export GPT_LOGS_DIR="$GPT_PATH/logs"
   export GPT_MAX_TOKEN=${GPT_MAX_TOKEN:-16384}
   export GPT_UUID_CONVERSATION=${GPT_UUID_CONVERSATION:-$(uuidgen)}
-  export PYTHON_BIN="$GPT_PATH/.venv/bin/python3"
+  export GPT_PYTHON_BIN="$GPT_PATH/.venv/bin/python3"
 }
 
 # 目录初始化
@@ -30,7 +30,7 @@ _new_conversation() {
 # 会话列表核心逻辑
 _conversation_core_logic() {
   local limit=$1
-  CONVERSATION_LIMIT=$limit "$PYTHON_BIN" -c '
+  CONVERSATION_LIMIT=$limit "$GPT_PYTHON_BIN" -c '
 import os, sys
 from shell import scan_conversation_files, get_preview
 
@@ -49,7 +49,7 @@ _show_conversation_menu() {
   {
     echo "$title"
     echo "$selection"
-  } | "$PYTHON_BIN" "$GPT_PATH/shell.py" format-conversation-menu
+  } | "$GPT_PYTHON_BIN" "$GPT_PATH/shell.py" format-conversation-menu
 }
 
 # 处理用户选择
@@ -88,18 +88,18 @@ _conversation_list() {
 # 模型管理函数
 _list_models() {
   local config_file="${1:-$GPT_PATH/model.json}"
-  "$PYTHON_BIN" "$GPT_PATH/shell.py" list-models "$config_file"
+  "$GPT_PYTHON_BIN" "$GPT_PATH/shell.py" list-models "$config_file"
 }
 
 _list_model_names() {
   local config_file="${1:-$GPT_PATH/model.json}"
-  "$PYTHON_BIN" "$GPT_PATH/shell.py" list-model-names "$config_file"
+  "$GPT_PYTHON_BIN" "$GPT_PATH/shell.py" list-model-names "$config_file"
 }
 
 _read_model_config() {
   local model_name=$1
   local config_file=$2
-  "$PYTHON_BIN" "$GPT_PATH/shell.py" read-model-config "$model_name" "$config_file"
+  "$GPT_PYTHON_BIN" "$GPT_PATH/shell.py" read-model-config "$model_name" "$config_file"
 }
 
 _set_gpt_env_vars() {
@@ -197,13 +197,13 @@ explaingpt() {
     return 1
   }
 
-  "$PYTHON_BIN" "$GPT_PATH/llm_query.py" --file "$file" --prompt-file "$prompt_file"
+  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --file "$file" --prompt-file "$prompt_file"
 }
 
 chat() {
   _check_gpt_env || return 1
   [[ "$1" == "new" ]] && export GPT_UUID_CONVERSATION=$(uuidgen)
-  "$PYTHON_BIN" "$GPT_PATH/llm_query.py" --chatbot
+  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --chatbot
 }
 
 askgpt() {
@@ -211,7 +211,7 @@ askgpt() {
     echo >&2 "Error: Question cannot be empty"
     return 1
   }
-  "$PYTHON_BIN" "$GPT_PATH/llm_query.py" --ask "$*"
+  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --ask "$*"
 }
 
 codegpt() {
@@ -229,7 +229,7 @@ archgpt() {
     echo >&2 "Error: Question cannot be empty"
     return 1
   }
-  "$PYTHON_BIN" "$GPT_PATH/llm_query.py" --workflow --architect fireworks-r1 --coder deepseek-v3.2 --ask "$*"
+  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --workflow --architect fireworks-r1 --coder deepseek-v3.2 --ask "$*"
   export GPT_SESSION_ID=$original_session
   echo "已恢复原会话: $original_session"
 }
@@ -289,12 +289,12 @@ _get_prompt_files() {
 
 _get_api_completions() {
   local prefix="$1"
-  [[ -z "$GPT_API_SERVER" || "$prefix" != symbol_* ]] && return
+  [[ -z "$GPT_SYMBOL_API_URL" || "$prefix" != symbol_* ]] && return
 
   _debug_print "api $prefix"
   local local_path="${prefix#symbol_}"
 
-  "$PYTHON_BIN" "$GPT_PATH/shell.py" complete "$prefix" | while read -r item; do
+  "$GPT_PYTHON_BIN" "$GPT_PATH/shell.py" complete "$prefix" | while read -r item; do
     echo "$item"
   done
 }
@@ -344,7 +344,7 @@ _bash_completion_setup() {
       COMPREPLY=($(compgen -o default -- "$cur"))
       return
     fi
-    local array=$("$PYTHON_BIN" "$GPT_PATH/shell.py" shell-complete "@$cur")
+    local array=$("$GPT_PYTHON_BIN" "$GPT_PATH/shell.py" shell-complete "@$cur")
     COMPREPLY=()
     for item in $array; do
       COMPREPLY+=("@$item")

@@ -229,6 +229,15 @@ askgpt "如何实现快速排序算法？"
 #
 #项目主目录，这个目录下必须有.llm_project.yml, 用来定位符号, @symbol_src/file.py/main 是这个目录下src/file.py的main函数
 project_root_dir: /path/to/your/project
+lsp: #lsp配置
+  commands: #这个项目配置的lsp启动命令
+    py: pylsp
+    clangd: clangd
+  subproject: #子目录的lsp
+    debugger/cpp/: clangd 
+  default: py #默认无匹配时的lsp
+  suffix:
+    cpp: clangd #根据后缀匹配查询哪个lsp
 #..main.. ripgrep搜索范围控制，在哪些文件中搜索main字符串
 exclude:
   dirs:
@@ -338,35 +347,27 @@ filters:
 
 ### 符号查询
 
-tree.py是一个tree-sitter实现的抽象语法树解析库，会生成一个sqlite做源代码索引，这个示例中我就索引了内核gcc　-E预处理过的源代码  
+tree.py是一个tree-sitter实现的抽象语法树解析库，提供多语言ast及lsp符号查找支持
 
 ```bash
 #一个典型的输出
 (terminal-llm) ➜  terminal-llm git:(main) ✗ python tree.py --project /Volumes/外置2T/android-kernel-preprocess/aosp/ --port 9050
 
-数据库当前状态：
-  总符号数: 246373
-  总文件数: 2711
-  索引数量: 3
-    索引名: idx_symbols_file, 唯一性: 否
-    索引名: idx_symbols_name, 唯一性: 否
-    索引名: sqlite_autoindex_symbols_1, 唯一性: 是
-符号缓存加载完成                                  
-处理项目 /Volumes/外置2T/android-kernel-preprocess/aosp/:  26%|███████████████████████████████████▋                                                                                                   | 723/2731 [00:04<00:12, 161.06文件/s]
-文件 /Volumes/外置2T/android-kernel-preprocess/aosp/fs/proc/proc_tty.c.pre.c 处理完成：
-  总符号数: 4687
-  已存在符号数: 1
-  重复符号数: 2974
-  新增符号数: 1
-  过滤符号数: 2974
-处理项目 /Volumes/外置2T/android-kernel-preprocess/aosp/: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2731/2731 [00:17<00:00, 152.64文件/s]
-符号索引构建完成
 INFO:     Started server process [74500]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:9050 (Press CTRL+C to quit)
 INFO:     127.0.0.1:57943 - "GET /symbols/show_tty_driver/context?max_depth=5 HTTP/1.1" 200 OK
 INFO:     127.0.0.1:57957 - "GET /symbols/show_tty_driver/context?max_depth=5 HTTP/1.1" 200 OK
+```
+
+### 启动针对新项目的ast服务
+```bash
+#新建一个.llm_project.yml，配置lsp
+$GPT_PYTHON_BIN $GPT_PATH/tree.py --port 9060;
+#GPT_PYTHON_BIN GPT_PATH是env.sh设置的环境变量，指向terminal-llm的目录
+export GPT_SYMBOL_API_URL=http://127.0.0.1:9060/;
+#给askgpt @symbol_.... 这些符号查询使用的符号服务地址
 ```
 
 ### 提示词模板
