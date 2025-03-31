@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import tree
 from lsp import GenericLSPClient
 from tree import (
+    LANGUAGE_QUERIES,
     BlockPatch,
     CodeMapBuilder,
     NodeProcessor,
@@ -29,7 +30,9 @@ from tree import (
     get_symbol_context_api,
     init_symbol_database,
     insert_symbol,
+    parse_code_file,
     search_symbols_api,
+    split_source,
     start_lsp_client_once,
     symbol_completion,
     symbol_completion_realtime,
@@ -371,7 +374,7 @@ class TestParserUtil(unittest.TestCase):
         func (MyStruct) Method4() {}
         """
         file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
 
         expected_symbols = [
             "main.MyStruct",
@@ -392,7 +395,7 @@ class TestParserUtil(unittest.TestCase):
         func Function3(param string) {}
         """
         file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
 
         expected_symbols = [
             "main.Function1",
@@ -416,7 +419,7 @@ class TestParserUtil(unittest.TestCase):
         func (o *OuterStruct.InnerStruct) Method2() {}
         """
         file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
 
         expected_symbols = [
             "main.OuterStruct",
@@ -433,7 +436,7 @@ class TestParserUtil(unittest.TestCase):
         var FuncVar = func() {}
         """
         file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
 
         # 匿名函数不应被提取为符号
         self.assertNotIn("main.FuncVar", paths)
@@ -448,7 +451,7 @@ class TestParserUtil(unittest.TestCase):
         func () Method1() {}
         """
         file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
 
         # 空接收器方法不应被提取为符号
         self.assertNotIn("main.Method1", paths)
@@ -465,7 +468,7 @@ class TestParserUtil(unittest.TestCase):
         }
         """
         file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
 
         expected_symbols = [
             "main.MyInt",
@@ -1034,9 +1037,6 @@ class TestCallAnalysis(TestParserUtil):
         )
         path = self.create_temp_file(code)
         paths, code_map = self.parser_util.get_symbol_paths(path)
-
-        with open(path, "rb") as f:
-            code_bytes = f.read()
         os.unlink(path)
 
         expected_paths = ["A", "A.B", "A.B.f", "MyClass", "MyClass.other_method", "MyClass.my_method", "some_function"]
@@ -1067,14 +1067,10 @@ class TestCallAnalysis(TestParserUtil):
                 self.assertTrue(definition is not None, f"未找到 {call['name']} 的定义")
 
                 definitions = definition if isinstance(definition, list) else [definition]
-                found_valid = False
-                for d in definitions:
-                    uri = d.get("uri", "")
-                    if uri.startswith("file://"):
-                        def_path = unquote(urlparse(uri).path)
-                        if os.path.exists(def_path):
-                            found_valid = True
-                            break
+                found_valid = any(
+                    d.get("uri", "").startswith("file://") and os.path.exists(unquote(urlparse(d.get("uri", "")).path))
+                    for d in definitions
+                )
                 self.assertTrue(found_valid, f"未找到有效的文件路径定义: {call['name']}")
         finally:
             os.unlink(temp_path)
@@ -1184,33 +1180,15 @@ class TestCallAnalysis(TestParserUtil):
         with open(path, "rb") as f:
             code_bytes = f.read()
 
-        alpha_pos = self._find_byte_position(code_bytes, "class Alpha:")
-        alpha_start_line, alpha_start_col, _, _ = self._convert_bytes_to_points(
-            code_bytes, alpha_pos[0], alpha_pos[0] + 1
-        )
-
-        method_a_pos = self._find_byte_position(code_bytes, "def method_a(self):")
-        method_a_start_line, method_a_start_col, _, _ = self._convert_bytes_to_points(
-            code_bytes, method_a_pos[0], method_a_pos[0] + 1
-        )
-
-        beta_pos = self._find_byte_position(code_bytes, "class Beta:")
-        beta_start_line, beta_start_col, _, _ = self._convert_bytes_to_points(code_bytes, beta_pos[0], beta_pos[0] + 1)
-
-        method_b_pos = self._find_byte_position(code_bytes, "def method_b(self):")
-        method_b_start_line, method_b_start_col, _, _ = self._convert_bytes_to_points(
-            code_bytes, method_b_pos[0], method_b_pos[0] + 1
-        )
+        def get_position_info(substring):
+            pos = self._find_byte_position(code_bytes, substring)
+            return self._convert_bytes_to_points(code_bytes, pos[0], pos[0] + 1)
 
         test_locations = [
-            (alpha_start_line, alpha_start_col),
-            (alpha_start_line, alpha_start_col + 5),
-            (method_a_start_line, method_a_start_col),
-            (method_a_start_line, method_a_start_col + 3),
-            (beta_start_line, beta_start_col),
-            (beta_start_line, beta_start_col + 4),
-            (method_b_start_line, method_b_start_col),
-            (method_b_start_line, method_b_start_col + 3),
+            *[get_position_info("class Alpha:")[:2] for _ in range(2)],
+            *[get_position_info("def method_a(self):")[:2] for _ in range(2)],
+            *[get_position_info("class Beta:")[:2] for _ in range(2)],
+            *[get_position_info("def method_b(self):")[:2] for _ in range(2)],
         ]
 
         symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations)
@@ -1734,7 +1712,7 @@ class TestLSPIntegration(unittest.TestCase):
         for tmp in self.temp_files:
             try:
                 os.unlink(tmp.name)
-            except:
+            except OSError:
                 pass
 
     def test_did_change_success(self):
@@ -1867,10 +1845,10 @@ class TestLSPStart(unittest.TestCase):
     def test_start_lsp_client_with_suffix_mapping(self, mock_lsp_client):
         """测试根据文件后缀匹配LSP"""
         cpp_file = str(self.project_root / "test.cpp")
-        with open(cpp_file, "w") as f:
+        with open(cpp_file, "w", encoding="utf-8") as f:
             f.write("// test")
 
-        client = start_lsp_client_once(self.config, cpp_file)
+        _ = start_lsp_client_once(self.config, cpp_file)
         mock_lsp_client.assert_called_once()
         args, _ = mock_lsp_client.call_args
         self.assertEqual(args[0], ["clangd"])
@@ -1881,10 +1859,10 @@ class TestLSPStart(unittest.TestCase):
         """测试根据子项目路径匹配LSP"""
         subproject_dir = self.project_root / "debugger" / "cpp"
         cpp_file = str(subproject_dir / "test.cpp")
-        with open(cpp_file, "w") as f:
+        with open(cpp_file, "w", encoding="utf-8") as f:
             f.write("// test")
 
-        client = start_lsp_client_once(self.config, cpp_file)
+        _ = start_lsp_client_once(self.config, cpp_file)
         mock_lsp_client.assert_called_once()
         args, _ = mock_lsp_client.call_args
         self.assertEqual(args[0], ["clangd"])
@@ -1893,17 +1871,117 @@ class TestLSPStart(unittest.TestCase):
     @patch("tree.GenericLSPClient")
     def test_start_lsp_client_with_default_mapping(self, mock_lsp_client):
         """测试使用默认LSP配置"""
-        client = start_lsp_client_once(self.config, self.test_file)
+        _ = start_lsp_client_once(self.config, self.test_file)
         mock_lsp_client.assert_called_once()
         args, _ = mock_lsp_client.call_args
         self.assertEqual(args[0], ["pylsp"])
         self.assertEqual(args[1], str(self.project_root))
 
     @patch("tree.GenericLSPClient")
-    def test_start_lsp_client_with_invalid_file(self, mock_lsp_client):
+    def test_start_lsp_client_with_invalid_file(self, _):
         """测试无效文件路径"""
         with self.assertRaises(Exception):
             start_lsp_client_once(self.config, "/nonexistent/file.py")
+
+
+class TestSplitAndPatch(unittest.TestCase):
+    def setUp(self):
+        # 创建临时文件并写入测试代码
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp_file:
+            self.code = """// Sample code
+#include <stdio.h>
+
+int main() {
+    printf("Hello\\n");
+    return 0;
+}"""
+            tmp_file.write(self.code)
+            tmp_file.flush()
+            self.tmp_file_path = tmp_file.name
+
+        # 获取解析器和查询对象
+        self.parser_loader = ParserLoader()
+        query_str = """
+        (return_statement) @return
+        """
+        LANGUAGE_QUERIES["c"] = query_str
+        self.lang_parser, self.query, _ = self.parser_loader.get_parser("test.c")
+
+    def tearDown(self):
+        # 删除临时文件
+        os.unlink(self.tmp_file_path)
+
+    def test_split_source(self):
+        """测试代码分割功能"""
+        # 解析代码文件
+        parsed_tree = parse_code_file(self.tmp_file_path, self.lang_parser)
+        captures = self.query.matches(parsed_tree.root_node)
+
+        # 验证是否找到return语句
+        self.assertGreater(len(captures), 0, "未找到return语句")
+
+        # 获取第一个return语句的节点
+        _, capture = captures[0]
+        return_node = capture["return"][0]
+        # 使用split_source提取代码
+        start_row, start_col = return_node.start_point
+        end_row, end_col = return_node.end_point
+        before, selected, after = split_source(self.code, start_row, start_col, end_row, end_col)
+        # 验证提取结果
+        self.assertEqual(selected, "return 0;", "提取的return语句不匹配")
+        self.assertEqual(
+            before,
+            """// Sample code
+#include <stdio.h>
+
+int main() {
+    printf("Hello\\n");
+    """,
+            "前段内容不匹配",
+        )
+        self.assertEqual(after, "\n}", "后段内容不匹配")
+
+        # 测试代码补丁功能
+        parsed_tree = parse_code_file(self.tmp_file_path, self.lang_parser)
+        captures = self.query.matches(parsed_tree.root_node)  # trace dump_tree(tree.root_node)
+
+        _, capture = captures[0]
+        return_node = capture["return"][0]
+
+        # 测试BlockPatch功能
+        code_patch = BlockPatch(
+            file_paths=[self.tmp_file_path],
+            patch_ranges=[(return_node.start_byte, return_node.end_byte)],
+            block_contents=[selected.encode("utf-8")],
+            update_contents=[b"return 1;"],
+        )
+
+        # 生成差异
+        diff = code_patch.generate_diff()
+        self.assertIn("-    return 0;", diff, "差异中缺少删除行")
+        self.assertIn("+    return 1;", diff, "差异中缺少添加行")
+
+        # 应用补丁
+        file_map = code_patch.apply_patch()
+        self.assertIn(b"return 1;", list(file_map.values())[0], "修改后的代码中缺少更新内容")
+
+    def test_symbol_parsing(self):
+        """测试符号解析功能"""
+        parser_util_instance = ParserUtil(self.parser_loader)
+        symbol_trie = SymbolTrie()
+
+        # 解析测试文件并更新符号前缀树
+        parser_util_instance.update_symbol_trie(self.tmp_file_path, symbol_trie)
+
+        # 测试精确搜索
+        main_symbol = symbol_trie.search_exact("main")
+        self.assertIsNotNone(main_symbol, "未找到main函数符号")
+        self.assertEqual(main_symbol["file_path"], self.tmp_file_path, "文件路径不匹配")
+
+        # 测试前缀搜索
+        prefix_results = symbol_trie.search_prefix("main")
+        self.assertGreater(len(prefix_results), 0, "前缀搜索未找到结果")
+        self.assertTrue(any(result["name"] == "main" for result in prefix_results), "未找到main函数符号")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,6 @@
+/*
+以较快的速度过滤掉不关心的代码文件，有用的再交给python层处理
+*/
 #include <Python.h>
 #include <cpython/code.h>
 #include <filesystem>
@@ -43,9 +46,8 @@ private:
     }
 
     try {
-      fs::path frame_path = fs::absolute(fs::path(filename_str));
       PyObject *result = PyObject_CallMethod(config, "match_filename", "s",
-                                             frame_path.string().c_str());
+        filename_str.c_str());
       if (result == NULL) {
         return false;
       }
@@ -163,8 +165,8 @@ public:
           return -1;
         }
         PyObject *ret =
-            PyObject_CallMethod(trace_logic, "handle_exception", "OOOO", type,
-                                value, traceback, (PyObject *)frame);
+            PyObject_CallMethod(trace_logic, "handle_exception", "OOO", type,
+                                value, traceback);
         if (ret != NULL) {
           Py_DECREF(ret);
         } else {

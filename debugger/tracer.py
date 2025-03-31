@@ -1,5 +1,6 @@
 import ast
 import fnmatch
+import importlib.util
 import inspect
 import linecache
 import logging
@@ -30,6 +31,7 @@ _COLORS = {
     "line": "\033[0m",  # 白色
     "error": "\033[91m",  # 红色
     "reset": "\033[0m",
+    "trace": "\033[95m",  # 紫色
 }
 
 logging.basicConfig(
@@ -307,6 +309,8 @@ class TraceLogic:
         self._running_flag = False
         self._file_name_cache = {}
         self._exception_handler = None
+        self._trace_expressions = {}  # 新增: 缓存追踪表达式 {filename: {lineno: [expr1, expr2]}}
+        self._ast_cache = {}  # 新增: AST解析缓存 {expr: (node, compiled)}
 
     def _add_to_buffer(self, message, color_type):
         """将日志消息添加到队列"""
@@ -348,6 +352,47 @@ class TraceLogic:
             return formatted
         except Exception:
             return filename
+
+    def _parse_trace_comment(self, line):
+        """解析追踪注释"""
+        comment_pos = line.rfind("#")  # 修改: 从右边查找最后一个井号
+        if comment_pos == -1:
+            return None
+
+        comment = line[comment_pos + 1 :].strip()
+        if not comment.lower().startswith("trace "):
+            return None
+
+        return comment[6:].strip()  # 返回"trace "后面的表达式
+
+    def _get_trace_expressions(self, filename, lineno):
+        """获取缓存的追踪表达式"""
+        if filename not in self._trace_expressions:
+            return []
+        return self._trace_expressions[filename].get(lineno, [])
+
+    def _cache_trace_expression(self, filename, lineno, expr):
+        """缓存追踪表达式"""
+        if filename not in self._trace_expressions:
+            self._trace_expressions[filename] = {}
+        if lineno not in self._trace_expressions[filename]:
+            self._trace_expressions[filename][lineno] = []
+        if expr not in self._trace_expressions[filename][lineno]:
+            self._trace_expressions[filename][lineno].append(expr)
+
+    def _compile_expr(self, expr):
+        """编译表达式并缓存结果"""
+        if expr in self._ast_cache:
+            return self._ast_cache[expr]
+
+        try:
+            node = ast.parse(expr, mode="eval")
+            compiled = compile(node, "<string>", "eval")
+            self._ast_cache[expr] = (node, compiled)
+            return node, compiled
+        except Exception as e:
+            self._add_to_buffer(f"表达式解析失败: {expr}, 错误: {str(e)}", "error")
+            raise
 
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
@@ -397,10 +442,42 @@ class TraceLogic:
         if self.line_counter.get(lineno, 0) >= _MAX_LINE_REPEAT:
             return
         self.line_counter[lineno] = self.line_counter.get(lineno, 0) + 1
-        line = linecache.getline(frame.f_code.co_filename, lineno).strip("\n")
-        filename = self._get_formatted_filename(frame.f_code.co_filename)
-        log_msg = f"{_INDENT*self.stack_depth}▷ {filename}:{lineno} {line}"
+
+        filename = frame.f_code.co_filename
+        line = linecache.getline(filename, lineno).strip("\n")
+        formatted_filename = self._get_formatted_filename(filename)
+        log_msg = f"{_INDENT*self.stack_depth}▷ {formatted_filename}:{lineno} {line}"
         self._add_to_buffer(log_msg, "line")
+
+        # 解析并执行追踪表达式
+        expr = self._parse_trace_comment(line)
+        if expr:
+            self._cache_trace_expression(filename, lineno, expr)
+            try:
+                locals_dict = frame.f_locals
+                globals_dict = frame.f_globals
+                _, compiled = self._compile_expr(expr)
+                value = eval(compiled, globals_dict, locals_dict)
+                formatted = _truncate_value(value)
+                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE {expr} = {formatted}"
+                self._add_to_buffer(trace_msg, "trace")
+            except Exception as e:
+                error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {expr} → {str(e)}"
+                self._add_to_buffer(error_msg, "error")
+
+        # 执行缓存的追踪表达式
+        for cached_expr in self._get_trace_expressions(filename, lineno):
+            try:
+                locals_dict = frame.f_locals
+                globals_dict = frame.f_globals
+                _, compiled = self._compile_expr(cached_expr)
+                value = eval(compiled, globals_dict, locals_dict)
+                formatted = _truncate_value(value)
+                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE {cached_expr} = {formatted}"
+                self._add_to_buffer(trace_msg, "trace")
+            except Exception as e:
+                error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {cached_expr} → {str(e)}"
+                self._add_to_buffer(error_msg, "error")
 
         if self.config.capture_vars:
             captured_vars = self.capture_variables(frame)
@@ -440,8 +517,7 @@ class TraceLogic:
 
             for expr in self.config.capture_vars:
                 try:
-                    node = ast.parse(expr, mode="eval")
-                    compiled = compile(node, "<string>", "eval")
+                    _, compiled = self._compile_expr(expr)
                     value = eval(compiled, globals_dict, locals_dict)
                     formatted = _truncate_value(value)
                     results[expr] = formatted
@@ -485,10 +561,18 @@ def start_trace(module_path, config: TraceConfig):
         config: 跟踪配置实例
         immediate_trace: 是否立即开始跟踪
     """
-    if os.path.exists(os.path.join(os.path.dirname(__file__), "tracer_core.so")):
-        from .tracer_core import TraceDispatcher
-
-        tracer = TraceDispatcher(str(module_path), TraceLogic(config), config)
+    tracer_core_path = os.path.join(os.path.dirname(__file__), "tracer_core.so")
+    if os.path.exists(tracer_core_path):
+        try:
+            spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)
+            tracer_core = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(tracer_core)
+            TraceDispatcher = tracer_core.TraceDispatcher
+            tracer = TraceDispatcher(str(module_path), TraceLogic(config), config)
+        except Exception as e:
+            logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
+            print(_color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", "error"))
+            raise
     else:
         tracer = TraceDispatcher(str(module_path), config)
     try:
