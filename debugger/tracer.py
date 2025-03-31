@@ -309,8 +309,8 @@ class TraceLogic:
         self._running_flag = False
         self._file_name_cache = {}
         self._exception_handler = None
-        self._trace_expressions = {}  # 新增: 缓存追踪表达式 {filename: {lineno: [expr1, expr2]}}
-        self._ast_cache = {}  # 新增: AST解析缓存 {expr: (node, compiled)}
+        self._trace_expressions = {}  # 修改为: {filename: {lineno: expr}}
+        self._ast_cache = {}  # 修改为: {expr: (node, compiled)}
 
     def _add_to_buffer(self, message, color_type):
         """将日志消息添加到队列"""
@@ -355,7 +355,7 @@ class TraceLogic:
 
     def _parse_trace_comment(self, line):
         """解析追踪注释"""
-        comment_pos = line.rfind("#")  # 修改: 从右边查找最后一个井号
+        comment_pos = line.rfind("#")
         if comment_pos == -1:
             return None
 
@@ -363,22 +363,19 @@ class TraceLogic:
         if not comment.lower().startswith("trace "):
             return None
 
-        return comment[6:].strip()  # 返回"trace "后面的表达式
+        return comment[6:].strip()
 
-    def _get_trace_expressions(self, filename, lineno):
+    def _get_trace_expression(self, filename, lineno):
         """获取缓存的追踪表达式"""
         if filename not in self._trace_expressions:
-            return []
-        return self._trace_expressions[filename].get(lineno, [])
+            return None
+        return self._trace_expressions[filename].get(lineno)
 
     def _cache_trace_expression(self, filename, lineno, expr):
         """缓存追踪表达式"""
         if filename not in self._trace_expressions:
             self._trace_expressions[filename] = {}
-        if lineno not in self._trace_expressions[filename]:
-            self._trace_expressions[filename][lineno] = []
-        if expr not in self._trace_expressions[filename][lineno]:
-            self._trace_expressions[filename][lineno].append(expr)
+        self._trace_expressions[filename][lineno] = expr
 
     def _compile_expr(self, expr):
         """编译表达式并缓存结果"""
@@ -451,32 +448,22 @@ class TraceLogic:
 
         # 解析并执行追踪表达式
         expr = self._parse_trace_comment(line)
-        if expr:
-            self._cache_trace_expression(filename, lineno, expr)
-            try:
-                locals_dict = frame.f_locals
-                globals_dict = frame.f_globals
-                _, compiled = self._compile_expr(expr)
-                value = eval(compiled, globals_dict, locals_dict)
-                formatted = _truncate_value(value)
-                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE {expr} = {formatted}"
-                self._add_to_buffer(trace_msg, "trace")
-            except Exception as e:
-                error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {expr} → {str(e)}"
-                self._add_to_buffer(error_msg, "error")
+        cached_expr = self._get_trace_expression(filename, lineno)
+        active_expr = expr if expr is not None else cached_expr
 
-        # 执行缓存的追踪表达式
-        for cached_expr in self._get_trace_expressions(filename, lineno):
+        if active_expr:
             try:
                 locals_dict = frame.f_locals
                 globals_dict = frame.f_globals
-                _, compiled = self._compile_expr(cached_expr)
+                _, compiled = self._compile_expr(active_expr)
                 value = eval(compiled, globals_dict, locals_dict)
                 formatted = _truncate_value(value)
-                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE {cached_expr} = {formatted}"
+                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE {active_expr} = {formatted}"
                 self._add_to_buffer(trace_msg, "trace")
+                if expr and expr != cached_expr:
+                    self._cache_trace_expression(filename, lineno, expr)
             except Exception as e:
-                error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {cached_expr} → {str(e)}"
+                error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {active_expr} → {str(e)}"
                 self._add_to_buffer(error_msg, "error")
 
         if self.config.capture_vars:
