@@ -571,6 +571,29 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("template<typename T>", code_map["Outer.Inner.Math.add"]["code"])
         self.assertIn("return a + b;", code_map["Outer.Inner.Math.add"]["code"])
 
+    def test_namespace_class_member(self):
+        """验证命名空间中的类成员函数路径"""
+        code = dedent(
+            """
+            namespace c {
+                class a {
+                public:
+                    int b(int argc) {
+                        return 0;
+                    }
+                };
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("c.a.b", paths)
+        self.assertIn("c.a.b", code_map)
+        self.assertIn("int b(int argc)", code_map["c.a.b"]["code"])
+        self.assertIn("return 0;", code_map["c.a.b"]["code"])
+
     def test_class_hierarchy(self):
         """验证类继承体系中的虚函数和成员函数路径"""
         code = dedent(
@@ -864,6 +887,27 @@ class TestCppSymbolPaths(TestParserUtil):
 
         # 验证函数参数中的数组声明（根据解析器实现决定是否提取）
         # self.assertIn("process_data", paths)
+
+    def test_namespace_member_function(self):
+        """验证命名空间中直接定义的成员函数路径"""
+        code = dedent(
+            """
+            namespace c
+            {
+            int a::b(int argc) {
+                return 0;
+            }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("c.a.b", paths)
+        self.assertIn("c.a.b", code_map)
+        self.assertIn("int a::b(int argc)", code_map["c.a.b"]["code"])
+        self.assertIn("return 0;", code_map["c.a.b"]["code"])
 
 
 class TestGoTypeAndFunctionAndMethod(TestParserUtil):

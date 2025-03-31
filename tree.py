@@ -847,6 +847,13 @@ class CPPSpec(LangSpec):
 
         func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
         if func_declarator:
+            # 尝试获取限定标识符
+            qualified_id = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_QUALIFIED_IDENTIFIER)
+            if qualified_id:
+                namespace = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.CPP_NAMESPACE_IDENTIFIER)
+                identifier = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.IDENTIFIER)
+                if namespace and identifier:
+                    return f"{namespace.text.decode('utf8')}.{identifier.text.decode('utf8')}"
             ident = BaseNodeProcessor.find_identifier_in_node(func_declarator)
             if ident:
                 return ident
