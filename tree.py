@@ -1403,7 +1403,7 @@ class RipgrepSearcher:
             print("调试信息：执行命令:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
 
-        if result.returncode not in (0, 1):
+        if result.returncode not in (0, 1):  # trace [subprocess.run, result.returncode]
             error_msg = f"rg command failed: {result.stderr}\nCommand: {' '.join(cmd)}"
             raise RuntimeError(error_msg)
 

@@ -191,17 +191,24 @@ class TraceConfig:
         return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
 
 
+MAX_ELEMENTS = 5
+
+
 def _truncate_value(value):
     """智能截断保留关键类型信息"""
     try:
         if isinstance(value, (list, tuple)):
-            elements = list(value)[:3]
-            preview = f"{type(value).__name__}({elements}...)" if len(value) > 3 else f"{type(value).__name__}({value})"
+            elements = list(value)[:MAX_ELEMENTS]
+            preview = (
+                f"{type(value).__name__}({elements}...)"
+                if len(value) > MAX_ELEMENTS
+                else f"{type(value).__name__}({value})"
+            )
         elif isinstance(value, dict):
-            keys = list(value.keys())[:3]
+            keys = list(value.keys())[:MAX_ELEMENTS]
             preview = f"dict(keys={keys}...)" if len(value) > 3 else f"dict({value})"
         elif hasattr(value, "__dict__"):
-            attrs = list(vars(value).keys())[:3]
+            attrs = list(vars(value).keys())[:MAX_ELEMENTS]
             preview = f"{type(value).__name__}({attrs}...)"
         else:
             preview = repr(value)
@@ -458,7 +465,7 @@ class TraceLogic:
                 _, compiled = self._compile_expr(active_expr)
                 value = eval(compiled, globals_dict, locals_dict)
                 formatted = _truncate_value(value)
-                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE {active_expr} = {formatted}"
+                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE 表达式 {active_expr} -> {formatted}"
                 self._add_to_buffer(trace_msg, "trace")
                 if expr and expr != cached_expr:
                     self._cache_trace_expression(filename, lineno, expr)

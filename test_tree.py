@@ -1284,76 +1284,83 @@ class TestRipGrepSearch(unittest.TestCase):
         )
         self.searcher = RipgrepSearcher(self.base_config)
 
-    @patch("subprocess.run")
-    def test_basic_search(self, mock_run):
+    def test_basic_search(self):
         mock_output = """
 {"type":"begin","data":{"path":{"text":"src/main.py"}}}
 {"type":"match","data":{"path":{"text":"src/main.py"},"lines":{"text":"def test():"},"line_number":42,"submatches":[{"start":4,"end":8}]}}
 {"type":"end","data":{"path":{"text":"src/main.py"},"stats":{"elapsed":{"secs":0,"nanos":12345},"matched_lines":1,"matches":1}}}
 """.strip()
-        mock_run.return_value = MagicMock(stdout=mock_output, stderr="", returncode=0)
+        from subprocess import CompletedProcess
 
-        results = self.searcher.search(["test"], Path("src"))
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].file_path.name, "main.py")
-        self.assertEqual(len(results[0].matches), 1)
-        self.assertEqual(results[0].matches[0].line, 42)
-        self.assertEqual(results[0].stats.get("matched_lines"), 1)
+        with patch("subprocess.run") as mock_run, patch("pathlib.Path.exists", return_value=True) as mock_exists:
+            mock_run.return_value = CompletedProcess(args=[], returncode=0, stdout=mock_output, stderr="")
+            results = self.searcher.search(["test"], Path("src"))
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].file_path.name, "main.py")
+            self.assertEqual(len(results[0].matches), 1)
+            self.assertEqual(results[0].matches[0].line, 42)
+            self.assertEqual(results[0].stats.get("matched_lines"), 1)
 
-    @patch("subprocess.run")
-    def test_command_generation(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+    def test_command_generation(self):
+        from subprocess import CompletedProcess
 
-        expected = [
-            "rg",
-            "--json",
-            "--smart-case",
-            "--trim",
-            "--type-add",
-            "custom:*.{py,md}",
-            "-t",
-            "custom",
-            "--no-ignore",
-            "--regexp",
-            "test",
-            "--glob",
-            "!vendor/**",
-            "--glob",
-            "!node_modules/**",
-            "--glob",
-            "!temp.txt",
-            "--glob",
-            "src/**",
-            str(Path.cwd()),
-        ]
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        self.searcher.search(["test"])
-        actual_command = mock_run.call_args[0][0]
-        self.assertListEqual(actual_command, expected)
+            expected = [
+                "rg",
+                "--json",
+                "--smart-case",
+                "--trim",
+                "--type-add",
+                "custom:*.{py,md}",
+                "-t",
+                "custom",
+                "--no-ignore",
+                "--regexp",
+                "test",
+                "--glob",
+                "!vendor/**",
+                "--glob",
+                "!node_modules/**",
+                "--glob",
+                "!temp.txt",
+                "--glob",
+                "src/**",
+                str(Path.cwd()),
+            ]
+
+            self.searcher.search(["test"])
+            actual_command = mock_run.call_args[0][0]
+            self.assertListEqual(actual_command, expected)
 
     def test_invalid_search_root(self):
         with self.assertRaises(ValueError):
             self.searcher.search(["test"], Path("/nonexistent"))
 
-    @patch("subprocess.run")
-    def test_error_handling(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="", stderr="invalid pattern", returncode=2)
-        with self.assertRaises(RuntimeError):
-            self.searcher.search(["[invalid-regex"], Path("."))
+    def test_error_handling(self):
+        from subprocess import CompletedProcess
 
-    @patch("subprocess.run")
-    def test_multiple_patterns(self, mock_run):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = CompletedProcess(args=[], returncode=2, stdout="", stderr="invalid pattern")
+            with self.assertRaisesRegex(RuntimeError, "invalid pattern"):
+                self.searcher.search(["[invalid-regex"], Path("."))
+
+    def test_multiple_patterns(self):
         mock_output = """
 {"type":"begin","data":{"path":{"text":"src/test.py"}}}
 {"type":"match","data":{"path":{"text":"src/test.py"},"lines":{"text":"class ParserUtil:"},"line_number":5,"submatches":[{"start":6,"end":16}]}}
 {"type":"end","data":{"path":{"text":"src/test.py"},"stats":{"elapsed":{"secs":0,"nanos":34567},"matched_lines":1,"matches":1}}}
 """.strip()
-        mock_run.return_value = MagicMock(stdout=mock_output, stderr="", returncode=0)
+        from subprocess import CompletedProcess
 
-        results = self.searcher.search(["ParserUtil", "Validator"], Path("src"))
-        self.assertEqual(len(results), 1)
-        self.assertIn("--regexp ParserUtil", " ".join(mock_run.call_args[0][0]))
-        self.assertIn("--regexp Validator", " ".join(mock_run.call_args[0][0]))
+        with patch("subprocess.run") as mock_run, patch("pathlib.Path.exists", return_value=True) as mock_exists:
+            mock_run.return_value = CompletedProcess(args=[], returncode=0, stdout=mock_output, stderr="")
+
+            results = self.searcher.search(["ParserUtil", "Validator"], Path("src"))
+            self.assertEqual(len(results), 1)
+            self.assertIn("--regexp ParserUtil", " ".join(mock_run.call_args[0][0]))
+            self.assertIn("--regexp Validator", " ".join(mock_run.call_args[0][0]))
 
 
 class TestSymbolsComplete(unittest.TestCase):
