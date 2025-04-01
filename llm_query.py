@@ -2253,7 +2253,7 @@ def handle_processing_error(match, error):
 
 
 # 获取.shadowroot的绝对路径，支持~展开
-shadowroot = Path(os.path.expanduser("~/.shadowroot"))
+shadowroot = Path(__file__).parent / ".shadowroot"
 
 
 def _save_response_content(content):
