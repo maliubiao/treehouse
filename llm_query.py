@@ -13,6 +13,7 @@ import json
 import logging
 import marshal
 import os
+import platform
 import pprint
 import re
 import stat
@@ -1263,8 +1264,8 @@ PATCH_PROMPT_HEADER = """
 - 保持原有缩进和代码风格，不添注释
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 用户提供的是类, 则输出完整的类，用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
-- 你的输出会被用来替代输入的符号或者文件路径，请不要省略，无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
-- 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径
+- 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
+- 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified file], [SYMBOL START]输入对应[modified symbol]
 """
 
 DUMP_EXAMPLE_A = """
@@ -1289,8 +1290,9 @@ aa
 DUMB_PROMPT = f"""
 # 输出规范
 - 保持原有缩进和代码风格，不添注释
-- 用户提取的是类, 则输出完整的类，用户提取的是函数, 则输出完整的修改函数，用户提取的是文件, 则输出完整的修改文件
-- 你的输出会被用来替代输入的内容，请不要省略，无论修改与否，符号名，文件名要与输出的代码内容一致
+- 用户提供的是类, 则输出完整的类，用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
+- 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
+- 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入对应[modified file], [SYMBOL START]输入对应[modified symbol]
 
 {DUMP_EXAMPLE_A}
 用户的要求如下:
@@ -2150,7 +2152,9 @@ class GPTContextProcessor:
         """处理符号"""
         symbol_map = {}
         symbols = perform_search(
-            symbol_name.symbols, args.config, max_context_size=GLOBAL_MODEL_CONFIG.max_context_size
+            symbol_name.symbols,
+            os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG),
+            max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
         )
         for symbol in symbols.values():
             symbol_map[symbol["name"]] = self._symbol_format(symbol)
@@ -2301,13 +2305,27 @@ def _save_file_to_shadowroot(shadow_file_path, file_content):
 
 def _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content):
     """生成unified diff"""
-    return difflib.unified_diff(
-        original_content.splitlines(),
-        file_content.splitlines(),
-        fromfile=str(old_file_path),
-        tofile=str(shadow_file_path),
-        lineterm="",
-    )
+    if platform.system() == "Windows":
+        # Windows系统使用diff工具
+        shadow_file_path = shadow_file_path.resolve()
+        old_file_path = old_file_path.resolve()
+        diff_cmd = "diff.exe"
+    else:
+        # Linux或MacOS系统使用diff命令
+        diff_cmd = "diff"
+    try:
+        p = subprocess.run([diff_cmd, "-u", str(old_file_path), str(shadow_file_path)], stdout=subprocess.PIPE)
+        return p.stdout.decode("utf-8")
+    except subprocess.CalledProcessError:
+        return "\n".join(
+            difflib.unified_diff(
+                original_content.splitlines(),
+                file_content.splitlines(),
+                fromfile=str(old_file_path),
+                tofile=str(shadow_file_path),
+                lineterm="",
+            )
+        )
 
 
 def _save_diff_content(diff_content):
@@ -2394,7 +2412,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         with open(str(old_file_path), "r", encoding="utf8") as f:
             original_content = f.read()
         diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
-        diff_content += "\n".join(diff) + "\n\n"
+        diff_content += diff + "\n\n"
 
     diff_file = _save_diff_content(diff_content)
     if diff_file:
@@ -2901,7 +2919,6 @@ def perform_search(
 
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
         raise ValueError("需要至少一个有效搜索关键词")
-
     config = ConfigLoader(Path(config_path)).load_search_config()
     searcher = RipgrepSearcher(config, debug=True)
     rg_results = searcher.search(patterns=[re.escape(word) for word in words])
@@ -2918,7 +2935,7 @@ def perform_search(
             for result in rg_results
         ]
     )
-    api_server = os.getenv("GPT_API_SERVER", "http://127.0.0.1:9050/")
+    api_server = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050/")
     if api_server.endswith("/"):
         api_server = api_server[:-1]
     api_url = f"{api_server}/search-to-symbols?max_context_size={max_context_size}"
@@ -3243,6 +3260,7 @@ class ModelSwitch:
                     tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
                 )
                 coder_prompt = f"{part_a}{context}{part_b}"
+                print(coder_prompt)
                 result = self.query(model_name=coder_model, prompt=coder_prompt)
                 content = result["choices"][0]["message"]["content"]
                 process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], auto_commit=False, auto_lint=False)

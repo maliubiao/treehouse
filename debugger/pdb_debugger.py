@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import logging
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -25,7 +26,7 @@ def execute_script(target: Path, args: List[str]) -> None:
     # 准备执行环境
     globals_dict = main_module.__dict__
     globals_dict.update({"__name__": "__main__", "__file__": str(target), "__package__": None})
-
+    sys.path.append(os.path.dirname(str(target)))
     try:
         compiled_code = compile(code, str(target), "exec")
         # 使用更安全的执行方式

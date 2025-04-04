@@ -520,7 +520,7 @@ line3
                 llm_query.extract_and_diff_files(test_content, auto_apply=True)
 
                 # Verify file content
-                self.assertEqual(test_file.read_text(), "line1\nline2\nline3\n")
+                self.assertEqual(test_file.read_text(), "line1\nline2\nline3")
                 # Verify diff file
                 diff_file = Path(tmpdir) / "changes.diff"
                 self.assertTrue(diff_file.exists())
@@ -538,7 +538,7 @@ new content
 [source code end]
 """
                 llm_query.extract_and_diff_files(test_content, auto_apply=True)
-                self.assertEqual(test_file.read_text(), "new content\n")
+                self.assertEqual(test_file.read_text(), "new content")
 
     def test_setup_script_processing(self):
         with tempfile.TemporaryDirectory() as tmpdir:

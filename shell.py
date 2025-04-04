@@ -43,9 +43,9 @@ def handle_complete(prefix: str):
     if not prefix.startswith("symbol_"):
         return
 
-    gpt_api_server = os.getenv("GPT_API_SERVER")
+    gpt_api_server = os.getenv("GPT_SYMBOL_API_URL")
     if not gpt_api_server:
-        logging.warning("GPT_API_SERVER environment variable not set")
+        logging.warning("GPT_SYMBOL_API_URL environment variable not set")
         return
 
     local_path = prefix[len("symbol_") :].replace("//", "/")
