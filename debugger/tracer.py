@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
 
-_MAX_VALUE_LENGTH = 100
+_MAX_VALUE_LENGTH = 512
 _INDENT = "  "
 _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -432,7 +432,7 @@ class TraceLogic:
         """增强返回值记录"""
         try:
             return_str = _truncate_value(return_value)
-            log_msg = f"{_INDENT*self.stack_depth}↗ RETURN {frame.f_code.co_name}() → {return_str}"
+            log_msg = f"{_INDENT*(self.stack_depth-1)}↗ RETURN {self._get_formatted_filename(frame.f_code.co_filename)}() → {return_str}"
             self._add_to_buffer(log_msg, "return")
             self.stack_depth = max(0, self.stack_depth - 1)
             if self._call_stack:
