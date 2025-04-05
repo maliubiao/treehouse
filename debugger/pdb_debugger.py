@@ -154,7 +154,8 @@ def print_debug_summary() -> None:
     print(_color_wrap("\n调试功能说明:", "line"))
     print(_color_wrap("  ✓ 支持多文件监控模式", "call"))
     print(_color_wrap("  ✓ 自动匹配目标模块及其依赖", "call"))
-    print(_color_wrap(f"\n输入 'tail -f {Path(__file__).parent}/logs/debug.log' 实时查看日志\n", "line"))
+    print(_color_wrap(f"{Path(__file__).parent}/logs/debug.log 实时查看日志", "line"))
+    print(_color_wrap(f"{Path(__file__).parent}/logs/trace_report.html 查看网页报告", "line"))
 
 
 if __name__ == "__main__":

@@ -338,27 +338,29 @@ class CallTreeHtmlRender:
 
     def _message_to_html(self, message, msg_type):
         """将消息转换为HTML片段"""
-        content = message.strip()
+
+        content = message.lstrip()
+        content = content.replace(" ", "&nbsp;")
         indent = len(message) - len(content)
         timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-
+        escaped_content = content
         if msg_type == "call":
             return (
                 f'<div class="foldable call" style="padding-left:{indent}px">\n'
-                f'    <span class="timestamp">[{timestamp}]</span> {content}\n'
+                f'    <span class="timestamp">[{timestamp}]</span> {escaped_content}\n'
                 f"</div>\n"
                 f'<div class="call-group">\n'
             )
-        elif msg_type == "return":
+        if msg_type == "return":
             return (
                 f"</div>\n"
                 f'<div class="return" style="padding-left:{indent}px">\n'
-                f'    <span class="timestamp">[{timestamp}]</span> {content}\n'
+                f'    <span class="timestamp">[{timestamp}]</span> {escaped_content}\n'
                 f"</div>\n"
             )
         return (
             f'<div class="{msg_type}" style="padding-left:{indent}px">\n'
-            f'    <span class="timestamp">[{timestamp}]</span> {content}\n'
+            f'    <span class="timestamp">[{timestamp}]</span> {escaped_content}\n'
             f"</div>\n"
         )
 
@@ -384,13 +386,17 @@ class CallTreeHtmlRender:
 
     def save_to_file(self, filename):
         """将HTML报告保存到文件"""
-        html = self.generate_html()
+        html_content = self.generate_html()
         with open(os.path.join(os.path.dirname(__file__), "logs", filename), "w", encoding="utf-8") as f:
-            f.write(html)
+            f.write(html_content)
 
 
 class TraceLogic:
     def __init__(self, config: TraceConfig):
+        self._init_attributes(config)
+
+    def _init_attributes(self, config):
+        """初始化实例属性"""
         self.stack_depth = 0
         self.line_counter = {}
         self._call_stack = []
@@ -411,14 +417,22 @@ class TraceLogic:
     def enable_output(self, output_type: str, **kwargs):
         """启用特定类型的输出"""
         if output_type == "file" and "filename" in kwargs:
-            self._log_file = open(kwargs["filename"], "a", encoding="utf-8")
+            try:
+                self._log_file = open(kwargs["filename"], "a", encoding="utf-8")
+            except (IOError, OSError) as e:
+                logging.error("无法打开日志文件: %s", str(e))
+                raise
         self._active_outputs.add(output_type)
 
     def disable_output(self, output_type: str):
         """禁用特定类型的输出"""
         if output_type == "file" and self._log_file:
-            self._log_file.close()
-            self._log_file = None
+            try:
+                self._log_file.close()
+            except (IOError, OSError) as e:
+                logging.error("关闭日志文件时出错: %s", str(e))
+            finally:
+                self._log_file = None
         self._active_outputs.discard(output_type)
 
     def _console_output(self, message, color_type):
@@ -426,7 +440,7 @@ class TraceLogic:
         colored_msg = _color_wrap(message, color_type)
         print(colored_msg)
 
-    def _file_output(self, message, color_type):
+    def _file_output(self, message, _):
         """文件输出处理"""
         if self._log_file:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -477,7 +491,8 @@ class TraceLogic:
                 formatted = path.name
             self._file_name_cache[filename] = formatted
             return formatted
-        except Exception:
+        except (TypeError, ValueError) as e:
+            logging.warning("文件名格式化失败: %s", str(e))
             return filename
 
     def _parse_trace_comment(self, line):
@@ -514,14 +529,15 @@ class TraceLogic:
             compiled = compile(node, "<string>", "eval")
             self._ast_cache[expr] = (node, compiled)
             return node, compiled
-        except Exception as e:
+        except (SyntaxError, ValueError) as e:
             self._add_to_buffer(f"表达式解析失败: {expr}, 错误: {str(e)}", "error")
             raise
 
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
         if self.stack_depth >= _MAX_CALL_DEPTH:
-            self._add_to_buffer(f"{_INDENT * self.stack_depth}⚠ MAX CALL DEPTH REACHED", "error")
+            msg = f"{_INDENT * self.stack_depth}⚠ MAX CALL DEPTH REACHED"
+            self._add_to_buffer(msg, "error")
             return
 
         try:
@@ -531,15 +547,15 @@ class TraceLogic:
             else:
                 try:
                     args, _, _, values = inspect.getargvalues(frame)
-                    for arg in args:
-                        if arg in values:
-                            args_info.append(f"{arg}={_truncate_value(values[arg])}")
-                except Exception as e:
+                    args_info = [f"{arg}={_truncate_value(values[arg])}" for arg in args]
+                except (AttributeError, TypeError) as e:
                     self._add_to_buffer(f"参数解析失败: {str(e)}", "error")
                     args_info.append("<参数解析错误>")
                 log_prefix = "CALL"
 
-            log_msg = f"{_INDENT*self.stack_depth}↘ {log_prefix} {self._get_formatted_filename(frame.f_code.co_filename)}:{frame.f_lineno} {frame.f_code.co_name}({', '.join(args_info)})"
+            filename = self._get_formatted_filename(frame.f_code.co_filename)
+            call_info = f"{log_prefix} {filename}:{frame.f_lineno} {frame.f_code.co_name}"
+            log_msg = f"{_INDENT*self.stack_depth}↘ {call_info}({', '.join(args_info)})"
             self._add_to_buffer(log_msg, "call")
             self._call_stack.append(frame.f_code.co_name)
             self.stack_depth += 1
@@ -552,7 +568,8 @@ class TraceLogic:
         """增强返回值记录"""
         try:
             return_str = _truncate_value(return_value)
-            log_msg = f"{_INDENT*(self.stack_depth-1)}↗ RETURN {self._get_formatted_filename(frame.f_code.co_filename)}() → {return_str}"
+            filename = self._get_formatted_filename(frame.f_code.co_filename)
+            log_msg = f"{_INDENT*(self.stack_depth-1)}↗ RETURN {filename}() " f"→ {return_str}"
             self._add_to_buffer(log_msg, "return")
             self.stack_depth = max(0, self.stack_depth - 1)
             if self._call_stack:
@@ -563,43 +580,47 @@ class TraceLogic:
     def handle_line(self, frame):
         """基础行号跟踪"""
         lineno = frame.f_lineno
-        if self.line_counter.get(lineno, 0) >= _MAX_LINE_REPEAT:
-            return
-        self.line_counter[lineno] = self.line_counter.get(lineno, 0) + 1
-
         filename = frame.f_code.co_filename
         line = linecache.getline(filename, lineno).strip("\n")
         formatted_filename = self._get_formatted_filename(filename)
         log_msg = f"{_INDENT*self.stack_depth}▷ {formatted_filename}:{lineno} {line}"
         self._add_to_buffer(log_msg, "line")
 
-        # 解析并执行追踪表达式
+        self._process_trace_expression(frame, line, filename, lineno)
+        if self.config.capture_vars:
+            self._process_captured_vars(frame)
+
+    def _process_trace_expression(self, frame, line, filename, lineno):
+        """处理追踪表达式"""
         expr = self._parse_trace_comment(line)
         cached_expr = self._get_trace_expression(filename, lineno)
         active_expr = expr if expr is not None else cached_expr
 
-        if active_expr:
-            try:
-                locals_dict = frame.f_locals
-                globals_dict = frame.f_globals
-                _, compiled = self._compile_expr(active_expr)
-                value = eval(compiled, globals_dict, locals_dict)
-                formatted = _truncate_value(value)
-                trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE 表达式 {active_expr} -> {formatted}"
-                self._add_to_buffer(trace_msg, "trace")
-                if expr and expr != cached_expr:
-                    self._cache_trace_expression(filename, lineno, expr)
-            except Exception as e:
-                error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {active_expr} → {str(e)}"
-                self._add_to_buffer(error_msg, "error")
+        if not active_expr:
+            return
 
-        if self.config.capture_vars:
-            captured_vars = self.capture_variables(frame)
-            if captured_vars:
-                var_msg = (
-                    f"{_INDENT*(self.stack_depth+1)}↳ 变量: {', '.join(f'{k}={v}' for k, v in captured_vars.items())}"
-                )
-                self._add_to_buffer(var_msg, "var")
+        try:
+            locals_dict = frame.f_locals
+            globals_dict = frame.f_globals
+            _, compiled = self._compile_expr(active_expr)
+            value = eval(compiled, globals_dict, locals_dict)
+            formatted = _truncate_value(value)
+            trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE 表达式 {active_expr} -> {formatted}"
+            self._add_to_buffer(trace_msg, "trace")
+            if expr and expr != cached_expr:
+                self._cache_trace_expression(filename, lineno, expr)
+        except (NameError, SyntaxError, TypeError) as e:
+            error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {active_expr} → {str(e)}"
+            self._add_to_buffer(error_msg, "error")
+
+    def _process_captured_vars(self, frame):
+        """处理捕获的变量"""
+        captured_vars = self.capture_variables(frame)
+        if captured_vars:
+            var_msg = (
+                f"{_INDENT*(self.stack_depth+1)}↳ 变量: " f"{', '.join(f'{k}={v}' for k, v in captured_vars.items())}"
+            )
+            self._add_to_buffer(var_msg, "var")
 
     def handle_exception(self, exc_type, exc_value, exc_traceback):
         """记录异常信息"""
@@ -607,7 +628,9 @@ class TraceLogic:
             frame = exc_traceback.tb_frame
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             lineno = exc_traceback.tb_lineno
-            exc_msg = f"{_INDENT*self.stack_depth}⚠ EXCEPTION {filename}:{lineno} {exc_type.__name__}: {str(exc_value)}"
+            exc_msg = (
+                f"{_INDENT*self.stack_depth}⚠ EXCEPTION {filename}:{lineno} " f"{exc_type.__name__}: {str(exc_value)}"
+            )
             self._add_to_buffer(exc_msg, "error")
 
             stack = traceback.extract_tb(exc_traceback)
@@ -668,7 +691,6 @@ class TraceLogic:
         if self._log_file:
             self._log_file.close()
             self._log_file = None
-        # 新增：停止时自动生成HTML报告
         if "html" in self._active_outputs:
             print("正在生成HTML报告trace_report.html...")
             self._html_render.save_to_file("trace_report.html")
