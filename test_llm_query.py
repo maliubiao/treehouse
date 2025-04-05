@@ -21,6 +21,7 @@ from prompt_toolkit.key_binding import KeyBindings
 import llm_query
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
+    GLOBAL_PROJECT_CONFIG,
     ArchitectMode,
     AutoGitCommit,
     BlockPatchResponse,
@@ -529,7 +530,6 @@ line3
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = Path(tmpdir) / "test.txt"
             test_file.touch()
-
             with patch("llm_query.shadowroot", Path(tmpdir)):
                 test_content = f"""
 [modified file]: {test_file}

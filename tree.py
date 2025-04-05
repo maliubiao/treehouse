@@ -256,6 +256,15 @@ class ProjectConfig:
         except ValueError:
             return str(path)
 
+    def relative_to_current_path(self, path: Path) -> str:
+        if path.is_absolute():
+            try:
+                return str(path.relative_to(Path.cwd()))
+            except ValueError:
+                return str(path)
+        else:
+            return str(Path(self.project_root_dir) / path).relative_to(Path.cwd())
+
     def get_lsp_client(self, key: str) -> Optional[Any]:
         """获取缓存的LSP客户端"""
         with self._lsp_lock:

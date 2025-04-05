@@ -1,4 +1,5 @@
 import ast
+import datetime
 import fnmatch
 import importlib.util
 import inspect
@@ -304,6 +305,90 @@ class TraceDispatcher:
         self._logic.stop()
 
 
+class CallTreeHtmlRender:
+    """将跟踪日志渲染为美观的HTML页面，支持搜索、折叠等功能"""
+
+    def __init__(self, trace_logic: "TraceLogic"):
+        self.trace_logic = trace_logic
+        self._messages = []  # 用于收集所有消息
+        self._html_template = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Python Trace Report</title>
+    <link rel="stylesheet" href="../tracer_styles.css">
+</head>
+<body>
+    <h1>Python Trace Report</h1>
+    <div class="summary">
+        <p>Generated at: {generation_time}</p>
+        <p>Total messages: {message_count}</p>
+        <p>Errors: {error_count}</p>
+    </div>
+    <div id="controls">
+        <input type="text" id="search" placeholder="Search messages...">
+        <button id="expandAll">Expand All</button>
+        <button id="collapseAll">Collapse All</button>
+        <button id="exportBtn">Export as HTML</button>
+    </div>
+    <div id="content">\n{content}\n</div>
+    <script src="../tracer_scripts.js"></script>
+</body>
+</html>"""
+
+    def _message_to_html(self, message, msg_type):
+        """将消息转换为HTML片段"""
+        content = message.strip()
+        indent = len(message) - len(content)
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+        if msg_type == "call":
+            return (
+                f'<div class="foldable call" style="padding-left:{indent}px">\n'
+                f'    <span class="timestamp">[{timestamp}]</span> {content}\n'
+                f"</div>\n"
+                f'<div class="call-group">\n'
+            )
+        elif msg_type == "return":
+            return (
+                f"</div>\n"
+                f'<div class="return" style="padding-left:{indent}px">\n'
+                f'    <span class="timestamp">[{timestamp}]</span> {content}\n'
+                f"</div>\n"
+            )
+        return (
+            f'<div class="{msg_type}" style="padding-left:{indent}px">\n'
+            f'    <span class="timestamp">[{timestamp}]</span> {content}\n'
+            f"</div>\n"
+        )
+
+    def add_message(self, message, msg_type):
+        """添加消息到消息列表"""
+        self._messages.append((message, msg_type))
+
+    def generate_html(self):
+        """生成完整的HTML报告"""
+        html_content = []
+        for message, msg_type in self._messages:
+            html_content.append(self._message_to_html(message, msg_type))
+
+        error_count = sum(1 for _, t in self._messages if t == "error")
+        generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        return self._html_template.format(
+            generation_time=generation_time,
+            message_count=len(self._messages),
+            error_count=error_count,
+            content="".join(html_content),
+        )
+
+    def save_to_file(self, filename):
+        """将HTML报告保存到文件"""
+        html = self.generate_html()
+        with open(os.path.join(os.path.dirname(__file__), "logs", filename), "w", encoding="utf-8") as f:
+            f.write(html)
+
+
 class TraceLogic:
     def __init__(self, config: TraceConfig):
         self.stack_depth = 0
@@ -316,21 +401,56 @@ class TraceLogic:
         self._running_flag = False
         self._file_name_cache = {}
         self._exception_handler = None
-        self._trace_expressions = {}  # 修改为: {filename: {lineno: expr}}
-        self._ast_cache = {}  # 修改为: {expr: (node, compiled)}
+        self._trace_expressions = {}
+        self._ast_cache = {}
+        self._output_handlers = {"console": self._console_output, "file": self._file_output, "html": self._html_output}
+        self._active_outputs = set(["console", "html"])
+        self._log_file = None
+        self._html_render = CallTreeHtmlRender(self)
+
+    def enable_output(self, output_type: str, **kwargs):
+        """启用特定类型的输出"""
+        if output_type == "file" and "filename" in kwargs:
+            self._log_file = open(kwargs["filename"], "a", encoding="utf-8")
+        self._active_outputs.add(output_type)
+
+    def disable_output(self, output_type: str):
+        """禁用特定类型的输出"""
+        if output_type == "file" and self._log_file:
+            self._log_file.close()
+            self._log_file = None
+        self._active_outputs.discard(output_type)
+
+    def _console_output(self, message, color_type):
+        """控制台输出处理"""
+        colored_msg = _color_wrap(message, color_type)
+        print(colored_msg)
+
+    def _file_output(self, message, color_type):
+        """文件输出处理"""
+        if self._log_file:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            self._log_file.write(f"[{timestamp}] {message}\n")
+            self._log_file.flush()
+
+    def _html_output(self, message, color_type):
+        """HTML输出处理"""
+        self._html_render.add_message(message, color_type)
 
     def _add_to_buffer(self, message, color_type):
-        """将日志消息添加到队列"""
+        """将日志消息添加到队列并立即处理"""
         self._log_queue.put((message, color_type))
+        if "html" in self._active_outputs:
+            self._html_render.add_message(message, color_type)
 
     def _flush_buffer(self):
         """刷新队列，输出所有日志"""
         while not self._log_queue.empty():
             try:
                 message, color_type = self._log_queue.get_nowait()
-                colored_msg = _color_wrap(message, color_type)
-                logging.debug(message)
-                print(colored_msg)
+                for output_type in self._active_outputs:
+                    if output_type in self._output_handlers:
+                        self._output_handlers[output_type](message, color_type)
             except queue.Empty:
                 break
 
@@ -545,6 +665,13 @@ class TraceLogic:
         self._flush_buffer()
         while not self._log_queue.empty():
             self._log_queue.get_nowait()
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None
+        # 新增：停止时自动生成HTML报告
+        if "html" in self._active_outputs:
+            print("正在生成HTML报告trace_report.html...")
+            self._html_render.save_to_file("trace_report.html")
 
 
 def start_trace(module_path, config: TraceConfig):

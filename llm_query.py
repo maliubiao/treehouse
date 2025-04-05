@@ -1383,9 +1383,9 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 符号名称: {symbol_name}
 文件路径: {patch_dict["file_path"]}
 
-[CONTENT START]
+[source code start]
 {patch_dict["block_content"] if isinstance(patch_dict["block_content"], str) else patch_dict["block_content"].decode('utf-8')}
-[CONTENT END]
+[source code end]
 
 [SYMBOL END]
 """
@@ -2385,7 +2385,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         elif match_type == "user_verify_script":
             verify_script = match_content
         else:
-            file_matches.append((path, match_content))
+            file_matches.append((GLOBAL_PROJECT_CONFIG.relative_to_current_path(Path(path)), match_content))
 
     def _process_script(script, script_name):
         if not script:
