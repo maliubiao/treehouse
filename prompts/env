@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+
+import os
+import platform
+import sys
+from datetime import datetime
+
+
+def get_proxy_info():
+    proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+    proxies = [os.getenv(var) for var in proxy_vars if os.getenv(var)]
+    if proxies:
+        return "Proxy configured: " + ", ".join(proxies)
+    else:
+        return "No proxy configured"
+
+
+def main():
+    current_path = os.getcwd()
+    os_name = platform.system()
+    os_version = platform.release()
+    shell = os.getenv("SHELL", "unknown").split("/")[-1]
+    user = os.getenv("USER", "unknown")
+    hostname = platform.node()
+    python_version = sys.version.split()[0]
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    proxy_info = get_proxy_info()
+
+    prompt = f"""
+** 当前环境特征 **：
+   - 当前目录: {current_path}
+   - 操作系统: {os_name} {os_version}
+   - 系统Shell: {shell}
+   - 用户/主机: {user}@{hostname}
+   - Python版本: {python_version}
+   - 代理状态: {proxy_info}
+   - 时间戳: {timestamp}
+"""
+    print(prompt)
+
+
+if __name__ == "__main__":
+    main()

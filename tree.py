@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -263,7 +264,8 @@ class ProjectConfig:
             except ValueError:
                 return str(path)
         else:
-            return str(Path(self.project_root_dir) / path).relative_to(Path.cwd())
+            p = Path(self.project_root_dir) / path
+            return str(p.relative_to(Path.cwd()))
 
     def get_lsp_client(self, key: str) -> Optional[Any]:
         """获取缓存的LSP客户端"""
@@ -745,7 +747,8 @@ def find_spec_for_lang(lang: str) -> "LangSpec":
         return GoLangSpec()
     elif lang == CPP_LANG or lang == C_LANG:
         return CPPSpec()
-    return LangSpec()
+    else:
+        return None
 
 
 class LangSpec(ABC):
@@ -768,7 +771,7 @@ class PythonSpec(LangSpec):
             return "__main__"
 
     def get_function_name(self, node):
-        pass
+        return None
 
     @staticmethod
     def is_main_block(node):
@@ -1986,9 +1989,6 @@ class BlockPatch:
         modified_blocks = self._build_modified_blocks(original_code, replacements)
         modified_code = "".join(modified_blocks)
 
-        # 尝试使用系统diff工具
-        import tempfile
-
         with (
             tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".original") as f_orig,
             tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".modified") as f_mod,
@@ -2031,18 +2031,16 @@ class BlockPatch:
     def generate_diff(self) -> str:
         """生成多文件差异补丁"""
         if not self.file_paths:
-            return ""
+            return {}
 
-        diff_output = []
         # 按文件分组处理
         file_groups = defaultdict(list)
         for idx, path in enumerate(self.file_paths):
             file_groups[path].append(idx)
-
+        m = {}
         for file_path, indices in file_groups.items():
-            diff_output.extend(self._process_single_file_diff(file_path, indices))
-
-        return "".join(diff_output)
+            m[file_path] = "".join(self._process_single_file_diff(file_path, indices))
+        return m
 
     def _process_single_file_patch(self, file_path: str, indices: list[int]) -> bytes:
         """处理单个文件的补丁应用"""

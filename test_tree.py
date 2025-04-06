@@ -164,8 +164,9 @@ class TestBlockPatch(unittest.TestCase):
         )
 
         diff = basic_patch.generate_diff()
-        self.assertIn("-    return 1", diff)
-        self.assertIn("+    return 10", diff)
+        self.assertIn(file_path, diff)
+        self.assertIn("-    return 1", diff[file_path])
+        self.assertIn("+    return 10", diff[file_path])
 
         patched_files = basic_patch.apply_patch()
         self.assertIn(file_path, patched_files)
@@ -196,10 +197,11 @@ class TestBlockPatch(unittest.TestCase):
         )
 
         diff = multiple_patch.generate_diff()
-        self.assertIn("-    return 1", diff)
-        self.assertIn("+    return 10", diff)
-        self.assertIn("-    return 2", diff)
-        self.assertIn("+    return 20", diff)
+        self.assertIn(file_path, diff)
+        self.assertIn("-    return 1", diff[file_path])
+        self.assertIn("+    return 10", diff[file_path])
+        self.assertIn("-    return 2", diff[file_path])
+        self.assertIn("+    return 20", diff[file_path])
 
         patched_files = multiple_patch.apply_patch()
         self.assertIn(file_path, patched_files)
@@ -257,7 +259,7 @@ class TestBlockPatch(unittest.TestCase):
             update_contents=[b"return 1"],
         )
 
-        self.assertEqual(nochange_patch.generate_diff(), "")
+        self.assertEqual(nochange_patch.generate_diff(), {})
         self.assertEqual(nochange_patch.apply_patch(), {})
 
     def test_multiple_files(self):
@@ -292,10 +294,12 @@ class TestBlockPatch(unittest.TestCase):
         )
 
         diff = multifile_patch.generate_diff()
-        self.assertIn("-    return 1", diff)
-        self.assertIn("+    return 10", diff)
-        self.assertIn("-    return 2", diff)
-        self.assertIn("+    return 20", diff)
+        self.assertIn(file1, diff)
+        self.assertIn(file2, diff)
+        self.assertIn("-    return 1", diff[file1])
+        self.assertIn("+    return 10", diff[file1])
+        self.assertIn("-    return 2", diff[file2])
+        self.assertIn("+    return 20", diff[file2])
 
         patched_files = multifile_patch.apply_patch()
         self.assertIn(file1, patched_files)
@@ -324,7 +328,8 @@ class TestBlockPatch(unittest.TestCase):
         )
 
         diff = insert_patch.generate_diff()
-        self.assertIn("+    print('inserted')", diff)
+        self.assertIn(file_path, diff)
+        self.assertIn("+    print('inserted')", diff[file_path])
 
         patched_files = insert_patch.apply_patch()
         self.assertIn(file_path, patched_files)
@@ -2009,8 +2014,9 @@ int main() {
 
         # 生成差异
         diff = code_patch.generate_diff()
-        self.assertIn("-    return 0;", diff, "差异中缺少删除行")
-        self.assertIn("+    return 1;", diff, "差异中缺少添加行")
+        self.assertIn(self.tmp_file_path, diff)
+        self.assertIn("-    return 0;", diff[self.tmp_file_path], "差异中缺少删除行")
+        self.assertIn("+    return 1;", diff[self.tmp_file_path], "差异中缺少添加行")
 
         # 应用补丁
         file_map = code_patch.apply_patch()

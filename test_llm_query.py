@@ -21,12 +21,12 @@ from prompt_toolkit.key_binding import KeyBindings
 import llm_query
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
-    GLOBAL_PROJECT_CONFIG,
     ArchitectMode,
     AutoGitCommit,
     BlockPatchResponse,
     ChatbotUI,
     CmdNode,
+    DiffBlockFilter,
     FormatAndLint,
     GPTContextProcessor,
     LintParser,
@@ -1199,18 +1199,17 @@ class TestAutoGitCommit(unittest.TestCase):
 
     def test_empty_commit_message(self):
         instance = AutoGitCommit("No commit message here")
-        self.assertEqual(instance.commit_message, "Auto commit: Fix code issues")
+        self.assertEqual(instance.commit_message, "")
 
     @patch.object(AutoGitCommit, "_execute_git_commands")
     def test_commit_flow(self, mock_execute):
-        with patch("builtins.input", return_value="y"):
-            instance = AutoGitCommit("[git commit message start]test commit[end]")
-            instance.do_commit()
-            mock_execute.assert_called_once()
+        instance = AutoGitCommit("[git commit message start]test commit[git commit message end]", auto_commit=True)
+        instance.do_commit()
+        mock_execute.assert_called_once()
 
     @patch("subprocess.run")
     def test_git_commands_execution(self, mock_run):
-        instance = AutoGitCommit("[git commit message start]test[end]")
+        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
         instance.commit_message = "test"
         instance._execute_git_commands()
         mock_run.assert_has_calls(
@@ -1219,7 +1218,9 @@ class TestAutoGitCommit(unittest.TestCase):
 
     @patch("subprocess.run")
     def test_specified_files_add(self, mock_run):
-        instance = AutoGitCommit("[git commit message start]test[end]", files_to_add=["src/main.py", "src/utils.py"])
+        instance = AutoGitCommit(
+            "[git commit message start]test[git commit message end]", files_to_add=["src/main.py", "src/utils.py"]
+        )
         instance.commit_message = "test"
         instance._execute_git_commands()
         mock_run.assert_has_calls(
@@ -1229,6 +1230,20 @@ class TestAutoGitCommit(unittest.TestCase):
                 call(["git", "commit", "-m", "test"], check=True),
             ]
         )
+
+    @patch("builtins.input")
+    def test_confirm_message(self, mock_input):
+        mock_input.return_value = "y"
+        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
+        self.assertTrue(instance._confirm_message())
+
+        mock_input.return_value = "n"
+        self.assertFalse(instance._confirm_message())
+
+        mock_input.side_effect = ["edit", "new message", "y"]
+        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
+        self.assertTrue(instance._confirm_message())
+        self.assertEqual(instance.commit_message, "new message")
 
 
 class TestFormatAndLint(unittest.TestCase):
@@ -1527,6 +1542,139 @@ class TestContentParse(unittest.TestCase):
         self.assertEqual(len(modified.split("\n\n")), 1)
         self.assertIn("outer.py", modified)
         self.assertNotIn("inner.py", remaining)
+
+
+class TestDiffBlockFilter(unittest.TestCase):
+    """
+    unified 0, diff bin 生成diff, two temp file
+    test single file diff
+    test multi file diff
+    # to do
+    生成一个diff有多个block需要让用户确认的情况，这必须要使diff tool不合并它们才行
+    """
+
+    def _create_temp_files(self, content1: str, content2: str) -> tuple[str, str]:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f1:
+            f1.write(content1)
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f2:
+            f2.write(content2)
+        return f1.name, f2.name
+
+    def test_basic_selection(self):
+        file1 = "a\nb\nc\n"
+        file2 = "a\nb2\nc\n"
+        f1, f2 = self._create_temp_files(file1, file2)
+        try:
+            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            diff = e.output
+
+        with patch("builtins.input", side_effect=["y", "n"]):
+            filter = DiffBlockFilter({f1: diff})
+            result = filter.interactive_filter()
+
+        self.assertIn(f1, result)
+        self.assertIn("b2", result[f1])
+
+    def test_invalid_input_handling(self):
+        file1 = "x\ny\nz\n"
+        file2 = "x\ny2\nz\n"
+        f1, f2 = self._create_temp_files(file1, file2)
+        try:
+            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            diff = e.output
+
+        with patch("builtins.input", side_effect=["invalid", "wrong", "y"]):
+            filter = DiffBlockFilter({f1: diff})
+            result = filter.interactive_filter()
+
+        self.assertGreater(len(result[f1].split("\n")), 3)
+
+    def test_immediate_accept_all(self):
+        file1 = "1\n2\n3\n"
+        file2 = "1\n2\n3\n4\n"
+        f1, f2 = self._create_temp_files(file1, file2)
+        try:
+            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            diff = e.output
+
+        with patch("builtins.input", side_effect=["ya"]):
+            filter = DiffBlockFilter({f1: diff})
+            result = filter.interactive_filter()
+
+        self.assertIn("+4", result[f1])
+
+    def test_multiple_file_diff(self):
+        file1 = "a\nb\nc\n"
+        file2 = "a\nb2\nc\n"
+        file3 = "x\ny\nz\n"
+        file4 = "x\ny2\nz\n"
+        f1, f2 = self._create_temp_files(file1, file2)
+        f3, f4 = self._create_temp_files(file3, file4)
+        try:
+            diff1 = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            diff1 = e.output
+        try:
+            diff2 = subprocess.check_output(["diff", "-u", f3, f4], text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            diff2 = e.output
+
+        diff_content = {f1: diff1, f3: diff2}
+        with patch("builtins.input", side_effect=["y", "y"]):
+            filter = DiffBlockFilter(diff_content)
+            result = filter.interactive_filter()
+
+        self.assertIn(f1, result)
+        self.assertIn(f3, result)
+        self.assertIn("b2", result[f1])
+        self.assertIn("y2", result[f3])
+
+    def test_quit_early(self):
+        file1 = "1\n2\n3\n"
+        file2 = "1\n2\n3\n4\n"
+        f1, f2 = self._create_temp_files(file1, file2)
+        try:
+            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            diff = e.output
+
+        with patch("builtins.input", side_effect=["q"]):
+            filter = DiffBlockFilter({f1: diff})
+            result = filter.interactive_filter()
+
+        self.assertEqual(result, {})
+
+    def test_no_changes(self):
+        file1 = "identical\ncontent\n"
+        file2 = "identical\ncontent\n"
+        f1, f2 = self._create_temp_files(file1, file2)
+        try:
+            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            diff = e.output
+
+        with patch("builtins.input", side_effect=[]):
+            filter = DiffBlockFilter({f1: diff})
+            result = filter.interactive_filter()
+
+        self.assertEqual(result, {})
+
+    def test_empty_diff(self):
+        with patch("builtins.input", side_effect=[]):
+            filter = DiffBlockFilter({"file.txt": ""})
+            result = filter.interactive_filter()
+
+        self.assertEqual(result, {})
+
+    def test_invalid_diff_content(self):
+        with patch("builtins.input", side_effect=[]):
+            filter = DiffBlockFilter({"file.txt": "not a valid diff"})
+            result = filter.interactive_filter()
+
+        self.assertEqual(result, {})
 
 
 if __name__ == "__main__":

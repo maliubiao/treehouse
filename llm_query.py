@@ -60,9 +60,8 @@ from tree import (
     MatchResult,
     ParserLoader,
     ParserUtil,
-    ProjectConfig,
     RipgrepSearcher,
-    SearchConfig,
+    SyntaxHighlight,
 )
 
 
@@ -1499,10 +1498,10 @@ class AutoGitCommit:
 
     def _extract_commit_message(self) -> str:
         if self.gpt_response is None:
-            return "Auto commit: Fix code issues"
+            return ""
         pattern = r"\[git commit message start\](.*?)\[git commit message end\]"
         match = re.search(pattern, self.gpt_response, re.DOTALL)
-        return match.group(1).strip() if match else "Auto commit: Fix code issues"
+        return match.group(1).strip() if match else ""
 
     def _confirm_message(self) -> bool:
         if self.auto_commit:
@@ -1511,7 +1510,8 @@ class AutoGitCommit:
         choice = input("是否使用此提交信息？(y/n/edit): ").lower()
         if choice == "edit":
             self.commit_message = input("请输入新的提交信息: ")
-            return True
+            choice = input("是否使用此提交信息？(y/n/edit): ").lower()
+            return choice == "y"
         return choice == "y"
 
     def _execute_git_commands(self):
@@ -1698,7 +1698,9 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
         )
 
         diff = patch.generate_diff()
-        highlighted_diff = highlight(diff, DiffLexer(), TerminalFormatter())
+        diff_str = "\n".join(diff.values())
+
+        highlighted_diff = highlight(diff_str, DiffLexer(), TerminalFormatter())
         print("\n高亮显示的diff内容：")
         print(highlighted_diff)
 
@@ -1720,6 +1722,97 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
 
         print("补丁未应用")
     return None
+
+
+class DiffBlockFilter:
+    def __init__(self, diff_content: dict[str, str]):
+        if not isinstance(diff_content, dict):
+            raise ValueError("diff_content must be a dictionary")
+        self.diff_content = diff_content
+        self.selected_blocks = []
+
+    def _parse_diff(self, file_diff: str) -> tuple[str, list[str]]:
+        """Parse diff content into header and individual blocks for a single file"""
+        if not file_diff or not isinstance(file_diff, str):
+            return ("", [])
+
+        blocks = []
+        current_block = []
+        in_block = False
+        header_lines = []
+
+        for line in file_diff.split("\n"):
+            if line.startswith("--- "):
+                header_lines = [line]
+            elif line.startswith("+++ "):
+                header_lines.append(line)
+            elif line.startswith("@@"):
+                if current_block:
+                    blocks.append("\n".join(current_block))
+                    current_block = []
+                current_block.append(line)
+                in_block = True
+            elif in_block:
+                current_block.append(line)
+            elif line.strip() and not header_lines:
+                header_lines.append(line)
+
+        if current_block:
+            blocks.append("\n".join(current_block))
+
+        return ("\n".join(header_lines) if header_lines else "", blocks)
+
+    def interactive_filter(self) -> dict[str, str]:
+        """Interactively filter diff blocks through user input with syntax highlighting"""
+        if not self.diff_content:
+            return {}
+
+        result = {}
+        for file_path, file_diff in self.diff_content.items():
+            if not file_diff or not isinstance(file_diff, str):
+                continue
+
+            print(f"\nFile: {file_path}")
+            header, file_blocks = self._parse_diff(file_diff)
+            if not file_blocks:
+                continue
+
+            file_result = []
+            accept_all = False
+            quit_early = False
+
+            for i, block in enumerate(file_blocks, 1):
+                if accept_all:
+                    file_result.append(block)
+                    continue
+
+                repeat_times = 3
+                while repeat_times > 0:
+                    highlighted_block = SyntaxHighlight.highlight_if_terminal(block, lang_type="diff")
+                    print(f"\nBlock {i}:\n{highlighted_block}\n")
+                    choice = input("Accept block? (y/n/ya/na/q): ").lower().strip()
+                    if choice in ("y", "yes"):
+                        file_result.append(block)
+                        break
+                    elif choice in ("n", "no"):
+                        break
+                    elif choice == "ya":
+                        file_result.extend(file_blocks[i - 1 :])
+                        accept_all = True
+                        break
+                    elif choice in ("na", "q"):
+                        quit_early = True
+                        break
+                    else:
+                        print("Invalid input. Please enter y/n/ya/na/q")
+                        repeat_times -= 1
+                if quit_early:
+                    break
+
+            if file_result and not quit_early:
+                result[file_path] = f"{header}\n" + "\n".join(file_result) if header else "\n".join(file_result)
+
+        return result
 
 
 def test_patch_response():
