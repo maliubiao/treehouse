@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import traceback
+import webbrowser
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, List, Optional
@@ -75,6 +76,24 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
     return result
 
 
+def open_trace_report() -> None:
+    """打开跟踪报告HTML文件"""
+    report_path = Path(__file__).parent / "logs" / "trace_report.html"
+    if not report_path.exists():
+        print(_color_wrap(f"❌ 跟踪报告文件 {report_path} 不存在", "error"))
+        return
+
+    try:
+        if sys.platform == "win32":
+            os.startfile(report_path)
+        elif sys.platform == "darwin":
+            webbrowser.open(f"file://{report_path}")
+        else:
+            webbrowser.open(f"file://{report_path}")
+    except Exception as e:
+        print(_color_wrap(f"❌ 无法打开跟踪报告: {str(e)}", "error"))
+
+
 def debug_main(argv: Optional[List[str]] = None) -> int:
     """调试器主入口，可被其他模块调用"""
     try:
@@ -87,11 +106,16 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
                     "用法: python -m debugger.pdb_debugger [调试选项] <目标脚本> [脚本参数]\n"
                     "调试选项:\n"
                     "  --watch-files=PATTERNS  逗号分隔的文件模式列表\n"
-                    "示例: python -m debugger.pdb_debugger --watch-files=src/*.py,utils/* main.py --verbose",
+                    "  --open-report          调试完成后自动打开HTML报告\n"
+                    "示例: python -m debugger.pdb_debugger --watch-files=src/*.py,utils/* main.py --verbose --open-report",
                     "error",
                 )
             )
             return 1
+
+        open_report = "--open-report" in argv
+        if open_report:
+            argv.remove("--open-report")
 
         args = parse_args(argv)
         target = args["target"].resolve()
@@ -135,6 +159,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             tracer.stop()
             sys.argv = original_argv
             print_debug_summary()
+            if open_report:
+                open_trace_report()
 
         return exit_code
     except (SystemExit, RuntimeError) as e:

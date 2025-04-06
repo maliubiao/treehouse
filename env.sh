@@ -407,6 +407,10 @@ function naskgpt() {
   echo "已恢复原会话: $original_session"
 }
 
+function trace() {
+  $GPT_PYTHON_BIN $GPT_PATH/debugger/pdb_debugger.py --open-report $@
+}
+
 # 自动配置默认模型
 if [[ -z "$GPT_KEY" || -z "$GPT_BASE_URL" || -z "$GPT_MODEL" ]]; then
   [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试自动配置默认模型" >&2

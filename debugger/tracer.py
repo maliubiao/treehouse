@@ -3,6 +3,7 @@ import datetime
 import fnmatch
 import importlib.util
 import inspect
+import json
 import linecache
 import logging
 import os
@@ -310,20 +311,41 @@ class CallTreeHtmlRender:
 
     def __init__(self, trace_logic: "TraceLogic"):
         self.trace_logic = trace_logic
-        self._messages = []  # 用于收集所有消息
+        self._messages = []  # 存储(message, msg_type, log_data)三元组
+        self._executed_lines = {}  # 记录执行过的行
+        self._frame_executed_lines = {}
+        self._source_files = {}  # 存储源代码文件内容
         self._html_template = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <title>Python Trace Report</title>
     <link rel="stylesheet" href="../tracer_styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet" id="prism-theme">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.css" rel="stylesheet">
 </head>
 <body>
+    <div id="sourceDialog" class="source-dialog">
+        <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
+        <div class="close-overlay"></div>
+        <div class="source-header">
+            <div class="source-title" id="sourceTitle"></div>
+        </div>
+        <div class="source-content" id="sourceContent"></div>
+
+    </div>
     <h1>Python Trace Report</h1>
     <div class="summary">
         <p>Generated at: {generation_time}</p>
         <p>Total messages: {message_count}</p>
         <p>Errors: {error_count}</p>
+        <div class="theme-selector">
+            <label>Theme: </label>
+            <select id="themeSelector">
+                <!-- Options will be populated by JavaScript -->
+            </select>
+        </div>
     </div>
     <div id="controls">
         <input type="text" id="search" placeholder="Search messages...">
@@ -333,21 +355,38 @@ class CallTreeHtmlRender:
     </div>
     <div id="content">\n{content}\n</div>
     <script src="../tracer_scripts.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+    <script>
+        window.executedLines = {executed_lines_data};
+        window.sourceFiles = {source_files_data};
+    </script>
 </body>
 </html>"""
 
-    def _message_to_html(self, message, msg_type):
+    def _message_to_html(self, message, msg_type, log_data):
         """将消息转换为HTML片段"""
-
         content = message.lstrip()
         content = content.replace(" ", "&nbsp;")
         indent = len(message) - len(content)
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
         escaped_content = content
+
+        filename = log_data.get("data", {}).get("filename") if isinstance(log_data, dict) else None
+        line_number = log_data.get("data", {}).get("lineno") if isinstance(log_data, dict) else None
+        frame_id = log_data.get("data", {}).get("frame_id") if isinstance(log_data, dict) else None
+
         if msg_type == "call":
+            view_source = (
+                f'<span class="view-source-btn" onclick="showSource(\'{filename}\', {line_number}, {frame_id})">view source</span>'
+                if filename and line_number
+                else ""
+            )
             return (
                 f'<div class="foldable call" style="padding-left:{indent}px">\n'
-                f'    <span class="timestamp">[{timestamp}]</span> {escaped_content}\n'
+                f"    {escaped_content}{view_source}\n"
                 f"</div>\n"
                 f'<div class="call-group">\n'
             )
@@ -355,39 +394,85 @@ class CallTreeHtmlRender:
             return (
                 f"</div>\n"
                 f'<div class="return" style="padding-left:{indent}px">\n'
-                f'    <span class="timestamp">[{timestamp}]</span> {escaped_content}\n'
+                f"    {escaped_content}\n"
                 f"</div>\n"
             )
+
+        view_source = (
+            f'<span class="view-source-btn" onclick="showSource(\'{filename}\', {line_number}, {frame_id})">view source</span>'
+            if filename and line_number
+            else ""
+        )
         return (
             f'<div class="{msg_type}" style="padding-left:{indent}px">\n'
-            f'    <span class="timestamp">[{timestamp}]</span> {escaped_content}\n'
+            f"    {escaped_content}{view_source}\n"
             f"</div>\n"
         )
 
-    def add_message(self, message, msg_type):
+    def _load_source_file(self, filename):
+        """加载源代码文件内容"""
+        if filename in self._source_files:
+            return
+
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                self._source_files[filename] = f.read()
+        except Exception as e:
+            self._source_files[filename] = f"// Error loading source file: {str(e)}"
+
+    def add_message(self, message, msg_type, log_data=None):
         """添加消息到消息列表"""
-        self._messages.append((message, msg_type))
+        self._messages.append((message, msg_type, log_data))
+
+    def add_raw_message(self, log_data, color_type):
+        """添加原始日志数据并处理"""
+        if isinstance(log_data, str):
+            message = log_data
+        else:
+            message = log_data["template"].format(**log_data["data"])
+
+        if color_type == "line" and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
+            filename = log_data["data"].get("filename")
+            lineno = log_data["data"]["lineno"]
+            frame_id = log_data["data"].get("frame_id")
+            if filename and lineno:
+                if filename not in self._executed_lines:
+                    self._executed_lines[filename] = {}
+                if frame_id not in self._executed_lines[filename]:
+                    self._executed_lines[filename][frame_id] = []
+                if lineno not in self._executed_lines[filename][frame_id]:
+                    self._executed_lines[filename][frame_id].append(lineno)
+                self._load_source_file(filename)
+
+        self._messages.append((message, color_type, log_data))
 
     def generate_html(self):
         """生成完整的HTML报告"""
         html_content = []
-        for message, msg_type in self._messages:
-            html_content.append(self._message_to_html(message, msg_type))
+        for message, msg_type, log_data in self._messages:
+            html_content.append(self._message_to_html(message, msg_type, log_data))
 
-        error_count = sum(1 for _, t in self._messages if t == "error")
+        error_count = sum(1 for _, t, _ in self._messages if t == "error")
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        executed_lines_json = json.dumps(self._executed_lines)
+        source_files_json = json.dumps(self._source_files)
 
         return self._html_template.format(
             generation_time=generation_time,
             message_count=len(self._messages),
             error_count=error_count,
             content="".join(html_content),
+            executed_lines_data=executed_lines_json,
+            source_files_data=source_files_json,
         )
 
     def save_to_file(self, filename):
         """将HTML报告保存到文件"""
         html_content = self.generate_html()
-        with open(os.path.join(os.path.dirname(__file__), "logs", filename), "w", encoding="utf-8") as f:
+        log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, filename), "w", encoding="utf-8") as f:
             f.write(html_content)
 
 
@@ -410,9 +495,20 @@ class TraceLogic:
         self._trace_expressions = {}
         self._ast_cache = {}
         self._output_handlers = {"console": self._console_output, "file": self._file_output, "html": self._html_output}
-        self._active_outputs = set(["console", "html"])
+        self._active_outputs = set(["html"])
         self._log_file = None
         self._html_render = CallTreeHtmlRender(self)
+        self._log_data_cache = {}
+        self._current_frame_id = 0
+        self._frame_id_map = {}
+
+    def _get_frame_id(self, frame):
+        """获取当前帧ID"""
+        frame_key = id(frame)
+        if frame_key not in self._frame_id_map:
+            self._current_frame_id += 1
+            self._frame_id_map[frame_key] = self._current_frame_id
+        return self._frame_id_map[frame_key]
 
     def enable_output(self, output_type: str, **kwargs):
         """启用特定类型的输出"""
@@ -435,36 +531,44 @@ class TraceLogic:
                 self._log_file = None
         self._active_outputs.discard(output_type)
 
-    def _console_output(self, message, color_type):
+    def _console_output(self, log_data, color_type):
         """控制台输出处理"""
+        message = self._format_log_message(log_data)
         colored_msg = _color_wrap(message, color_type)
         print(colored_msg)
 
-    def _file_output(self, message, _):
+    def _file_output(self, log_data, _):
         """文件输出处理"""
         if self._log_file:
+            message = self._format_log_message(log_data)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             self._log_file.write(f"[{timestamp}] {message}\n")
             self._log_file.flush()
 
-    def _html_output(self, message, color_type):
+    def _html_output(self, log_data, color_type):
         """HTML输出处理"""
-        self._html_render.add_message(message, color_type)
+        self._html_render.add_raw_message(log_data, color_type)
 
-    def _add_to_buffer(self, message, color_type):
-        """将日志消息添加到队列并立即处理"""
-        self._log_queue.put((message, color_type))
+    def _format_log_message(self, log_data):
+        """格式化日志消息"""
+        if isinstance(log_data, str):
+            return log_data
+        return log_data["template"].format(**log_data["data"])
+
+    def _add_to_buffer(self, log_data, color_type):
+        """将日志数据添加到队列并立即处理"""
+        self._log_queue.put((log_data, color_type))
         if "html" in self._active_outputs:
-            self._html_render.add_message(message, color_type)
+            self._html_output(log_data, color_type)
 
     def _flush_buffer(self):
         """刷新队列，输出所有日志"""
         while not self._log_queue.empty():
             try:
-                message, color_type = self._log_queue.get_nowait()
+                log_data, color_type = self._log_queue.get_nowait()
                 for output_type in self._active_outputs:
                     if output_type in self._output_handlers:
-                        self._output_handlers[output_type](message, color_type)
+                        self._output_handlers[output_type](log_data, color_type)
             except queue.Empty:
                 break
 
@@ -530,14 +634,18 @@ class TraceLogic:
             self._ast_cache[expr] = (node, compiled)
             return node, compiled
         except (SyntaxError, ValueError) as e:
-            self._add_to_buffer(f"表达式解析失败: {expr}, 错误: {str(e)}", "error")
+            self._add_to_buffer(
+                {"template": "表达式解析失败: {expr}, 错误: {error}", "data": {"expr": expr, "error": str(e)}}, "error"
+            )
             raise
 
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
         if self.stack_depth >= _MAX_CALL_DEPTH:
-            msg = f"{_INDENT * self.stack_depth}⚠ MAX CALL DEPTH REACHED"
-            self._add_to_buffer(msg, "error")
+            self._add_to_buffer(
+                {"template": "{indent}⚠ MAX CALL DEPTH REACHED", "data": {"indent": _INDENT * self.stack_depth}},
+                "error",
+            )
             return
 
         try:
@@ -549,28 +657,52 @@ class TraceLogic:
                     args, _, _, values = inspect.getargvalues(frame)
                     args_info = [f"{arg}={_truncate_value(values[arg])}" for arg in args]
                 except (AttributeError, TypeError) as e:
-                    self._add_to_buffer(f"参数解析失败: {str(e)}", "error")
+                    self._add_to_buffer({"template": "参数解析失败: {error}", "data": {"error": str(e)}}, "error")
                     args_info.append("<参数解析错误>")
                 log_prefix = "CALL"
 
             filename = self._get_formatted_filename(frame.f_code.co_filename)
-            call_info = f"{log_prefix} {filename}:{frame.f_lineno} {frame.f_code.co_name}"
-            log_msg = f"{_INDENT*self.stack_depth}↘ {call_info}({', '.join(args_info)})"
-            self._add_to_buffer(log_msg, "call")
-            self._call_stack.append(frame.f_code.co_name)
+            frame_id = self._get_frame_id(frame)
+            self._add_to_buffer(
+                {
+                    "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}]",
+                    "data": {
+                        "indent": _INDENT * self.stack_depth,
+                        "prefix": log_prefix,
+                        "filename": filename,
+                        "lineno": frame.f_lineno,
+                        "func": frame.f_code.co_name,
+                        "args": ", ".join(args_info),
+                        "frame_id": frame_id,
+                    },
+                },
+                "call",
+            )
+            self._call_stack.append((frame.f_code.co_name, frame_id))
             self.stack_depth += 1
         except Exception as e:
             traceback.print_exc()
             logging.error("Call logging error: %s", str(e))
-            self._add_to_buffer(f"⚠ 记录调用时出错: {str(e)}", "error")
+            self._add_to_buffer({"template": "⚠ 记录调用时出错: {error}", "data": {"error": str(e)}}, "error")
 
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
         try:
             return_str = _truncate_value(return_value)
             filename = self._get_formatted_filename(frame.f_code.co_filename)
-            log_msg = f"{_INDENT*(self.stack_depth-1)}↗ RETURN {filename}() " f"→ {return_str}"
-            self._add_to_buffer(log_msg, "return")
+            frame_id = self._get_frame_id(frame)
+            self._add_to_buffer(
+                {
+                    "template": "{indent}↗ RETURN {filename}() → {return_value} [frame:{frame_id}]",
+                    "data": {
+                        "indent": _INDENT * (self.stack_depth - 1),
+                        "filename": filename,
+                        "return_value": return_str,
+                        "frame_id": frame_id,
+                    },
+                },
+                "return",
+            )
             self.stack_depth = max(0, self.stack_depth - 1)
             if self._call_stack:
                 self._call_stack.pop()
@@ -583,8 +715,20 @@ class TraceLogic:
         filename = frame.f_code.co_filename
         line = linecache.getline(filename, lineno).strip("\n")
         formatted_filename = self._get_formatted_filename(filename)
-        log_msg = f"{_INDENT*self.stack_depth}▷ {formatted_filename}:{lineno} {line}"
-        self._add_to_buffer(log_msg, "line")
+        frame_id = self._get_frame_id(frame)
+        self._add_to_buffer(
+            {
+                "template": "{indent}▷ {filename}:{lineno} {line} [frame:{frame_id}]",
+                "data": {
+                    "indent": _INDENT * self.stack_depth,
+                    "filename": formatted_filename,
+                    "lineno": lineno,
+                    "line": line,
+                    "frame_id": frame_id,
+                },
+            },
+            "line",
+        )
 
         self._process_trace_expression(frame, line, filename, lineno)
         if self.config.capture_vars:
@@ -605,22 +749,49 @@ class TraceLogic:
             _, compiled = self._compile_expr(active_expr)
             value = eval(compiled, globals_dict, locals_dict)
             formatted = _truncate_value(value)
-            trace_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE 表达式 {active_expr} -> {formatted}"
-            self._add_to_buffer(trace_msg, "trace")
+            self._add_to_buffer(
+                {
+                    "template": "{indent}↳ TRACE 表达式 {expr} -> {value} [frame:{frame_id}]",
+                    "data": {
+                        "indent": _INDENT * (self.stack_depth + 1),
+                        "expr": active_expr,
+                        "value": formatted,
+                        "frame_id": self._get_frame_id(frame),
+                    },
+                },
+                "trace",
+            )
             if expr and expr != cached_expr:
                 self._cache_trace_expression(filename, lineno, expr)
         except (NameError, SyntaxError, TypeError) as e:
-            error_msg = f"{_INDENT*(self.stack_depth+1)}↳ TRACE ERROR: {active_expr} → {str(e)}"
-            self._add_to_buffer(error_msg, "error")
+            self._add_to_buffer(
+                {
+                    "template": "{indent}↳ TRACE ERROR: {expr} → {error} [frame:{frame_id}]",
+                    "data": {
+                        "indent": _INDENT * (self.stack_depth + 1),
+                        "expr": active_expr,
+                        "error": str(e),
+                        "frame_id": self._get_frame_id(frame),
+                    },
+                },
+                "error",
+            )
 
     def _process_captured_vars(self, frame):
         """处理捕获的变量"""
         captured_vars = self.capture_variables(frame)
         if captured_vars:
-            var_msg = (
-                f"{_INDENT*(self.stack_depth+1)}↳ 变量: " f"{', '.join(f'{k}={v}' for k, v in captured_vars.items())}"
+            self._add_to_buffer(
+                {
+                    "template": "{indent}↳ 变量: {vars} [frame:{frame_id}]",
+                    "data": {
+                        "indent": _INDENT * (self.stack_depth + 1),
+                        "vars": ", ".join(f"{k}={v}" for k, v in captured_vars.items()),
+                        "frame_id": self._get_frame_id(frame),
+                    },
+                },
+                "var",
             )
-            self._add_to_buffer(var_msg, "var")
 
     def handle_exception(self, exc_type, exc_value, exc_traceback):
         """记录异常信息"""
@@ -628,10 +799,21 @@ class TraceLogic:
             frame = exc_traceback.tb_frame
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             lineno = exc_traceback.tb_lineno
-            exc_msg = (
-                f"{_INDENT*self.stack_depth}⚠ EXCEPTION {filename}:{lineno} " f"{exc_type.__name__}: {str(exc_value)}"
+            frame_id = self._get_frame_id(frame)
+            self._add_to_buffer(
+                {
+                    "template": "{indent}⚠ EXCEPTION {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
+                    "data": {
+                        "indent": _INDENT * self.stack_depth,
+                        "filename": filename,
+                        "lineno": lineno,
+                        "exc_type": exc_type.__name__,
+                        "exc_value": str(exc_value),
+                        "frame_id": frame_id,
+                    },
+                },
+                "error",
             )
-            self._add_to_buffer(exc_msg, "error")
 
             stack = traceback.extract_tb(exc_traceback)
             for i, frame_info in enumerate(stack):
@@ -639,7 +821,17 @@ class TraceLogic:
                     continue
                 filename = self._get_formatted_filename(frame_info.filename)
                 self._add_to_buffer(
-                    f"{_INDENT*(self.stack_depth+i)}↳ at {filename}:{frame_info.lineno} in {frame_info.name}", "error"
+                    {
+                        "template": "{indent}↳ at {filename}:{lineno} in {func} [frame:{frame_id}]",
+                        "data": {
+                            "indent": _INDENT * (self.stack_depth + i),
+                            "filename": filename,
+                            "lineno": frame_info.lineno,
+                            "func": frame_info.name,
+                            "frame_id": frame_id,
+                        },
+                    },
+                    "error",
                 )
 
     def capture_variables(self, frame):
@@ -659,7 +851,10 @@ class TraceLogic:
                     formatted = _truncate_value(value)
                     results[expr] = formatted
                 except (NameError, SyntaxError, TypeError) as e:
-                    self._add_to_buffer(f"表达式求值失败: {expr}, 错误: {str(e)}", "error")
+                    self._add_to_buffer(
+                        {"template": "表达式求值失败: {expr}, 错误: {error}", "data": {"expr": expr, "error": str(e)}},
+                        "error",
+                    )
                     results[expr] = f"<求值错误: {str(e)}>"
 
             if self.config.callback:
