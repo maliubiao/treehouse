@@ -1,38 +1,141 @@
+:root {
+    /* Light theme variables */
+    --bg-color: #f5f5f5;
+    --text-color: #333;
+    --card-bg: white;
+    --border-color: #ddd;
+    --shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    --highlight-bg: #fffacd;
+    --hover-darken: 10%;
+
+    /* Call types colors */
+    --call-color: #3498db;
+    --return-color: #2ecc71;
+    --line-color: #7f8c8d;
+    --trace-color: #e67e22;
+    --var-color: #9b59b6;
+    --error-color: #e74c3c;
+    --timestamp-color: #95a5a6;
+
+    /* Dialog colors */
+    --dialog-bg: white;
+    --dialog-border: #ccc;
+    --dialog-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    --close-btn-bg: #e74c3c;
+    --close-btn-hover: #c0392b;
+
+    /* Source viewer */
+    --linenumber-bg: #f8f8f8;
+    --executed-bg: rgba(255, 250, 205, 0.5);
+    --current-bg: rgba(255, 235, 153, 0.6);
+    --executed-border: gold;
+    --current-border: orange;
+
+    /* Scroll colors */
+    --scrollbar-thumb: #ccc;
+    --scrollbar-track: transparent;
+    --scrollbar-width: 8px;
+
+    /* Control elements */
+    --btn-bg: #3498db;
+    --btn-hover: #2980b9;
+}
+
+/* Dark theme variables */
+.dark-theme {
+    --bg-color: #1e1e1e;
+    --text-color: #d4d4d4;
+    --card-bg: #252526;
+    --border-color: #444;
+    --shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    --highlight-bg: #5c5c00;
+    --hover-darken: 5%;
+
+    /* Call types colors - dark theme */
+    --call-color: #4fc3f7;
+    --return-color: #81c784;
+    --line-color: #9e9e9e;
+    --trace-color: #ffb74d;
+    --var-color: #ba68c8;
+    --error-color: #f44336;
+    --timestamp-color: #95a5a6;
+
+    /* Dialog colors - dark theme */
+    --dialog-bg: #252526;
+    --dialog-border: #555;
+    --dialog-shadow: 0 0 20px rgba(0, 0, 0, 0.7);
+
+    /* Source viewer - dark theme */
+    --linenumber-bg: #2d2d2d;
+    --linenumber-text: #aaa;
+    --executed-bg: rgba(58, 58, 0, 0.5);
+    --current-bg: rgba(92, 92, 0, 0.6);
+    --executed-border: #b58900;
+    --current-border: #cb4b16;
+
+    /* Scroll colors - dark theme */
+    --scrollbar-thumb: #666;
+    --scrollbar-track: #333;
+
+    /* Control elements - dark theme */
+    --btn-bg: #0d47a1;
+    --btn-hover: #1565c0;
+}
+
+/* ===== Base Styles ===== */
 body {
     font-family: 'Menlo', 'Consolas', monospace;
     line-height: 1.6;
     margin: 0;
     padding: 20px;
-    background-color: #f5f5f5;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+}
+
+/* ===== Call Type Styles ===== */
+.call,
+.return,
+.line,
+.trace,
+.var,
+.error {
+    font-weight: normal;
 }
 
 .call {
-    color: #3498db;
+    color: var(--call-color);
     font-weight: bold;
 }
 
 .return {
-    color: #2ecc71;
+    color: var(--return-color);
     font-weight: bold;
 }
 
 .line {
-    color: #7f8c8d;
+    color: var(--line-color);
 }
 
 .trace {
-    color: #e67e22;
+    color: var(--trace-color);
 }
 
 .var {
-    color: #9b59b6;
+    color: var(--var-color);
 }
 
 .error {
-    color: #e74c3c;
+    color: var(--error-color);
     font-weight: bold;
 }
 
+.timestamp {
+    color: var(--timestamp-color);
+    font-size: 0.8em;
+    margin-right: 10px;
+}
+
+/* ===== Folding Functionality ===== */
 .foldable {
     cursor: pointer;
     position: relative;
@@ -44,6 +147,7 @@ body {
     content: '▶';
     position: absolute;
     left: 0;
+    color: var(--text-color);
 }
 
 .foldable.expanded::before {
@@ -56,55 +160,54 @@ body {
 
 .call-group {
     margin-left: 20px;
-    border-left: 1px dashed #ccc;
+    border-left: 1px dashed var(--border-color);
     padding-left: 10px;
+}
+
+/* ===== Controls and Search ===== */
+#controls {
+    margin: 10px 0;
+    padding: 10px;
+    background: var(--card-bg);
+    border-radius: 4px;
+    box-shadow: var(--shadow);
 }
 
 #search {
     margin: 10px;
     padding: 8px;
     width: 300px;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
-}
-
-#controls {
-    margin: 10px 0;
-    padding: 10px;
-    background: white;
-    border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    background-color: var(--card-bg);
+    color: var(--text-color);
 }
 
 button {
     padding: 8px 12px;
     margin-right: 5px;
-    background: #3498db;
+    background: var(--btn-bg);
     color: white;
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    transition: background-color 0.2s ease;
 }
 
 button:hover {
-    background: #2980b9;
+    background: var(--btn-hover);
 }
 
 .highlight {
-    background-color: #fffacd;
+    background-color: var(--highlight-bg);
 }
 
-.timestamp {
-    color: #95a5a6;
-    font-size: 0.8em;
-    margin-right: 10px;
-}
-
+/* ===== Main Content ===== */
 #content {
-    background: white;
+    background: var(--card-bg);
     padding: 15px;
     border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow);
 }
 
 .section {
@@ -112,13 +215,34 @@ button:hover {
 }
 
 .summary {
-    background: #f8f9fa;
+    background: var(--bg-color);
     padding: 10px;
     border-radius: 4px;
     margin-bottom: 15px;
 }
 
-/* Improved dialog styling to prevent scroll issues */
+/* ===== Theme Selector ===== */
+.theme-selector {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+}
+
+.theme-selector label {
+    margin-right: 10px;
+    font-weight: bold;
+}
+
+.theme-selector select {
+    padding: 6px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background-color: var(--card-bg);
+    color: var(--text-color);
+    min-width: 180px;
+}
+
+/* ===== Source Dialog ===== */
 .source-dialog {
     display: none;
     position: fixed;
@@ -127,9 +251,9 @@ button:hover {
     transform: translate(-50%, -50%);
     width: 80%;
     height: 80%;
-    background: white;
-    border: 1px solid #ccc;
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    background: var(--dialog-bg);
+    border: 1px solid var(--dialog-border);
+    box-shadow: var(--dialog-shadow);
     z-index: 1000;
     padding: 20px;
     border-radius: 8px;
@@ -148,26 +272,13 @@ button:hover {
     align-items: center;
     margin-bottom: 15px;
     padding-bottom: 10px;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
 }
 
 .source-title {
     font-weight: bold;
     font-size: 1.2em;
-}
-
-.close-btn {
-    cursor: pointer;
-    padding: 5px 10px;
-    background: #e74c3c;
-    color: white;
-    border: none;
-    border-radius: 3px;
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    z-index: 1001;
 }
 
 .source-content {
@@ -179,6 +290,7 @@ button:hover {
     overflow: auto;
 }
 
+/* Source container layout */
 .source-container {
     display: flex;
     height: 100%;
@@ -186,21 +298,23 @@ button:hover {
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 14px;
     border-radius: 4px;
-    border: 1px solid #eee;
+    border: 1px solid var(--border-color);
 }
 
+/* Line numbers column */
 .line-numbers {
     padding-right: 10px;
     text-align: right;
     user-select: none;
-    border-right: 1px solid #eee;
+    border-right: 1px solid var(--border-color);
     margin-right: 10px;
     min-width: 40px;
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 14px;
     line-height: 1.5;
-    background-color: #f8f8f8;
+    background-color: var(--linenumber-bg);
     overflow-y: hidden;
+    color: var(--linenumber-text, var(--text-color));
 }
 
 .line-number {
@@ -212,9 +326,10 @@ button:hover {
     box-sizing: border-box;
 }
 
+/* Code content area */
 .code-content {
     flex: 1;
-    overflow: auto; /* This is the scrollable area */
+    overflow: auto;
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 14px;
     line-height: 1.5;
@@ -231,31 +346,71 @@ button:hover {
     line-height: 1.5;
 }
 
-.executed-line {
-    background-color: #fffacd;
+/* Line highlighting */
+.executed-line-light {
+    background-color: var(--executed-bg);
+    border-left: 2px solid var(--executed-border);
 }
 
-.current-line {
-    background-color: #ffeb99;
+.current-line-light {
+    background-color: var(--current-bg);
+    border-left: 2px solid var(--current-border);
     font-weight: bold;
 }
 
+.executed-line-dark {
+    background-color: var(--executed-bg);
+    border-left: 2px solid var(--executed-border);
+}
+
+.current-line-dark {
+    background-color: var(--current-bg);
+    border-left: 2px solid var(--current-border);
+    font-weight: bold;
+}
+
+/* Simplified legacy classes for compatibility */
+.executed-line {
+    background-color: var(--executed-bg);
+    border-left: 2px solid var(--executed-border);
+}
+
+.current-line {
+    background-color: var(--current-bg);
+    border-left: 2px solid var(--current-border);
+    font-weight: bold;
+}
+
+/* Source view buttons */
 .view-source-btn {
     cursor: pointer;
-    color: #3498db;
+    color: var(--call-color);
     text-decoration: underline;
     margin-left: 10px;
     font-size: 0.8em;
 }
 
-/* Enhanced close button functionality */
+/* Enhanced close buttons */
+.close-btn {
+    cursor: pointer;
+    padding: 5px 10px;
+    background: var(--close-btn-bg);
+    color: white;
+    border: none;
+    border-radius: 3px;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1001;
+}
+
 .floating-close-btn {
     position: absolute;
     top: 10px;
     right: 10px;
     width: 36px;
     height: 36px;
-    background: #e74c3c;
+    background: var(--close-btn-bg);
     color: white;
     border-radius: 50%;
     display: flex;
@@ -266,15 +421,14 @@ button:hover {
     z-index: 1002;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
     user-select: none;
+    transition: background-color 0.2s, transform 0.2s;
 }
 
 .floating-close-btn:hover {
-    background: #c0392b;
+    background: var(--close-btn-hover);
     transform: scale(1.1);
-    transition: transform 0.2s ease;
 }
 
-/* Add an overlay for a larger click target */
 .close-overlay {
     position: absolute;
     top: 0;
@@ -286,11 +440,12 @@ button:hover {
     opacity: 0;
 }
 
-/* Ensure all event handlers respect the dialog boundaries */
+/* Ensure dialog elements capture events */
 .source-dialog * {
     pointer-events: auto;
 }
 
+/* ===== Syntax Highlighting Styles ===== */
 .source-content pre[class*="language-"] {
     margin: 0;
     padding: 0;
@@ -305,6 +460,7 @@ button:hover {
     line-height: 1.5;
 }
 
+/* Syntax token colors */
 .source-content .token.comment,
 .source-content .token.prolog,
 .source-content .token.doctype,
@@ -360,209 +516,28 @@ button:hover {
     color: #d16969;
 }
 
-.executed-line-light {
-    background-color: rgba(255, 250, 205, 0.5);
-    border-left: 2px solid gold;
-}
-
-.current-line-light {
-    background-color: rgba(255, 235, 153, 0.6);
-    border-left: 2px solid orange;
-    font-weight: bold;
-}
-
-.executed-line-dark {
-    background-color: rgba(58, 58, 0, 0.5);
-    border-left: 2px solid #b58900;
-}
-
-.current-line-dark {
-    background-color: rgba(92, 92, 0, 0.6);
-    border-left: 2px solid #cb4b16;
-    font-weight: bold;
-}
-
-.dark-theme {
-    background-color: #1e1e1e;
-    color: #d4d4d4;
-}
-
-.dark-theme #content,
-.dark-theme #controls,
-.dark-theme .summary {
-    background-color: #252526;
-    color: #d4d4d4;
-}
-
-.dark-theme .source-dialog {
-    background-color: #252526;
-    color: #d4d4d4;
-    border-color: #555;
-}
-
-.dark-theme .call {
-    color: #4fc3f7;
-}
-
-.dark-theme .return {
-    color: #81c784;
-}
-
-.dark-theme .line {
-    color: #9e9e9e;
-}
-
-.dark-theme .trace {
-    color: #ffb74d;
-}
-
-.dark-theme .var {
-    color: #ba68c8;
-}
-
-.dark-theme .error {
-    color: #f44336;
-}
-
-.dark-theme #search {
-    background-color: #333;
-    color: #d4d4d4;
-    border-color: #444;
-}
-
-.dark-theme button {
-    background-color: #0d47a1;
-}
-
-.dark-theme button:hover {
-    background-color: #1565c0;
-}
-
-.dark-theme .highlight {
-    background-color: #5c5c00;
-}
-
-.dark-theme .foldable::before {
-    color: #d4d4d4;
-}
-
-.dark-theme .call-group {
-    border-left-color: #444;
-}
-
-.dark-theme .source-content .token.punctuation,
-.dark-theme .source-content .token.operator,
-.dark-theme .source-content .token.entity,
-.dark-theme .source-content .token.url,
-.dark-theme .language-css .token.string,
-.dark-theme .style .token.string {
-    color: #d4d4d4;
-}
-
-.dark-theme .line-numbers {
-    background-color: #2d2d2d;
-    color: #aaa;
-    border-right-color: #444;
-}
-
-.theme-selector {
-    margin: 10px 0;
-    display: flex;
-    align-items: center;
-}
-
-.theme-selector label {
-    margin-right: 10px;
-    font-weight: bold;
-}
-
-.theme-selector select {
-    padding: 6px 8px;
-    border-radius: 4px;
-    border: 1px solid #ccc;
-    background-color: white;
-    min-width: 180px;
-}
-
-.dark-theme .theme-selector select {
-    background-color: #333;
-    color: #ddd;
-    border-color: #555;
-}
-
-/* Dark theme adjustments */
-.dark-theme .source-dialog {
-    background-color: #252526;
-    border-color: #444;
-}
-
-.dark-theme .source-header {
-    border-bottom-color: #444;
-}
-
-.dark-theme .source-container {
-    border-color: #444;
-}
-
-.dark-theme .line-numbers {
-    background-color: #2d2d2d;
-    border-right-color: #444;
-}
-
-/* Ensure scroll synchronization */
+/* ===== Scrollbar Styling ===== */
 .line-numbers::-webkit-scrollbar,
 .code-content::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
 }
 
 .line-numbers::-webkit-scrollbar-thumb,
 .code-content::-webkit-scrollbar-thumb {
-    background: #ccc;
+    background: var(--scrollbar-thumb);
     border-radius: 4px;
-}
-
-.dark-theme .line-numbers::-webkit-scrollbar-thumb,
-.dark-theme .code-content::-webkit-scrollbar-thumb {
-    background: #666;
 }
 
 .line-numbers::-webkit-scrollbar-track,
 .code-content::-webkit-scrollbar-track {
-    background: transparent;
+    background: var(--scrollbar-track);
+    border-radius: 4px;
 }
 
-/* Ensure scrollbars are visible and working properly */
-.code-content::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-}
-
-.code-content::-webkit-scrollbar-thumb {
-    background: #ccc;
-    border-radius: 5px;
-}
-
-.code-content::-webkit-scrollbar-track {
-    background: #f5f5f5;
-    border-radius: 5px;
-}
-
-.dark-theme .code-content::-webkit-scrollbar-thumb {
-    background: #666;
-}
-
-.dark-theme .code-content::-webkit-scrollbar-track {
-    background: #333;
-}
-
-/* Fix for line number synchronization */
-.line-numbers, .code-content {
+/* Firefox scrollbar compatibility */
+.line-numbers,
+.code-content {
     scrollbar-width: thin;
-    scrollbar-color: #ccc transparent;
-}
-
-.dark-theme .line-numbers, 
-.dark-theme .code-content {
-    scrollbar-color: #666 transparent;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
