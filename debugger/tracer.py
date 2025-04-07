@@ -1,6 +1,7 @@
 import ast
 import datetime
 import fnmatch
+import html
 import importlib.util
 import inspect
 import json
@@ -12,6 +13,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
@@ -23,8 +25,6 @@ _INDENT = "  "
 _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_NAME = _LOG_DIR / "debug.log"
-_MAX_LINE_REPEAT = 5
-_STACK_TRACK_INTERVAL = 0.1
 _MAX_CALL_DEPTH = 20
 _COLORS = {
     "call": "\033[92m",  # 绿色
@@ -193,29 +193,32 @@ class TraceConfig:
         return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
 
 
-MAX_ELEMENTS = 5
-
-
-def _truncate_value(value):
+def _truncate_value(value, keep_elements=5):
     """智能截断保留关键类型信息"""
     try:
+        # Ignore function, module, and class types
+        if inspect.isfunction(value) or inspect.ismodule(value) or inspect.isclass(value):
+            return f"{type(value).__name__}(...)"
+
         if isinstance(value, (list, tuple)):
-            elements = list(value)[:MAX_ELEMENTS]
-            preview = (
-                f"{type(value).__name__}({elements}...)"
-                if len(value) > MAX_ELEMENTS
-                else f"{type(value).__name__}({value})"
-            )
+            if len(value) <= keep_elements:
+                return repr(value)
+            else:
+                elements = list(value)[:keep_elements]
+                return f"{type(value).__name__}({elements}...)"
         elif isinstance(value, dict):
-            keys = list(value.keys())[:MAX_ELEMENTS]
-            preview = f"dict(keys={keys}...)" if len(value) > 3 else f"dict({value})"
+            if len(value) <= keep_elements:
+                return repr(value)
+            else:
+                keys = list(value.keys())[:keep_elements]
+                return f"dict(keys={keys}...)"
         elif hasattr(value, "__dict__"):
-            attrs = list(vars(value).keys())[:MAX_ELEMENTS]
+            attrs = list(vars(value).keys())[:keep_elements]
             preview = f"{type(value).__name__}({attrs}...)"
         else:
             preview = repr(value)
     except (AttributeError, TypeError, ValueError):
-        preview = "<unrepresentable>"
+        preview = "..."
 
     if len(preview) > _MAX_VALUE_LENGTH:
         return preview[:_MAX_VALUE_LENGTH] + "..."
@@ -273,7 +276,7 @@ class TraceDispatcher:
             return self._handle_exception_event(frame, arg)
         return None
 
-    def _handle_call_event(self, frame, arg):
+    def _handle_call_event(self, frame, arg=None):
         """处理函数调用事件"""
         if self.is_target_frame(frame):
             self._active_frames.add(frame)
@@ -287,7 +290,7 @@ class TraceDispatcher:
             self._active_frames.discard(frame)
         return self.trace_dispatch
 
-    def _handle_line_event(self, frame, arg):
+    def _handle_line_event(self, frame, arg=None):
         """处理行号事件"""
         if frame in self._active_frames:
             self._logic.handle_line(frame)
@@ -368,6 +371,7 @@ class CallTreeHtmlRender:
     <script>
         window.executedLines = {executed_lines_data};
         window.sourceFiles = {source_files_data};
+        window.commentsData = {comments_data};
     </script>
 </body>
 </html>"""
@@ -378,20 +382,19 @@ class CallTreeHtmlRender:
         content = content.replace(" ", "&nbsp;")
         indent = len(message) - len(content)
         escaped_content = content
+        data = log_data.get("data", {}) if isinstance(log_data, dict) else {}
+        filename = data.get("filename")
+        line_number = data.get("lineno")
+        frame_id = data.get("frame_id")
+        comment = data.get("comment")
 
-        filename = log_data.get("data", {}).get("filename") if isinstance(log_data, dict) else None
-        line_number = log_data.get("data", {}).get("lineno") if isinstance(log_data, dict) else None
-        frame_id = log_data.get("data", {}).get("frame_id") if isinstance(log_data, dict) else None
+        comment_html = self._build_comment_html(comment) if comment else ""
+        view_source_html = self._build_view_source_html(filename, line_number, frame_id)
 
         if msg_type == "call":
-            view_source = (
-                f'<span class="view-source-btn" onclick="showSource(\'{filename}\', {line_number}, {frame_id})">view source</span>'
-                if filename and line_number
-                else ""
-            )
             return (
                 f'<div class="foldable call" style="padding-left:{indent}px">\n'
-                f"    {escaped_content}{view_source}\n"
+                f"    {escaped_content}{view_source_html}{comment_html}\n"
                 f"</div>\n"
                 f'<div class="call-group">\n'
             )
@@ -399,19 +402,41 @@ class CallTreeHtmlRender:
             return (
                 f"</div>\n"
                 f'<div class="return" style="padding-left:{indent}px">\n'
-                f"    {escaped_content}\n"
+                f"    {escaped_content}{comment_html}\n"
                 f"</div>\n"
             )
 
-        view_source = (
-            f'<span class="view-source-btn" onclick="showSource(\'{filename}\', {line_number}, {frame_id})">view source</span>'
-            if filename and line_number
-            else ""
-        )
         return (
             f'<div class="{msg_type}" style="padding-left:{indent}px">\n'
-            f"    {escaped_content}{view_source}\n"
+            f"    {escaped_content}{view_source_html}{comment_html}\n"
             f"</div>\n"
+        )
+
+    def _build_comment_html(self, comment):
+        """构建评论HTML片段"""
+        is_long = len(comment) > 64
+        short_comment = comment[:64] + "..." if is_long else comment
+        comment_id = f"comment_{uuid.uuid4().hex}"
+
+        short_comment = html.escape(short_comment)
+        full_comment = html.escape(comment)
+
+        return (
+            f'<span class="comment" id="{comment_id}" '
+            f"onclick=\"event.stopPropagation(); toggleCommentExpand('{comment_id}', event)\">"
+            f'<span class="comment-preview">{short_comment}</span>'
+            f'<span class="comment-full">{full_comment}</span>'
+            f"</span>"
+        )
+
+    def _build_view_source_html(self, filename, line_number, frame_id):
+        """构建查看源代码按钮HTML片段"""
+        if not filename or not line_number:
+            return ""
+        return (
+            f'<span class="view-source-btn" '
+            f"onclick=\"showSource('{filename}', {line_number}, {frame_id})\">"
+            f"view source</span>"
         )
 
     def _load_source_file(self, filename):
@@ -422,7 +447,7 @@ class CallTreeHtmlRender:
         try:
             with open(filename, "r", encoding="utf-8") as f:
                 self._source_files[filename] = f.read()
-        except Exception as e:
+        except (IOError, OSError) as e:
             self._source_files[filename] = f"// Error loading source file: {str(e)}"
 
     def add_message(self, message, msg_type, log_data=None):
@@ -435,7 +460,6 @@ class CallTreeHtmlRender:
             message = log_data
         else:
             message = log_data["template"].format(**log_data["data"])
-
         if color_type == "line" and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
             filename = log_data["data"].get("filename")
             lineno = log_data["data"]["lineno"]
@@ -454,6 +478,7 @@ class CallTreeHtmlRender:
     def generate_html(self):
         """生成完整的HTML报告"""
         html_content = []
+        comments_data = {}
         for message, msg_type, log_data in self._messages:
             html_content.append(self._message_to_html(message, msg_type, log_data))
 
@@ -462,6 +487,7 @@ class CallTreeHtmlRender:
 
         executed_lines_json = json.dumps(self._executed_lines)
         source_files_json = json.dumps(self._source_files)
+        comments_json = json.dumps(comments_data)
 
         return self._html_template.format(
             generation_time=generation_time,
@@ -470,6 +496,7 @@ class CallTreeHtmlRender:
             content="".join(html_content),
             executed_lines_data=executed_lines_json,
             source_files_data=source_files_json,
+            comments_data=comments_json,
         )
 
     def save_to_file(self, filename):
@@ -506,6 +533,7 @@ class TraceLogic:
         self._log_data_cache = {}
         self._current_frame_id = 0
         self._frame_id_map = {}
+        self._frame_locals_map = {}
 
     def _get_frame_id(self, frame):
         """获取当前帧ID"""
@@ -563,8 +591,6 @@ class TraceLogic:
     def _add_to_buffer(self, log_data, color_type):
         """将日志数据添加到队列并立即处理"""
         self._log_queue.put((log_data, color_type))
-        if "html" in self._active_outputs:
-            self._html_output(log_data, color_type)
 
     def _flush_buffer(self):
         """刷新队列，输出所有日志"""
@@ -652,7 +678,6 @@ class TraceLogic:
                 "error",
             )
             return
-
         try:
             args_info = []
             if frame.f_code.co_name == "<module>":
@@ -668,6 +693,7 @@ class TraceLogic:
 
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
+            self._frame_locals_map[frame_id] = frame.f_locals
             self._add_to_buffer(
                 {
                     "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}]",
@@ -696,6 +722,9 @@ class TraceLogic:
             return_str = _truncate_value(return_value)
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
+            comment = self.get_locals_change(frame_id, frame)
+            if frame_id in self._frame_locals_map:
+                del self._frame_locals_map[frame_id]
             self._add_to_buffer(
                 {
                     "template": "{indent}↗ RETURN {filename}() → {return_value} [frame:{frame_id}]",
@@ -704,6 +733,7 @@ class TraceLogic:
                         "filename": filename,
                         "return_value": return_str,
                         "frame_id": frame_id,
+                        "comment": comment,
                     },
                 },
                 "return",
@@ -714,6 +744,18 @@ class TraceLogic:
         except KeyError:
             pass
 
+    def get_locals_change(self, frame_id, frame):
+        old_locals = self._frame_locals_map[frame_id]
+        change_array = []
+        text_list = []
+        for var_name, value in frame.f_locals.items():
+            if value != old_locals.get(var_name):
+                change_array.append((var_name, value))
+                text_list.append("%s=%s" % (var_name, _truncate_value(value, keep_elements=10)))
+        self._frame_locals_map[frame_id] = frame.f_locals.copy()
+        comment = "".join(text_list)
+        return comment
+
     def handle_line(self, frame):
         """基础行号跟踪"""
         lineno = frame.f_lineno
@@ -721,15 +763,17 @@ class TraceLogic:
         line = linecache.getline(filename, lineno).strip("\n")
         formatted_filename = self._get_formatted_filename(filename)
         frame_id = self._get_frame_id(frame)
+        comment = self.get_locals_change(frame_id, frame)
         self._add_to_buffer(
             {
-                "template": "{indent}▷ {filename}:{lineno} {line} [frame:{frame_id}]",
+                "template": "{indent}▷ {filename}:{lineno} {line}",
                 "data": {
                     "indent": _INDENT * self.stack_depth,
                     "filename": formatted_filename,
                     "lineno": lineno,
                     "line": line,
                     "frame_id": frame_id,
+                    "comment": comment,
                 },
             },
             "line",
@@ -896,6 +940,21 @@ class TraceLogic:
             self._html_render.save_to_file("trace_report.html")
 
 
+def get_tracer(module_path, config: TraceConfig):
+    tracer_core_path = os.path.join(os.path.dirname(__file__), "tracer_core.so")
+    if os.path.exists(tracer_core_path):
+        try:
+            spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)
+            tracer_core = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(tracer_core)
+            TraceDispatcher = tracer_core.TraceDispatcher
+            return TraceDispatcher(str(module_path), TraceLogic(config), config)
+        except Exception as e:
+            logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
+            print(_color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", "error"))
+            raise
+
+
 def start_trace(module_path, config: TraceConfig):
     """启动调试跟踪会话
 
@@ -904,19 +963,8 @@ def start_trace(module_path, config: TraceConfig):
         config: 跟踪配置实例
         immediate_trace: 是否立即开始跟踪
     """
-    tracer_core_path = os.path.join(os.path.dirname(__file__), "tracer_core.so")
-    if os.path.exists(tracer_core_path):
-        try:
-            spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)
-            tracer_core = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(tracer_core)
-            TraceDispatcher = tracer_core.TraceDispatcher
-            tracer = TraceDispatcher(str(module_path), TraceLogic(config), config)
-        except Exception as e:
-            logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
-            print(_color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", "error"))
-            raise
-    else:
+    tracer = get_tracer(module_path, config)
+    if not tracer:
         tracer = TraceDispatcher(str(module_path), config)
     try:
         tracer.start()

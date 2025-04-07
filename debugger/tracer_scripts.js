@@ -46,6 +46,7 @@ const TraceViewer = {
         this.initThemes();
         this.initSourceDialog();
         this.initKeyboardShortcuts();
+        this.initCommentToggle();
     },
 
     // Initialize folding functionality
@@ -246,6 +247,43 @@ const TraceViewer = {
         }
     },
 
+    // Initialize comment toggle functionality
+    initCommentToggle() {
+        const content = this.elements.content;
+        
+        // 使用事件委托模式，但增加更精确的判断
+        content.addEventListener('click', e => {
+            // 检查是否点击了评论或其子元素
+            let target = e.target;
+            let isComment = target.classList.contains('comment') || 
+                             target.classList.contains('comment-preview') ||
+                             target.classList.contains('comment-full') ||
+                             target.closest('.comment');
+            
+            if (!isComment) return;
+            
+            // 找到评论根元素
+            const commentElement = target.classList.contains('comment') ? 
+                                  target : target.closest('.comment');
+            
+            if (!commentElement) return;
+            
+            // 阻止事件冒泡
+            e.stopPropagation();
+            e.preventDefault();
+            
+            // 切换展开状态
+            commentElement.classList.toggle('expanded');
+            
+            // 如果展开，滚动到可见区域
+            if (commentElement.classList.contains('expanded')) {
+                setTimeout(() => {
+                    commentElement.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+                }, 10);
+            }
+        });
+    },
+
     // Source code viewer functionality
     sourceViewer: {
         // Get executed lines for a specific frame
@@ -253,7 +291,11 @@ const TraceViewer = {
             if (!window.executedLines || !window.executedLines[filename] || !window.executedLines[filename][frameId]) {
                 return null;
             }
-            const lines = window.executedLines[filename][frameId];
+            
+            const rawLines = window.executedLines[filename][frameId];
+            // Extract just the line numbers from the [lineno, comment] pairs
+            const lines = rawLines.map(pair => Array.isArray(pair) ? pair[0] : pair);
+            
             return {
                 min: Math.min(...lines),
                 max: Math.max(...lines),
@@ -474,4 +516,24 @@ function showSource(filename, lineNumber, frameId) {
 
 function getFrameLines(filename, frameId) {
     return TraceViewer.sourceViewer.getFrameLines(filename, frameId);
+}
+
+// 全局函数
+function toggleCommentExpand(commentId, event) {
+    if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+    }
+    
+    const commentEl = document.getElementById(commentId);
+    if (commentEl) {
+        commentEl.classList.toggle('expanded');
+        
+        // 如果展开，滚动到可见区域
+        if (commentEl.classList.contains('expanded')) {
+            setTimeout(() => {
+                commentEl.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+            }, 10);
+        }
+    }
 }

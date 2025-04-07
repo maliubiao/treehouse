@@ -39,6 +39,10 @@
     /* Control elements */
     --btn-bg: #3498db;
     --btn-hover: #2980b9;
+
+    /* New comment colors */
+    --comment-color: #6a9955;
+    --comment-hover: #4d7b3a;
 }
 
 /* Dark theme variables */
@@ -484,4 +488,76 @@ button:hover {
 .code-content {
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* New comment styles - improved */
+.comment {
+    color: var(--comment-color);
+    margin-left: 10px;
+    font-style: italic;
+    cursor: pointer;
+    display: inline-block; /* Ensure it stays as a block */
+    padding: 2px 4px;
+    border-radius: 3px;
+    background-color: rgba(106, 153, 85, 0.1);
+    transition: all 0.2s ease;
+    user-select: none;
+    position: relative; /* 添加定位上下文 */
+    max-width: 500px; /* 限制宽度 */
+    vertical-align: middle;
+}
+
+.comment:hover {
+    color: var(--comment-hover);
+    background-color: rgba(106, 153, 85, 0.2);
+}
+
+.comment::before {
+    content: "💬 ";
+    opacity: 0.7;
+}
+
+.comment-preview {
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    vertical-align: middle;
+}
+
+.comment-full {
+    display: none;
+    white-space: pre-wrap; /* Handle line breaks properly */
+    word-break: break-word; /* Prevent overflow for long unbroken text */
+}
+
+.comment.expanded {
+    display: block;
+    max-width: 100%;
+    background-color: rgba(106, 153, 85, 0.15);
+    padding: 4px 6px;
+    margin-top: 5px;
+    margin-bottom: 5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.comment.expanded .comment-preview {
+    display: none !important;
+}
+
+.comment.expanded .comment-full {
+    display: block !important;
+}
+
+/* 确保黑暗主题下评论可见 */
+.dark-theme .comment {
+    background-color: rgba(106, 153, 85, 0.2);
+    color: #9fca82;
+}
+
+.dark-theme .comment:hover,
+.dark-theme .comment.expanded {
+    background-color: rgba(106, 153, 85, 0.3);
+    color: #b5e6a1;
 }
