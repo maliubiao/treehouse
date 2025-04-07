@@ -1962,7 +1962,7 @@ def _process_symbol_data(symbol_data: dict, symbol_name: str) -> dict:
     location = symbol_data["location"]
     if not symbol_name:
         if "/" not in symbol_data["name"]:
-            symbol_name = f"{symbol_data["file_path"]}/{symbol_data["name"]}"
+            symbol_name = "%s/%s" % (symbol_data["file_path"], symbol_data["name"])
         else:
             symbol_name = symbol_data["name"]
     return {

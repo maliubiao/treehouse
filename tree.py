@@ -922,7 +922,7 @@ class GoLangSpec(LangSpec):
         if not method_name or not type_node:
             return None
 
-        return f"{type_node.text.decode("utf8")}.{method_name}"
+        return "%s.%s" % (type_node.text.decode("utf8"), method_name)
 
     @staticmethod
     def get_go_function_name(node):
@@ -2994,7 +2994,7 @@ async def location_to_symbol(
                     if symbol["name"] in symbols_filter:
                         continue
                     symbols_filter.add(symbol["name"])
-                    logger.info(f"检查同文件符号{symbol["file_path"]}.{symbol["name"]}的调用")
+                    logger.info("检查同文件符号%s.%s的调用" % (symbol["file_path"], symbol["name"]))
                     calls.extend([(level + 1, call) for call in symbol["calls"]])
             collected_symbols.extend(symbols)
         except (ConnectionError, TimeoutError, RuntimeError) as e:

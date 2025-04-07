@@ -60,7 +60,8 @@ endif()
 add_compile_options(-fvisibility=hidden)
 
 # Find dependencies with proper component specifications
-find_package(Python 3.12.6 REQUIRED COMPONENTS Interpreter Development Development.Module)
+find_package(Python 3.11.11 REQUIRED COMPONENTS Interpreter Development Development.Module)
+#find_package(Python 3.11.11 EXACT REQUIRED COMPONENTS Interpreter Development Development.Module)
 
 # Configure pybind11 with updated policies
 cmake_policy(SET CMP0135 NEW)  # Handle FetchContent timestamp policy

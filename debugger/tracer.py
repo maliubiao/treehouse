@@ -268,11 +268,11 @@ class TraceDispatcher:
         """事件分发器"""
         if event == "call":
             return self._handle_call_event(frame, arg)
-        if event == "return":
+        elif event == "return":
             return self._handle_return_event(frame, arg)
-        if event == "line":
+        elif event == "line":
             return self._handle_line_event(frame, arg)
-        if event == "exception":
+        elif event == "exception":
             return self._handle_exception_event(frame, arg)
         return None
 
@@ -678,6 +678,7 @@ class TraceLogic:
                 "error",
             )
             return
+        frame.f_trace_opcodes = True
         try:
             args_info = []
             if frame.f_code.co_name == "<module>":
@@ -782,6 +783,9 @@ class TraceLogic:
         self._process_trace_expression(frame, line, filename, lineno)
         if self.config.capture_vars:
             self._process_captured_vars(frame)
+
+    def handle_opcode(self, frame, name, value):
+        print("store local", name, value)
 
     def _process_trace_expression(self, frame, line, filename, lineno):
         """处理追踪表达式"""
@@ -959,7 +963,7 @@ def start_trace(module_path, config: TraceConfig):
     """启动调试跟踪会话
 
     Args:
-        module_path: 目标模块路径
+        module_path: d目标模块路径
         config: 跟踪配置实例
         immediate_trace: 是否立即开始跟踪
     """

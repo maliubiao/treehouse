@@ -2,66 +2,77 @@
 以较快的速度过滤掉不关心的代码文件，有用的再交给python层处理
 */
 #include <Python.h>
+#include <bytesobject.h>
 #include <ceval.h>
+#include <cpython/code.h>
+#include <cstdint>
 #include <cstdio>
-#include <opcode.h>
 #include <filesystem>
 #include <mutex>
 #include <object.h>
+#include <opcode.h>
 #include <pyframe.h>
 #include <pythonrun.h>
 #include <pytypedefs.h>
 #include <stdexcept>
 #include <string>
+#include <tupleobject.h>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
 
 /*
-python include里没有这个结构体的定义，下边的是非公开结构体， 可能随着版本不同而不同
-这个结构是从python 3.12版本源代码那里copy过来的
+python include里没有这个结构体的定义，下边的是非公开结构体，
+可能随着版本不同而不同 这个结构是从python 3.11版本源代码那里copy过来的
 不同的版本如果结构不同，访问指针可能会崩，需要适配
+用这个结构主要为了实现损耗比较小的变量trace, bytecode级别, 工作在native层
 */
 struct internal_frame {
-    PyObject_HEAD
-    PyFrameObject *f_back;      /* previous frame, or NULL */
-    struct _PyInterpreterFrame *f_frame; /* points to the frame data */
-    PyObject *f_trace;          /* Trace function */
-    int f_lineno;               /* Current line number. Only valid if non-zero */
-    char f_trace_lines;         /* Emit per-line trace events? */
-    char f_trace_opcodes;       /* Emit per-opcode trace events? */
-    char f_fast_as_locals;      /* Have the fast locals of this frame been converted to a dict? */
-    /* The frame data, if this frame object owns the frame */
-    PyObject *_f_frame_data[1];
+  PyObject_HEAD PyFrameObject *f_back; /* previous frame, or NULL */
+  struct _PyInterpreterFrame *f_frame; /* points to the frame data */
+  PyObject *f_trace;                   /* Trace function */
+  int f_lineno;          /* Current line number. Only valid if non-zero */
+  char f_trace_lines;    /* Emit per-line trace events? */
+  char f_trace_opcodes;  /* Emit per-opcode trace events? */
+  char f_fast_as_locals; /* Have the fast locals of this frame been converted to
+                            a dict? */
+  /* The frame data, if this frame object owns the frame */
+  PyObject *_f_frame_data[1];
+};
+
+struct CodeUnit {
+  uint8_t code;
+  uint8_t arg;
 };
 
 typedef struct _PyInterpreterFrame {
-    PyCodeObject *f_code; /* Strong reference */
-    struct _PyInterpreterFrame *previous;
-    PyObject *f_funcobj; /* Strong reference. Only valid if not on C stack */
-    PyObject *f_globals; /* Borrowed reference. Only valid if not on C stack */
-    PyObject *f_builtins; /* Borrowed reference. Only valid if not on C stack */
-    PyObject *f_locals; /* Strong reference, may be NULL. Only valid if not on C stack */
-    PyFrameObject *frame_obj; /* Strong reference, may be NULL. Only valid if not on C stack */
-    // NOTE: This is not necessarily the last instruction started in the given
-    // frame. Rather, it is the code unit *prior to* the *next* instruction. For
-    // example, it may be an inline CACHE entry, an instruction we just jumped
-    // over, or (in the case of a newly-created frame) a totally invalid value:
-    _Py_CODEUNIT *prev_instr;
-    int stacktop;  /* Offset of TOS from localsplus  */
-    /* The return_offset determines where a `RETURN` should go in the caller,
-     * relative to `prev_instr`.
-     * It is only meaningful to the callee,
-     * so it needs to be set in any CALL (to a Python function)
-     * or SEND (to a coroutine or generator).
-     * If there is no callee, then it is meaningless. */
-    uint16_t return_offset;
-    char owner;
-    /* Locals and stack */
-    PyObject *localsplus[1];
+  PyCodeObject *f_code; /* Strong reference */
+  struct _PyInterpreterFrame *previous;
+  PyObject *f_funcobj;  /* Strong reference. Only valid if not on C stack */
+  PyObject *f_globals;  /* Borrowed reference. Only valid if not on C stack */
+  PyObject *f_builtins; /* Borrowed reference. Only valid if not on C stack */
+  PyObject *f_locals;   /* Strong reference, may be NULL. Only valid if not on C
+                           stack */
+  PyFrameObject *frame_obj; /* Strong reference, may be NULL. Only valid if not
+                               on C stack */
+  // NOTE: This is not necessarily the last instruction started in the given
+  // frame. Rather, it is the code unit *prior to* the *next* instruction. For
+  // example, it may be an inline CACHE entry, an instruction we just jumped
+  // over, or (in the case of a newly-created frame) a totally invalid value:
+  struct CodeUnit *prev_instr;
+  int stacktop; /* Offset of TOS from localsplus  */
+  /* The return_offset determines where a `RETURN` should go in the caller,
+   * relative to `prev_instr`.
+   * It is only meaningful to the callee,
+   * so it needs to be set in any CALL (to a Python function)
+   * or SEND (to a coroutine or generator).
+   * If there is no callee, then it is meaningless. */
+  uint16_t return_offset;
+  char owner;
+  /* Locals and stack */
+  PyObject *localsplus[1];
 } internal_frame_PyInterpreterFrame;
-
 
 class TraceDispatcher {
 private:
@@ -89,10 +100,10 @@ private:
       std::lock_guard<std::mutex> lock(cache_mutex);
       auto it = path_cache.find(filename_str);
       if (it != path_cache.end()) {
-        bool matched =  it->second;
+        bool matched = it->second;
         struct internal_frame *frame_internal = (struct internal_frame *)frame;
-        if(!matched) {
-            frame_internal->f_trace_lines = 0;
+        if (!matched) {
+          frame_internal->f_trace_lines = 0;
         }
         return matched;
       }
@@ -100,7 +111,7 @@ private:
 
     try {
       PyObject *result = PyObject_CallMethod(config, "match_filename", "s",
-        filename_str.c_str());
+                                             filename_str.c_str());
       if (result == NULL) {
         return false;
       }
@@ -112,7 +123,7 @@ private:
         path_cache[filename_str] = matched;
       }
       struct internal_frame *frame_internal = (struct internal_frame *)frame;
-      if(!matched) {
+      if (!matched) {
         frame_internal->f_trace_lines = 0;
       }
       return matched;
@@ -165,19 +176,36 @@ public:
 
   int handle_opcode_event(PyFrameObject *frame, PyObject *arg) {
     {
-        int last_opcode = PyFrame_GetLasti(frame);
-        if(last_opcode == STORE_FAST) {
-            struct internal_frame *frame_internal = (struct internal_frame *)frame;
-            internal_frame_PyInterpreterFrame *frame_interpreter =
-                (internal_frame_PyInterpreterFrame *)frame_internal->f_frame;
-            PyObject **sp = frame_interpreter->localsplus + frame_interpreter->stacktop;
-            PyObject *stack_top_element = sp[-1];
-            if (PyObject_Print(stack_top_element, stdout, 0) != 0) {
-                PyErr_Clear();
-                printf("<%s object at %p>",
-                        Py_TYPE(stack_top_element)->tp_name, (void *)(stack_top_element));
-            }
+      int lasti = PyFrame_GetLasti(frame);
+      PyCodeObject *code = PyFrame_GetCode(frame);
+
+      struct internal_frame *frame_internal = (struct internal_frame *)frame;
+      internal_frame_PyInterpreterFrame *frame_interpreter =
+          (internal_frame_PyInterpreterFrame *)frame_internal->f_frame;
+      uint8_t last_opcode = frame_interpreter->prev_instr->code;
+      PyObject *var_name = PyTuple_GET_ITEM(code->co_localsplusnames,
+                                            frame_interpreter->prev_instr->arg);
+      Py_DECREF(code);
+      // access the co_code
+    //   printf("\nopcode: %d, oparg: %d, lasti: %d\n", last_opcode,
+    //          frame_interpreter->prev_instr->arg, lasti);
+      if (last_opcode == STORE_FAST) {
+        PyObject **sp =
+        frame_interpreter->localsplus + frame_interpreter->stacktop;
+        PyObject *stack_top_element = sp[-1];
+        Py_INCREF(var_name);
+        Py_INCREF(stack_top_element);
+        PyObject *ret = PyObject_CallMethod(trace_logic, "handle_opcode", "OOO",
+                                            (PyObject *)frame, var_name, stack_top_element);
+        Py_DECREF(var_name);
+        Py_DECREF(stack_top_element);
+        if (ret != NULL) {
+          Py_DECREF(ret);
+        } else {
+          PyErr_Print();
+          PyErr_Clear();
         }
+      }
     }
     return 0;
   }
@@ -245,9 +273,8 @@ public:
                                &traceback)) {
           return -1;
         }
-        PyObject *ret =
-            PyObject_CallMethod(trace_logic, "handle_exception", "OOO", type,
-                                value, traceback);
+        PyObject *ret = PyObject_CallMethod(trace_logic, "handle_exception",
+                                            "OOO", type, value, traceback);
         if (ret != NULL) {
           Py_DECREF(ret);
         } else {
@@ -260,8 +287,7 @@ public:
   }
 
   void start() {
-    PyEval_SetTraceAllThreads(&trace_dispatch_thunk,
-                              reinterpret_cast<PyObject *>(this));
+    PyEval_SetTrace(&trace_dispatch_thunk, reinterpret_cast<PyObject *>(this));
     PyObject *ret = PyObject_CallMethod(trace_logic, "start", nullptr);
     if (ret != NULL) {
       Py_DECREF(ret);
@@ -269,7 +295,7 @@ public:
   }
 
   void stop() {
-    PyEval_SetTraceAllThreads(nullptr, nullptr);
+    PyEval_SetTrace(nullptr, nullptr);
     PyObject *ret = PyObject_CallMethod(trace_logic, "stop", nullptr);
     if (ret != NULL) {
       Py_DECREF(ret);
