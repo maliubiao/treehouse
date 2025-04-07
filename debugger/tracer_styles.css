@@ -26,7 +26,7 @@
 
     /* Source viewer */
     --linenumber-bg: #f8f8f8;
-    --executed-bg: rgba(255, 250, 205, 0.5);
+    --executed-bg: rgba(243, 222, 34, 0.5);
     --current-bg: rgba(255, 235, 153, 0.6);
     --executed-border: gold;
     --current-border: orange;
@@ -458,62 +458,6 @@ button:hover {
     font-family: 'Menlo', 'Consolas', monospace;
     white-space: pre;
     line-height: 1.5;
-}
-
-/* Syntax token colors */
-.source-content .token.comment,
-.source-content .token.prolog,
-.source-content .token.doctype,
-.source-content .token.cdata {
-    color: #6a9955;
-}
-
-.source-content .token.punctuation {
-    color: #d4d4d4;
-}
-
-.source-content .token.property,
-.source-content .token.tag,
-.source-content .token.boolean,
-.source-content .token.number,
-.source-content .token.constant,
-.source-content .token.symbol,
-.source-content .token.deleted {
-    color: #b5cea8;
-}
-
-.source-content .token.selector,
-.source-content .token.attr-name,
-.source-content .token.string,
-.source-content .token.char,
-.source-content .token.builtin,
-.source-content .token.inserted {
-    color: #ce9178;
-}
-
-.source-content .token.operator,
-.source-content .token.entity,
-.source-content .token.url,
-.source-content .language-css .token.string,
-.source-content .style .token.string {
-    color: #d4d4d4;
-}
-
-.source-content .token.atrule,
-.source-content .token.attr-value,
-.source-content .token.keyword {
-    color: #569cd6;
-}
-
-.source-content .token.function,
-.source-content .token.class-name {
-    color: #dcdcaa;
-}
-
-.source-content .token.regex,
-.source-content .token.important,
-.source-content .token.variable {
-    color: #d16969;
 }
 
 /* ===== Scrollbar Styling ===== */

@@ -243,14 +243,19 @@ class TraceDispatcher:
         """精确匹配目标模块路径"""
         try:
             if not frame or not frame.f_code or not frame.f_code.co_filename:
+                frame.f_trace_lines = False
                 return False
 
             result = self.path_cache.get(frame.f_code.co_filename, None)
             if result is not None:
+                if result is False:
+                    frame.f_trace_lines = False
                 return result
             frame_path = Path(frame.f_code.co_filename).resolve()
             matched = self.config.match_filename(str(frame_path))
             self.path_cache[frame.f_code.co_filename] = matched
+            if not matched:
+                frame.f_trace_lines = False
             return matched
         except (AttributeError, ValueError, OSError) as e:
             logging.debug("Frame check error: %s", str(e))

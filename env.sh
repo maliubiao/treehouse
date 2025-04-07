@@ -408,7 +408,7 @@ function naskgpt() {
 }
 
 function trace() {
-  $GPT_PYTHON_BIN $GPT_PATH/debugger/pdb_debugger.py --open-report $@
+  $GPT_PYTHON_BIN $GPT_PATH/debugger/tracer_main.py --open-report $@
 }
 
 # 自动配置默认模型

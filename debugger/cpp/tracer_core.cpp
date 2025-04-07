@@ -2,6 +2,7 @@
 以较快的速度过滤掉不关心的代码文件，有用的再交给python层处理
 */
 #include <Python.h>
+#include <ceval.h>
 #include <cpython/code.h>
 #include <filesystem>
 #include <mutex>
@@ -14,6 +15,24 @@
 #include <unordered_set>
 
 namespace fs = std::filesystem;
+
+/*
+python include里没有这个结构体的定义， 可能随着版本不同而不同
+这个结构是从python 3.12版本源代码那里copy过来的
+不同的版本如果结构不同，访问指针可能会崩，需要适配
+*/
+struct internal_frame {
+    PyObject_HEAD
+    PyFrameObject *f_back;      /* previous frame, or NULL */
+    struct _PyInterpreterFrame *f_frame; /* points to the frame data */
+    PyObject *f_trace;          /* Trace function */
+    int f_lineno;               /* Current line number. Only valid if non-zero */
+    char f_trace_lines;         /* Emit per-line trace events? */
+    char f_trace_opcodes;       /* Emit per-opcode trace events? */
+    char f_fast_as_locals;      /* Have the fast locals of this frame been converted to a dict? */
+    /* The frame data, if this frame object owns the frame */
+    PyObject *_f_frame_data[1];
+};
 
 class TraceDispatcher {
 private:
@@ -41,7 +60,12 @@ private:
       std::lock_guard<std::mutex> lock(cache_mutex);
       auto it = path_cache.find(filename_str);
       if (it != path_cache.end()) {
-        return it->second;
+        bool matched =  it->second;
+        if(!matched) {
+            struct internal_frame *frame_internal = (struct internal_frame *)frame;
+            frame_internal->f_trace_lines = 0;
+        }
+        return matched;
       }
     }
 
@@ -57,6 +81,10 @@ private:
       {
         std::lock_guard<std::mutex> lock(cache_mutex);
         path_cache[filename_str] = matched;
+      }
+      if(!matched) {
+        struct internal_frame *frame_internal = (struct internal_frame *)frame;
+        frame_internal->f_trace_lines = 0;
       }
       return matched;
     } catch (...) {
