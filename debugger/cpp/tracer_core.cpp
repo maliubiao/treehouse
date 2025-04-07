@@ -186,6 +186,7 @@ public:
       PyObject *var_name = PyTuple_GET_ITEM(code->co_localsplusnames,
                                             frame_interpreter->prev_instr->arg);
       Py_DECREF(code);
+      
       // access the co_code
     //   printf("\nopcode: %d, oparg: %d, lasti: %d\n", last_opcode,
     //          frame_interpreter->prev_instr->arg, lasti);
@@ -193,6 +194,9 @@ public:
         PyObject **sp =
         frame_interpreter->localsplus + frame_interpreter->stacktop;
         PyObject *stack_top_element = sp[-1];
+        if(var_name == NULL || stack_top_element == NULL) {
+          return 0;
+        }
         Py_INCREF(var_name);
         Py_INCREF(stack_top_element);
         PyObject *ret = PyObject_CallMethod(trace_logic, "handle_opcode", "OOO",
@@ -202,6 +206,7 @@ public:
         if (ret != NULL) {
           Py_DECREF(ret);
         } else {
+          printf("Error in handle_opcode_event\n");
           PyErr_Print();
           PyErr_Clear();
         }
@@ -221,6 +226,7 @@ public:
       if (ret != NULL) {
         Py_DECREF(ret);
       } else {
+        printf("Error in handle_call_event\n");
         PyErr_Print();
         PyErr_Clear();
       }
@@ -232,12 +238,15 @@ public:
     {
       std::lock_guard<std::mutex> lock(cache_mutex);
       if (active_frames.find(frame) != active_frames.end()) {
-
+        if(arg == NULL) {
+            arg = Py_None;
+        }
         PyObject *ret = PyObject_CallMethod(trace_logic, "handle_return", "OO",
                                             (PyObject *)frame, arg);
         if (ret != NULL) {
           Py_DECREF(ret);
         } else {
+          printf("Error in handle_return_event\n");
           PyErr_Print();
           PyErr_Clear();
         }
@@ -256,6 +265,7 @@ public:
         if (ret != NULL) {
           Py_DECREF(ret);
         } else {
+          printf("Error in handle_line_event\n");
           PyErr_Print();
           PyErr_Clear();
         }
@@ -278,6 +288,7 @@ public:
         if (ret != NULL) {
           Py_DECREF(ret);
         } else {
+          printf("Error in handle_exception_event\n");
           PyErr_Print();
           PyErr_Clear();
         }

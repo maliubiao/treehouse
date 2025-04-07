@@ -746,16 +746,7 @@ class TraceLogic:
             pass
 
     def get_locals_change(self, frame_id, frame):
-        old_locals = self._frame_locals_map[frame_id]
-        change_array = []
-        text_list = []
-        for var_name, value in frame.f_locals.items():
-            if value != old_locals.get(var_name):
-                change_array.append((var_name, value))
-                text_list.append("%s=%s" % (var_name, _truncate_value(value, keep_elements=10)))
-        self._frame_locals_map[frame_id] = frame.f_locals.copy()
-        comment = "".join(text_list)
-        return comment
+        return ""
 
     def handle_line(self, frame):
         """基础行号跟踪"""
