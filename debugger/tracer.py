@@ -321,11 +321,11 @@ class CallTreeHtmlRender:
     def __init__(self, trace_logic: "TraceLogic"):
         self.trace_logic = trace_logic
         self._messages = []  # 存储(message, msg_type, log_data)三元组
-        self._executed_lines = {}  # 记录执行过的行
-        self._frame_executed_lines = {}
+        self._executed_lines = defaultdict(lambda: defaultdict(set))  # 使用集合避免重复记录
+        self._frame_executed_lines = defaultdict(lambda: defaultdict(set))
         self._source_files = {}  # 存储源代码文件内容
-        self._stack_variables = {}
-        self._comments_data = {}
+        self._stack_variables = {}  # 键改为元组(frame_id, filename, lineno)
+        self._comments_data = defaultdict(lambda: defaultdict(list))
         self._html_template = """<!DOCTYPE html>
 <html>
 <head>
@@ -381,101 +381,95 @@ class CallTreeHtmlRender:
 
     def _get_nested_dict_value(self, data_dict, filename, frame_id=None):
         """获取嵌套字典中的值"""
-        if filename not in data_dict:
+        try:
+            return data_dict[filename] if frame_id is None else data_dict[filename][frame_id]
+        except KeyError:
             return None
-        if frame_id is None:
-            return data_dict[filename]
-        if frame_id not in data_dict[filename]:
-            return None
-        return data_dict[filename][frame_id]
 
     def _set_nested_dict_value(self, data_dict, filename, value, frame_id=None):
         """设置嵌套字典中的值"""
-        if filename not in data_dict:
-            data_dict[filename] = {} if frame_id is not None else value
         if frame_id is not None:
-            if frame_id not in data_dict[filename]:
-                data_dict[filename][frame_id] = []
-            if value not in data_dict[filename][frame_id]:
-                data_dict[filename][frame_id].append(value)
+            data_dict[filename][frame_id].add(value)
+        else:
+            data_dict[filename] = value
 
     def format_stack_variables(self, variables):
         if not variables:
             return ""
         text = []
+        seen = set()
         for var_name, value in variables:
-            item = "%s=%s" % (var_name, _truncate_value(value))
-            if item not in text:
+            item = f"{var_name}={_truncate_value(value)}"
+            if item not in seen:
+                seen.add(item)
                 text.append(item)
         return " ".join(text)
 
     def _message_to_html(self, message, msg_type, log_data):
         """将消息转换为HTML片段"""
-        content = message.lstrip()
-        content = content.replace(" ", "&nbsp;")
-        indent = len(message) - len(content)
-        escaped_content = content
+        stripped_message = message.lstrip()
+        indent = len(message) - len(stripped_message)
+        escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
+
         data = log_data.get("data", {}) if isinstance(log_data, dict) else {}
         original_filename = data.get("original_filename")
         line_number = data.get("lineno")
         frame_id = data.get("frame_id")
         comment = ""
+
         if frame_id and original_filename and line_number is not None:
-            key = "%s:%s:%d" % (frame_id, original_filename, line_number)
+            key = (frame_id, original_filename, line_number)
             variables = self._stack_variables.get(key, [])
             comment = self.format_stack_variables(variables)
-            self._set_nested_dict_value(self._comments_data, original_filename, comment, frame_id)
+            if comment:
+                self._comments_data[original_filename][frame_id].append(comment)
 
         comment_html = self._build_comment_html(comment) if comment else ""
         view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
 
+        html_parts = []
         if msg_type == "call":
-            return (
-                f'<div class="foldable call" style="padding-left:{indent}px">\n'
-                f"    {escaped_content}{view_source_html}{comment_html}\n"
-                f"</div>\n"
-                f'<div class="call-group">\n'
+            html_parts.extend(
+                [
+                    f'<div class="foldable call" style="padding-left:{indent}px">',
+                    f"    {escaped_content}{view_source_html}{comment_html}",
+                    "</div>",
+                    '<div class="call-group">',
+                ]
             )
-        if msg_type == "return":
-            return (
-                f"</div>\n"
-                f'<div class="return" style="padding-left:{indent}px">\n'
-                f"    {escaped_content}{comment_html}\n"
-                f"</div>\n"
+        elif msg_type == "return":
+            html_parts.extend(
+                [
+                    "</div>",
+                    f'<div class="return" style="padding-left:{indent}px">',
+                    f"    {escaped_content}{comment_html}",
+                    "</div>",
+                ]
             )
-
-        return (
-            f'<div class="{msg_type}" style="padding-left:{indent}px">\n'
-            f"    {escaped_content}{view_source_html}{comment_html}\n"
-            f"</div>\n"
-        )
+        else:
+            html_parts.extend(
+                [
+                    f'<div class="{msg_type}" style="padding-left:{indent}px">',
+                    f"    {escaped_content}{view_source_html}{comment_html}",
+                    "</div>",
+                ]
+            )
+        return "\n".join(html_parts) + "\n"
 
     def _build_comment_html(self, comment):
         """构建评论HTML片段"""
         is_long = len(comment) > 64
         short_comment = comment[:64] + "..." if is_long else comment
         comment_id = f"comment_{uuid.uuid4().hex}"
-
-        short_comment = html.escape(short_comment)
-        full_comment = html.escape(comment)
-
-        return (
-            f'<span class="comment" id="{comment_id}" '
-            f"onclick=\"event.stopPropagation(); toggleCommentExpand('{comment_id}', event)\">"
-            f'<span class="comment-preview">{short_comment}</span>'
-            f'<span class="comment-full">{full_comment}</span>'
-            f"</span>"
-        )
+        short_comment_escaped = html.escape(short_comment)
+        full_comment_escaped = html.escape(comment)
+        return f'<span class="comment" id="{comment_id}" onclick="event.stopPropagation(); toggleCommentExpand(\'{comment_id}\', event)"><span class="comment-preview">{short_comment_escaped}</span><span class="comment-full">{full_comment_escaped}</span></span>'
 
     def _build_view_source_html(self, filename, line_number, frame_id):
         """构建查看源代码按钮HTML片段"""
         if not filename or not line_number:
             return ""
-        return (
-            f'<span class="view-source-btn" '
-            f"onclick=\"showSource('{filename}', {line_number}, {frame_id})\">"
-            f"view source</span>"
-        )
+        return f'<span class="view-source-btn" onclick="showSource(\'{filename}\', {line_number}, {frame_id})">view source</span>'
 
     def _load_source_file(self, filename):
         """加载源代码文件内容"""
@@ -496,8 +490,9 @@ class CallTreeHtmlRender:
     def add_stack_variable_create(self, frame_id, filename, lineno, var_name, value):
         if lineno is None:
             return
-        key = "%s:%s:%d" % (frame_id, filename, lineno)
-        self._stack_variables[key] = self._stack_variables.get(key, [])
+        key = (frame_id, filename, lineno)
+        if key not in self._stack_variables:
+            self._stack_variables[key] = []
         self._stack_variables[key].append((var_name, value))
 
     def add_raw_message(self, log_data, color_type):
@@ -505,27 +500,34 @@ class CallTreeHtmlRender:
         if isinstance(log_data, str):
             message = log_data
         else:
+            # 预缓存格式化结果避免重复格式化
             message = log_data["template"].format(**log_data["data"])
+
         if color_type == "line" and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
-            original_filename = log_data["data"].get("original_filename")
-            lineno = log_data["data"]["lineno"]
-            frame_id = log_data["data"].get("frame_id")
+            data = log_data["data"]
+            original_filename = data.get("original_filename")
+            lineno = data["lineno"]
+            frame_id = data.get("frame_id")
             if original_filename and lineno:
-                self._set_nested_dict_value(self._executed_lines, original_filename, lineno, frame_id)
+                self._executed_lines[original_filename][frame_id].add(lineno)
                 self._load_source_file(original_filename)
 
         self._messages.append((message, color_type, log_data))
 
     def generate_html(self):
         """生成完整的HTML报告"""
-        html_content = []
-        for message, msg_type, log_data in self._messages:
-            html_content.append(self._message_to_html(message, msg_type, log_data))
+        buffer = []
+        error_count = 0
 
-        error_count = sum(1 for _, t, _ in self._messages if t == "error")
+        for message, msg_type, log_data in self._messages:
+            buffer.append(self._message_to_html(message, msg_type, log_data))
+            if msg_type == "error":
+                error_count += 1
+
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         executed_lines_json = json.dumps(self._executed_lines)
+
         source_files_json = json.dumps(self._source_files)
         comments_json = json.dumps(self._comments_data)
 
@@ -533,7 +535,7 @@ class CallTreeHtmlRender:
             generation_time=generation_time,
             message_count=len(self._messages),
             error_count=error_count,
-            content="".join(html_content),
+            content="".join(buffer),
             executed_lines_data=executed_lines_json,
             source_files_data=source_files_json,
             comments_data=comments_json,
