@@ -103,11 +103,11 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         if not argv:
             print(
                 _color_wrap(
-                    "用法: python -m debugger.pdb_debugger [调试选项] <目标脚本> [脚本参数]\n"
+                    "用法: python -m debugger.tracer_main [调试选项] <目标脚本> [脚本参数]\n"
                     "调试选项:\n"
                     "  --watch-files=PATTERNS  逗号分隔的文件模式列表\n"
                     "  --open-report          调试完成后自动打开HTML报告\n"
-                    "示例: python -m debugger.pdb_debugger --watch-files=src/*.py,utils/* main.py --verbose --open-report",
+                    "示例: python -m debugger.tracer_main --watch-files=src/*.py,utils/* main.py --verbose --open-report",
                     "error",
                 )
             )
@@ -129,8 +129,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         print(_color_wrap("📝 调试功能说明:", "line"))
         print(_color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
         print(_color_wrap("  ✓ 自动跳过标准库和第三方库", "call"))
-        print(_color_wrap("  ✓ 变量变化检测 (截断长度: 100字符)", "var"))
-        print(_color_wrap("  ✓ 循环控制: 同一行最多记录3次", "line"))
+        print(_color_wrap("  ✓ 变量变化检测", "var"))
         print(_color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
         print(_color_wrap("  ✓ 自动在主程序入口设置断点 (if __name__ == '__main__')", "call"))
         print(_color_wrap(f"\n📂 调试日志路径: {Path(__file__).parent/'logs/debug.log'}\n", "line"))
@@ -138,6 +137,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         original_argv = sys.argv.copy()
         exit_code = 0
 
+        tracer = None
         try:
             # 创建匹配当前调试目标的TraceConfig
             target_patterns = args["watch_files"] or [f"*{target.stem}.py"]

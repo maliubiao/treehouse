@@ -132,9 +132,8 @@ patchgpt ..MyClass.. 根据说明，写完这个这测试套件
   - 浏览器扩展集成支持, 绕过cloudflare干扰
   - 自动内容提取与格式转换
 - **Obsidian支持**： markdown保存历史查询到指定目录
-- **代理支持**：完善的HTTP代理配置检测
 - **多个模型切换**： 用配置文件在本机ollama 14b,32b小模型, 远程r1全量模型之间切换
-- **流式响应**：实时显示API响应内容, 推理思考内容的输出
+- **高级调试功能**: 支持对python的代码的行级追踪，将局部变量的变化，输出到tracing日志
 
 
 ## 代码生成
@@ -369,6 +368,27 @@ $GPT_PYTHON_BIN $GPT_PATH/tree.py --port 9060;
 export GPT_SYMBOL_API_URL=http://127.0.0.1:9060/;
 #给askgpt @symbol_.... 这些符号查询使用的符号服务地址
 ```
+
+
+### 高级调试器
+支持对python程序进行bytecode级别的line trace, 输出执行了哪一行，变量的改变，而且性能足够好，不至于卡住
+#### 编译
+```bash
+#python 3.11.11  uv python pin {version}, 最好3.11.11，因为cpp会访问python虚拟机内部数据，版本不对会崩
+cd terminal-llm; source .venv/bin/activate
+cd debugger/cpp
+#编译不成功，到下边qq群交流, 如果文档内容不能复现，请到群里反馈
+cmake ../ -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON #or
+cmake ../ -DCMAKE_BUILD_TYPE=Release
+#在terminal-llm/debugger/tracer_core.so
+```
+#### 使用
+```bash
+#改path后再用, --watch-files=是glob匹配，通配符, --open-report是结束打开网页
+python ~/code/terminal-llm/debugger/tracer_main.py --watch-files="*query.py" --open-report test_llm_query.py
+```
+
+<img src="doc/debugger-preview.png" width = "600" alt="line tracer" align=center />
 
 ### 提示词模板
 
