@@ -382,7 +382,9 @@ class CallTreeHtmlRender:
             return ""
         text = []
         for var_name, value in variables:
-            text.append("%s=%s" % (var_name, _truncate_value(value)))
+            item = "%s=%s" % (var_name, _truncate_value(value))
+            if item not in text:
+                text.append(item)
         return " ".join(text)
 
     def _message_to_html(self, message, msg_type, log_data):
@@ -469,6 +471,8 @@ class CallTreeHtmlRender:
         self._messages.append((message, msg_type, log_data))
 
     def add_stack_variable_create(self, frame_id, filename, lineno, var_name, value):
+        if lineno is None:
+            return
         key = "%s:%s:%d" % (frame_id, filename, lineno)
         self._stack_variables[key] = self._stack_variables.get(key, [])
         self._stack_variables[key].append((var_name, value))
