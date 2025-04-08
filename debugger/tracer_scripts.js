@@ -315,8 +315,17 @@ const TraceViewer = {
                 dialog.style.display = 'block';
                 return;
             }
-
-            const text = window.sourceFiles[filename];
+            // Get source code, decode if it's Base64-encoded
+            let text = window.sourceFiles[filename];
+        
+            // Attempt to decode Base64 with UTF-8 support
+            const raw = atob(text);
+            const bytes = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) {
+                bytes[i] = raw.charCodeAt(i);
+            }
+            text = new TextDecoder('utf-8').decode(bytes);
+            
             const lines = text.split('\n');
             const frameLines = frameId ? this.getFrameLines(filename, frameId) : null;
 

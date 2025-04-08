@@ -1,4 +1,5 @@
 import ast
+import base64
 import datetime
 import fnmatch
 import html
@@ -363,12 +364,12 @@ class CallTreeHtmlRender:
         <button id="exportBtn">Export as HTML</button>
     </div>
     <div id="content">\n{content}\n</div>
-    <script src="../tracer_scripts.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+    <script src="../tracer_scripts.js"></script>
     <script>
         window.executedLines = {executed_lines_data};
         window.sourceFiles = {source_files_data};
@@ -394,7 +395,6 @@ class CallTreeHtmlRender:
         indent = len(message) - len(content)
         escaped_content = content
         data = log_data.get("data", {}) if isinstance(log_data, dict) else {}
-        filename = data.get("filename")
         original_filename = data.get("original_filename")
         line_number = data.get("lineno")
         frame_id = data.get("frame_id")
@@ -405,7 +405,7 @@ class CallTreeHtmlRender:
             comment = self.format_stack_variables(variables)
 
         comment_html = self._build_comment_html(comment) if comment else ""
-        view_source_html = self._build_view_source_html(filename, line_number, frame_id)
+        view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
 
         if msg_type == "call":
             return (
@@ -461,8 +461,10 @@ class CallTreeHtmlRender:
             return
 
         try:
-            with open(filename, "r", encoding="utf-8") as f:
-                self._source_files[filename] = f.read()
+            with open(filename, "rb") as f:
+                # Convert bytes to base64 and then to string for JavaScript to read
+                content = base64.b64encode(f.read()).decode("utf-8")
+                self._source_files[filename] = content
         except (IOError, OSError) as e:
             self._source_files[filename] = f"// Error loading source file: {str(e)}"
 
@@ -485,6 +487,7 @@ class CallTreeHtmlRender:
             message = log_data["template"].format(**log_data["data"])
         if color_type == "line" and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
             filename = log_data["data"].get("filename")
+            original_filename = log_data["data"].get("original_filename")
             lineno = log_data["data"]["lineno"]
             frame_id = log_data["data"].get("frame_id")
             if filename and lineno:
@@ -494,7 +497,7 @@ class CallTreeHtmlRender:
                     self._executed_lines[filename][frame_id] = []
                 if lineno not in self._executed_lines[filename][frame_id]:
                     self._executed_lines[filename][frame_id].append(lineno)
-                self._load_source_file(filename)
+                self._load_source_file(original_filename)
 
         self._messages.append((message, color_type, log_data))
 
