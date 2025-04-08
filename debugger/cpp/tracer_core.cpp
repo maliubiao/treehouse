@@ -179,14 +179,30 @@ public:
     internal_frame_PyInterpreterFrame *frame_interpreter =
         (internal_frame_PyInterpreterFrame *)frame_internal->f_frame;
     uint8_t last_opcode = frame_interpreter->prev_instr->code;
-    PyObject *var_name = PyTuple_GET_ITEM(code->co_localsplusnames,
-                                          frame_interpreter->prev_instr->arg);
+    PyObject *var_name = NULL;
+    ///虚构机执行细节，参考Python/generated_cases.c.h, 或者dis模块的stack 操作说明
+    if (last_opcode == STORE_GLOBAL || last_opcode == STORE_NAME ||
+        last_opcode == STORE_ATTR) {
+      var_name =
+          PyTuple_GET_ITEM(code->co_names, frame_interpreter->prev_instr->arg);
+    } else if (last_opcode == STORE_FAST) {
+      var_name = PyTuple_GET_ITEM(code->co_localsplusnames,
+                                  frame_interpreter->prev_instr->arg);
+    } else if(last_opcode == STORE_SUBSCR) {
+        PyObject **sp =
+        frame_interpreter->localsplus + frame_interpreter->stacktop;
+        var_name = sp[-1];
+    }
     Py_DECREF(code);
-
-    if (last_opcode == STORE_FAST) {
+    if (var_name != NULL) {
       PyObject **sp =
           frame_interpreter->localsplus + frame_interpreter->stacktop;
       PyObject *stack_top_element = sp[-1];
+      if (last_opcode == STORE_ATTR) {
+        stack_top_element = sp[-2];
+      } else if(last_opcode == STORE_SUBSCR) {
+        stack_top_element = sp[-3];
+      }
       if (var_name == NULL || stack_top_element == NULL) {
         return 0;
       }

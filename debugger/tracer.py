@@ -424,6 +424,7 @@ class CallTreeHtmlRender:
             key = "%s:%s:%d" % (frame_id, original_filename, line_number)
             variables = self._stack_variables.get(key, [])
             comment = self.format_stack_variables(variables)
+            self._set_nested_dict_value(self._comments_data, original_filename, comment, frame_id)
 
         comment_html = self._build_comment_html(comment) if comment else ""
         view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
@@ -506,7 +507,6 @@ class CallTreeHtmlRender:
         else:
             message = log_data["template"].format(**log_data["data"])
         if color_type == "line" and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
-            filename = log_data["data"].get("filename")
             original_filename = log_data["data"].get("original_filename")
             lineno = log_data["data"]["lineno"]
             frame_id = log_data["data"].get("frame_id")
