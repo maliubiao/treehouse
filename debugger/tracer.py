@@ -490,13 +490,13 @@ class CallTreeHtmlRender:
             original_filename = log_data["data"].get("original_filename")
             lineno = log_data["data"]["lineno"]
             frame_id = log_data["data"].get("frame_id")
-            if filename and lineno:
-                if filename not in self._executed_lines:
-                    self._executed_lines[filename] = {}
-                if frame_id not in self._executed_lines[filename]:
-                    self._executed_lines[filename][frame_id] = []
-                if lineno not in self._executed_lines[filename][frame_id]:
-                    self._executed_lines[filename][frame_id].append(lineno)
+            if original_filename and lineno:
+                if original_filename not in self._executed_lines:
+                    self._executed_lines[original_filename] = {}
+                if frame_id not in self._executed_lines[original_filename]:
+                    self._executed_lines[original_filename][frame_id] = []
+                if lineno not in self._executed_lines[original_filename][frame_id]:
+                    self._executed_lines[original_filename][frame_id].append(lineno)
                 self._load_source_file(original_filename)
 
         self._messages.append((message, color_type, log_data))

@@ -291,11 +291,9 @@ const TraceViewer = {
             if (!window.executedLines || !window.executedLines[filename] || !window.executedLines[filename][frameId]) {
                 return null;
             }
-            
             const rawLines = window.executedLines[filename][frameId];
             // Extract just the line numbers from the [lineno, comment] pairs
             const lines = rawLines.map(pair => Array.isArray(pair) ? pair[0] : pair);
-            
             return {
                 min: Math.min(...lines),
                 max: Math.max(...lines),
