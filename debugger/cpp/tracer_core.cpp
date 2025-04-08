@@ -83,6 +83,8 @@ private:
   PyObject *config;
   std::mutex cache_mutex;
 
+  void print_stack_trace() { PyErr_PrintEx(1); }
+
   bool is_target_frame(PyFrameObject *frame) {
     if (!frame)
       return false;
@@ -109,28 +111,23 @@ private:
       }
     }
 
-    try {
-      PyObject *result = PyObject_CallMethod(config, "match_filename", "s",
-                                             filename_str.c_str());
-      if (result == NULL) {
-        return false;
-      }
-      bool matched = PyObject_IsTrue(result);
-      Py_DECREF(result);
-
-      {
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        path_cache[filename_str] = matched;
-      }
-      struct internal_frame *frame_internal = (struct internal_frame *)frame;
-      if (!matched) {
-        frame_internal->f_trace_lines = 0;
-      }
-      return matched;
-    } catch (...) {
-      PyErr_Clear();
+    PyObject *result = PyObject_CallMethod(config, "match_filename", "s",
+                                           filename_str.c_str());
+    if (result == NULL) {
       return false;
     }
+    bool matched = PyObject_IsTrue(result);
+    Py_DECREF(result);
+
+    {
+      std::lock_guard<std::mutex> lock(cache_mutex);
+      path_cache[filename_str] = matched;
+    }
+    struct internal_frame *frame_internal = (struct internal_frame *)frame;
+    if (!matched) {
+      frame_internal->f_trace_lines = 0;
+    }
+    return matched;
   }
 
 public:
@@ -175,41 +172,35 @@ public:
   }
 
   int handle_opcode_event(PyFrameObject *frame, PyObject *arg) {
-    {
-      int lasti = PyFrame_GetLasti(frame);
-      PyCodeObject *code = PyFrame_GetCode(frame);
+    int lasti = PyFrame_GetLasti(frame);
+    PyCodeObject *code = PyFrame_GetCode(frame);
 
-      struct internal_frame *frame_internal = (struct internal_frame *)frame;
-      internal_frame_PyInterpreterFrame *frame_interpreter =
-          (internal_frame_PyInterpreterFrame *)frame_internal->f_frame;
-      uint8_t last_opcode = frame_interpreter->prev_instr->code;
-      PyObject *var_name = PyTuple_GET_ITEM(code->co_localsplusnames,
-                                            frame_interpreter->prev_instr->arg);
-      Py_DECREF(code);
-      
-      // access the co_code
-    //   printf("\nopcode: %d, oparg: %d, lasti: %d\n", last_opcode,
-    //          frame_interpreter->prev_instr->arg, lasti);
-      if (last_opcode == STORE_FAST) {
-        PyObject **sp =
-        frame_interpreter->localsplus + frame_interpreter->stacktop;
-        PyObject *stack_top_element = sp[-1];
-        if(var_name == NULL || stack_top_element == NULL) {
-          return 0;
-        }
-        Py_INCREF(var_name);
-        Py_INCREF(stack_top_element);
-        PyObject *ret = PyObject_CallMethod(trace_logic, "handle_opcode", "OOO",
-                                            (PyObject *)frame, var_name, stack_top_element);
-        Py_DECREF(var_name);
-        Py_DECREF(stack_top_element);
-        if (ret != NULL) {
-          Py_DECREF(ret);
-        } else {
-          printf("Error in handle_opcode_event\n");
-          PyErr_Print();
-          PyErr_Clear();
-        }
+    struct internal_frame *frame_internal = (struct internal_frame *)frame;
+    internal_frame_PyInterpreterFrame *frame_interpreter =
+        (internal_frame_PyInterpreterFrame *)frame_internal->f_frame;
+    uint8_t last_opcode = frame_interpreter->prev_instr->code;
+    PyObject *var_name = PyTuple_GET_ITEM(code->co_localsplusnames,
+                                          frame_interpreter->prev_instr->arg);
+    Py_DECREF(code);
+
+    if (last_opcode == STORE_FAST) {
+      PyObject **sp =
+          frame_interpreter->localsplus + frame_interpreter->stacktop;
+      PyObject *stack_top_element = sp[-1];
+      if (var_name == NULL || stack_top_element == NULL) {
+        return 0;
+      }
+      Py_INCREF(var_name);
+      Py_INCREF(stack_top_element);
+      PyObject *ret =
+          PyObject_CallMethod(trace_logic, "handle_opcode", "OOO",
+                              (PyObject *)frame, var_name, stack_top_element);
+      Py_DECREF(var_name);
+      Py_DECREF(stack_top_element);
+      if (ret != NULL) {
+        Py_DECREF(ret);
+      } else {
+        print_stack_trace();
       }
     }
     return 0;
@@ -226,72 +217,58 @@ public:
       if (ret != NULL) {
         Py_DECREF(ret);
       } else {
-        printf("Error in handle_call_event\n");
-        PyErr_Print();
-        PyErr_Clear();
+        print_stack_trace();
       }
     }
     return 0;
   }
 
   int handle_return_event(PyFrameObject *frame, PyObject *arg) {
-    {
-      std::lock_guard<std::mutex> lock(cache_mutex);
-      if (active_frames.find(frame) != active_frames.end()) {
-        if(arg == NULL) {
-            arg = Py_None;
-        }
-        PyObject *ret = PyObject_CallMethod(trace_logic, "handle_return", "OO",
-                                            (PyObject *)frame, arg);
-        if (ret != NULL) {
-          Py_DECREF(ret);
-        } else {
-          printf("Error in handle_return_event\n");
-          PyErr_Print();
-          PyErr_Clear();
-        }
-        active_frames.erase(frame);
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    if (active_frames.find(frame) != active_frames.end()) {
+      if (arg == NULL) {
+        arg = Py_None;
       }
+      PyObject *ret = PyObject_CallMethod(trace_logic, "handle_return", "OO",
+                                          (PyObject *)frame, arg);
+      if (ret != NULL) {
+        Py_DECREF(ret);
+      } else {
+        print_stack_trace();
+      }
+      active_frames.erase(frame);
     }
     return 0;
   }
 
   int handle_line_event(PyFrameObject *frame, PyObject *arg) {
-    {
-      std::lock_guard<std::mutex> lock(cache_mutex);
-      if (active_frames.find(frame) != active_frames.end()) {
-        PyObject *ret = PyObject_CallMethod(trace_logic, "handle_line", "O",
-                                            (PyObject *)frame);
-        if (ret != NULL) {
-          Py_DECREF(ret);
-        } else {
-          printf("Error in handle_line_event\n");
-          PyErr_Print();
-          PyErr_Clear();
-        }
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    if (active_frames.find(frame) != active_frames.end()) {
+      PyObject *ret = PyObject_CallMethod(trace_logic, "handle_line", "O",
+                                          (PyObject *)frame);
+      if (ret != NULL) {
+        Py_DECREF(ret);
+      } else {
+        print_stack_trace();
       }
     }
     return 0;
   }
 
   int handle_exception_event(PyFrameObject *frame, PyObject *arg) {
-    {
-      std::lock_guard<std::mutex> lock(cache_mutex);
-      if (active_frames.find(frame) != active_frames.end()) {
-        PyObject *type, *value, *traceback;
-        if (!PyArg_UnpackTuple(arg, "exception", 3, 3, &type, &value,
-                               &traceback)) {
-          return -1;
-        }
-        PyObject *ret = PyObject_CallMethod(trace_logic, "handle_exception",
-                                            "OOO", type, value, traceback);
-        if (ret != NULL) {
-          Py_DECREF(ret);
-        } else {
-          printf("Error in handle_exception_event\n");
-          PyErr_Print();
-          PyErr_Clear();
-        }
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    if (active_frames.find(frame) != active_frames.end()) {
+      PyObject *type, *value, *traceback;
+      if (!PyArg_UnpackTuple(arg, "exception", 3, 3, &type, &value,
+                             &traceback)) {
+        return -1;
+      }
+      PyObject *ret = PyObject_CallMethod(trace_logic, "handle_exception",
+                                          "OOO", type, value, traceback);
+      if (ret != NULL) {
+        Py_DECREF(ret);
+      } else {
+        print_stack_trace();
       }
     }
     return 0;
@@ -302,6 +279,8 @@ public:
     PyObject *ret = PyObject_CallMethod(trace_logic, "start", nullptr);
     if (ret != NULL) {
       Py_DECREF(ret);
+    } else {
+      print_stack_trace();
     }
   }
 
@@ -310,6 +289,8 @@ public:
     PyObject *ret = PyObject_CallMethod(trace_logic, "stop", nullptr);
     if (ret != NULL) {
       Py_DECREF(ret);
+    } else {
+      print_stack_trace();
     }
   }
 };

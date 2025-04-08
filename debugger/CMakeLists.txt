@@ -13,7 +13,7 @@ endif()
 
 # Compiler options
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(-Wall -Wextra)
+    add_compile_options(-Wall -Wextra -fno-exceptions -fno-rtti)
     add_compile_options($<$<CONFIG:RELEASE>:-O3 -flto>)
     add_compile_options($<$<CONFIG:DEBUG>:-g -fno-omit-frame-pointer>)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)

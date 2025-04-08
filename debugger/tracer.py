@@ -323,6 +323,7 @@ class CallTreeHtmlRender:
         self._executed_lines = {}  # 记录执行过的行
         self._frame_executed_lines = {}
         self._source_files = {}  # 存储源代码文件内容
+        self._stack_variables = {}
         self._html_template = """<!DOCTYPE html>
 <html>
 <head>
@@ -376,6 +377,14 @@ class CallTreeHtmlRender:
 </body>
 </html>"""
 
+    def format_stack_variables(self, variables):
+        if not variables:
+            return ""
+        text = []
+        for var_name, value in variables:
+            text.append("%s=%s" % (var_name, _truncate_value(value)))
+        return " ".join(text)
+
     def _message_to_html(self, message, msg_type, log_data):
         """将消息转换为HTML片段"""
         content = message.lstrip()
@@ -384,9 +393,14 @@ class CallTreeHtmlRender:
         escaped_content = content
         data = log_data.get("data", {}) if isinstance(log_data, dict) else {}
         filename = data.get("filename")
+        original_filename = data.get("original_filename")
         line_number = data.get("lineno")
         frame_id = data.get("frame_id")
-        comment = data.get("comment")
+        comment = ""
+        if frame_id and original_filename and line_number is not None:
+            key = "%s:%s:%d" % (frame_id, original_filename, line_number)
+            variables = self._stack_variables.get(key, [])
+            comment = self.format_stack_variables(variables)
 
         comment_html = self._build_comment_html(comment) if comment else ""
         view_source_html = self._build_view_source_html(filename, line_number, frame_id)
@@ -454,6 +468,11 @@ class CallTreeHtmlRender:
         """添加消息到消息列表"""
         self._messages.append((message, msg_type, log_data))
 
+    def add_stack_variable_create(self, frame_id, filename, lineno, var_name, value):
+        key = "%s:%s:%d" % (frame_id, filename, lineno)
+        self._stack_variables[key] = self._stack_variables.get(key, [])
+        self._stack_variables[key].append((var_name, value))
+
     def add_raw_message(self, log_data, color_type):
         """添加原始日志数据并处理"""
         if isinstance(log_data, str):
@@ -510,9 +529,6 @@ class CallTreeHtmlRender:
 
 class TraceLogic:
     def __init__(self, config: TraceConfig):
-        self._init_attributes(config)
-
-    def _init_attributes(self, config):
         """初始化实例属性"""
         self.stack_depth = 0
         self.line_counter = {}
@@ -702,6 +718,7 @@ class TraceLogic:
                         "indent": _INDENT * self.stack_depth,
                         "prefix": log_prefix,
                         "filename": filename,
+                        "original_filename": frame.f_code.co_filename,
                         "lineno": frame.f_lineno,
                         "func": frame.f_code.co_name,
                         "args": ", ".join(args_info),
@@ -735,6 +752,7 @@ class TraceLogic:
                         "return_value": return_str,
                         "frame_id": frame_id,
                         "comment": comment,
+                        "original_filename": frame.f_code.co_filename,
                     },
                 },
                 "return",
@@ -766,6 +784,7 @@ class TraceLogic:
                     "line": line,
                     "frame_id": frame_id,
                     "comment": comment,
+                    "original_filename": filename,
                 },
             },
             "line",
@@ -776,7 +795,9 @@ class TraceLogic:
             self._process_captured_vars(frame)
 
     def handle_opcode(self, frame, name, value):
-        print("store local", name, value)
+        self._html_render.add_stack_variable_create(
+            self._get_frame_id(frame), frame.f_code.co_filename, frame.f_lineno, name, value
+        )
 
     def _process_trace_expression(self, frame, line, filename, lineno):
         """处理追踪表达式"""
@@ -854,6 +875,7 @@ class TraceLogic:
                         "exc_type": exc_type.__name__,
                         "exc_value": str(exc_value),
                         "frame_id": frame_id,
+                        "original_filename": frame.f_code.co_filename,
                     },
                 },
                 "error",
