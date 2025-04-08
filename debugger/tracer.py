@@ -325,6 +325,7 @@ class CallTreeHtmlRender:
         self._frame_executed_lines = {}
         self._source_files = {}  # 存储源代码文件内容
         self._stack_variables = {}
+        self._comments_data = {}
         self._html_template = """<!DOCTYPE html>
 <html>
 <head>
@@ -377,6 +378,26 @@ class CallTreeHtmlRender:
     </script>
 </body>
 </html>"""
+
+    def _get_nested_dict_value(self, data_dict, filename, frame_id=None):
+        """获取嵌套字典中的值"""
+        if filename not in data_dict:
+            return None
+        if frame_id is None:
+            return data_dict[filename]
+        if frame_id not in data_dict[filename]:
+            return None
+        return data_dict[filename][frame_id]
+
+    def _set_nested_dict_value(self, data_dict, filename, value, frame_id=None):
+        """设置嵌套字典中的值"""
+        if filename not in data_dict:
+            data_dict[filename] = {} if frame_id is not None else value
+        if frame_id is not None:
+            if frame_id not in data_dict[filename]:
+                data_dict[filename][frame_id] = []
+            if value not in data_dict[filename][frame_id]:
+                data_dict[filename][frame_id].append(value)
 
     def format_stack_variables(self, variables):
         if not variables:
@@ -462,7 +483,6 @@ class CallTreeHtmlRender:
 
         try:
             with open(filename, "rb") as f:
-                # Convert bytes to base64 and then to string for JavaScript to read
                 content = base64.b64encode(f.read()).decode("utf-8")
                 self._source_files[filename] = content
         except (IOError, OSError) as e:
@@ -491,12 +511,7 @@ class CallTreeHtmlRender:
             lineno = log_data["data"]["lineno"]
             frame_id = log_data["data"].get("frame_id")
             if original_filename and lineno:
-                if original_filename not in self._executed_lines:
-                    self._executed_lines[original_filename] = {}
-                if frame_id not in self._executed_lines[original_filename]:
-                    self._executed_lines[original_filename][frame_id] = []
-                if lineno not in self._executed_lines[original_filename][frame_id]:
-                    self._executed_lines[original_filename][frame_id].append(lineno)
+                self._set_nested_dict_value(self._executed_lines, original_filename, lineno, frame_id)
                 self._load_source_file(original_filename)
 
         self._messages.append((message, color_type, log_data))
@@ -504,7 +519,6 @@ class CallTreeHtmlRender:
     def generate_html(self):
         """生成完整的HTML报告"""
         html_content = []
-        comments_data = {}
         for message, msg_type, log_data in self._messages:
             html_content.append(self._message_to_html(message, msg_type, log_data))
 
@@ -513,7 +527,7 @@ class CallTreeHtmlRender:
 
         executed_lines_json = json.dumps(self._executed_lines)
         source_files_json = json.dumps(self._source_files)
-        comments_json = json.dumps(comments_data)
+        comments_json = json.dumps(self._comments_data)
 
         return self._html_template.format(
             generation_time=generation_time,
