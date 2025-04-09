@@ -401,6 +401,18 @@ class CallTreeHtmlRender:
         seen = set()
         for opcode, var_name, value in variables:
             if "CALL" == dis.opname[opcode]:
+                is_method = value[-1]
+                value = value[:-1]
+                instance_name = ""
+                if is_method:
+                    instance = value[0]
+                    if getattr(instance, "__name__", None):
+                        instance_name = instance.__name__
+                    elif getattr(instance, "__class__", None):
+                        instance_name = instance.__class__.__name__
+                    else:
+                        instance_name = repr(instance)
+                    value = value[1:]
                 args = ", ".join(f"{_truncate_value(arg)}" for arg in value)
                 if getattr(var_name, "__code__", None):
                     item = f"{var_name.__code__.co_name}({args})"
@@ -408,6 +420,8 @@ class CallTreeHtmlRender:
                     item = f"{var_name.__name__}({args})"
                 else:
                     item = f"{var_name}({args})"
+                if instance_name:
+                    item = f"{instance_name}.{item}"
             elif "STORE_SUBSCR" == dis.opname[opcode]:
                 item = f"[{var_name}]={_truncate_value(value)}"
             else:

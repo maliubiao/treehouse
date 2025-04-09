@@ -2,6 +2,7 @@
 以较快的速度过滤掉不关心的代码文件，有用的再交给python层处理
 */
 #include <Python.h>
+#include <boolobject.h>
 #include <bytesobject.h>
 #include <ceval.h>
 #include <cpython/code.h>
@@ -230,18 +231,23 @@ public:
       PyObject *method = sp[-(arg_size+2)];
       PyObject **args_base = sp - arg_size;
       int total_args = arg_size;
+      PyObject *is_method = Py_True;
       if(method != NULL) {
         callable = method;
         args_base --;
         total_args ++;
+      } else {
+        is_method = Py_False;
       }
+      Py_INCREF(is_method);
       Py_INCREF(callable);
-      PyObject *args = PyTuple_New(total_args);
+      PyObject *args = PyTuple_New(total_args+1);
       for (int i = 0; i < total_args; i++) {
         PyObject *arg = args_base[i];
         Py_INCREF(arg);
         PyTuple_SET_ITEM(args, i , arg);
       }
+      PyTuple_SET_ITEM(args, total_args, is_method);
       PyObject *opcode_object = PyLong_FromSize_t(last_opcode);
       PyObject *ret = PyObject_CallMethod(trace_logic, "handle_opcode", "OOOO",
                                           (PyObject *)frame, opcode_object, callable, args);
