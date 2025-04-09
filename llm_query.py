@@ -1262,9 +1262,14 @@ PATCH_PROMPT_HEADER = """
 - 若无修改需求，则忽视传入的符号或者块
 - 保持原有缩进和代码风格，不添注释
 - 输出必须为纯文本，禁止使用markdown或代码块
-- 用户提供的是类, 则输出完整的类，用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
-- 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
+- 用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
+- 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 
+- 可以单独修改输入符号的子符号，要根据规则命名，但不可以同时修改子符号跟父符号
 - 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified file], [SYMBOL START]输入对应[modified symbol]
+
+[symbol path rule start]
+{symbol_path_rule_content}
+[symbol path rule end]
 """
 
 DUMP_EXAMPLE_A = """
@@ -1371,7 +1376,8 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
     if not GLOBAL_MODEL_CONFIG.is_thinking:
         prompt += PUA_PROMPT
     if patch_require:
-        prompt += PATCH_PROMPT_HEADER
+        text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text()
+        prompt += PATCH_PROMPT_HEADER.format(symbol_path_rule_content=text)
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
     # 添加符号信息
@@ -1594,6 +1600,26 @@ class BlockPatchResponse:
 
         return text[start_idx + len(start_tag) : end_idx].strip()
 
+    @staticmethod
+    def extract_symbol_paths(response_text):
+        """
+        从响应文本中提取所有符号路径
+        返回格式: {"file": [symbol_path1, symbol_path2, ...]}
+        """
+        symbol_paths = {}
+        pattern = re.compile(r"\[modified symbol\]:\s*([^\n]+)\s*\n\[source code start\]", re.DOTALL)
+
+        for match in pattern.finditer(response_text):
+            whole_path = match.group(1).strip()
+            idx = whole_path.rfind("/")
+            assert idx != -1
+            symbol_path = whole_path[idx + 1 :].strip()
+            file_path = whole_path[:idx]
+            if file_path not in symbol_paths:
+                symbol_paths[file_path] = []
+            symbol_paths[file_path].append(symbol_path)
+        return symbol_paths
+
 
 def parse_llm_response(response_text, symbol_names=None):
     """
@@ -1650,6 +1676,35 @@ def process_file_change(response_text, valid_symbols=[]):
     return "\n".join(results), remaining_text
 
 
+def lookup_symbols(file, symbol_names):
+    from tree import ParserLoader, ParserUtil
+
+    parser_loader_s = ParserLoader()
+    parser_util = ParserUtil(parser_loader_s)
+    return parser_util.lookup_symbols(file, symbol_names)
+
+
+def add_symbol_details(remaining, symbol_detail):
+    require_info_map = BlockPatchResponse.extract_symbol_paths(remaining)
+    require_info_syms = {}
+    for file, v in require_info_map.items():
+        for sym in v:
+            symbol_path = "{}/{}".format(file, sym)
+            if symbol_path not in symbol_detail:
+                if file not in require_info_syms:
+                    require_info_syms[file] = []
+                require_info_syms[file].append(sym)
+    for file, symbols in require_info_syms.items():
+        symbol_info_map = lookup_symbols(file, symbols)
+        for symbol, symbol_info in symbol_info_map.items():
+            symbol_path = "{}/{}".format(file, symbol)
+            symbol_detail[symbol_path] = {
+                "file_path": file,
+                "block_range": symbol_info["block_range"],
+                "block_content": symbol_info["code"].encode("utf8"),
+            }
+
+
 def process_patch_response(response_text, symbol_detail, auto_commit: bool = True, auto_lint: bool = True):
     """
     处理大模型的补丁响应，生成差异并应用补丁
@@ -1671,13 +1726,13 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
     file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
     if file_part:
         extract_and_diff_files(file_part, save=False)
-
+    add_symbol_details(remaining, symbol_detail)
     results = parse_llm_response(remaining, symbol_detail.keys())
     for symbol_name, _ in results:
-        path = (GLOBAL_PROJECT_CONFIG.project_root_dir / symbol_detail[symbol_name]["file_path"]).relative_to(
+        symbol_path = (GLOBAL_PROJECT_CONFIG.project_root_dir / symbol_detail[symbol_name]["file_path"]).relative_to(
             Path.cwd()
         )
-        symbol_detail[symbol_name]["file_path"] = str(path)
+        symbol_detail[symbol_name]["file_path"] = str(symbol_path)
     if not results:
         return
     patch_data = [

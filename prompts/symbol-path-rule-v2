@@ -1,0 +1,97 @@
+**符号路径生成规则指引**
+
+**一、符号路径组成格式**
+`<文件路径>/<符号全名>`
+示例：`test_tree.py/TestParserUtil.test_go_method_extraction`
+
+**二、多语言符号命名规则**
+
+1. **Go语言**
+   - 结构体方法：`包名.结构体名.方法名`
+     示例：`main.MyStruct.Method1`
+   - 函数：`包名.函数名`
+     示例：`main.Function1`
+   - 类型声明：`包名.类型名`
+     示例：`main.MyInt`
+   - 导入块：`__import__`（包含所有import语句）
+
+2. **C++**
+   - 命名空间函数：`命名空间链.函数名`
+     示例：`Outer.Inner.Math.add`
+   - 类成员：`类名.成员名`
+     示例：`c.a.b`
+   - 模板类：`模板类名.方法名`
+     示例：`TemplateScope.template_method`
+   - 运算符重载：`类名.operator符号`
+     示例：`Point.operator+`
+
+3. **Python**
+   - 类方法：`类名.方法名`
+     示例：`MyClass.my_method`
+   - 主程序块：`__main__`
+   - 导入块：`__import__`
+
+**三、特殊处理规则**
+
+1. **嵌套结构**
+   ```cpp
+   // 输入
+   namespace A { namespace B { class C { void d(){} } } }
+   // 符号路径
+   A.B.C.d
+   ```
+
+2. **模板处理**
+   ```cpp
+   // 输入
+   template<typename T> class Stack { void push(T v){} }
+   // 符号路径
+   Stack.push
+   ```
+
+3. **异常情况**
+   ```go
+   // 无效接收器（不应生成符号）
+   func () InvalidMethod() {}
+   ```
+
+**四、输入输出示例**
+
+输入代码：
+```go
+package main
+
+type User struct {
+    Name string
+}
+
+func (u User) GetName() string {
+    return u.Name
+}
+```
+
+应生成符号路径：
+```
+testdata.go/main.User.GetName
+```
+
+输入代码：
+```cpp
+namespace AI {
+    class Robot {
+    public:
+        void speak(const std::string& msg);
+    };
+}
+```
+
+应生成符号路径：
+```
+robotics.cpp/AI.Robot.speak
+```
+
+**五、验证要点**
+1. 符号路径必须包含完整作用域链
+2. 匿名结构/函数不生成符号
+3. 每个符号必须绑定到原始代码位置
+4. 同一文件内符号路径保持唯一性

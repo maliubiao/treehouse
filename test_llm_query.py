@@ -427,6 +427,96 @@ c = 3
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][1].strip(), "a = 1\nb = 2\nc = 3")
 
+    def test_extract_symbol_paths(self):
+        """测试从响应中提取符号路径"""
+        response = """
+[modified symbol]: path/to/file1.py/symbol1
+[source code start]
+code1
+[source code end]
+
+[modified symbol]: path/to/file2.py/symbol2
+[source code start]
+code2
+[source code end]
+
+[modified symbol]: path/to/file1.py/symbol3
+[source code start]
+code3
+[source code end]
+        """
+        parser = BlockPatchResponse()
+        result = parser.extract_symbol_paths(response)
+
+        expected = {"path/to/file1.py": ["symbol1", "symbol3"], "path/to/file2.py": ["symbol2"]}
+        self.assertEqual(result, expected)
+
+    def test_add_symbol_details(self):
+        """测试add_symbol_details函数"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as tmp:
+            tmp.write(
+                dedent(
+                    '''
+            def func1():
+                """测试函数1"""
+                pass
+
+            class TestClass:
+                """测试类"""
+                def method1(self):
+                    pass
+            '''
+                )
+            )
+            tmp_path = tmp.name
+            # 准备测试数据
+        remaining = dedent(
+            '''
+        [modified symbol]: {}/func1
+        [source code start]
+        def func1():
+            """修改后的函数1"""
+            return 42
+        [source code end]
+
+        [modified symbol]: {}/TestClass
+        [source code start]
+        class TestClass:
+            """修改后的类"""
+            def method1(self):
+                return "modified"
+        [source code end]
+        '''.format(
+                tmp_path, tmp_path
+            )
+        )
+        try:
+            symbol_detail = {}
+            require_info_map = BlockPatchResponse.extract_symbol_paths(remaining)
+            self.assertEqual(len(require_info_map), 1)
+            self.assertIn(tmp_path, require_info_map)
+
+            # 调用测试函数
+            llm_query.add_symbol_details(remaining, symbol_detail)
+
+            # 验证结果
+            self.assertEqual(len(symbol_detail), 2)
+            self.assertIn(f"{tmp_path}/func1", symbol_detail)
+            self.assertIn(f"{tmp_path}/TestClass", symbol_detail)
+
+            # 验证符号信息内容
+            func_info = symbol_detail[f"{tmp_path}/func1"]
+            self.assertEqual(func_info["file_path"], tmp_path)
+            self.assertIn("block_range", func_info)
+            self.assertIn("block_content", func_info)
+
+            class_info = symbol_detail[f"{tmp_path}/TestClass"]
+            self.assertEqual(class_info["file_path"], tmp_path)
+            self.assertIn("block_range", class_info)
+            self.assertIn("block_content", class_info)
+        finally:
+            os.unlink(tmp_path)
+
 
 class TestGitignoreFunctions(unittest.TestCase):
     """测试.gitignore相关功能"""

@@ -120,6 +120,17 @@ class TestTraceDispatcher(unittest.TestCase):
         mock_frame.f_code.co_filename = "not_target.py"
         self.assertFalse(self.dispatcher.is_target_frame(mock_frame))
 
+    def test_none_frame(self):
+        self.assertFalse(self.dispatcher.is_target_frame(None))
+
+    def test_wildcard_matching(self):
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = "test_tracer_core.py"
+        self.assertTrue(self.dispatcher.is_target_frame(mock_frame))
+
+        mock_frame.f_code.co_filename = "unrelated.py"
+        self.assertFalse(self.dispatcher.is_target_frame(mock_frame))
+
     def test_trace_dispatch(self):
         frame = inspect.currentframe()
 
@@ -138,6 +149,74 @@ class TestTraceDispatcher(unittest.TestCase):
         # Test exception event
         tracer = self.dispatcher.trace_dispatch(frame, "exception", None)
         self.assertEqual(tracer, self.dispatcher.trace_dispatch)
+
+    def test_unknown_event(self):
+        frame = inspect.currentframe()
+        tracer = self.dispatcher.trace_dispatch(frame, "unknown", None)
+        self.assertIsNone(tracer)
+
+    def test_target_files_empty(self):
+        empty_config = TraceConfig(target_files=[])
+        dispatcher = TraceDispatcher(self.test_file, empty_config)
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = "any_file.py"
+        self.assertTrue(dispatcher.is_target_frame(mock_frame))
+
+    def test_path_caching(self):
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = "test_cache.py"
+        self.dispatcher.path_cache.clear()
+
+        # First call should populate cache
+        self.dispatcher.is_target_frame(mock_frame)
+        self.assertIn(mock_frame.f_code.co_filename, self.dispatcher.path_cache)
+
+        # Second call should use cached result
+        prev_cache_size = len(self.dispatcher.path_cache)
+        self.dispatcher.is_target_frame(mock_frame)
+        self.assertEqual(len(self.dispatcher.path_cache), prev_cache_size)
+
+    def test_invalid_co_filename(self):
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = None
+        self.assertFalse(self.dispatcher.is_target_frame(mock_frame))
+
+        mock_frame.f_code.co_filename = "12345"
+        self.assertFalse(self.dispatcher.is_target_frame(mock_frame))
+
+    def test_path_resolution_failure(self):
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = "invalid/\x00path.py"
+        with patch.object(Path, "resolve", side_effect=ValueError("Test error")):
+            result = self.dispatcher.is_target_frame(mock_frame)
+        self.assertFalse(result)
+
+    @unittest.skipUnless(sys.platform.startswith("win"), "Requires Windows platform")
+    def test_case_insensitive_matching(self):
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = "TEST_CASE.PY"
+        self.dispatcher.config.target_files = ["test_*.py"]
+        self.assertTrue(self.dispatcher.is_target_frame(mock_frame))
+
+    def test_multiple_frame_caching(self):
+        mock_frame1 = Mock()
+        mock_frame1.f_code.co_filename = "test_cache_a.py"
+        mock_frame2 = Mock()
+        mock_frame2.f_code.co_filename = "test_cache_b.py"
+
+        for _ in range(3):
+            self.dispatcher.is_target_frame(mock_frame1)
+            self.dispatcher.is_target_frame(mock_frame2)
+
+        self.assertEqual(self.dispatcher.path_cache.get("test_cache_a.py"), True)
+        self.assertEqual(self.dispatcher.path_cache.get("test_cache_b.py"), True)
+        self.assertEqual(len(self.dispatcher.path_cache), 2)
+
+    def test_non_ascii_filename(self):
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = "测试_文件.py"
+        self.dispatcher.config.target_files = ["*测试_*.py"]
+        self.assertTrue(self.dispatcher.is_target_frame(mock_frame))
 
 
 class TestTraceLogic(unittest.TestCase):

@@ -631,6 +631,14 @@ class ParserUtil:
         """批量处理位置并返回符号名到符号信息的映射"""
         return self.code_map_builder.find_symbols_for_locations(code_map, locations, max_context_size)
 
+    def lookup_symbols(self, file_path: str, symbols: list[str]):
+        """根据文件路径列表查找符号"""
+        _, code_map = self.get_symbol_paths(file_path)
+        m = {}
+        for path in symbols:
+            m[path] = code_map[path]
+        return m
+
     def print_symbol_paths(self, file_path: str):
         """打印文件中的所有符号路径及对应代码和位置信息"""
         paths, code_map = self.get_symbol_paths(file_path)
@@ -2028,7 +2036,11 @@ class BlockPatch:
         diff_lines = []
         for line in system_diff.splitlines(keepends=True):
             if line.startswith("--- ") or line.startswith("+++ "):
-                diff_lines.append(f"{line.split()[0]} {file_path}\n")
+                if "\t" in line:
+                    first, timestamp = line.split("\t")
+                    diff_lines.append(f"{first.split()[0]} {file_path}\t{timestamp}")
+                else:
+                    diff_lines.append(f"{line.split()[0]} {file_path}")
             else:
                 diff_lines.append(line)
 
