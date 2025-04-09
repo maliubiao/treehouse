@@ -378,7 +378,7 @@ cmake ../ -DCMAKE_BUILD_TYPE=Release
 #### 使用
 ```bash
 #改path后再用, --watch-files=是glob匹配，通配符, --open-report是结束打开网页, 不建议trace执行几十万行的那种，浏览器负担太大
-python ~/code/terminal-llm/debugger/tracer_main.py --watch-files="*path.py" --watch-files="*query.py" --open-report test_llm_query.py
+python -m debugger.tracer_main --watch-files="*path.py"  --watch-files="*query.py" --open-report test_llm_query.py -v TestDiffBlockFilter
 ```
 
 <img src="doc/debugger-preview.png" width = "600" alt="line tracer" align=center />
