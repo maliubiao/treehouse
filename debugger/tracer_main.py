@@ -10,7 +10,7 @@ from types import ModuleType
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from debugger.tracer import TraceConfig, _color_wrap, start_trace
+from debugger.tracer import TraceConfig, color_wrap, start_trace
 
 
 def execute_script(target: Path, args: List[str]) -> None:
@@ -35,7 +35,7 @@ def execute_script(target: Path, args: List[str]) -> None:
         exec(compiled_code, globals_dict)  # pylint: disable=exec-used
     except SystemExit as sys_exit:
         if sys_exit.code != 0:
-            print(_color_wrap(f"⚠ 脚本以退出码 {sys_exit.code} 终止", "error"))
+            print(color_wrap(f"⚠ 脚本以退出码 {sys_exit.code} 终止", "error"))
     except Exception:
         traceback.print_exc()
         raise
@@ -110,7 +110,7 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
             "verbose": args.verbose,
         }
     except SystemExit:
-        print(_color_wrap("\n错误: 参数解析失败, 请检查输入参数", "error"))
+        print(color_wrap("\n错误: 参数解析失败, 请检查输入参数", "error"))
         raise
 
 
@@ -118,7 +118,7 @@ def open_trace_report() -> None:
     """打开跟踪报告HTML文件"""
     report_path = Path(__file__).parent / "logs" / "trace_report.html"
     if not report_path.exists():
-        print(_color_wrap(f"❌ 跟踪报告文件 {report_path} 不存在", "error"))
+        print(color_wrap(f"❌ 跟踪报告文件 {report_path} 不存在", "error"))
         return
 
     try:
@@ -129,7 +129,7 @@ def open_trace_report() -> None:
         else:
             webbrowser.open(f"file://{report_path}")
     except Exception as e:
-        print(_color_wrap(f"❌ 无法打开跟踪报告: {str(e)}", "error"))
+        print(color_wrap(f"❌ 无法打开跟踪报告: {str(e)}", "error"))
 
 
 def debug_main(argv: Optional[List[str]] = None) -> int:
@@ -140,7 +140,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
 
         if not argv:
             print(
-                _color_wrap(
+                color_wrap(
                     "Python脚本调试跟踪工具\n\n"
                     "用法: python -m debugger.tracer_main [选项] <脚本> [脚本参数]\n\n"
                     "选项:\n"
@@ -159,23 +159,23 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         args = parse_args(argv)
         target = args["target"].resolve()
         if not target.exists():
-            print(_color_wrap(f"❌ 目标文件 {target} 不存在", "error"))
+            print(color_wrap(f"❌ 目标文件 {target} 不存在", "error"))
             return 2
         if target.suffix != ".py":
-            print(_color_wrap(f"❌ 目标文件 {target} 不是Python脚本(.py)", "error"))
+            print(color_wrap(f"❌ 目标文件 {target} 不是Python脚本(.py)", "error"))
             return 2
 
-        print(_color_wrap(f"\n🔍 启动调试会话 - 目标: {target}", "call"))
+        print(color_wrap(f"\n🔍 启动调试会话 - 目标: {target}", "call"))
         if args["watch_files"]:
-            print(_color_wrap(f"📝 监控文件模式: {', '.join(args['watch_files'])}", "var"))
+            print(color_wrap(f"📝 监控文件模式: {', '.join(args['watch_files'])}", "var"))
 
-        print(_color_wrap("\n📝 调试功能:", "line"))
-        print(_color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
-        print(_color_wrap("  ✓ 自动跳过标准库和第三方库", "call"))
-        print(_color_wrap("  ✓ 变量变化检测", "var"))
-        print(_color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
-        print(_color_wrap(f"\n📂 调试日志路径: {Path(__file__).parent/'logs/debug.log'}", "line"))
-        print(_color_wrap(f"📂 报告文件路径: {Path(__file__).parent/'logs/trace_report.html'}\n", "line"))
+        print(color_wrap("\n📝 调试功能:", "line"))
+        print(color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
+        print(color_wrap("  ✓ 自动跳过标准库和第三方库", "call"))
+        print(color_wrap("  ✓ 变量变化检测", "var"))
+        print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
+        print(color_wrap(f"\n📂 调试日志路径: {Path(__file__).parent/'logs/debug.log'}", "line"))
+        print(color_wrap(f"📂 报告文件路径: {Path(__file__).parent/'logs/trace_report.html'}\n", "line"))
 
         original_argv = sys.argv.copy()
         exit_code = 0
@@ -191,10 +191,10 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             tracer = start_trace(target, config=config)
             execute_script(target, args["script_args"])
         except KeyboardInterrupt:
-            print(_color_wrap("\n🛑 用户中断调试过程", "error"))
+            print(color_wrap("\n🛑 用户中断调试过程", "error"))
             exit_code = 130
         except (SystemExit, RuntimeError) as e:
-            print(_color_wrap(f"❌ 执行错误: {str(e)}", "error"))
+            print(color_wrap(f"❌ 执行错误: {str(e)}", "error"))
             logging.error("执行错误: %s\n%s", str(e), traceback.format_exc())
             exit_code = 3
         finally:
@@ -208,21 +208,21 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         return exit_code
     except (SystemExit, RuntimeError) as e:
         logging.error("调试器崩溃: %s\n%s", str(e), traceback.format_exc())
-        print(_color_wrap(f"💥 调试器内部错误: {str(e)}", "error"))
+        print(color_wrap(f"💥 调试器内部错误: {str(e)}", "error"))
         return 4
 
 
 def print_debug_summary() -> None:
     """打印调试会话摘要"""
-    print(_color_wrap("\n调试日志包含以下信息类型：", "line"))
-    print(_color_wrap("  ↘ CALL     - 函数调用及参数", "call"))
-    print(_color_wrap("  ↗ RETURN   - 函数返回值及耗时", "return"))
-    print(_color_wrap("  Δ VARIABLES - 变量创建/修改/删除", "var"))
-    print(_color_wrap("  ▷ LINE     - 执行的源代码行", "line"))
-    print(_color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
-    print(_color_wrap("\n调试功能说明:", "line"))
-    print(_color_wrap(f"{Path(__file__).parent}/logs/debug.log 查看日志", "line"))
-    print(_color_wrap(f"{Path(__file__).parent}/logs/trace_report.html 查看网页报告", "line"))
+    print(color_wrap("\n调试日志包含以下信息类型：", "line"))
+    print(color_wrap("  ↘ CALL     - 函数调用及参数", "call"))
+    print(color_wrap("  ↗ RETURN   - 函数返回值及耗时", "return"))
+    print(color_wrap("  Δ VARIABLES - 变量创建/修改/删除", "var"))
+    print(color_wrap("  ▷ LINE     - 执行的源代码行", "line"))
+    print(color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
+    print(color_wrap("\n调试功能说明:", "line"))
+    print(color_wrap(f"{Path(__file__).parent}/logs/debug.log 查看日志", "line"))
+    print(color_wrap(f"{Path(__file__).parent}/logs/trace_report.html 查看网页报告", "line"))
 
 
 if __name__ == "__main__":

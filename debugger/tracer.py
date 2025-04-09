@@ -195,7 +195,7 @@ class TraceConfig:
         return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
 
 
-def _truncate_value(value, keep_elements=5):
+def truncate_repr_value(value, keep_elements=5):
     """智能截断保留关键类型信息"""
     try:
         # Ignore function, module, and class types
@@ -206,17 +206,36 @@ def _truncate_value(value, keep_elements=5):
             if len(value) <= keep_elements:
                 return repr(value)
             else:
-                elements = list(value)[:keep_elements]
-                return f"{type(value).__name__}({elements}...)"
+                keep_list = []
+                for i in range(value[:keep_elements]):
+                    keep_list.append(value[i])
+                return f"[{keep_list} ...]"
         elif isinstance(value, dict):
             if len(value) <= keep_elements:
                 return repr(value)
-            else:
-                keys = list(value.keys())[:keep_elements]
-                return f"dict(keys={keys}...)"
+            keep_dict = {}
+            i = keep_elements
+            it = iter(value)
+            while i > 0 and value:
+                key = next(it)
+                keep_dict[key] = value[key]
+                i -= 1
+            s = repr(keep_dict)
+            s = "%s ...}" % s[:-1]
+            return s
         elif hasattr(value, "__dict__"):
-            attrs = list(vars(value).keys())[:keep_elements]
-            preview = f"{type(value).__name__}({attrs}...)"
+            if len(value.__dict__) <= keep_elements:
+                return f"{type(value).__name__}.({repr(value.__dict__)})"
+            keep_attrs = {}
+            i = keep_elements
+            it = iter(value.__dict__)
+            while i > 0 and value.__dict__:
+                key = next(it)
+                keep_attrs[key] = value.__dict__[key]
+                i -= 1
+            s = repr(keep_attrs)
+            s = "%s ...}" % s[:-1]
+            preview = f"{type(value).__name__}({s})"
         else:
             preview = repr(value)
     except (AttributeError, TypeError, ValueError):
@@ -227,7 +246,7 @@ def _truncate_value(value, keep_elements=5):
     return preview
 
 
-def _color_wrap(text, color_type):
+def color_wrap(text, color_type):
     """包装颜色但不影响日志文件"""
     return f"{_COLORS[color_type]}{text}{_COLORS['reset']}" if sys.stdout.isatty() else text
 
@@ -413,7 +432,7 @@ class CallTreeHtmlRender:
                     else:
                         instance_name = repr(instance)
                     value = value[1:]
-                args = ", ".join(f"{_truncate_value(arg)}" for arg in value)
+                args = ", ".join(f"{truncate_repr_value(arg)}" for arg in value)
                 if getattr(var_name, "__code__", None):
                     item = f"{var_name.__code__.co_name}({args})"
                 elif getattr(var_name, "__name__", None):
@@ -423,9 +442,9 @@ class CallTreeHtmlRender:
                 if instance_name:
                     item = f"{instance_name}.{item}"
             elif "STORE_SUBSCR" == dis.opname[opcode]:
-                item = f"[{var_name}]={_truncate_value(value)}"
+                item = f"[{var_name}]={truncate_repr_value(value)}"
             else:
-                item = f"{var_name}={_truncate_value(value)}"
+                item = f"{var_name}={truncate_repr_value(value)}"
             if item not in seen:
                 seen.add(item)
                 text.append(item)
@@ -572,11 +591,18 @@ class CallTreeHtmlRender:
 
     def save_to_file(self, filename):
         """将HTML报告保存到文件"""
-        html_content = self.generate_html()
-        log_dir = os.path.join(os.path.dirname(__file__), "logs")
-        os.makedirs(log_dir, exist_ok=True)
-        with open(os.path.join(log_dir, filename), "w", encoding="utf-8") as f:
-            f.write(html_content)
+        p = Path(filename)
+        if p.is_absolute():
+            # If it's an absolute path, ensure parent directories exist
+            p.parent.mkdir(parents=True, exist_ok=True)
+            html_content = self.generate_html()
+            p.write_text(html_content, encoding="utf-8")
+        else:
+            html_content = self.generate_html()
+            log_dir = os.path.join(os.path.dirname(__file__), "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, filename), "w", encoding="utf-8") as f:
+                f.write(html_content)
 
 
 class TraceLogic:
@@ -635,7 +661,7 @@ class TraceLogic:
     def _console_output(self, log_data, color_type):
         """控制台输出处理"""
         message = self._format_log_message(log_data)
-        colored_msg = _color_wrap(message, color_type)
+        colored_msg = color_wrap(message, color_type)
         print(colored_msg)
 
     def _file_output(self, log_data, _):
@@ -754,7 +780,7 @@ class TraceLogic:
             else:
                 try:
                     args, _, _, values = inspect.getargvalues(frame)
-                    args_info = [f"{arg}={_truncate_value(values[arg])}" for arg in args]
+                    args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args]
                 except (AttributeError, TypeError) as e:
                     self._add_to_buffer({"template": "参数解析失败: {error}", "data": {"error": str(e)}}, "error")
                     args_info.append("<参数解析错误>")
@@ -789,7 +815,7 @@ class TraceLogic:
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
         try:
-            return_str = _truncate_value(return_value)
+            return_str = truncate_repr_value(return_value)
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
             comment = self.get_locals_change(frame_id, frame)
@@ -865,7 +891,7 @@ class TraceLogic:
             globals_dict = frame.f_globals
             _, compiled = self._compile_expr(active_expr)
             value = eval(compiled, globals_dict, locals_dict)
-            formatted = _truncate_value(value)
+            formatted = truncate_repr_value(value)
             self._add_to_buffer(
                 {
                     "template": "{indent}↳ TRACE 表达式 {expr} -> {value} [frame:{frame_id}]",
@@ -966,7 +992,7 @@ class TraceLogic:
                 try:
                     _, compiled = self._compile_expr(expr)
                     value = eval(compiled, globals_dict, locals_dict)
-                    formatted = _truncate_value(value)
+                    formatted = truncate_repr_value(value)
                     results[expr] = formatted
                 except (NameError, SyntaxError, TypeError) as e:
                     self._add_to_buffer(
@@ -1020,7 +1046,7 @@ def get_tracer(module_path, config: TraceConfig):
             return TraceDispatcher(str(module_path), TraceLogic(config), config)
         except Exception as e:
             logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
-            print(_color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", "error"))
+            print(color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", "error"))
             raise
 
 
@@ -1040,7 +1066,7 @@ def start_trace(module_path, config: TraceConfig):
         return tracer
     except Exception as e:
         logging.error("💥 DEBUGGER INIT ERROR: %s\n%s", str(e), traceback.format_exc())
-        print(_color_wrap(f"❌ 调试器初始化错误: {str(e)}\n{traceback.format_exc()}", "error"))
+        print(color_wrap(f"❌ 调试器初始化错误: {str(e)}\n{traceback.format_exc()}", "error"))
         raise
 
 
@@ -1048,4 +1074,4 @@ def stop_trace():
     """停止调试跟踪并清理资源"""
     sys.settrace(None)
     logging.info("⏹ DEBUG SESSION ENDED\n")
-    print(_color_wrap(f"\n⏹ 调试会话结束", "return"))
+    print(color_wrap(f"\n⏹ 调试会话结束", "return"))

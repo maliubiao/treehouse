@@ -1709,6 +1709,8 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
     files = []
     for file, diff in diff_per_file.items():
         temp_file = shadowroot / (file + ".diff")
+        if not temp_file.parent.exists():
+            os.makedirs(temp_file.parent)
         with open(temp_file, "w+") as f:
             f.write(diff)
         _apply_patch(temp_file)

@@ -1,218 +1,267 @@
-import queue
+import dis
+import html
+import inspect
+import json
+import os
 import shutil
 import sys
 import tempfile
-import threading
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from debugger.tracer import TraceConfig, TraceDispatcher
+from debugger.tracer import (
+    _COLORS,
+    _INDENT,
+    _MAX_VALUE_LENGTH,
+    CallTreeHtmlRender,
+    TraceConfig,
+    TraceDispatcher,
+    TraceLogic,
+    color_wrap,
+    truncate_repr_value,
+)
 
 
-class TestTracer(unittest.TestCase):
+class TestTruncateReprValue(unittest.TestCase):
+    def test_truncate_long_string(self):
+        long_str = "a" * (_MAX_VALUE_LENGTH + 100)
+        result = truncate_repr_value(long_str)
+        self.assertTrue(len(result) <= _MAX_VALUE_LENGTH + 3)
+        self.assertTrue(result.endswith("..."))
+
+    def test_truncate_list(self):
+        long_list = list(range(100))
+        result = truncate_repr_value(long_list)
+        self.assertIn("...", result)
+        self.assertLess(len(result), len(str(long_list)))
+
+    def test_truncate_dict(self):
+        long_dict = {str(i): i for i in range(100)}
+        result = truncate_repr_value(long_dict)
+        self.assertIn("...", result)
+        self.assertLess(len(result), len(str(long_dict)))
+
+    def test_truncate_custom_object(self):
+        class TestObj:
+            def __init__(self):
+                self.a = 1
+                self.b = 2
+                self.c = 3
+                self.d = 4
+                self.e = 5
+                self.f = 6
+
+        obj = TestObj()
+        result = truncate_repr_value(obj)
+        self.assertIn("...", result)
+        self.assertIn("TestObj", result)
+
+
+class TestTraceConfig(unittest.TestCase):
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
-        self.tmp_path = Path(self.test_dir)
+        self.temp_dir = tempfile.mkdtemp()
+        self.config_file = Path(self.temp_dir) / "test_config.yml"
+        self.sample_config = {
+            "target_files": ["*.py", "test_*.py"],
+            "line_ranges": {"test.py": [(1, 10), (20, 30)]},
+            "capture_vars": ["x", "y.z"],
+        }
+        with open(self.config_file, "w") as f:
+            json.dump(self.sample_config, f)
 
     def tearDown(self):
-        shutil.rmtree(self.test_dir)
+        shutil.rmtree(self.temp_dir)
 
-    def test_filename_pattern_matching(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    pass\n")
+    def test_from_yaml(self):
+        config = TraceConfig.from_yaml(self.config_file)
+        self.assertEqual(config.target_files, self.sample_config["target_files"])
+        self.assertEqual(len(config.line_ranges), 1)
+        self.assertEqual(config.capture_vars, self.sample_config["capture_vars"])
 
-        config = TraceConfig(target_files=["*test_*.py"], line_ranges={}, capture_vars=[])
-        tracer = TraceDispatcher(test_file, config=config)
+    def test_match_filename(self):
+        config = TraceConfig(target_files=["*.py"])
+        self.assertTrue(config.match_filename("test.py"))
+        self.assertTrue(config.match_filename("/path/to/test.py"))
+        self.assertFalse(config.match_filename("test.txt"))
 
-        frame = Mock(f_code=Mock(co_filename=str(test_file)))
-        self.assertTrue(tracer.is_target_frame(frame))
+    def test_parse_line_ranges(self):
+        line_ranges = {"test.py": [(1, 3), (5, 7)]}
+        config = TraceConfig(line_ranges=line_ranges)
+        parsed = config.line_ranges
+        self.assertEqual(len(parsed), 1)
+        self.assertIn(str(Path("test.py").resolve()), parsed)
+        self.assertEqual(parsed[str(Path("test.py").resolve())], {1, 2, 3, 5, 6, 7})
 
-    def test_line_range_filtering(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    pass\n")
+    def test_validate_expressions(self):
+        valid_exprs = ["x", "x.y", "x[0]"]
+        invalid_exprs = ["x.", "1 + ", "x = y"]
 
-        config = TraceConfig(target_files=[], line_ranges={str(test_file): [(1, 2)]}, capture_vars=[])
-        tracer = TraceDispatcher(test_file, config=config)
+        config = TraceConfig(capture_vars=valid_exprs)
+        self.assertTrue(config.validate())
 
-        frame = Mock(f_code=Mock(co_filename=str(test_file)), f_lineno=1)
-        tracer.log_line(frame)  # Should capture
-        frame.f_lineno = 3
-        tracer.log_line(frame)  # Should ignore
+        t = TraceConfig(capture_vars=invalid_exprs)
+        self.assertFalse(t.validate())
 
-    def test_variable_capture(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    x = 42\n    y = 'hello'\n")
 
-        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x", "y"])
-        tracer = TraceDispatcher(test_file, config=config)
+class TestTraceDispatcher(unittest.TestCase):
+    def setUp(self):
+        self.test_file = Path(__file__)
+        self.config = TraceConfig(target_files=["*test_*.py"])
+        self.dispatcher = TraceDispatcher(self.test_file, self.config)
 
-        frame = Mock(
-            f_code=Mock(co_filename=str(test_file)),
-            f_locals={"x": 42, "y": "hello"},
-            f_lineno=1,
-            f_globals={"__name__": "__main__"},
-        )
-        captured = tracer.capture_variables(frame)
-        self.assertEqual(captured, {"x": "42", "y": "'hello'"})
+    def test_is_target_frame(self):
+        frame = inspect.currentframe()
+        self.assertTrue(self.dispatcher.is_target_frame(frame))
 
-    def test_callback_trigger(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    x = 42\n")
+        mock_frame = Mock()
+        mock_frame.f_code.co_filename = "not_target.py"
+        self.assertFalse(self.dispatcher.is_target_frame(mock_frame))
 
-        callback_called = False
+    def test_trace_dispatch(self):
+        frame = inspect.currentframe()
 
-        def callback(_):
-            nonlocal callback_called
-            callback_called = True
+        # Test call event
+        tracer = self.dispatcher.trace_dispatch(frame, "call", None)
+        self.assertEqual(tracer, self.dispatcher.trace_dispatch)
 
-        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x"], callback=callback)
-        tracer = TraceDispatcher(test_file, config=config)
-        tracer.tracing_enabled = True
+        # Test line event
+        tracer = self.dispatcher.trace_dispatch(frame, "line", None)
+        self.assertEqual(tracer, self.dispatcher.trace_dispatch)
 
-        frame = Mock(
-            f_code=Mock(co_filename=str(test_file)),
-            f_locals={"x": 42},
-            f_lineno=1,
-            f_globals={"__name__": "__main__"},
-        )
-        tracer.log_line(frame)
-        self.assertTrue(callback_called)
+        # Test return event
+        tracer = self.dispatcher.trace_dispatch(frame, "return", None)
+        self.assertEqual(tracer, self.dispatcher.trace_dispatch)
 
-    def test_performance_large_file(self):
-        test_file = self.tmp_path / "large_file.py"
-        with open(test_file, "w") as f:
-            for i in range(10000):
-                f.write(f"x{i} = {i}\n")
+        # Test exception event
+        tracer = self.dispatcher.trace_dispatch(frame, "exception", None)
+        self.assertEqual(tracer, self.dispatcher.trace_dispatch)
 
-        config = TraceConfig(target_files=[], line_ranges={str(test_file): [(1, 10000)]}, capture_vars=[])
-        tracer = TraceDispatcher(test_file, config=config)
 
-        start_time = time.time()
-        frame = Mock(f_code=Mock(co_filename=str(test_file)), f_lineno=10000)
-        tracer.log_line(frame)
-        elapsed_time = time.time() - start_time
-        self.assertLess(elapsed_time, 0.1)
+class TestTraceLogic(unittest.TestCase):
+    def setUp(self):
+        self.config = TraceConfig()
+        self.logic = TraceLogic(self.config)
+        self.frame = inspect.currentframe()
 
-        # Verify async flush performance
-        start_time = time.time()
-        for _ in range(100):
-            tracer._add_to_buffer("test message", "line")
-        elapsed_time = time.time() - start_time
-        self.assertLess(elapsed_time, 0.01)
+    def test_handle_call(self):
+        self.logic.handle_call(self.frame)
+        self.assertEqual(self.logic.stack_depth, 1)
 
-    def test_multiple_file_patterns(self):
-        files = [self.tmp_path / "test1.py", self.tmp_path / "test2.py", self.tmp_path / "ignore.py"]
-        for f in files:
-            f.write_text("def foo():\n    pass\n")
+    def test_handle_return(self):
+        self.logic.stack_depth = 1
+        self.logic.handle_return(self.frame, "test")
+        self.assertEqual(self.logic.stack_depth, 0)
 
-        config = TraceConfig(target_files=["*test*.py"], line_ranges={}, capture_vars=[])
-        for f in files:
-            tracer = TraceDispatcher(f, config=config)
-            frame = Mock(f_code=Mock(co_filename=str(f)))
-            if f.name.startswith("test"):
-                self.assertTrue(tracer.is_target_frame(frame))
-            else:
-                self.assertFalse(tracer.is_target_frame(frame))
+    def test_handle_line(self):
+        self.logic.stack_depth = 1
+        self.logic.handle_line(self.frame)
 
-    def test_variable_capture_expressions(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    x = 42\n    y = 'hello'\n")
+    def test_handle_exception(self):
+        try:
+            raise ValueError("test error")
+        except ValueError as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            self.logic.handle_exception(exc_type, exc_value, exc_traceback)
 
-        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x + 1", "y.upper()"])
-        tracer = TraceDispatcher(test_file, config=config)
+    def test_capture_variables(self):
+        frame = inspect.currentframe()
+        x = 42
+        y = {"z": "test"}
+        self.config.capture_vars = ["x", "y['z']"]
+        result = self.logic.capture_variables(frame)
+        self.assertEqual(result["x"], "42")
+        self.assertEqual(result["y['z']"], "'test'")
 
-        frame = Mock(
-            f_code=Mock(co_filename=str(test_file)),
-            f_locals={"x": 42, "y": "hello"},
-            f_lineno=1,
-            f_globals={"__name__": "__main__"},
-        )
-        captured = tracer.capture_variables(frame)
-        self.assertEqual(captured, {"x + 1": "43", "y.upper()": "'HELLO'"})
+    def test_output_handlers(self):
+        test_msg = {"template": "test {value}", "data": {"value": 42}}
 
-    def test_callback_with_variables(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    x = 42\n")
+        # Test console output
+        with patch("builtins.print") as mock_print:
+            self.logic._console_output(test_msg, "call")
+            mock_print.assert_called_once()
 
-        captured_vars = None
+        # Test file output
+        with tempfile.NamedTemporaryFile() as tmp:
+            self.logic.enable_output("file", filename=tmp.name)
+            self.logic._file_output(test_msg, None)
+            self.logic.disable_output("file")
+            with open(tmp.name) as f:
+                content = f.read()
+            self.assertIn("test 42", content)
 
-        def callback(captured_variables):
-            nonlocal captured_vars
-            captured_vars = captured_variables
 
-        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=["x"], callback=callback)
-        tracer = TraceDispatcher(test_file, config=config)
-        tracer.tracing_enabled = True
-        frame = Mock(
-            f_code=Mock(co_filename=str(test_file)),
-            f_locals={"x": 42},
-            f_globals={"__name__": "__main__"},
-            f_lineno=1,
-        )
-        tracer.log_line(frame)
-        self.assertEqual(captured_vars, {"x": "42"})
+class TestCallTreeHtmlRender(unittest.TestCase):
+    def setUp(self):
+        self.config = TraceConfig()
+        self.logic = TraceLogic(self.config)
+        self.render = CallTreeHtmlRender(self.logic)
 
-    def test_max_line_repeat(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    x = 42\n")
+    def test_add_message(self):
+        self.render.add_message("test message", "call")
+        self.assertEqual(len(self.render._messages), 1)
 
-        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
-        tracer = TraceDispatcher(test_file, config=config)
-        tracer.tracing_enabled = True
-        frame = Mock(f_code=Mock(co_filename=str(test_file)), f_lineno=1)
-        for _ in range(5):
-            tracer.log_line(frame)
-        self.assertEqual(tracer.line_counter[1], 5)
+    def test_add_stack_variable(self):
+        frame = inspect.currentframe()
+        frame_id = 1
+        filename = "test.py"
+        lineno = 42
+        opcode = dis.opmap["LOAD_NAME"]
+        var_name = "x"
+        value = 42
+        self.render.add_stack_variable_create(frame_id, filename, lineno, opcode, var_name, value)
+        key = (frame_id, filename, lineno)
+        self.assertIn(key, self.render._stack_variables)
 
-    def test_async_flush(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    x = 42\n")
+    def test_generate_html(self):
+        self.render.add_message("test message", "call")
+        html = self.render.generate_html()
+        self.assertIn("test&nbsp;message", html)
+        self.assertIn("Python Trace Report", html)
 
-        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
-        tracer = TraceDispatcher(test_file, config=config)
-        tracer.tracing_enabled = True
+    def test_save_to_file(self):
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tmp:
+            tmp.close()
+            self.render.add_message("test message", "call")
+            self.render.save_to_file(str(Path(tmp.name)))
+            with open(tmp.name) as f:
+                content = f.read()
+            self.assertIn("test&nbsp;message", content)
+            os.unlink(tmp.name)
 
-        # Add messages with delay
-        for i in range(5):
-            tracer._add_to_buffer(f"Message {i}", "line")
-            time.sleep(0.1)
 
-        # Wait for flush
-        time.sleep(1.5)
-        tracer.stop()
+class TestColorWrap(unittest.TestCase):
+    def test_color_wrap(self):
+        colored = color_wrap("test", "call")
+        self.assertTrue(colored.startswith(_COLORS["call"]))
+        self.assertTrue(colored.endswith(_COLORS["reset"]))
 
-        # Verify all messages were processed
-        self.assertTrue(tracer._log_queue.empty())
+    def test_color_wrap_no_tty(self):
+        with patch("sys.stdout.isatty", return_value=False):
+            colored = color_wrap("test", "call")
+            self.assertEqual(colored, "test")
 
-    def test_thread_safety(self):
-        test_file = self.tmp_path / "test_file.py"
-        test_file.write_text("def foo():\n    x = 42\n")
 
-        config = TraceConfig(target_files=[], line_ranges={}, capture_vars=[])
-        tracer = TraceDispatcher(test_file, config=config)
-        tracer.tracing_enabled = True
+class TestIntegration(unittest.TestCase):
+    def test_full_trace_cycle(self):
+        config = TraceConfig(target_files=["test_*.py"])
+        dispatcher = TraceDispatcher(__file__, config)
 
-        def worker():
-            for i in range(100):
-                tracer._add_to_buffer(f"Thread {threading.current_thread().name} - {i}", "line")
-                time.sleep(0.001)
+        # Start tracing
+        dispatcher.start()
 
-        threads = [threading.Thread(target=worker) for _ in range(5)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        # Execute some code
+        def test_func(x):
+            y = x + 1
+            return y * 2
 
-        # Wait for flush
-        time.sleep(1.5)
-        tracer.stop()
+        result = test_func(5)
+        self.assertEqual(result, 12)
 
-        # Verify no messages were lost
-        self.assertTrue(tracer._log_queue.empty())
+        # Stop tracing
+        dispatcher.stop()
 
 
 if __name__ == "__main__":
