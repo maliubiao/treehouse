@@ -263,6 +263,53 @@ class TestIntegration(unittest.TestCase):
         # Stop tracing
         dispatcher.stop()
 
+    def test_event_coverage(self):
+        config = TraceConfig(target_files=["test_*.py"])
+        dispatcher = TraceDispatcher(__file__, config)
+        logic = TraceLogic(config)
+
+        # Test call event
+        frame = inspect.currentframe()
+        logic.handle_call(frame)
+        self.assertEqual(logic.stack_depth, 1)
+
+        # Test line event
+        logic.handle_line(frame)
+        self.assertEqual(logic.stack_depth, 1)
+
+        # Test return event
+        logic.handle_return(frame, "test")
+        self.assertEqual(logic.stack_depth, 0)
+
+        # Test exception event
+        try:
+            raise ValueError("test error")
+        except ValueError as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            logic.handle_exception(exc_type, exc_value, exc_traceback)
+
+        # Test variable capture
+        x = 42
+        y = {"z": "test"}
+        config.capture_vars = ["x", "y['z']"]
+        result = logic.capture_variables(frame)
+        self.assertEqual(result["x"], "42")
+        self.assertEqual(result["y['z']"], "'test'")
+
+        # Test output handlers
+        test_msg = {"template": "test {value}", "data": {"value": 42}}
+        with patch("builtins.print") as mock_print:
+            logic._console_output(test_msg, "call")
+            mock_print.assert_called_once()
+
+        with tempfile.NamedTemporaryFile() as tmp:
+            logic.enable_output("file", filename=tmp.name)
+            logic._file_output(test_msg, None)
+            logic.disable_output("file")
+            with open(tmp.name) as f:
+                content = f.read()
+            self.assertIn("test 42", content)
+
 
 if __name__ == "__main__":
     unittest.main()

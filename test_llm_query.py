@@ -26,6 +26,7 @@ from llm_query import (
     BlockPatchResponse,
     ChatbotUI,
     CmdNode,
+    CoverageTestPlan,
     DiffBlockFilter,
     FormatAndLint,
     GPTContextProcessor,
@@ -1562,11 +1563,9 @@ class TestDiffBlockFilter(unittest.TestCase):
 
     def _verify_patch(self, original_file: str, patch_content: str, expected_content: str) -> None:
         with tempfile.NamedTemporaryFile(mode="w+") as patched_file:
-            # Create a temporary file to store the patch
             with tempfile.NamedTemporaryFile(mode="w+") as patch_file:
                 patch_file.write(patch_content)
                 patch_file.flush()
-                # Run patch command with proper arguments
                 subprocess.run(
                     ["patch", "-p0", "-i", patch_file.name, original_file, "-o", patched_file.name],
                     check=True,
@@ -1584,11 +1583,11 @@ class TestDiffBlockFilter(unittest.TestCase):
             diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
-            self.assertEqual(e.returncode, 1)  # diff returns 1 when files differ
+            self.assertEqual(e.returncode, 1)
 
         with patch("builtins.input", side_effect=["y", "n"]):
-            filter = DiffBlockFilter({f1: diff})
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter({f1: diff})
+            result = diff_filter.interactive_filter()
 
         self.assertIn(f1, result)
         self.assertIn("b2", result[f1])
@@ -1605,8 +1604,8 @@ class TestDiffBlockFilter(unittest.TestCase):
             self.assertEqual(e.returncode, 1)
 
         with patch("builtins.input", side_effect=["invalid", "wrong", "y"]):
-            filter = DiffBlockFilter({f1: diff})
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter({f1: diff})
+            result = diff_filter.interactive_filter()
 
         self.assertGreater(len(result[f1].split("\n")), 3)
         self._verify_patch(f1, result[f1], file2)
@@ -1622,8 +1621,8 @@ class TestDiffBlockFilter(unittest.TestCase):
             self.assertEqual(e.returncode, 1)
 
         with patch("builtins.input", side_effect=["ya"]):
-            filter = DiffBlockFilter({f1: diff})
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter({f1: diff})
+            result = diff_filter.interactive_filter()
 
         self.assertIn("+4", result[f1])
         self._verify_patch(f1, result[f1], file2)
@@ -1648,8 +1647,8 @@ class TestDiffBlockFilter(unittest.TestCase):
 
         diff_content = {f1: diff1, f3: diff2}
         with patch("builtins.input", side_effect=["y", "y"]):
-            filter = DiffBlockFilter(diff_content)
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter(diff_content)
+            result = diff_filter.interactive_filter()
 
         self.assertIn(f1, result)
         self.assertIn(f3, result)
@@ -1669,8 +1668,8 @@ class TestDiffBlockFilter(unittest.TestCase):
             self.assertEqual(e.returncode, 1)
 
         with patch("builtins.input", side_effect=["q"]):
-            filter = DiffBlockFilter({f1: diff})
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter({f1: diff})
+            result = diff_filter.interactive_filter()
 
         self.assertEqual(result, {})
 
@@ -1684,24 +1683,122 @@ class TestDiffBlockFilter(unittest.TestCase):
             self.fail(f"diff should return 0 for identical files, got {e.returncode}")
 
         with patch("builtins.input", side_effect=[]):
-            filter = DiffBlockFilter({f1: diff})
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter({f1: diff})
+            result = diff_filter.interactive_filter()
 
         self.assertEqual(result, {})
 
     def test_empty_diff(self):
         with patch("builtins.input", side_effect=[]):
-            filter = DiffBlockFilter({"file.txt": ""})
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter({"file.txt": ""})
+            result = diff_filter.interactive_filter()
 
         self.assertEqual(result, {})
 
     def test_invalid_diff_content(self):
         with patch("builtins.input", side_effect=[]):
-            filter = DiffBlockFilter({"file.txt": "not a valid diff"})
-            result = filter.interactive_filter()
+            diff_filter = DiffBlockFilter({"file.txt": "not a valid diff"})
+            result = diff_filter.interactive_filter()
 
         self.assertEqual(result, {})
+
+
+class TestCoverageTestPlan(unittest.TestCase):
+    """Test cases for CoverageTestPlan functionality."""
+
+    def test_parse_valid_test_plan(self):
+        """Test parsing a valid test plan with multiple test cases and methods."""
+        plan_content = '''
+[test case start]
+[class start]
+[class name start]TestClass1[class name end]
+class TestClass1(unittest.TestCase):
+    def test_method1(self):
+        """Test method 1 description"""
+    def test_method2(self):
+        """Test method 2 description"""
+[class end]
+[test case end]
+[test case start]
+[class start]
+[class name start]TestClass2[class name end]
+class TestClass2(unittest.TestCase):
+    def test_method3(self):
+        """Test method 3 description"""
+[class end]
+[test case end]'''
+        result = CoverageTestPlan.parse_test_plan(plan_content)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["class_name"], "TestClass1")
+        self.assertEqual(len(result[0]["test_methods"]), 2)
+        self.assertEqual(result[1]["class_name"], "TestClass2")
+        self.assertEqual(len(result[1]["test_methods"]), 1)
+
+    def test_parse_empty_test_plan(self):
+        """Test parsing an empty test plan returns empty list."""
+        result = CoverageTestPlan.parse_test_plan("")
+        self.assertEqual(len(result), 0)
+
+    def test_parse_invalid_test_case(self):
+        """Test parsing test case missing class name is skipped."""
+        plan_content = '''
+[test case start]
+[class start]
+class TestClass1(unittest.TestCase):
+    def test_method1(self):
+        """Test method 1 description"""
+[class end]
+[test case end]'''
+        result = CoverageTestPlan.parse_test_plan(plan_content)
+        self.assertEqual(len(result), 0)
+
+    def test_parse_test_case_without_methods(self):
+        """Test parsing test case with no test methods."""
+        plan_content = """
+[test case start]
+[class start]
+[class name start]TestClass1[class name end]
+class TestClass1(unittest.TestCase):
+[class end]
+[test case end]"""
+        result = CoverageTestPlan.parse_test_plan(plan_content)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(len(result[0]["test_methods"]), 0)
+
+    def test_parse_method_without_description(self):
+        """Test parsing method without docstring is skipped."""
+        plan_content = '''
+[test case start]
+[class start]
+[class name start]TestClass1[class name end]
+class TestClass1(unittest.TestCase):
+    def test_method1(self):
+        pass
+    def test_method2(self):
+        """Test method 2 description"""
+[class end]
+[test case end]'''
+        result = CoverageTestPlan.parse_test_plan(plan_content)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(len(result[0]["test_methods"]), 1)
+        self.assertEqual(result[0]["test_methods"][0]["name"], "test_method2")
+
+    def test_validate_valid_test_plan(self):
+        """Test validation returns True for valid test plan."""
+        plan_content = '''
+[test case start]
+[class start]
+[class name start]TestClass1[class name end]
+class TestClass1(unittest.TestCase):
+    def test_method1(self):
+        """Test method 1 description"""
+[class end]
+[test case end]'''
+        self.assertTrue(CoverageTestPlan.validate_test_plan(plan_content))
+
+    def test_validate_invalid_test_plan(self):
+        """Test validation returns False for invalid test plan."""
+        self.assertFalse(CoverageTestPlan.validate_test_plan("invalid content"))
 
 
 if __name__ == "__main__":
