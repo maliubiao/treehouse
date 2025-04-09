@@ -1255,7 +1255,7 @@ PATCH_PROMPT_HEADER = """
 - 高内聚，低耦合，易扩展
 - 利用成熟的设施
 - 减少重复片段
-- 不导入依赖的包，比如import, include, 建议用户自行处理
+- 这是代码片断，不适合导入依赖的包，另行提示用户自行处理
 
 # 指令规范
 - 必须返回结构化内容，使用严格指定的标签格式
@@ -1678,50 +1678,50 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
             Path.cwd()
         )
         symbol_detail[symbol_name]["file_path"] = str(path)
-
-    if len(results):
-        patch_data = [
-            (
-                symbol_detail[symbol_name]["file_path"],
-                symbol_detail[symbol_name]["block_range"],
-                symbol_detail[symbol_name]["block_content"],
-                source_code.encode("utf-8"),
-            )
-            for symbol_name, source_code in results
-        ]
-
-        patch = BlockPatch(
-            file_paths=[data[0] for data in patch_data],
-            patch_ranges=[data[1] for data in patch_data],
-            block_contents=[data[2] for data in patch_data],
-            update_contents=[data[3] for data in patch_data],
+    if not results:
+        return
+    patch_data = [
+        (
+            symbol_detail[symbol_name]["file_path"],
+            symbol_detail[symbol_name]["block_range"],
+            symbol_detail[symbol_name]["block_content"],
+            source_code.encode("utf-8"),
         )
+        for symbol_name, source_code in results
+    ]
 
-        diff = patch.generate_diff()
-        diff_str = "\n".join(diff.values())
+    patch = BlockPatch(
+        file_paths=[data[0] for data in patch_data],
+        patch_ranges=[data[1] for data in patch_data],
+        block_contents=[data[2] for data in patch_data],
+        update_contents=[data[3] for data in patch_data],
+    )
 
-        highlighted_diff = highlight(diff_str, DiffLexer(), TerminalFormatter())
-        print("\n高亮显示的diff内容：")
-        print(highlighted_diff)
-
-        user_input = input("\n是否应用此补丁？(y/n): ").lower()
-        if user_input == "y":
-            file_map = patch.apply_patch()
-            for file_path, content in file_map.items():
-                with open(file_path, "wb+") as f:
-                    f.write(content)
-            print("补丁已成功应用")
-            if auto_lint:
-                formatter = FormatAndLint(verbose=True)
-                fix_files = list(file_map.keys())
-                formatter.run_checks(fix_files, fix=True)
-            if auto_commit:
-                commit = AutoGitCommit(gpt_response=remaining, files_to_add=fix_files, auto_commit=False)
-                commit.do_commit()
-            return file_map
-
-        print("补丁未应用")
-    return None
+    diff = patch.generate_diff()
+    diff_str = "\n".join(diff.values())
+    highlighted_diff = highlight(diff_str, DiffLexer(), TerminalFormatter())
+    print("\n高亮显示的diff内容：")
+    print(highlighted_diff)
+    diff_per_file = DiffBlockFilter(diff).interactive_filter()
+    if not diff_per_file:
+        print("没有选择任何diff块")
+        return None
+    files = []
+    for file, diff in diff_per_file.items():
+        temp_file = shadowroot / (file + ".diff")
+        with open(temp_file, "w+") as f:
+            f.write(diff)
+        _apply_patch(temp_file)
+        os.remove(temp_file)
+        files.append(file)
+    print("补丁已成功应用")
+    if auto_lint:
+        formatter = FormatAndLint(verbose=True)
+        formatter.run_checks(files, fix=True)
+    if auto_commit:
+        commit = AutoGitCommit(gpt_response=remaining, files_to_add=files, auto_commit=False)
+        commit.do_commit()
+        return files
 
 
 class DiffBlockFilter:
@@ -1790,7 +1790,7 @@ class DiffBlockFilter:
                 while repeat_times > 0:
                     highlighted_block = SyntaxHighlight.highlight_if_terminal(block, lang_type="diff")
                     print(f"\nBlock {i}:\n{highlighted_block}\n")
-                    choice = input("Accept block? (y/n/ya/na/q): ").lower().strip()
+                    choice = input("接受修改? (y/n/ya/na/q): ").lower().strip()
                     if choice in ("y", "yes"):
                         file_result.append(block)
                         break
@@ -1804,7 +1804,7 @@ class DiffBlockFilter:
                         quit_early = True
                         break
                     else:
-                        print("Invalid input. Please enter y/n/ya/na/q")
+                        print("错误的输出，请选择 y/n/ya/na/q")
                         repeat_times -= 1
                 if quit_early:
                     break

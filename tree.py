@@ -1962,11 +1962,12 @@ class BlockPatch:
             diff_tool = "diff.exe" if shutil.which("diff.exe") else "fc"
 
         try:
-            result = subprocess.run(
-                [diff_tool, "-u", original_file, modified_file], capture_output=True, text=True, check=True
-            )
-            return result.stdout
-        except (subprocess.CalledProcessError, FileNotFoundError):
+            result = subprocess.run([diff_tool, "-u", original_file, modified_file], capture_output=True, text=True)
+            # 对于diff工具，返回0表示文件相同，返回1表示文件有差异，这都是正常情况
+            if result.returncode in (0, 1):
+                return result.stdout
+            return None
+        except FileNotFoundError:
             return None
 
     def _process_single_file_diff(self, file_path: str, indices: list[int]) -> list[str]:
@@ -2006,8 +2007,8 @@ class BlockPatch:
 
         # 回退到Python实现
         if not system_diff:
-
-            return list(
+            print("patch失败，使用python difflib实现")
+            diff_lines = list(
                 unified_diff(
                     original_code.decode("utf8").splitlines(keepends=True),
                     modified_code.splitlines(keepends=True),
@@ -2017,6 +2018,11 @@ class BlockPatch:
                     n=3,
                 )
             )
+            # Add newline character to lines starting with --- or +++
+            for i, line in enumerate(diff_lines):
+                if line.startswith("---") or line.startswith("+++"):
+                    diff_lines[i] = line + "\n"
+            return diff_lines
 
         # 调整系统diff输出中的文件路径
         diff_lines = []

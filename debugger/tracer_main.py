@@ -105,9 +105,9 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
                 _color_wrap(
                     "用法: python -m debugger.tracer_main [调试选项] <目标脚本> [脚本参数]\n"
                     "调试选项:\n"
-                    "  --watch-files=PATTERNS  逗号分隔的文件模式列表\n"
+                    "  --watch-files=PATTERNS  可以使用多次这个选项\n"
                     "  --open-report          调试完成后自动打开HTML报告\n"
-                    "示例: python -m debugger.tracer_main --watch-files=src/*.py,utils/* main.py --verbose --open-report",
+                    "示例: python -m debugger.tracer_main --watch-files='src/*.py' --watch-files='*main.py' --verbose --open-report",
                     "error",
                 )
             )
@@ -131,7 +131,6 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         print(_color_wrap("  ✓ 自动跳过标准库和第三方库", "call"))
         print(_color_wrap("  ✓ 变量变化检测", "var"))
         print(_color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
-        print(_color_wrap("  ✓ 自动在主程序入口设置断点 (if __name__ == '__main__')", "call"))
         print(_color_wrap(f"\n📂 调试日志路径: {Path(__file__).parent/'logs/debug.log'}\n", "line"))
 
         original_argv = sys.argv.copy()
@@ -140,7 +139,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         tracer = None
         try:
             # 创建匹配当前调试目标的TraceConfig
-            target_patterns = args["watch_files"] or [f"*{target.stem}.py"]
+            target_patterns = args["watch_files"] + [f"*{target.stem}.py"]
             config = TraceConfig(
                 target_files=target_patterns,
                 capture_vars=[],
@@ -178,9 +177,7 @@ def print_debug_summary() -> None:
     print(_color_wrap("  ▷ LINE     - 执行的源代码行", "line"))
     print(_color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
     print(_color_wrap("\n调试功能说明:", "line"))
-    print(_color_wrap("  ✓ 支持多文件监控模式", "call"))
-    print(_color_wrap("  ✓ 自动匹配目标模块及其依赖", "call"))
-    print(_color_wrap(f"{Path(__file__).parent}/logs/debug.log 实时查看日志", "line"))
+    print(_color_wrap(f"{Path(__file__).parent}/logs/debug.log 查看日志", "line"))
     print(_color_wrap(f"{Path(__file__).parent}/logs/trace_report.html 查看网页报告", "line"))
 
 

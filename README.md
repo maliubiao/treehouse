@@ -137,14 +137,7 @@ patchgpt ..MyClass.. 根据说明，写完这个这测试套件
 
 
 ## 代码生成
-符号补丁，启动tree.py以支持符号查找, 可以自动获取某个函数的上下文, 提问之后， 之后根据大模型的的代码输出, 根据diff的结果自主决定是否patch     
-tree.py的启动示例   
-```bash
-#建议加全局变量，避免askgpt找不到符号服务器
-export GPT_API_SERVER="http://127.0.0.1:9050/"
-python  tree.py --project . --excludes "*/.venv/*" "*/node/*" --port 9050 --db-path local.sqlite  
-#之后可以在askgpt中使用@symbol_file.xx/main 这样获取符号上下文，bash, zsh shell支持补号补全, 比较方便
-```
+可对文件或者具体代码符号补丁，需要启动tree.py以支持符号精准查找, 可以使用language server自动获取某个函数的上下文, 提问之后， 之后根据大模型的的代码输出, 根据diff的结果自主决定是否patch, 参考后边的配置说明     
 
 
 ## 安装与配置
@@ -366,7 +359,7 @@ INFO:     127.0.0.1:57957 - "GET /symbols/show_tty_driver/context?max_depth=5 HT
 $GPT_PYTHON_BIN $GPT_PATH/tree.py --port 9060;
 #GPT_PYTHON_BIN GPT_PATH是env.sh设置的环境变量，指向terminal-llm的目录
 export GPT_SYMBOL_API_URL=http://127.0.0.1:9060/;
-#给askgpt @symbol_.... 这些符号查询使用的符号服务地址
+#在askgpt中使用@symbol_file.xx/main 这样获取符号上下文，bash, zsh shell支持补号补全, 比较方便
 ```
 
 
@@ -385,7 +378,7 @@ cmake ../ -DCMAKE_BUILD_TYPE=Release
 #### 使用
 ```bash
 #改path后再用, --watch-files=是glob匹配，通配符, --open-report是结束打开网页, 不建议trace执行几十万行的那种，浏览器负担太大
-python ~/code/terminal-llm/debugger/tracer_main.py --watch-files="*query.py" --open-report test_llm_query.py
+python ~/code/terminal-llm/debugger/tracer_main.py --watch-files="*path.py" --watch-files="*query.py" --open-report test_llm_query.py
 ```
 
 <img src="doc/debugger-preview.png" width = "600" alt="line tracer" align=center />

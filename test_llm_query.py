@@ -1560,6 +1560,22 @@ class TestDiffBlockFilter(unittest.TestCase):
             f2.write(content2)
         return f1.name, f2.name
 
+    def _verify_patch(self, original_file: str, patch_content: str, expected_content: str) -> None:
+        with tempfile.NamedTemporaryFile(mode="w+") as patched_file:
+            # Create a temporary file to store the patch
+            with tempfile.NamedTemporaryFile(mode="w+") as patch_file:
+                patch_file.write(patch_content)
+                patch_file.flush()
+                # Run patch command with proper arguments
+                subprocess.run(
+                    ["patch", "-p0", "-i", patch_file.name, original_file, "-o", patched_file.name],
+                    check=True,
+                    stderr=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                )
+                patched_content = Path(patched_file.name).read_text()
+                self.assertEqual(patched_content.strip(), expected_content.strip())
+
     def test_basic_selection(self):
         file1 = "a\nb\nc\n"
         file2 = "a\nb2\nc\n"
@@ -1568,6 +1584,7 @@ class TestDiffBlockFilter(unittest.TestCase):
             diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
+            self.assertEqual(e.returncode, 1)  # diff returns 1 when files differ
 
         with patch("builtins.input", side_effect=["y", "n"]):
             filter = DiffBlockFilter({f1: diff})
@@ -1575,6 +1592,7 @@ class TestDiffBlockFilter(unittest.TestCase):
 
         self.assertIn(f1, result)
         self.assertIn("b2", result[f1])
+        self._verify_patch(f1, result[f1], file2)
 
     def test_invalid_input_handling(self):
         file1 = "x\ny\nz\n"
@@ -1584,12 +1602,14 @@ class TestDiffBlockFilter(unittest.TestCase):
             diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
+            self.assertEqual(e.returncode, 1)
 
         with patch("builtins.input", side_effect=["invalid", "wrong", "y"]):
             filter = DiffBlockFilter({f1: diff})
             result = filter.interactive_filter()
 
         self.assertGreater(len(result[f1].split("\n")), 3)
+        self._verify_patch(f1, result[f1], file2)
 
     def test_immediate_accept_all(self):
         file1 = "1\n2\n3\n"
@@ -1599,12 +1619,14 @@ class TestDiffBlockFilter(unittest.TestCase):
             diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
+            self.assertEqual(e.returncode, 1)
 
         with patch("builtins.input", side_effect=["ya"]):
             filter = DiffBlockFilter({f1: diff})
             result = filter.interactive_filter()
 
         self.assertIn("+4", result[f1])
+        self._verify_patch(f1, result[f1], file2)
 
     def test_multiple_file_diff(self):
         file1 = "a\nb\nc\n"
@@ -1617,10 +1639,12 @@ class TestDiffBlockFilter(unittest.TestCase):
             diff1 = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff1 = e.output
+            self.assertEqual(e.returncode, 1)
         try:
             diff2 = subprocess.check_output(["diff", "-u", f3, f4], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff2 = e.output
+            self.assertEqual(e.returncode, 1)
 
         diff_content = {f1: diff1, f3: diff2}
         with patch("builtins.input", side_effect=["y", "y"]):
@@ -1631,6 +1655,8 @@ class TestDiffBlockFilter(unittest.TestCase):
         self.assertIn(f3, result)
         self.assertIn("b2", result[f1])
         self.assertIn("y2", result[f3])
+        self._verify_patch(f1, result[f1], file2)
+        self._verify_patch(f3, result[f3], file4)
 
     def test_quit_early(self):
         file1 = "1\n2\n3\n"
@@ -1640,6 +1666,7 @@ class TestDiffBlockFilter(unittest.TestCase):
             diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
+            self.assertEqual(e.returncode, 1)
 
         with patch("builtins.input", side_effect=["q"]):
             filter = DiffBlockFilter({f1: diff})
@@ -1654,7 +1681,7 @@ class TestDiffBlockFilter(unittest.TestCase):
         try:
             diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            diff = e.output
+            self.fail(f"diff should return 0 for identical files, got {e.returncode}")
 
         with patch("builtins.input", side_effect=[]):
             filter = DiffBlockFilter({f1: diff})
