@@ -525,8 +525,11 @@ class CallTreeHtmlRender:
                 error_count += 1
 
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        executed_lines_json = json.dumps(self._executed_lines)
+        executed_lines_data = {
+            filename: {frame_id: list(lines) for frame_id, lines in frames.items()}
+            for filename, frames in self._executed_lines.items()
+        }
+        executed_lines_json = json.dumps(executed_lines_data)
 
         source_files_json = json.dumps(self._source_files)
         comments_json = json.dumps(self._comments_data)
