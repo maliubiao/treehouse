@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <longobject.h>
 #include <mutex>
 #include <object.h>
 #include <opcode.h>
@@ -180,7 +181,8 @@ public:
         (internal_frame_PyInterpreterFrame *)frame_internal->f_frame;
     uint8_t last_opcode = frame_interpreter->prev_instr->code;
     PyObject *var_name = NULL;
-    ///虚构机执行细节，参考Python/generated_cases.c.h, 或者dis模块的stack 操作说明
+    /// 虚构机执行细节，参考Python/generated_cases.c.h, 或者dis模块的stack
+    /// 操作说明
     if (last_opcode == STORE_GLOBAL || last_opcode == STORE_NAME ||
         last_opcode == STORE_ATTR) {
       var_name =
@@ -188,10 +190,10 @@ public:
     } else if (last_opcode == STORE_FAST) {
       var_name = PyTuple_GET_ITEM(code->co_localsplusnames,
                                   frame_interpreter->prev_instr->arg);
-    } else if(last_opcode == STORE_SUBSCR) {
-        PyObject **sp =
-        frame_interpreter->localsplus + frame_interpreter->stacktop;
-        var_name = sp[-1];
+    } else if (last_opcode == STORE_SUBSCR) {
+      PyObject **sp =
+          frame_interpreter->localsplus + frame_interpreter->stacktop;
+      var_name = sp[-1];
     }
     Py_DECREF(code);
     if (var_name != NULL) {
@@ -200,7 +202,7 @@ public:
       PyObject *stack_top_element = sp[-1];
       if (last_opcode == STORE_ATTR) {
         stack_top_element = sp[-2];
-      } else if(last_opcode == STORE_SUBSCR) {
+      } else if (last_opcode == STORE_SUBSCR) {
         stack_top_element = sp[-3];
       }
       if (var_name == NULL || stack_top_element == NULL) {
@@ -208,11 +210,44 @@ public:
       }
       Py_INCREF(var_name);
       Py_INCREF(stack_top_element);
+      PyObject *opcode_object = PyLong_FromSize_t(last_opcode);
       PyObject *ret =
-          PyObject_CallMethod(trace_logic, "handle_opcode", "OOO",
-                              (PyObject *)frame, var_name, stack_top_element);
+          PyObject_CallMethod(trace_logic, "handle_opcode", "OOOO",
+                              (PyObject *)frame, opcode_object, var_name, stack_top_element);
       Py_DECREF(var_name);
       Py_DECREF(stack_top_element);
+      Py_DECREF(opcode_object);
+      if (ret != NULL) {
+        Py_DECREF(ret);
+      } else {
+        print_stack_trace();
+      }
+    } else if (last_opcode == CALL) {
+      uint8_t arg_size = frame_interpreter->prev_instr->arg;
+      PyObject **sp =
+          frame_interpreter->localsplus + frame_interpreter->stacktop;
+      PyObject *callable = sp[-(arg_size+1)];
+      PyObject *method = sp[-(arg_size+2)];
+      PyObject **args_base = sp - arg_size;
+      int total_args = arg_size;
+      if(method != NULL) {
+        callable = method;
+        args_base --;
+        total_args ++;
+      }
+      Py_INCREF(callable);
+      PyObject *args = PyTuple_New(total_args);
+      for (int i = 0; i < total_args; i++) {
+        PyObject *arg = args_base[i];
+        Py_INCREF(arg);
+        PyTuple_SET_ITEM(args, i , arg);
+      }
+      PyObject *opcode_object = PyLong_FromSize_t(last_opcode);
+      PyObject *ret = PyObject_CallMethod(trace_logic, "handle_opcode", "OOOO",
+                                          (PyObject *)frame, opcode_object, callable, args);
+      Py_DECREF(callable);
+      Py_DECREF(args);
+      Py_DECREF(opcode_object);
       if (ret != NULL) {
         Py_DECREF(ret);
       } else {

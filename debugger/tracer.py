@@ -1,6 +1,7 @@
 import ast
 import base64
 import datetime
+import dis
 import fnmatch
 import html
 import importlib.util
@@ -398,8 +399,19 @@ class CallTreeHtmlRender:
             return ""
         text = []
         seen = set()
-        for var_name, value in variables:
-            item = f"{var_name}={_truncate_value(value)}"
+        for opcode, var_name, value in variables:
+            if "CALL" == dis.opname[opcode]:
+                args = ", ".join(f"{_truncate_value(arg)}" for arg in value)
+                if getattr(var_name, "__code__", None):
+                    item = f"{var_name.__code__.co_name}({args})"
+                elif getattr(var_name, "__name__", None):
+                    item = f"{var_name.__name__}({args})"
+                else:
+                    item = f"{var_name}({args})"
+            elif "STORE_SUBSCR" == dis.opname[opcode]:
+                item = f"[{var_name}]={_truncate_value(value)}"
+            else:
+                item = f"{var_name}={_truncate_value(value)}"
             if item not in seen:
                 seen.add(item)
                 text.append(item)
@@ -487,13 +499,13 @@ class CallTreeHtmlRender:
         """添加消息到消息列表"""
         self._messages.append((message, msg_type, log_data))
 
-    def add_stack_variable_create(self, frame_id, filename, lineno, var_name, value):
+    def add_stack_variable_create(self, frame_id, filename, lineno, opcode, var_name, value):
         if lineno is None:
             return
         key = (frame_id, filename, lineno)
         if key not in self._stack_variables:
             self._stack_variables[key] = []
-        self._stack_variables[key].append((var_name, value))
+        self._stack_variables[key].append((opcode, var_name, value))
 
     def add_raw_message(self, log_data, color_type):
         """添加原始日志数据并处理"""
@@ -820,9 +832,9 @@ class TraceLogic:
         if self.config.capture_vars:
             self._process_captured_vars(frame)
 
-    def handle_opcode(self, frame, name, value):
+    def handle_opcode(self, frame, opcode, name, value):
         self._html_render.add_stack_variable_create(
-            self._get_frame_id(frame), frame.f_code.co_filename, frame.f_lineno, name, value
+            self._get_frame_id(frame), frame.f_code.co_filename, frame.f_lineno, opcode, name, value
         )
 
     def _process_trace_expression(self, frame, line, filename, lineno):
