@@ -101,10 +101,8 @@ class TestSourceFrameworkParser(unittest.TestCase):
             """
         # Auto-generated code skeleton
 
-        \"\"\"Module docstring\"\"\"
         import os
         from sys import path
-        VALUE = 100
         @class_decorator
         class MyClass:
             pass  # Placeholder

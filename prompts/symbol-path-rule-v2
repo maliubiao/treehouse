@@ -28,6 +28,7 @@
 3. **Python**
    - 类方法：`类名.方法名`
      示例：`MyClass.my_method`
+   - 不包括包名
    - 主程序块：`__main__`
    - 导入块：`__import__`
 

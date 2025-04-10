@@ -1245,31 +1245,7 @@ def read_last_query(_):
 
 
 PATCH_PROMPT_HEADER = """
-# 任务说明
-- 积极帮助用户处理遇到的问题，提供超预期的解决方案
-- 主要是处理代码, 消除bug, 增加新功能，重构，或者用户要求的其它修改
-- 修改完代码要验证是否正确的解决了问题
-- 根据任务的需要增加，删除，拼接，改写原来的符号或者块
-
-# 代码编写规范
-- 编写符合工业标准的高质量代码
-- 用强类型降低重构难度
-- 高内聚，低耦合，易扩展
-- 利用成熟的设施
-- 减少重复片段
-- 匿名函数不利于符号查找, 强制有意义的函数命名
-- 这是代码片断，不适合导入依赖的包，另行提示用户自行处理
-
-# 输出规范
-- 必须返回结构化内容，使用严格指定的标签格式
-- 若无修改需求，则忽视传入的符号或者块
-- 保持原有缩进和代码风格，不添注释
-- 输出必须为纯文本，禁止使用markdown或代码块
-- 用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
-- 你的输出会被用来替代符号或者文件路径的原始内容，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致
-- 在理解代码的基础上，根据[symbol path rule] 决定修改什么符号
-- 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified file], [SYMBOL START]输入对应[modified symbol]
-
+{patch_rule}
 [symbol path rule start]
 {symbol_path_rule_content}
 [symbol path rule end]
@@ -1380,7 +1356,8 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
         prompt += PUA_PROMPT
     if patch_require:
         text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text()
-        prompt += PATCH_PROMPT_HEADER.format(symbol_path_rule_content=text)
+        patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text()
+        prompt += PATCH_PROMPT_HEADER.format(patch_rule=patch_text, symbol_path_rule_content=text)
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
     # 添加符号信息
