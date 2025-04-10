@@ -9,11 +9,16 @@ _init_gpt_env() {
 
   export GPT_DOC="$GPT_PATH/obsidian"
   export PATH="$GPT_PATH/bin:$PATH"
+  export PYTHONPATH="$GPT_PATH:$PYTHONPATH"
   export GPT_PROMPTS_DIR="$GPT_PATH/prompts"
   export GPT_LOGS_DIR="$GPT_PATH/logs"
   export GPT_MAX_TOKEN=${GPT_MAX_TOKEN:-16384}
   export GPT_UUID_CONVERSATION=${GPT_UUID_CONVERSATION:-$(uuidgen)}
   export GPT_PYTHON_BIN="$GPT_PATH/.venv/bin/python3"
+
+  if [[ -f "$GPT_PATH/.tree/rc.sh" ]]; then
+    source "$GPT_PATH/.tree/rc.sh"
+  fi
 }
 
 # 目录初始化
@@ -409,6 +414,14 @@ function naskgpt() {
 
 function trace() {
   $GPT_PYTHON_BIN $GPT_PATH/debugger/tracer_main.py --open-report $@
+}
+
+function symbolgpt() {
+  $GPT_PYTHON_BIN -c "import llm_query; llm_query.start_symbol_service(False)"
+}
+
+function symbolgptrestart() {
+  $GPT_PYTHON_BIN -c "import llm_query; llm_query.start_symbol_service(True)"
 }
 
 # 自动配置默认模型

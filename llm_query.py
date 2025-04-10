@@ -16,6 +16,8 @@ import os
 import platform
 import pprint
 import re
+import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -1255,6 +1257,7 @@ PATCH_PROMPT_HEADER = """
 - 高内聚，低耦合，易扩展
 - 利用成熟的设施
 - 减少重复片段
+- 匿名函数不利于符号查找, 强制有意义的函数命名
 - 这是代码片断，不适合导入依赖的包，另行提示用户自行处理
 
 # 指令规范
@@ -1263,8 +1266,7 @@ PATCH_PROMPT_HEADER = """
 - 保持原有缩进和代码风格，不添注释
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
-- 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 
-- 可以单独修改输入符号的子符号，要根据规则命名，但不可以同时修改子符号跟父符号
+- 你的输出会被用来替代符号或者文件路径的原始内容，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致
 - 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified file], [SYMBOL START]输入对应[modified symbol]
 
 [symbol path rule start]
@@ -3817,6 +3819,183 @@ class CoverageTestPlan:
             return len(cases) > 0
         except Exception:
             return False
+
+
+class SymbolService:
+    """符号服务实例管理器
+
+    功能:
+    1. 加载项目配置(.llm_project)
+    2. 管理tree.py进程(端口分配、PID记录)
+    3. 提供符号服务API(http://127.0.0.1:port)
+    """
+
+    CONFIG_FILE = LLM_PROJECT_CONFIG
+    PID_FILE = ".tree/pid"
+    LOG_FILE = ".tree/log"
+    RC_FILE = ".tree/rc.sh"
+    DEFAULT_PORT = 9050
+    DEFAULT_LSP = "pylsp"
+
+    def __init__(self, project_root: str = None, port: int = None, lsp: str = None, force_restart: bool = False):
+        self.project_root = Path(project_root or Path.cwd()).resolve()
+        self.port = port or self._find_available_port()
+        self.lsp = lsp or self.DEFAULT_LSP
+        self.force_restart = force_restart
+        self.tree_dir = self.project_root / ".tree"
+        self.pid_file = self.tree_dir / "pid"
+        self.log_file = self.tree_dir / "log"
+        self.rc_file = self.tree_dir / "rc.sh"
+        self._validate_project_root()
+
+    def _validate_project_root(self):
+        """验证项目根目录是否包含配置文件"""
+        if not (self.project_root / self.CONFIG_FILE).exists():
+            raise FileNotFoundError(f"项目配置文件 {self.CONFIG_FILE} 不存在于 {self.project_root}")
+
+    def _find_available_port(self) -> int:
+        """查找可用端口"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+
+    def _read_pid_file(self) -> Optional[dict]:
+        """读取PID文件内容"""
+        if not self.pid_file.exists():
+            return None
+        try:
+            with open(self.pid_file, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
+
+    def _write_pid_file(self, pid: int):
+        """写入PID文件"""
+        with open(self.pid_file, "w") as f:
+            json.dump({"pid": pid, "port": self.port}, f)
+
+    def _write_rc_file(self, api_url: str):
+        """写入环境变量配置文件"""
+        with open(self.rc_file, "w") as f:
+            f.write(f"export GPT_SYMBOL_API_URL={api_url}\n")
+
+    def _kill_existing_process(self, pid: int):
+        """终止现有进程"""
+        try:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(1)  # 等待进程退出
+            if self._is_process_running(pid):
+                os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # 进程已不存在
+        finally:
+            self.pid_file.unlink(missing_ok=True)
+
+    def _is_process_running(self, pid: int) -> bool:
+        """检查进程是否在运行"""
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def _check_service_ready(self, timeout: int = 10) -> bool:
+        """检查服务是否就绪"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), timeout=1):
+                    return True
+            except (socket.timeout, ConnectionRefusedError):
+                time.sleep(0.5)
+        return False
+
+    def start(self) -> str:
+        """启动符号服务
+
+        返回:
+            API服务URL (http://127.0.0.1:port)
+        """
+        # 确保.tree目录存在
+        self.tree_dir.mkdir(parents=True, exist_ok=True)
+
+        # 检查现有进程
+        pid_info = self._read_pid_file()
+        if pid_info:
+            if self._is_process_running(pid_info["pid"]):
+                if not self.force_restart:
+                    return f"http://127.0.0.1:{pid_info['port']}"
+                self._kill_existing_process(pid_info["pid"])
+            else:
+                # 清理无效的pid文件
+                self.pid_file.unlink(missing_ok=True)
+
+        # 启动新进程
+        cmd = [
+            "python",
+            str(Path(__file__).parent / "tree.py"),
+            "--project",
+            str(self.project_root),
+            "--port",
+            str(self.port),
+            "--lsp",
+            self.lsp,
+        ]
+
+        # 重定向输出到日志文件
+        with open(self.log_file, "w") as log_file:
+            process = subprocess.Popen(cmd, stdout=log_file, stderr=log_file)
+
+        self._write_pid_file(process.pid)
+
+        if not self._check_service_ready():
+            raise RuntimeError(f"符号服务启动失败，端口 {self.port} 不可用或日志中没有启动信息")
+
+        api_url = f"http://127.0.0.1:{self.port}"
+        self._write_rc_file(api_url)
+        return api_url
+
+
+def start_symbol_service(force=False):
+    """
+    use config in global object
+    GLOBAL_PROJECT_CONFIG
+    start symbol service
+    """
+    if not hasattr(GLOBAL_PROJECT_CONFIG, "project_root_dir"):
+        raise ValueError("GLOBAL_PROJECT_CONFIG缺少project_root_dir配置")
+
+    try:
+        # 从配置中读取LSP设置，默认为pylsp
+        lsp_config = getattr(GLOBAL_PROJECT_CONFIG, "lsp", {})
+        default_lsp = lsp_config.get("default", "py") if isinstance(lsp_config, dict) else "py"
+
+        # 尝试从配置中获取symbol_service端口
+        port = None
+        if hasattr(GLOBAL_PROJECT_CONFIG, "symbol_service_url"):
+            try:
+                parsed_url = urlparse(GLOBAL_PROJECT_CONFIG.symbol_service_url)
+                if parsed_url.port:
+                    port = parsed_url.port
+            except (AttributeError, ValueError):
+                pass
+
+        service = SymbolService(
+            project_root=GLOBAL_PROJECT_CONFIG.project_root_dir, port=port, lsp=default_lsp, force_restart=force
+        )
+
+        # 如果使用了随机端口，更新global config
+        if port is None or port != service.port:
+            GLOBAL_PROJECT_CONFIG.update_symbol_service_url(f"http://127.0.0.1:{service.port}")
+
+        api_url = service.start()
+        print(f"符号服务已启动: {api_url}")
+        print(f"环境变量已写入: {service.rc_file}")
+        print(f"使用命令加载环境变量: source {service.rc_file}")
+        return api_url
+    except Exception as e:
+        print(f"启动符号服务失败: {str(e)}")
+        raise
 
 
 def handle_workflow(program_args):

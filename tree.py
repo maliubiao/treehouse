@@ -249,6 +249,8 @@ class ProjectConfig:
         self.lsp = lsp
         self._lsp_clients: Dict[str, Any] = {}
         self._lsp_lock = threading.Lock()
+        self.symbol_service_url: Optional[str] = None
+        self._config_file_path: Optional[Path] = None
 
     def relative_path(self, path: Path) -> str:
         """获取相对于项目根目录的路径"""
@@ -277,19 +279,38 @@ class ProjectConfig:
         with self._lsp_lock:
             self._lsp_clients[key] = client
 
+    def set_config_file_path(self, config_path: Path):
+        """设置配置文件路径"""
+        self._config_file_path = config_path
+
+    def update_symbol_service_url(self, url: str):
+        """更新符号服务URL并保存配置"""
+        self.symbol_service_url = url
+        self._save_config()
+
+    def _save_config(self):
+        """将配置保存到文件"""
+        if not self._config_file_path:
+            return
+
+        config_data = {
+            "project_root_dir": str(self.project_root_dir),
+            "exclude": self.exclude,
+            "include": self.include,
+            "file_types": self.file_types,
+            "lsp": self.lsp,
+            "symbol_service_url": self.symbol_service_url,
+        }
+
+        try:
+            with open(self._config_file_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(config_data, f, sort_keys=False)
+        except IOError as e:
+            logging.error(f"保存配置文件失败: {e}")
+
 
 class ConfigLoader:
-    """加载和管理LLM项目搜索配置
-
-    配置结构示例:
-    project_root_dir: "."
-    exclude:
-      dirs: [".venv", "node_modules", "tmp"]
-      files: ["*.min.js", "*.bundle.css"]
-    include:
-      files: ["*.py", "*.md", "*.txt"]
-    file_types: [".py", ".js", ".md"]
-    """
+    """加载和管理LLM项目搜索配置"""
 
     def __init__(self, config_path: Path = Path(LLM_PROJECT_CONFIG)):
         self.config_path = Path(config_path)
@@ -321,7 +342,9 @@ class ConfigLoader:
         try:
             with open(self.config_path, encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
-            return self._merge_configs(config)
+            project_config = self._merge_configs(config)
+            project_config.set_config_file_path(self.config_path)
+            return project_config
         except (yaml.YAMLError, IOError) as e:
             print(f"❌ 配置文件加载失败: {str(e)}")
             return self._default_config
@@ -337,7 +360,7 @@ class ConfigLoader:
 
     def _merge_configs(self, user_config: dict) -> ProjectConfig:
         """合并用户配置和默认配置"""
-        return ProjectConfig(
+        project_config = ProjectConfig(
             project_root_dir=Path(
                 os.path.expanduser(user_config.get("project_root_dir", self._default_config.project_root_dir))
             ).resolve(),
@@ -360,6 +383,8 @@ class ConfigLoader:
             },
             file_types=list(set(self._default_config.file_types + user_config.get("file_types", []))),
         )
+        project_config.symbol_service_url = user_config.get("symbol_service_url")
+        return project_config
 
     def _create_search_config(self, config: ProjectConfig) -> "SearchConfig":
         """创建SearchConfig对象并进行验证"""
@@ -1799,7 +1824,7 @@ class SourceSkeleton:
 
         # 处理模块级赋值
         elif node.type in (
-            #NodeTypes.EXPRESSION_STATEMENT,
+            # NodeTypes.EXPRESSION_STATEMENT,
             NodeTypes.C_DEFINE,
             NodeTypes.GO_IMPORT_DECLARATION,
             NodeTypes.C_INCLUDE,
@@ -4497,9 +4522,9 @@ if __name__ == "__main__":
         print(SyntaxHighlight.highlight_if_terminal(framework, file_path=args.debug_skeleton))
     else:
         logger.info("启动FastAPI服务")
-        from debugger.web import service
+        # from debugger.web import service
 
-        service.start_debugger(args.debugger_port)
+        # service.start_debugger(args.debugger_port)
         main(
             host=args.host,
             port=args.port,
