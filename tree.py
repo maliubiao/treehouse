@@ -1799,7 +1799,7 @@ class SourceSkeleton:
 
         # 处理模块级赋值
         elif node.type in (
-            NodeTypes.EXPRESSION_STATEMENT,
+            #NodeTypes.EXPRESSION_STATEMENT,
             NodeTypes.C_DEFINE,
             NodeTypes.GO_IMPORT_DECLARATION,
             NodeTypes.C_INCLUDE,
