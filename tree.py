@@ -1407,10 +1407,11 @@ class SearchConfig:
 
 
 class RipgrepSearcher:
-    def __init__(self, config: SearchConfig, debug: bool = False):
+    def __init__(self, config: SearchConfig, debug: bool = False, file_list: list[str] = None):
         self.config = config
         self.debug = debug
         self.file_pattern = self._build_file_pattern()
+        self.file_list = file_list
 
     def _build_file_pattern(self) -> str:
         """构建符合ripgrep要求的文件类型匹配模式"""
@@ -1474,26 +1475,26 @@ class RipgrepSearcher:
             "custom",
             "--no-ignore",  # 确保遵守我们自己的过滤规则
         ]
-
         # 添加搜索模式
         for pattern in patterns:
             cmd.extend(["--regexp", pattern])
 
-        # 添加排除目录
-        for d in self.config.exclude_dirs:
-            cmd.extend(["--glob", f"!{d}/**"])
+        if self.file_list:
+            cmd.extend(["--follow", "--glob"] + list(self.file_list))
+        else:
+            # 添加排除目录
+            for d in self.config.exclude_dirs:
+                cmd.extend(["--glob", f"!{d}/**"])
 
-        # 添加排除文件
-        for f in self.config.exclude_files:
-            cmd.extend(["--glob", f"!{f}"])
+            # 添加排除文件
+            for f in self.config.exclude_files:
+                cmd.extend(["--glob", f"!{f}"])
 
-        # 添加包含目录（通过glob实现）
-        for d in self.config.include_dirs:
-            cmd.extend(["--glob", f"{d}/**"])
-
-        # 最终添加搜索根目录
-        cmd.append(str(search_root))
-
+            # 添加包含目录（通过glob实现）
+            for d in self.config.include_dirs:
+                cmd.extend(["--glob", f"{d}/**"])
+            # 最终添加搜索根目录
+            cmd.append(str(search_root))
         return cmd
 
     def _parse_results(self, output: str) -> List[SearchResult]:

@@ -139,10 +139,6 @@ public:
         trace_logic(tracer_logic) {
     Py_INCREF(trace_logic);
     Py_INCREF(config);
-    if (!fs::exists(this->target_path)) {
-      throw std::runtime_error("Target path not found: " +
-                               std::string(target_path));
-    }
   }
 
   ~TraceDispatcher() {
@@ -411,12 +407,7 @@ static int TraceDispatcher_init(TraceDispatcherObject *self, PyObject *args,
     return -1;
   }
 
-  try {
-    self->dispatcher = new TraceDispatcher(target_path, trace_logic, config);
-  } catch (const std::exception &e) {
-    PyErr_SetString(PyExc_RuntimeError, e.what());
-    return -1;
-  }
+  self->dispatcher = new TraceDispatcher(target_path, trace_logic, config);
   return 0;
 }
 

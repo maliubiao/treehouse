@@ -1260,13 +1260,14 @@ PATCH_PROMPT_HEADER = """
 - 匿名函数不利于符号查找, 强制有意义的函数命名
 - 这是代码片断，不适合导入依赖的包，另行提示用户自行处理
 
-# 指令规范
+# 输出规范
 - 必须返回结构化内容，使用严格指定的标签格式
 - 若无修改需求，则忽视传入的符号或者块
 - 保持原有缩进和代码风格，不添注释
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
 - 你的输出会被用来替代符号或者文件路径的原始内容，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致
+- 在理解代码的基础上，根据[symbol path rule] 决定修改什么符号
 - 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified file], [SYMBOL START]输入对应[modified symbol]
 
 [symbol path rule start]
@@ -2169,6 +2170,8 @@ class GPTContextProcessor:
     def __init__(self):
         self.cmd_map = self._initialize_cmd_map()
         self.current_length = 0
+        self.cmds = []
+        self._local_files = set()
         self._add_gpt_flags()
 
     def _initialize_cmd_map(self):
@@ -2254,6 +2257,7 @@ class GPTContextProcessor:
     ) -> str:
         """处理包含@...的文本"""
         parts = self.preprocess_text(text)
+        self.cmds = parts.copy()
         for i, node in enumerate(parts):
             if isinstance(node, TextNode):
                 if ignore_text:
@@ -2300,6 +2304,13 @@ class GPTContextProcessor:
             "block_content": symbol["code"].encode("utf-8"),
         }
 
+    def _extract_include_files(self):
+        for node in self.cmds:
+            if isinstance(node, CmdNode):
+                if is_local_file(node.command):
+                    self._local_files.add(node.command)
+        return self._local_files
+
     def _process_symbol(self, symbol_name: SymbolsNode) -> str:
         """处理符号"""
         symbol_map = {}
@@ -2307,6 +2318,7 @@ class GPTContextProcessor:
             symbol_name.symbols,
             os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG),
             max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
+            file_list=self._extract_include_files(),
         )
         for symbol in symbols.values():
             symbol_map[symbol["name"]] = self._symbol_format(symbol)
@@ -3065,16 +3077,18 @@ def prompt_words_search(words: List[str], args):
 
 
 def perform_search(
-    words: List[str], config_path: str = LLM_PROJECT_CONFIG, max_context_size=GLOBAL_MODEL_CONFIG.max_context_size
+    words: List[str],
+    config_path: str = LLM_PROJECT_CONFIG,
+    max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
+    file_list: List[str] = None,
 ):
     """执行代码搜索并返回强类型结果"""
 
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
         raise ValueError("需要至少一个有效搜索关键词")
     config = ConfigLoader(Path(config_path)).load_search_config()
-    searcher = RipgrepSearcher(config, debug=True)
+    searcher = RipgrepSearcher(config, debug=True, file_list=file_list)
     rg_results = searcher.search(patterns=[re.escape(word) for word in words])
-
     results: FileSearchResults = FileSearchResults(
         results=[
             FileSearchResult(

@@ -3,27 +3,79 @@ cmake_minimum_required(VERSION 3.15)
 project(terminal-llm-tracer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(Python_VERSION "3.11" CACHE STRING "Target Python version (3.8-3.12)")
+set(Python_EXECUTABLE "" CACHE FILEPATH "Path to Python executable")
 
-# Platform detection
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    set(PLATFORM_MACOS TRUE)
+# Platform detection (host and target)
+if(ANDROID)
+    set(PLATFORM_ANDROID TRUE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(PLATFORM_APPLE TRUE)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLATFORM_LINUX TRUE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(PLATFORM_WINDOWS TRUE)
 endif()
 
+message(STATUS "Host system: ${CMAKE_HOST_SYSTEM_NAME}")
+message(STATUS "Target system: ${CMAKE_SYSTEM_NAME}")
+
+# 平台定义转换
+add_compile_definitions(
+    $<$<BOOL:${PLATFORM_APPLE}>:PLATFORM_APPLE>
+    $<$<BOOL:${PLATFORM_LINUX}>:PLATFORM_LINUX>
+    $<$<BOOL:${PLATFORM_WINDOWS}>:PLATFORM_WINDOWS>
+    $<$<BOOL:${PLATFORM_ANDROID}>:PLATFORM_ANDROID>
+)
+
+# 统一架构定义
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(ARCH_X86_64 TRUE)
+    set(ARCH_STRING "x86_64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+    set(ARCH_ARM64 TRUE)
+    set(ARCH_STRING "arm64")
+    add_compile_options(-DARM_ARCH)
+else()
+    execute_process(COMMAND uname -m 
+        OUTPUT_VARIABLE ARCH_STRING 
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT ARCH_STRING)
+        set(ARCH_STRING "unknown")
+    endif()
+endif()
+
+add_compile_definitions(
+    $<$<BOOL:${ARCH_X86_64}>:ARCH_X86_64>
+    $<$<BOOL:${ARCH_ARM64}>:ARCH_ARM64>
+    ARCH_STRING="${ARCH_STRING}"
+)
+
 # Compiler options
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(-Wall -Wextra -fno-exceptions -fno-rtti)
-    add_compile_options($<$<CONFIG:RELEASE>:-O3 -flto>)
-    add_compile_options($<$<CONFIG:DEBUG>:-g -fno-omit-frame-pointer>)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra -fno-exceptions -fno-rtti )
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        add_compile_options(-O3 -flto)
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_compile_options(-g -fno-omit-frame-pointer)
+    endif()
+    
+    if(ARCH_X86_64)
+        add_compile_options(-march=native)
+    elseif(ARCH_ARM64 AND PLATFORM_APPLE)
+        add_compile_options(-arch arm64)
+    endif()
+    
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+elseif(MSVC)
+    add_compile_options(/W4 /EHsc /permissive-)
 endif()
 
 # Sanitizers and instrumentation
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(ENABLE_ASAN)
         add_compile_options(-fsanitize=address)
         add_link_options(-fsanitize=address)
@@ -43,27 +95,39 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
     endif()
 endif()
 
+add_compile_definitions(
+    $<$<BOOL:${ENABLE_ASAN}>:ENABLE_ASAN>
+    $<$<BOOL:${ENABLE_COVERAGE}>:ENABLE_COVERAGE>
+)
+
 # RPATH settings
-if(PLATFORM_MACOS)
+if(PLATFORM_APPLE)
     set(CMAKE_INSTALL_RPATH "@loader_path/../lib")
     set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 elseif(PLATFORM_LINUX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
 endif()
 
-# Architecture detection
-if(PLATFORM_MACOS AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-    add_compile_options(-arch arm64)
+# Symbol visibility (moved after target creation)
+if(NOT PLATFORM_WINDOWS)
+    add_compile_options(-fvisibility=hidden)
 endif()
 
-# Symbol visibility (moved after target creation)
-add_compile_options(-fvisibility=hidden)
-
 # Find dependencies with proper component specifications
-find_package(Python 3.11.11 REQUIRED COMPONENTS Interpreter Development Development.Module)
-#find_package(Python 3.11.11 EXACT REQUIRED COMPONENTS Interpreter Development Development.Module)
+if(PLATFORM_WINDOWS)
+    set(components Interpreter Development Development.Module Debug)
+else()
+    set(components Interpreter Development Development.Module)
+     
+endif()
 
-# Configure pybind11 with updated policies
+if(Python_EXECUTABLE)
+    set(Python_FIND_VIRTUALENV FIRST)
+    find_package(Python ${Python_VERSION} EXACT REQUIRED COMPONENTS ${components})
+else()
+    find_package(Python ${Python_VERSION} REQUIRED COMPONENTS ${components})
+endif()
+
 cmake_policy(SET CMP0135 NEW)  # Handle FetchContent timestamp policy
 
 # Define target library
@@ -79,10 +143,20 @@ target_link_libraries(tracer_core PRIVATE
     Python::Python
 )
 
+# Set Python include directories
+target_include_directories(tracer_core PRIVATE
+    ${Python_INCLUDE_DIRS}
+)
+
 # Set output directory to match Python import path
+if(PLATFORM_WINDOWS)
+    set(SUFFIX ".pyd")
+else()
+    set(SUFFIX ".so")
+endif()
 set_target_properties(tracer_core PROPERTIES
     PREFIX ""
-    SUFFIX ".so"
+    SUFFIX ${SUFFIX}
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
@@ -95,13 +169,14 @@ doxygen_add_docs(
 )
 
 # Installation rules
-install(TARGETS tracer_core
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-)
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/cpp/
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.h")
+if(PLATFORM_WINDOWS)
+    install(TARGETS tracer_core DESTINATION Scripts)
+else()
+    install(TARGETS tracer_core
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+    )
+endif()
 
 # Version management
 set(PROJECT_VERSION 1.0.0)
