@@ -97,7 +97,7 @@ endif()
 
 add_compile_definitions(
     $<$<BOOL:${ENABLE_ASAN}>:ENABLE_ASAN>
-    $<$<BOOL:${ENABLE_COVERAGE}>:ENABLE_COVERAGE>
+   $<$<BOOL:${ENABLE_COVERAGE}>:ENABLE_COVERAGE>
 )
 
 # RPATH settings

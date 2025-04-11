@@ -1703,10 +1703,10 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
     filtered_response = re.sub(
         rf"{prevent_escape_a}.*?{prevent_escape_b}", "", response_text, flags=re.DOTALL
     ).strip()  # 解析大模型响应
+    add_symbol_details(filtered_response, symbol_detail)
     file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
     if file_part:
         extract_and_diff_files(file_part, save=False)
-    add_symbol_details(remaining, symbol_detail)
     results = parse_llm_response(remaining, symbol_detail.keys())
     for symbol_name, _ in results:
         symbol_path = (GLOBAL_PROJECT_CONFIG.project_root_dir / symbol_detail[symbol_name]["file_path"]).relative_to(
