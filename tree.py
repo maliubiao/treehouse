@@ -25,7 +25,7 @@ from difflib import unified_diff
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 import yaml
@@ -266,7 +266,7 @@ class ProjectConfig:
             except ValueError:
                 return str(path)
         else:
-            p = Path(self.project_root_dir) / path
+            p = (Path.cwd() / path).resolve()
             return str(p.relative_to(Path.cwd()))
 
     def get_lsp_client(self, key: str) -> Optional[Any]:
@@ -525,7 +525,7 @@ class SymbolTrie:
     def _collect_all_symbols(self, node, current_prefix, result):
         """递归收集所有符号"""
         if node.is_end:
-            result[current_prefix] = [symbol for symbol in node.symbols]
+            result[current_prefix] = list(node.symbols)
 
         for char, child in node.children.items():
             self._collect_all_symbols(child, current_prefix + char, result)
@@ -660,9 +660,34 @@ class ParserUtil:
         """根据文件路径列表查找符号"""
         _, code_map = self.get_symbol_paths(file_path)
         m = {}
+        n = {}
         for path in symbols:
-            m[path] = code_map[path]
-        return m
+            path_backup = path
+            symbol_info = code_map.get(path, None)
+            if symbol_info:
+                m[path] = code_map[path]
+                m[path]["block_content"] = m[path]["code"].encode("utf-8")
+                continue
+            for _ in range(path.count(".")):
+                path = path[: path.rfind(".")]
+                symbol_info = code_map.get(path, None)
+                symbol_info["block_content"] = symbol_info["code"].encode("utf-8")
+                if symbol_info:
+                    n[path_backup] = (path, symbol_info)
+                    break
+            if not symbol_info:
+                # 使用整个文件作为符号信息
+                with open(file_path, "rb") as f:
+                    file_bytes = f.read()
+                file_size = len(file_bytes)
+                symbol_info = {
+                    "block_content": file_bytes,
+                    "block_range": (0, file_size),
+                    "start_line": 0,
+                    "file_path": file_path,
+                }
+                n[path_backup] = ("module", symbol_info)
+        return m, n
 
     def print_symbol_paths(self, file_path: str):
         """打印文件中的所有符号路径及对应代码和位置信息"""
@@ -710,7 +735,7 @@ class BaseNodeProcessor(ABC):
         """递归获取属性调用的完整名称"""
         if node.type == NodeTypes.IDENTIFIER:
             return node.text.decode("utf8")
-        elif node.type == NodeTypes.ATTRIBUTE:
+        if node.type == NodeTypes.ATTRIBUTE:
             obj_part = BaseNodeProcessor.get_full_attribute_name(node.child_by_field_name("object"))
             attr_part = node.child_by_field_name("attribute").text.decode("utf8")
             return f"{obj_part}.{attr_part}"
@@ -721,7 +746,7 @@ class BaseNodeProcessor(ABC):
         """从函数调用节点中提取函数名"""
         if function_node.type == NodeTypes.IDENTIFIER:
             return function_node.text.decode("utf8")
-        elif function_node.type == NodeTypes.ATTRIBUTE:
+        if function_node.type == NodeTypes.ATTRIBUTE:
             return BaseNodeProcessor.get_full_attribute_name(function_node)
         return None
 
@@ -776,12 +801,11 @@ def find_spec_for_lang(lang: str) -> "LangSpec":
     #     return JavaScriptSpec()
     # elif lang == JAVA_LANG:
     #     return JavaSpec()
-    elif lang == GO_LANG:
+    if lang == GO_LANG:
         return GoLangSpec()
-    elif lang == CPP_LANG or lang == C_LANG:
+    if lang in (CPP_LANG, C_LANG):
         return CPPSpec()
-    else:
-        return None
+    return None
 
 
 class LangSpec(ABC):
@@ -790,11 +814,11 @@ class LangSpec(ABC):
     @abstractmethod
     def get_symbol_name(self, node: Node) -> str:
         """提取节点的符号名称"""
-        pass
+        raise NotImplementedError("Subclasses must implement get_symbol_name")
 
     @abstractmethod
     def get_function_name(self, node: Node) -> str:
-        pass
+        raise NotImplementedError("Subclasses must implement get_function_name")
 
 
 class PythonSpec(LangSpec):
@@ -802,6 +826,7 @@ class PythonSpec(LangSpec):
     def get_symbol_name(self, node):
         if node.type == NodeTypes.IF_STATEMENT and self.is_main_block(node):
             return "__main__"
+        return None
 
     def get_function_name(self, node):
         return None
@@ -822,14 +847,15 @@ class CPPSpec(LangSpec):
     """C++语言特定处理策略"""
 
     def get_symbol_name(self, node: Node):
-        if node.type == NodeTypes.CPP_CLASS_SPECIFIER or node.type == NodeTypes.C_STRUCT_SPECFIER:
+        if node.type in (NodeTypes.CPP_CLASS_SPECIFIER, NodeTypes.C_STRUCT_SPECFIER):
             return self.get_cpp_class_name(node)
-        elif node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
+        if node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
             return self.get_cpp_namespace_name(node)
-        elif node.type == NodeTypes.C_DECLARATION:
+        if node.type == NodeTypes.C_DECLARATION:
             return self.get_cpp_declaration_name(node)
-        elif node.type == NodeTypes.CPP_FRIEND_DECLARATION:
+        if node.type == NodeTypes.CPP_FRIEND_DECLARATION:
             return self.get_friend_function_name(node)
+        return None
 
     def get_cpp_class_name(self, node: Node):
         """从C++类定义节点中提取类名"""
@@ -864,50 +890,56 @@ class CPPSpec(LangSpec):
             if namespace and identifier:
                 return f"{namespace.text.decode('utf8')}.{identifier.text.decode('utf8')}"
 
-        # 直接提取标识符
         return BaseNodeProcessor.find_identifier_in_node(declarator)
 
     def get_friend_function_name(self, node: Node):
         decl = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_DECLARATION)
-        if decl:
-            return self.get_function_name(decl)
+        return self.get_function_name(decl) if decl else None
 
     def get_function_name(self, node: Node):
+        result = None
         pointer_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_POINTER_DECLARATOR)
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
             if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
-                return BaseNodeProcessor.find_identifier_in_node(func_declarator)
+                result = BaseNodeProcessor.find_identifier_in_node(func_declarator)
 
-        reference_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_REFERENCE_DECLARATOR)
-        if reference_declarator:
-            func_declarator = BaseNodeProcessor.find_child_by_type(reference_declarator, NodeTypes.FUNCTION_DECLARATOR)
+        if not result:
+            reference_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_REFERENCE_DECLARATOR)
+            if reference_declarator:
+                func_declarator = BaseNodeProcessor.find_child_by_type(
+                    reference_declarator, NodeTypes.FUNCTION_DECLARATOR
+                )
+                if func_declarator:
+                    result = BaseNodeProcessor.find_identifier_in_node(func_declarator)
+                    if not result:
+                        operator_name = BaseNodeProcessor.find_child_by_type(
+                            func_declarator, NodeTypes.CPP_OPERATOR_NAME
+                        )
+                        if operator_name:
+                            result = operator_name.text.decode("utf8")
+
+        if not result:
+            func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
             if func_declarator:
-                ident = BaseNodeProcessor.find_identifier_in_node(func_declarator)
-                if ident:
-                    return ident
-                operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
-                if operator_name:
-                    return operator_name.text.decode("utf8")
+                qualified_id = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_QUALIFIED_IDENTIFIER)
+                if qualified_id:
+                    namespace = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.CPP_NAMESPACE_IDENTIFIER)
+                    identifier = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.IDENTIFIER)
+                    if namespace and identifier:
+                        result = f"{namespace.text.decode('utf8')}.{identifier.text.decode('utf8')}"
+                if not result:
+                    result = BaseNodeProcessor.find_identifier_in_node(func_declarator)
+                if not result:
+                    field = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_FIELD_IDENTIFIER)
+                    if field:
+                        result = field.text.decode("utf8")
+                if not result:
+                    operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
+                    if operator_name:
+                        result = operator_name.text.decode("utf8")
 
-        func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
-        if func_declarator:
-            # 尝试获取限定标识符
-            qualified_id = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_QUALIFIED_IDENTIFIER)
-            if qualified_id:
-                namespace = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.CPP_NAMESPACE_IDENTIFIER)
-                identifier = BaseNodeProcessor.find_child_by_type(qualified_id, NodeTypes.IDENTIFIER)
-                if namespace and identifier:
-                    return f"{namespace.text.decode('utf8')}.{identifier.text.decode('utf8')}"
-            ident = BaseNodeProcessor.find_identifier_in_node(func_declarator)
-            if ident:
-                return ident
-            field = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_FIELD_IDENTIFIER)
-            if field:
-                return field.text.decode("utf8")
-            operator_name = BaseNodeProcessor.find_child_by_type(func_declarator, NodeTypes.CPP_OPERATOR_NAME)
-            if operator_name:
-                return operator_name.text.decode("utf8")
+        return result
 
 
 class GoLangSpec(LangSpec):
@@ -916,11 +948,11 @@ class GoLangSpec(LangSpec):
     def get_symbol_name(self, node) -> str:
         if node.type == NodeTypes.GO_TYPE_DECLARATION:
             return self.get_go_type_name(node)
-        elif node.type == NodeTypes.GO_METHOD_DECLARATION:
+        if node.type == NodeTypes.GO_METHOD_DECLARATION:
             return self.get_go_method_name(node)
-        elif node.type == NodeTypes.GO_FUNC_DECLARATION:
+        if node.type == NodeTypes.GO_FUNC_DECLARATION:
             return self.get_go_function_name(node)
-        elif node.type == NodeTypes.GO_PACKAGE_CLAUSE:
+        if node.type == NodeTypes.GO_PACKAGE_CLAUSE:
             return self.get_go_package_name(node)
         return None
 
@@ -955,7 +987,7 @@ class GoLangSpec(LangSpec):
         if not method_name or not type_node:
             return None
 
-        return "%s.%s" % (type_node.text.decode("utf8"), method_name)
+        return f"{type_node.text.decode('utf8')}.{method_name}"
 
     @staticmethod
     def get_go_function_name(node):
@@ -996,13 +1028,14 @@ class NodeProcessor(BaseNodeProcessor):
             return None
         if node.type == NodeTypes.CLASS_DEFINITION:
             return self.get_class_name(node)
-        elif node.type in NodeTypes.FUNCTION_DEFINITION:
+        if node.type in NodeTypes.FUNCTION_DEFINITION:
             return self.get_function_name(node)
-        elif node.type == NodeTypes.ASSIGNMENT:
+        if node.type == NodeTypes.ASSIGNMENT:
             return self.get_assignment_name(node)
 
         if self.lang_spec:
             return self.lang_spec.get_symbol_name(node)
+        return None
 
     def get_class_name(self, node):
         """从类定义节点中提取类名"""
@@ -1679,9 +1712,9 @@ class SourceSkeleton:
     def _get_docstring(self, node, parent_type: str):
         """根据Tree-sitter节点类型提取文档字符串"""
         if parent_type == NodeTypes.DECORATED_DEFINITION:
-            for i in node.children:
-                if i.type == NodeTypes.FUNCTION_DEFINITION:
-                    node = i
+            for child in node.children:
+                if child.type == NodeTypes.FUNCTION_DEFINITION:
+                    node = child
                     parent_type = NodeTypes.FUNCTION_DEFINITION
                     break
         # 模块文档字符串：第一个连续的字符串表达式
@@ -1690,7 +1723,7 @@ class SourceSkeleton:
                 return node.children[0].text.decode("utf8")
 
         # 类/函数文档字符串：body中的第一个字符串表达式
-        elif parent_type in (NodeTypes.CLASS_DEFINITION, NodeTypes.FUNCTION_DEFINITION):
+        if parent_type in (NodeTypes.CLASS_DEFINITION, NodeTypes.FUNCTION_DEFINITION):
             node = node.child_by_field_name(NodeTypes.BODY)
             if node:
                 if (
@@ -1699,7 +1732,7 @@ class SourceSkeleton:
                     and node.children[0].children[0].type == NodeTypes.STRING
                 ):
                     return node.children[0].text.decode("utf8")
-        elif parent_type in (NodeTypes.GO_FUNC_DECLARATION, NodeTypes.GO_METHOD_DECLARATION):
+        if parent_type in (NodeTypes.GO_FUNC_DECLARATION, NodeTypes.GO_METHOD_DECLARATION):
             prev = node.prev_sibling
             comment_all = []
             while prev and prev.type == NodeTypes.COMMENT:
@@ -1710,11 +1743,11 @@ class SourceSkeleton:
 
     def _capture_signature(self, node, source_bytes: bytes) -> str:
         """精确捕获定义签名（基于Tree-sitter解析结构）"""
-
         start = node.start_byte
         end = 0
+
         if node.type == NodeTypes.DECORATED_DEFINITION:
-            for i, v in enumerate(node.children):
+            for v in node.children:
                 if v.type in (NodeTypes.FUNCTION_DEFINITION, NodeTypes.CLASS_DEFINITION):
                     for j, v1 in enumerate(v.children):
                         if v1.type == NodeTypes.BLOCK:
@@ -1723,16 +1756,14 @@ class SourceSkeleton:
             if end == 0:
                 dump_tree(node, source_bytes)
                 raise ValueError("unknown ast")
-
             return source_bytes[start:end].decode("utf8")
-        # 捕获定义主体
-        elif node.type in (
+
+        if node.type in (
             NodeTypes.FUNCTION_DEFINITION,
             NodeTypes.CLASS_DEFINITION,
             NodeTypes.GO_FUNC_DECLARATION,
             NodeTypes.GO_METHOD_DECLARATION,
         ):
-            end = 0
             for j, v1 in enumerate(node.children):
                 if v1.type in (NodeTypes.BLOCK, NodeTypes.COMPOUND_STATEMENT):
                     end = node.children[j - 1].end_byte
@@ -1741,17 +1772,16 @@ class SourceSkeleton:
                 dump_tree(node, source_bytes)
                 raise ValueError("unknown ast")
             return source_bytes[start:end].decode("utf8")
-        else:
-            dump_tree(node, source_bytes)
-            raise ValueError("unknown ast")
+
+        dump_tree(node, source_bytes)
+        raise ValueError("unknown ast")
 
     def _process_node(self, node, source_bytes: bytes, indent=0, lang_name="") -> List[str]:
         """基于Tree-sitter节点类型的处理逻辑"""
         output = []
         indent_str = INDENT_UNIT * indent
-        # 处理模块级元素
-        if is_node_module(node.type):
-            # 处理模块子节点
+
+        def process_module_node():
             for child in node.children:
                 if child.type in [
                     NodeTypes.CLASS_DEFINITION,
@@ -1772,18 +1802,14 @@ class SourceSkeleton:
                 ]:
                     output.extend(self._process_node(child, source_bytes, lang_name=lang_name))
 
-        # 处理类定义
-        elif node.type == NodeTypes.CLASS_DEFINITION:
-            # 捕获类签名
+        def process_class_node():
             class_sig = self._capture_signature(node, source_bytes)
             output.append(f"\n{class_sig}")
 
-            # 提取类文档字符串
             docstring = self._get_docstring(node, NodeTypes.CLASS_DEFINITION)
             if docstring:
                 output.append(f'{indent_str}{INDENT_UNIT}"""{docstring}"""')
 
-            # 处理类成员
             body = node.child_by_field_name(NodeTypes.BODY)
             if body:
                 for member in body.children:
@@ -1798,6 +1824,36 @@ class SourceSkeleton:
                         code = source_bytes[member.start_byte : member.end_byte].decode("utf8")
                         output.append(f"{indent_str}{INDENT_UNIT}{code}")
 
+        def process_function_node():
+            if self.is_lang_cstyle(lang_name):
+                docstring = self._get_docstring(node, node.type)
+                if docstring:
+                    output.append(f"{indent_str}{docstring}")
+
+            func_sig = self._capture_signature(node, source_bytes)
+            output.append(f"{indent_str}{func_sig}")
+
+            if not self.is_lang_cstyle(lang_name):
+                docstring = self._get_docstring(node, node.type)
+                if docstring:
+                    output.append(f"{indent_str}{INDENT_UNIT}{docstring}")
+
+            if self.is_lang_cstyle(lang_name):
+                output.append("{\n    //Placeholder\n}")
+            else:
+                output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
+
+        def process_other_node():
+            if is_node_module(node.parent.type):
+                code = source_bytes[node.start_byte : node.end_byte].decode("utf8")
+                output.append(f"{code}")
+
+        # 处理模块级元素
+        if is_node_module(node.type):
+            process_module_node()
+        # 处理类定义
+        elif node.type == NodeTypes.CLASS_DEFINITION:
+            process_class_node()
         # 处理函数/方法定义
         elif node.type in [
             NodeTypes.FUNCTION_DEFINITION,
@@ -1805,27 +1861,9 @@ class SourceSkeleton:
             NodeTypes.GO_FUNC_DECLARATION,
             NodeTypes.GO_METHOD_DECLARATION,
         ]:
-            if self.is_lang_cstyle(lang_name):
-                docstring = self._get_docstring(node, node.type)
-                if docstring:
-                    output.append(f"{indent_str}{docstring}")
-            # 捕获函数签名
-            func_sig = self._capture_signature(node, source_bytes)
-            output.append(f"{indent_str}{func_sig}")
-            if not self.is_lang_cstyle(lang_name):
-                # 提取函数文档字符串
-                docstring = self._get_docstring(node, node.type)
-                if docstring:
-                    output.append(f"{indent_str}{INDENT_UNIT}{docstring}")
-            # 添加占位符
-            if self.is_lang_cstyle(lang_name):
-                output.append("{\n    //Placeholder\n}")
-            else:
-                output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
-
+            process_function_node()
         # 处理模块级赋值
         elif node.type in (
-            # NodeTypes.EXPRESSION_STATEMENT,
             NodeTypes.C_DEFINE,
             NodeTypes.GO_IMPORT_DECLARATION,
             NodeTypes.C_INCLUDE,
@@ -1835,9 +1873,8 @@ class SourceSkeleton:
             NodeTypes.GO_CONST_DECLARATION,
             NodeTypes.GO_TYPE_DECLARATION,
             NodeTypes.GO_PACKAGE_CLAUSE,
-        ) and is_node_module(node.parent.type):
-            code = source_bytes[node.start_byte : node.end_byte].decode("utf8")
-            output.append(f"{code}")
+        ):
+            process_other_node()
 
         return output
 
@@ -1853,14 +1890,15 @@ class SourceSkeleton:
 
         tree = parser.parse(source_bytes)
         root = tree.root_node
-        if self.is_lang_cstyle(lang_name):
-            framework = ["// Auto-generated code skeleton\n"]
-        else:
-            framework = ["# Auto-generated code skeleton\n"]
+        framework_lines = (
+            ["// Auto-generated code skeleton\n"]
+            if self.is_lang_cstyle(lang_name)
+            else ["# Auto-generated code skeleton\n"]
+        )
         framework_content = self._process_node(root, source_bytes, lang_name=lang_name)
 
         # 合并结果并优化格式
-        result = "\n".join(framework + framework_content)
+        result = "\n".join(framework_lines + framework_content)
         return re.sub(r"\n{3,}", "\n\n", result).strip() + "\n"
 
 
@@ -1891,9 +1929,9 @@ class BlockPatch:
         self.patch_ranges = []
         self.block_contents = []
         self.update_contents = []
-        for i in range(len(file_paths)):
+        for i, file_path in enumerate(file_paths):
             if block_contents[i] != update_contents[i]:
-                self.file_paths.append(file_paths[i])
+                self.file_paths.append(file_path)
                 self.patch_ranges.append(patch_ranges[i])
                 self.block_contents.append(block_contents[i])
                 self.update_contents.append(update_contents[i])
@@ -1912,8 +1950,8 @@ class BlockPatch:
                 try:
                     # 检测是否为UTF-8编码
                     content.decode("utf-8")
-                except UnicodeDecodeError:
-                    raise ValueError(f"文件 {path} 不是UTF-8编码，拒绝修改以避免不可预测的结果")
+                except UnicodeDecodeError as exc:
+                    raise ValueError(f"文件 {path} 不是UTF-8编码，拒绝修改以避免不可预测的结果") from exc
                 self.source_codes[path] = content
 
     def _is_binary_file(self, content: bytes) -> bool:
@@ -1996,7 +2034,9 @@ class BlockPatch:
             diff_tool = "diff.exe" if shutil.which("diff.exe") else "fc"
 
         try:
-            result = subprocess.run([diff_tool, "-u", original_file, modified_file], capture_output=True, text=True)
+            result = subprocess.run(
+                [diff_tool, "-u", original_file, modified_file], capture_output=True, text=True, check=False
+            )
             # 对于diff工具，返回0表示文件相同，返回1表示文件有差异，这都是正常情况
             if result.returncode in (0, 1):
                 return result.stdout
@@ -3033,13 +3073,13 @@ async def location_to_symbol(
             symbols = await _process_call(
                 call, symbol["file_path"], trie, lsp_client, file_content_cache, file_lines_cache, lookup_cache
             )
-            for symbol in symbols:
-                if symbol["file_path"] == symbol_file_path:
-                    if symbol["name"] in symbols_filter:
+            for sym in symbols:
+                if sym["file_path"] == symbol_file_path:
+                    if sym["name"] in symbols_filter:
                         continue
-                    symbols_filter.add(symbol["name"])
-                    logger.info("检查同文件符号%s.%s的调用" % (symbol["file_path"], symbol["name"]))
-                    calls.extend([(level + 1, call) for call in symbol["calls"]])
+                    symbols_filter.add(sym["name"])
+                    logger.info("检查同文件符号%s.%s的调用", sym["file_path"], sym["name"])
+                    calls.extend([(level + 1, call) for call in sym["calls"]])
             collected_symbols.extend(symbols)
         except (ConnectionError, TimeoutError, RuntimeError) as e:
             print(f"处理调用 {call['name']} 时发生错误: {str(e)}")
@@ -4022,7 +4062,8 @@ def debug_duplicate_symbol(symbol_name, all_existing_symbols, conn, data):
 def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: dict, all_existing_symbols: dict):
     """单线程数据库写入"""
     try:
-        start_time = time.time() * 1000
+        timing = {"start": time.time() * 1000, "prepare": 0, "insert": 0, "meta": 0}
+
         full_path = str(file_path.resolve().absolute())
         file_hash = calculate_file_hash(file_path)
         last_modified = file_path.stat().st_mtime
@@ -4031,28 +4072,23 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
         conn.execute("BEGIN TRANSACTION")
 
         # 准备数据
-        prepare_start = time.time() * 1000
+        timing["prepare"] = time.time() * 1000
         insert_data, duplicate_count = prepare_insert_data(symbols, all_existing_symbols, full_path)
-        prepare_time = time.time() * 1000 - prepare_start
+        timing["prepare"] = time.time() * 1000 - timing["prepare"]
 
         # 插入或更新符号数据
-        insert_start = time.time() * 1000
+        timing["insert"] = time.time() * 1000
         if insert_data:
-            # 先进行过滤
             filtered_data = []
             for data in insert_data:
                 symbol_name = data[1]
                 if symbol_name not in all_existing_symbols:
                     all_existing_symbols[symbol_name] = []
-                # 检查哈希值是否已经存在，避免重复添加
+
                 if not any(existing[2] == data[7] for existing in all_existing_symbols[symbol_name]):
                     filtered_data.append(data)
                     all_existing_symbols[symbol_name].append((full_path, data[4], data[7]))
-                    # 调试重复符号（需要时取消注释）
-                    # if "get_proc_task" in symbol_name and len(all_existing_symbols[symbol_name]) > 1:
-                    #     debug_duplicate_symbol(symbol_name, all_existing_symbols, conn, data)
 
-                    # 更新前缀树
                     symbol_info = {
                         "name": data[1],
                         "file_path": data[2],
@@ -4061,7 +4097,6 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
                     }
                     app.state.symbol_trie.insert(symbol_name, symbol_info)
 
-            # 插入过滤后的数据
             if filtered_data:
                 conn.executemany(
                     """
@@ -4074,11 +4109,10 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
                         for data in filtered_data
                     ],
                 )
-        insert_time = time.time() * 1000 - insert_start
+        timing["insert"] = time.time() * 1000 - timing["insert"]
 
         # 更新文件元数据
-        meta_start = time.time() * 1000
-        total_symbols = len(symbols)
+        timing["meta"] = time.time() * 1000
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -4086,26 +4120,26 @@ def process_symbols_to_db(conn: sqlite3.Connection, file_path: Path, symbols: di
             (file_path, last_modified, file_hash, total_symbols)
             VALUES (?, ?, ?, ?)
             """,
-            (full_path, last_modified, file_hash, total_symbols),
+            (full_path, last_modified, file_hash, len(symbols)),
         )
-        meta_time = time.time() * 1000 - meta_start
+        timing["meta"] = time.time() * 1000 - timing["meta"]
 
         conn.commit()
 
         # 输出统计信息
-        total_time = time.time() * 1000 - start_time
+        total_time = time.time() * 1000 - timing["start"]
         print(f"\n文件 {file_path} 处理完成：")
-        print(f"  总符号数: {total_symbols}")
+        print(f"  总符号数: {len(symbols)}")
         print(f"  重复符号数: {duplicate_count}")
         print(f"  新增符号数: {len(insert_data)}")
-        print(f"  过滤符号数: {duplicate_count + (total_symbols - len(symbols))}")
-        print(f"  性能数据（单位：毫秒）：")
-        print(f"    数据准备: {prepare_time:.2f}")
-        print(f"    数据插入: {insert_time:.2f}")
-        print(f"    元数据更新: {meta_time:.2f}")
+        print(f"  过滤符号数: {duplicate_count + (len(symbols) - len(insert_data))}")
+        print("  性能数据（单位：毫秒）：")
+        print(f"    数据准备: {timing['prepare']:.2f}")
+        print(f"    数据插入: {timing['insert']:.2f}")
+        print(f"    元数据更新: {timing['meta']:.2f}")
         print(f"    总耗时: {total_time:.2f}")
 
-    except Exception as e:
+    except Exception:
         conn.rollback()
         raise
 
@@ -4200,13 +4234,16 @@ def process_files_single(conn: sqlite3.Connection, tasks: list, all_existing_sym
     print("\n使用单进程模式处理文件...")
     for file_path in tasks:
         print(f"[INFO] 开始处理文件: {file_path}")
-        file_path, symbols = parse_worker_wrapper(file_path)
-        if file_path:
+        result = parse_worker_wrapper(file_path)
+        if isinstance(result, tuple) and len(result) == 2:
+            file_path, symbols = result
             print(f"[INFO] 文件 {file_path} 解析完成，开始插入数据库...")
             process_symbols_to_db(
                 conn=conn, file_path=file_path, symbols=symbols, all_existing_symbols=all_existing_symbols
             )
             print(f"[INFO] 文件 {file_path} 数据库插入完成")
+        else:
+            print(f"[WARNING] 文件 {file_path} 解析返回无效结果: {result}")
 
 
 def process_files_multiprocess(conn: sqlite3.Connection, tasks: list, all_existing_symbols: dict, parallel: int):
@@ -4314,7 +4351,7 @@ def start_lsp_client_once(config: ProjectConfig, file_path: str):
         # 检查缓存
         cached_client = config.get_lsp_client(cache_key)
         if cached_client:
-            logger.debug(f"使用缓存的LSP客户端: {cache_key}")
+            logger.debug("使用缓存的LSP客户端: %s", cache_key)
             return cached_client
 
         # 初始化客户端
@@ -4335,7 +4372,7 @@ def start_lsp_client_once(config: ProjectConfig, file_path: str):
 
         # 缓存客户端
         config.set_lsp_client(cache_key, client)
-        logger.debug(f"已缓存LSP客户端: {cache_key}")
+        logger.debug("已缓存LSP客户端: %s", cache_key)
         client.initialized_event.wait(timeout=5)
         return client
     except Exception as e:
@@ -4388,14 +4425,14 @@ def _start_lsp_thread(client: GenericLSPClient, client_info: dict):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            logger.debug(f"启动LSP客户端线程: {client_info['key']}，命令: {client_info['command']}")
+            logger.debug("启动LSP客户端线程: %s，命令: %s", client_info["key"], client_info["command"])
             client.start()
             loop.run_forever()
-        except Exception as e:
+        except (ConnectionError, RuntimeError) as e:
             traceback.print_exc()
             logger.error("LSP客户端运行异常: %s，客户端信息: %s", str(e), client_info)
         finally:
-            logger.debug(f"关闭LSP客户端: {client_info['key']}")
+            logger.debug("关闭LSP客户端: %s", client_info["key"])
             loop.run_until_complete(client.shutdown())
             loop.close()
             logger.info("LSP客户端已关闭: %s", client_info["key"])
@@ -4480,7 +4517,7 @@ if __name__ == "__main__":
 
     args = arg_parser.parse_args()
 
-    logger.info("启动代码分析工具: 日志输出: %s" % args.log_level)
+    logger.info("启动代码分析工具: 日志输出: %s", args.log_level)
     logger.setLevel(args.log_level)
 
     DEFAULT_DB = args.db_path

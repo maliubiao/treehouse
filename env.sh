@@ -424,6 +424,10 @@ function symbolgptrestart() {
   $GPT_PYTHON_BIN -c "import llm_query; llm_query.start_symbol_service(True)"
 }
 
+function patchgpttrace() {
+  python -m debugger.tracer_main --open-report llm_query.py --ask "@patch @patch-rule @symbol-path-rule-v2 $@"
+}
+
 # 自动配置默认模型
 if [[ -z "$GPT_KEY" || -z "$GPT_BASE_URL" || -z "$GPT_MODEL" ]]; then
   [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试自动配置默认模型" >&2

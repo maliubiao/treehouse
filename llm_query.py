@@ -29,12 +29,10 @@ import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from textwrap import dedent
 from typing import Callable, Dict, List, Optional, Tuple, TypedDict, Union
 from urllib.parse import urlparse
 
 import requests
-import yaml
 from openai import OpenAI
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -921,11 +919,11 @@ class ClipboardMonitor:
         self._debug_print("获取监控结果...")
         with self.lock:
             if self.collected_contents:
-                result = ""
+                contents = []
                 for content in self.collected_contents:
-                    result += f"\n[clipboard content start]\n{content}\n[clipboard content end]\n"
+                    contents.append(f"\n[clipboard content start]\n{content}\n[clipboard content end]\n")
                 self._debug_print(f"返回 {len(self.collected_contents)} 段内容")
-                return result
+                return "".join(contents)
             self._debug_print("未捕获到任何内容")
             return "未捕获到任何剪贴板内容"
 
@@ -1256,7 +1254,7 @@ DUMP_EXAMPLE_A = """
 输出:
 [modified file]: /path/to/debugger/test_tracer.py
 [source code start]
-aa
+file test_tracer.py content
 [source code end]
 [Example 1 end]
 
@@ -1265,9 +1263,22 @@ aa
 输出:
 [modified symbol]: /path/to/debugger/test_tracer.py/Tracer
 [source code start]
-aa
+class Tracer content
 [source code end]
 [Example 2 end]
+
+输出:
+[modified symbol]: /path/to/debugger/test_tracer.py/Tracer.a
+[source code start]
+method a content
+[source code end]
+[modified symbol]: /path/to/debugger/test_tracer.py/Tracer.b
+[source code start]
+method b content
+[source code end]
+
+[Example 2 end]
+
 """
 
 DUMB_PROMPT = f"""
@@ -1448,7 +1459,7 @@ class FormatAndLint:
             if result.returncode != 0:
                 self.logger.error("Command failed: %s\nOutput: %s", " ".join(full_cmd), result.stdout.decode().strip())
             return result.returncode
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
             if self.verbose:
                 self.logger.info("Timeout executing: %s", " ".join(full_cmd))
             self.logger.error("Timeout expired for command: %s", " ".join(full_cmd))
@@ -1610,155 +1621,199 @@ def parse_llm_response(response_text, symbol_names=None):
     return parser.parse(response_text)
 
 
-def process_file_change(response_text, valid_symbols=[]):
+def process_file_change(response_text, valid_symbols=None):
     """
     解析LLM响应文本，提取文件修改记录
     返回格式: ([{"symbol_path": str, "content": str}], remaining_text)
 
     Args:
         response_text: 包含修改符号的原始文本
+        valid_symbols: 可选的有效符号列表
 
     Returns:
         tuple: (修改记录列表, 剩余文本)
     """
+    if valid_symbols is None:
+        valid_symbols = []
+
     pattern = re.compile(
         r"\[modified (?:symbol|file)\]:\s*(.+?)\n\[source code start\]\n(.*?)\n\[source code end\]", re.DOTALL
     )
-    matches = pattern.finditer(response_text)
     results = []
     remaining_parts = []
     last_end = 0
-    file_tag = "[modified file]:"
-    symbol_tag = "[modified symbol]:"
-    for match in matches:
-        start = match.start()
-        end = match.end()
+
+    for match in pattern.finditer(response_text):
+        start, end = match.start(), match.end()
         symbol_path = match.group(1).strip()
         content = response_text[start:end]
-        # 检查symbol_path是否是有效的文件路径
-        if (
+
+        is_valid = (
             os.path.exists(symbol_path)
             or (valid_symbols and symbol_path not in valid_symbols)
-            or content.startswith(file_tag)
-        ):
-            if start > last_end:
-                remaining_parts.append(response_text[last_end:start])
-            part = content.replace(symbol_tag, file_tag, 1)
-            results.append(part)
+            or content.startswith("[modified file]:")
+        )
+
+        if start > last_end:
+            remaining_parts.append(response_text[last_end:start])
+
+        if is_valid:
+            results.append(content.replace("[modified symbol]:", "[modified file]:", 1))
         else:
-            # 如果不是有效文件路径，则存储到remaining_parts
-            if start > last_end:
-                remaining_parts.append(response_text[last_end:start])
             remaining_parts.append(content)
+
         last_end = end
+
     remaining_parts.append(response_text[last_end:])
     remaining_text = "".join(remaining_parts).strip()
     return "\n".join(results), remaining_text
 
 
 def lookup_symbols(file, symbol_names):
-    from tree import ParserLoader, ParserUtil
+    from tree import ParserLoader as PL
+    from tree import ParserUtil as PU
 
-    parser_loader_s = ParserLoader()
-    parser_util = ParserUtil(parser_loader_s)
+    parser_loader_s = PL()
+    parser_util = PU(parser_loader_s)
     return parser_util.lookup_symbols(file, symbol_names)
+
+
+def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
+    if not os.path.exists(file):
+        raise FileNotFoundError(f"Source file not found: {file}")
+
+    start_line = parent_symbol_info.get("start_line", 1)
+    block_content = parent_symbol_info["block_content"].decode("utf-8")
+    lines = block_content.splitlines()
+
+    print(f"\nParent symbol: {parent_symbol}")
+    print(f"File: {file}")
+    print(f"Location: lines {start_line}-{start_line + len(lines) - 1}\n")
+
+    for i, line in enumerate(lines):
+        print(f"{start_line+i:4d} | {line}")
+
+    while True:
+        try:
+            selected_line = int(input("\nEnter insert line number for new symbol location: "))
+            if start_line <= selected_line < start_line + len(lines):
+                break
+            print(f"Line number must be between {start_line} and {start_line + len(lines) - 1}")
+        except ValueError:
+            print("Please enter a valid integer")
+
+    parent_content = parent_symbol_info["block_content"]
+    line_offsets = [0]
+    offset = 0
+    for line in parent_content.splitlines(keepends=True):
+        offset += len(line)
+        line_offsets.append(offset)
+
+    selected_offset = parent_symbol_info["block_range"][0] + line_offsets[selected_line - start_line]
+    return {
+        "file_path": file,
+        "block_range": [selected_offset, selected_offset],
+        "block_content": b"",
+    }
 
 
 def add_symbol_details(remaining, symbol_detail):
     require_info_map = BlockPatchResponse.extract_symbol_paths(remaining)
     require_info_syms = {}
-    for file, v in require_info_map.items():
-        for sym in v:
-            symbol_path = "{}/{}".format(file, sym)
+
+    # First pass: collect required symbols
+    for file, symbols in require_info_map.items():
+        for sym in symbols:
+            symbol_path = f"{file}/{sym}"
             if symbol_path not in symbol_detail:
-                if file not in require_info_syms:
-                    require_info_syms[file] = []
-                require_info_syms[file].append(sym)
+                require_info_syms.setdefault(file, []).append(sym)
+
+    # Second pass: process symbols
     for file, symbols in require_info_syms.items():
-        symbol_info_map = lookup_symbols(file, symbols)
+        symbol_info_map, new_symbol_map = lookup_symbols(file, symbols)
+
+        # Update symbol info map with new symbols
+        for path, (parent_symbol, parent_symbol_info) in new_symbol_map.items():
+            symbol_info_map[path] = interactive_symbol_location(file, path, parent_symbol, parent_symbol_info)
+
+        # Update symbol details
         for symbol, symbol_info in symbol_info_map.items():
-            symbol_path = "{}/{}".format(file, symbol)
-            symbol_detail[symbol_path] = {
+            symbol_detail[f"{file}/{symbol}"] = {
                 "file_path": file,
                 "block_range": symbol_info["block_range"],
-                "block_content": symbol_info["code"].encode("utf8"),
+                "block_content": symbol_info["block_content"],
             }
 
 
 def process_patch_response(response_text, symbol_detail, auto_commit: bool = True, auto_lint: bool = True):
-    """
-    处理大模型的补丁响应，生成差异并应用补丁
-
-    参数:
-        response_text: 大模型返回的响应文本
-        symbol_detail: 要处理的符号
-
-    返回:
-        如果用户确认应用补丁，则返回修改后的代码(bytes)
-        否则返回None
-    """
-    # do not remove these escape lines
-    prevent_escape_a = "<thi" + "nk>"
-    prevent_escape_b = "</thi" + "nk>"
+    """处理大模型的补丁响应，生成差异并应用补丁"""
+    # 处理响应文本
+    prevent_escape = ("<thi" + "nk>", "</thi" + "nk>")
     filtered_response = re.sub(
-        rf"{prevent_escape_a}.*?{prevent_escape_b}", "", response_text, flags=re.DOTALL
-    ).strip()  # 解析大模型响应
+        rf"{prevent_escape[0]}.*?{prevent_escape[1]}", "", response_text, flags=re.DOTALL
+    ).strip()
+
     add_symbol_details(filtered_response, symbol_detail)
     file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
+
     if file_part:
         extract_and_diff_files(file_part, save=False)
+
     results = parse_llm_response(remaining, symbol_detail.keys())
-    for symbol_name, _ in results:
+    if not results:
+        return None
+
+    # 准备补丁数据
+    patch_items = []
+    for symbol_name, source_code in results:
         symbol_path = (GLOBAL_PROJECT_CONFIG.project_root_dir / symbol_detail[symbol_name]["file_path"]).relative_to(
             Path.cwd()
         )
-        symbol_detail[symbol_name]["file_path"] = str(symbol_path)
-    if not results:
-        return
-    patch_data = [
-        (
-            symbol_detail[symbol_name]["file_path"],
-            symbol_detail[symbol_name]["block_range"],
-            symbol_detail[symbol_name]["block_content"],
-            source_code.encode("utf-8"),
+        patch_items.append(
+            (
+                str(symbol_path),
+                symbol_detail[symbol_name]["block_range"],
+                symbol_detail[symbol_name]["block_content"],
+                source_code.encode("utf-8"),
+            )
         )
-        for symbol_name, source_code in results
-    ]
 
     patch = BlockPatch(
-        file_paths=[data[0] for data in patch_data],
-        patch_ranges=[data[1] for data in patch_data],
-        block_contents=[data[2] for data in patch_data],
-        update_contents=[data[3] for data in patch_data],
+        file_paths=[item[0] for item in patch_items],
+        patch_ranges=[item[1] for item in patch_items],
+        block_contents=[item[2] for item in patch_items],
+        update_contents=[item[3] for item in patch_items],
     )
 
+    # 处理差异和应用补丁
     diff = patch.generate_diff()
-    diff_str = "\n".join(diff.values())
-    highlighted_diff = highlight(diff_str, DiffLexer(), TerminalFormatter())
+    highlighted_diff = highlight("\n".join(diff.values()), DiffLexer(), TerminalFormatter())
     print("\n高亮显示的diff内容：")
     print(highlighted_diff)
+
     diff_per_file = DiffBlockFilter(diff).interactive_filter()
     if not diff_per_file:
         print("没有选择任何diff块")
         return None
-    files = []
-    for file, diff in diff_per_file.items():
+
+    modified_files = []
+    for file, diff_content in diff_per_file.items():
         temp_file = shadowroot / (file + ".diff")
-        if not temp_file.parent.exists():
-            os.makedirs(temp_file.parent)
-        with open(temp_file, "w+") as f:
-            f.write(diff)
+        temp_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(temp_file, "w+", encoding="utf-8") as f:
+            f.write(diff_content)
         _apply_patch(temp_file)
-        os.remove(temp_file)
-        files.append(file)
+        temp_file.unlink()
+        modified_files.append(file)
+
     print("补丁已成功应用")
+
     if auto_lint:
-        formatter = FormatAndLint(verbose=True)
-        formatter.run_checks(files, fix=True)
+        FormatAndLint(verbose=True).run_checks(modified_files, fix=True)
     if auto_commit:
-        commit = AutoGitCommit(gpt_response=remaining, files_to_add=files, auto_commit=False)
-        commit.do_commit()
-        return files
+        AutoGitCommit(gpt_response=remaining, files_to_add=modified_files, auto_commit=False).do_commit()
+
+    return modified_files
 
 
 class DiffBlockFilter:
@@ -1828,21 +1883,23 @@ class DiffBlockFilter:
                     highlighted_block = SyntaxHighlight.highlight_if_terminal(block, lang_type="diff")
                     print(f"\nBlock {i}:\n{highlighted_block}\n")
                     choice = input("接受修改? (y/n/ya/na/q): ").lower().strip()
+
                     if choice in ("y", "yes"):
                         file_result.append(block)
                         break
-                    elif choice in ("n", "no"):
+                    if choice in ("n", "no"):
                         break
-                    elif choice == "ya":
+                    if choice == "ya":
                         file_result.extend(file_blocks[i - 1 :])
                         accept_all = True
                         break
-                    elif choice in ("na", "q"):
+                    if choice in ("na", "q"):
                         quit_early = True
                         break
-                    else:
-                        print("错误的输出，请选择 y/n/ya/na/q")
-                        repeat_times -= 1
+
+                    print("错误的输出，请选择 y/n/ya/na/q")
+                    repeat_times -= 1
+
                 if quit_early:
                     break
 
@@ -3554,6 +3611,13 @@ class PylintFixer:
         print(f"\n当前错误组信息（共 {len(group)} 个错误）:")
         for idx, result in enumerate(group, 1):
             print(f"错误 {idx}: {result.file_path} 第 {result.line} 行 : {result.message}")
+
+        if not self.auto_apply:
+            response = input("是否修复这组错误？(y/n): ").strip().lower()
+            if response != "y":
+                print("跳过这组错误")
+                return
+
         try:
             self.fixer.fix_symbol(symbol, symbol_map)
         except Exception as e:

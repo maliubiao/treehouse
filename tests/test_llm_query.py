@@ -38,9 +38,11 @@ from llm_query import (
     _find_gitignore,
     _handle_local_file,
     get_symbol_detail,
+    interactive_symbol_location,
     patch_symbol_with_prompt,
     process_file_change,
 )
+from tree import BlockPatch
 
 
 class TestGPTContextProcessor(unittest.TestCase):
@@ -514,6 +516,123 @@ code3
             self.assertEqual(class_info["file_path"], tmp_path)
             self.assertIn("block_range", class_info)
             self.assertIn("block_content", class_info)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_interactive_symbol_location(self):
+        """测试交互式符号位置选择器"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as tmp:
+            tmp.write(
+                dedent(
+                    '''
+            def existing_func():
+                """已有函数"""
+                pass
+
+            class ExistingClass:
+                def method1(self):
+                    pass
+
+                def method2(self):
+                    pass
+            '''
+                )
+            )
+            tmp_path = tmp.name
+
+        try:
+            # 准备父符号信息
+            with open(tmp_path, "rb") as f:
+                content = f.read()
+
+            parent_info = {"start_line": 1, "block_range": [0, len(content)], "block_content": content}
+
+            # 模拟用户输入(选择第7行，即method2的位置)
+            with unittest.mock.patch("builtins.input", side_effect=["8"]):
+                result = interactive_symbol_location(
+                    file=tmp_path, path="test_path", parent_symbol="ExistingClass", parent_symbol_info=parent_info
+                )
+
+            # 验证返回结果
+            self.assertEqual(result["file_path"], tmp_path)
+            self.assertEqual(len(result["block_range"]), 2)
+            self.assertEqual(result["block_content"], b"")
+
+            # 测试与BlockPatch的联动
+            patch = BlockPatch(
+                file_paths=[tmp_path],
+                patch_ranges=[result["block_range"]],
+                block_contents=[result["block_content"]],
+                update_contents=[b"    def new_method(self):\n        return 'patched'"],
+            )
+
+            diff = patch.generate_diff()
+            self.assertIn(tmp_path, diff)
+            self.assertIn("+    def new_method(self):", diff[tmp_path])
+            self.assertIn("+        return 'patched'", diff[tmp_path])
+
+            patched_files = patch.apply_patch()
+            self.assertIn(tmp_path, patched_files)
+            self.assertIn(b"new_method", patched_files[tmp_path])
+        finally:
+            os.unlink(tmp_path)
+
+    def test_add_symbol_details_with_interactive(self):
+        """测试add_symbol_details与交互式位置选择的集成"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as tmp:
+            tmp.write(
+                dedent(
+                    """
+            def target_func():
+                pass
+
+            class TargetClass:
+                def target_method(self):
+                    pass
+            """
+                )
+            )
+            tmp_path = tmp.name
+
+        try:
+            # 准备测试数据
+            remaining = dedent(
+                """
+            [modified symbol]: {}/new_symbol
+            [source code start]
+            new_code = 42
+            [source code end]
+            """.format(
+                    tmp_path
+                )
+            )
+
+            # 模拟用户输入(选择第2行，即target_func的位置)
+            with unittest.mock.patch("builtins.input", side_effect=["2"]):
+                symbol_detail = {}
+                llm_query.add_symbol_details(remaining, symbol_detail)
+
+            # 验证结果
+            self.assertEqual(len(symbol_detail), 1)
+            self.assertIn(f"{tmp_path}/new_symbol", symbol_detail)
+
+            # 测试与BlockPatch的联动
+            symbol_info = symbol_detail[f"{tmp_path}/new_symbol"]
+            patch = BlockPatch(
+                file_paths=[tmp_path],
+                patch_ranges=[symbol_info["block_range"]],
+                block_contents=[symbol_info["block_content"]],
+                update_contents=[b"new_code = 42\n    # patched"],
+            )
+
+            diff = patch.generate_diff()
+            self.assertIn(tmp_path, diff)
+            self.assertIn("+new_code = 42", diff[tmp_path])
+            self.assertIn("# patched", diff[tmp_path])
+
+            patched_files = patch.apply_patch()
+            self.assertIn(tmp_path, patched_files)
+            self.assertIn(b"new_code = 42", patched_files[tmp_path])
         finally:
             os.unlink(tmp_path)
 
