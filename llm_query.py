@@ -4006,7 +4006,7 @@ class SymbolService:
         if not self._check_service_ready():
             raise RuntimeError(f"符号服务启动失败，端口 {self.port} 不可用或日志中没有启动信息")
 
-        api_url = f"http://127.0.0.1:{self.port}"
+        api_url = f"http://127.0.0.1:{self.port}/"
         self._write_rc_file(api_url)
         return api_url
 
