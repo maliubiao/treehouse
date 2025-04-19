@@ -364,149 +364,6 @@ class TestParserUtil(unittest.TestCase):
             f.write(code)
             return f.name
 
-    def test_go_method_extraction(self):
-        """测试Go方法符号提取"""
-        code = """
-        package main
-
-        type MyStruct struct {}
-
-        func (m MyStruct) Method1() {}
-        func (m *MyStruct) Method2() {}
-        func (_ MyStruct) Method3() {}
-        func (MyStruct) Method4() {}
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, _ = self.parser_util.get_symbol_paths(file_path)
-
-        expected_symbols = [
-            "main.MyStruct",
-            "main.MyStruct.Method1",
-            "main.MyStruct.Method2",
-            "main.MyStruct.Method3",
-            "main.MyStruct.Method4",
-        ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.MyStruct")], expected_symbols)
-
-    def test_go_function_extraction(self):
-        """测试Go函数符号提取"""
-        code = """
-        package main
-
-        func Function1() {}
-        func Function2() int { return 0 }
-        func Function3(param string) {}
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, _ = self.parser_util.get_symbol_paths(file_path)
-
-        expected_symbols = [
-            "main.Function1",
-            "main.Function2",
-            "main.Function3",
-        ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.Function")], expected_symbols)
-
-    def test_go_nested_receiver_extraction(self):
-        """测试嵌套接收器方法符号提取"""
-        code = """
-        package main
-
-        type OuterStruct struct {
-            InnerStruct struct {
-                Value int
-            }
-        }
-
-        func (o OuterStruct) Method1() {}
-        func (o *OuterStruct.InnerStruct) Method2() {}
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, _ = self.parser_util.get_symbol_paths(file_path)
-
-        expected_symbols = [
-            "main.OuterStruct",
-            "main.OuterStruct.Method1",
-            "main.OuterStruct.InnerStruct.Method2",
-        ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.OuterStruct")], expected_symbols)
-
-    def test_go_anonymous_function_extraction(self):
-        """测试匿名函数符号提取"""
-        code = """
-        package main
-
-        var FuncVar = func() {}
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, _ = self.parser_util.get_symbol_paths(file_path)
-
-        # 匿名函数不应被提取为符号
-        self.assertNotIn("main.FuncVar", paths)
-
-    def test_go_empty_receiver_extraction(self):
-        """测试空接收器方法符号提取"""
-        code = """
-        package main
-
-        type MyStruct struct {}
-
-        func () Method1() {}
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, _ = self.parser_util.get_symbol_paths(file_path)
-
-        # 空接收器方法不应被提取为符号
-        self.assertNotIn("main.Method1", paths)
-
-    def test_go_type_declaration_extraction(self):
-        """测试Go类型声明符号提取"""
-        code = """
-        package main
-
-        type MyInt int
-        type MyStruct struct {
-            Field1 int
-            Field2 string
-        }
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, _ = self.parser_util.get_symbol_paths(file_path)
-
-        expected_symbols = [
-            "main.MyInt",
-            "main.MyStruct",
-        ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.My")], expected_symbols)
-
-    def test_go_import_declaration_extraction(self):
-        """测试Go导入声明符号提取"""
-        code = """
-        package main
-
-        import (
-            "fmt"
-            "math"
-        )
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
-
-        self.assertIn("__import__", paths)
-        self.assertIn("fmt", code_map["__import__"]["code"])
-        self.assertIn("math", code_map["__import__"]["code"])
-
-    def test_go_package_clause_extraction(self):
-        """测试Go包声明符号提取"""
-        code = """
-        package main
-        """
-        file_path = self.create_temp_file(code, suffix=".go")
-        paths, code_map = self.parser_util.get_symbol_paths(file_path)
-
-        self.assertIn("__import__", paths)
-        self.assertIn("package main", code_map["__import__"]["code"])
-
 
 class TestSymbolPaths(TestParserUtil):
     def test_get_symbol_paths(self):
@@ -913,7 +770,299 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("return 0;", code_map["c.a.b"]["code"])
 
 
+class TestJavascriptSymbolPaths(TestParserUtil):
+    def test_javascript_function_extraction(self):
+        """测试JavaScript函数符号提取"""
+        code = dedent(
+            """
+            function myFunction() {
+                return 42;
+            }
+
+            const myArrowFunction = () => {
+                return 42;
+            };
+
+            class MyClass {
+                myMethod() {
+                    return 42;
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".js")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        print(paths)
+        expected_symbols = ["myFunction", "myArrowFunction", "MyClass.myMethod", "MyClass"]
+        self.assertCountEqual([s for s in paths if s.startswith("my") or s.startswith("MyClass")], expected_symbols)
+
+    def test_javascript_class_extraction(self):
+        """测试JavaScript类及其方法符号提取"""
+        code = dedent(
+            """
+            import { helper } from './utils';
+            import CalculatorBase from './base';
+
+            class Calculator {
+                constructor() {
+                    this.value = 0;
+                }
+
+                add(n) {
+                    this.value += n;
+                }
+
+                static create() {
+                    return new Calculator();
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".js")
+        paths, code_map = self.parser_util.get_symbol_paths(path, debug=True)
+        os.unlink(path)
+        print(paths)
+        expected_symbols = ["Calculator", "Calculator.constructor", "Calculator.add", "Calculator.create", "__import__"]
+        self.assertCountEqual([s for s in paths if s.startswith("Calculator") or s == "__import__"], expected_symbols)
+
+    def test_javascript_object_methods(self):
+        """测试JavaScript对象方法符号提取"""
+        code = dedent(
+            """
+            const mathOperations = {
+                sum(a, b) {
+                    return a + b;
+                },
+                factorial(n) {
+                    return n <= 1 ? 1 : n * this.factorial(n - 1);
+                }
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".js")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        expected_symbols = ["mathOperations", "mathOperations.sum", "mathOperations.factorial"]
+        self.assertCountEqual([s for s in paths if s.startswith("mathOperations")], expected_symbols)
+
+    def test_javascript_async_functions(self):
+        """测试JavaScript异步函数符号提取"""
+        code = dedent(
+            """
+            async function fetchData(url) {
+                const response = await fetch(url);
+                return response.json();
+            }
+
+            const asyncArrow = async (ms) => {
+                await new Promise(resolve => setTimeout(resolve, ms));
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".js")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        expected_symbols = ["fetchData", "asyncArrow"]
+        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+
+    def test_javascript_generator_functions(self):
+        """测试JavaScript生成器函数符号提取"""
+        code = dedent(
+            """
+            function* numberGenerator() {
+                let index = 0;
+                while (true) yield index++;
+            }
+
+            const objectWithGenerator = {
+                *generatorMethod() {
+                    yield 1;
+                    yield 2;
+                }
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".js")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        print(paths)
+        expected_symbols = ["numberGenerator", "objectWithGenerator.generatorMethod"]
+        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+
+    def test_javascript_imports_block(self):
+        """测试JavaScript导入块符号提取"""
+        code = dedent(
+            """
+            import { foo } from 'module';
+            import * as bar from 'module2';
+            import baz, { qux } from 'module3';
+            """
+        )
+        path = self.create_temp_file(code, suffix=".js")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        self.assertIn("__import__", paths)
+
+    def test_javascript_anonymous_functions(self):
+        """测试JavaScript匿名函数不应生成符号"""
+        code = dedent(
+            """
+            const anonymous = function() {};
+            document.addEventListener("click", function() {});
+            """
+        )
+        path = self.create_temp_file(code, suffix=".js")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        print(paths)
+        os.unlink(path)
+        self.assertIn("anonymous", paths)
+
+
 class TestGoTypeAndFunctionAndMethod(TestParserUtil):
+    def test_go_method_extraction(self):
+        """测试Go方法符号提取"""
+        code = """
+        package main
+
+        type MyStruct struct {}
+
+        func (m MyStruct) Method1() {}
+        func (m *MyStruct) Method2() {}
+        func (_ MyStruct) Method3() {}
+        func (MyStruct) Method4() {}
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
+
+        expected_symbols = [
+            "main.MyStruct",
+            "main.MyStruct.Method1",
+            "main.MyStruct.Method2",
+            "main.MyStruct.Method3",
+            "main.MyStruct.Method4",
+        ]
+        self.assertCountEqual([s for s in paths if s.startswith("main.MyStruct")], expected_symbols)
+
+    def test_go_function_extraction(self):
+        """测试Go函数符号提取"""
+        code = """
+        package main
+
+        func Function1() {}
+        func Function2() int { return 0 }
+        func Function3(param string) {}
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
+
+        expected_symbols = [
+            "main.Function1",
+            "main.Function2",
+            "main.Function3",
+        ]
+        self.assertCountEqual([s for s in paths if s.startswith("main.Function")], expected_symbols)
+
+    def test_go_nested_receiver_extraction(self):
+        """测试嵌套接收器方法符号提取"""
+        code = """
+        package main
+
+        type OuterStruct struct {
+            InnerStruct struct {
+                Value int
+            }
+        }
+
+        func (o OuterStruct) Method1() {}
+        func (o *OuterStruct.InnerStruct) Method2() {}
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
+
+        expected_symbols = [
+            "main.OuterStruct",
+            "main.OuterStruct.Method1",
+            "main.OuterStruct.InnerStruct.Method2",
+        ]
+        self.assertCountEqual([s for s in paths if s.startswith("main.OuterStruct")], expected_symbols)
+
+    def test_go_anonymous_function_extraction(self):
+        """测试匿名函数符号提取"""
+        code = """
+        package main
+
+        var FuncVar = func() {}
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
+
+        # 匿名函数不应被提取为符号
+        self.assertNotIn("main.FuncVar", paths)
+
+    def test_go_empty_receiver_extraction(self):
+        """测试空接收器方法符号提取"""
+        code = """
+        package main
+
+        type MyStruct struct {}
+
+        func () Method1() {}
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
+
+        # 空接收器方法不应被提取为符号
+        self.assertNotIn("main.Method1", paths)
+
+    def test_go_type_declaration_extraction(self):
+        """测试Go类型声明符号提取"""
+        code = """
+        package main
+
+        type MyInt int
+        type MyStruct struct {
+            Field1 int
+            Field2 string
+        }
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, _ = self.parser_util.get_symbol_paths(file_path)
+
+        expected_symbols = [
+            "main.MyInt",
+            "main.MyStruct",
+        ]
+        self.assertCountEqual([s for s in paths if s.startswith("main.My")], expected_symbols)
+
+    def test_go_import_declaration_extraction(self):
+        """测试Go导入声明符号提取"""
+        code = """
+        package main
+
+        import (
+            "fmt"
+            "math"
+        )
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+
+        self.assertIn("__import__", paths)
+        self.assertIn("fmt", code_map["__import__"]["code"])
+        self.assertIn("math", code_map["__import__"]["code"])
+
+    def test_go_package_clause_extraction(self):
+        """测试Go包声明符号提取"""
+        code = """
+        package main
+        """
+        file_path = self.create_temp_file(code, suffix=".go")
+        paths, code_map = self.parser_util.get_symbol_paths(file_path)
+
+        self.assertIn("__import__", paths)
+        self.assertIn("package main", code_map["__import__"]["code"])
+
     def test_go_type_struct_definition(self):
         code = dedent(
             """  

@@ -651,7 +651,7 @@ class ParserUtil:
         self.node_processor = NodeProcessor()
         self.code_map_builder = CodeMapBuilder(None, self.node_processor, lang=parser_loader.lang)
 
-    def get_symbol_paths(self, file_path: str):
+    def get_symbol_paths(self, file_path: str, debug: bool = False):
         """解析代码文件并返回所有符号路径及对应代码和位置信息"""
         parser, _, lang_name = self.parser_loader.get_parser(file_path)
         self.node_processor.lang_spec = find_spec_for_lang(lang_name)
@@ -659,6 +659,8 @@ class ParserUtil:
             source_code = f.read()
         tree = parser.parse(source_code)
         root_node = tree.root_node
+        if debug:
+            dump_tree(root_node)
         self.code_map_builder.root_node = root_node
         results = []
         code_map = {}
@@ -828,6 +830,8 @@ def find_spec_for_lang(lang: str) -> "LangSpec":
     """根据语言名称查找对应的语言特定处理策略"""
     if lang == PYTHON_LANG:
         return PythonSpec()
+    elif lang == JAVASCRIPT_LANG:
+        return JavascriptSpec()
     # elif lang == JAVASCRIPT_LANG:
     #     return JavaScriptSpec()
     # elif lang == JAVA_LANG:
@@ -850,6 +854,67 @@ class LangSpec(ABC):
     @abstractmethod
     def get_function_name(self, node: Node) -> str:
         raise NotImplementedError("Subclasses must implement get_function_name")
+
+
+class JavascriptSpec(LangSpec):
+    """TypeScript语言特定处理策略"""
+
+    def get_symbol_name(self, node: Node) -> str:
+
+        if node.type == NodeTypes.JS_CLASS_DECLARATION:
+            class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+            return class_name.text.decode("utf8") if class_name else None
+
+        if node.type == NodeTypes.JS_METHOD_DEFINITION:
+            method_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.JS_PROPERTY_IDENTIFIER)
+            if method_name:
+                return method_name.text.decode("utf8")
+            return None
+
+        if node.type == NodeTypes.JS_FUNCTION_DECLARATION:
+            func_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+            return func_name.text.decode("utf8") if func_name else None
+
+        if node.type == NodeTypes.JS_ARROW_FUNCTION:
+            parent = node.parent
+            if parent and parent.type == NodeTypes.JS_VARIABLE_DECLARATION:
+                return BaseNodeProcessor.find_identifier_in_node(parent)
+            return None
+
+        if node.type == NodeTypes.JS_GENERATOR_FUNCTION_DECLARATION:
+            func_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+            return func_name.text.decode("utf8") if func_name else None
+
+        if node.type == NodeTypes.JS_METHOD_DEFINITION:
+            class_node = node.parent
+            if class_node and class_node.type == NodeTypes.JS_CLASS_DECLARATION:
+                class_name = self.get_symbol_name(class_node)
+                property_identifier = BaseNodeProcessor.find_child_by_type(node, NodeTypes.JS_PROPERTY_IDENTIFIER)
+                if property_identifier:
+                    method_name = property_identifier.text.decode("utf8")
+                    return f"{class_name}.{method_name}" if class_name and method_name else None
+
+        if node.type == NodeTypes.JS_LEXICAL_DECLARATION:
+            declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.JS_VARIABLE_DECLARATOR)
+            if declarator and BaseNodeProcessor.find_child_by_type(declarator, NodeTypes.JS_FUNCTION_EXPRESSION):
+                return BaseNodeProcessor.find_identifier_in_node(declarator)
+            if declarator and BaseNodeProcessor.find_child_by_type(declarator, NodeTypes.JS_ARROW_FUNCTION):
+                return BaseNodeProcessor.find_identifier_in_node(declarator)
+            if declarator and BaseNodeProcessor.find_child_by_type(declarator, NodeTypes.JS_OBJECT):
+                return BaseNodeProcessor.find_identifier_in_node(declarator)
+
+        if node.type == NodeTypes.JS_ARROW_FUNCTION:
+            parent = node.parent
+            if parent and parent.type == NodeTypes.JS_VARIABLE_DECLARATION:
+                return BaseNodeProcessor.find_identifier_in_node(parent)
+
+        if node.type == NodeTypes.JS_VARIABLE_DECLARATION:
+            return BaseNodeProcessor.find_identifier_in_node(node)
+
+        return None
+
+    def get_function_name(self, node: Node) -> str:
+        return self.get_symbol_name(node)
 
 
 class PythonSpec(LangSpec):
@@ -1672,10 +1737,27 @@ class NodeTypes:
     CPP_FRIEND_DECLARATION = "friend_declaration"
     C_ATTRIBUTE_DECLARATION = "attribute_declaration"
     C_ARRAY_DECLARATOR = "array_declarator"
+    JS_FUNCTION_DECLARATION = "function_declaration"
+    JS_CLASS_DECLARATION = "class_declaration"
+    JS_FUNCTION_EXPRESSION = "function_expression"
+    JS_LEXICAL_DECLARATION = "lexical_declaration"
+    JS_VARIABLE_DECLARATION = "variable_declaration"
+    JS_VARIABLE_DECLARATOR = "variable_declarator"
+    JS_ARROW_FUNCTION = "arrow_function"
+    JS_GENERATOR_FUNCTION_DECLARATION = "generator_function_declaration"
+    JS_METHOD_DEFINITION = "method_definition"
+    JS_PROPERTY_IDENTIFIER = "property_identifier"
+    JS_OBJECT = "object"
+    JS_PROGRAM = "program"
 
     @staticmethod
     def is_module(node_type):
-        return node_type in (NodeTypes.MODULE, NodeTypes.TRANSLATION_UNIT, NodeTypes.GO_SOURCE_FILE)
+        return node_type in (
+            NodeTypes.MODULE,
+            NodeTypes.TRANSLATION_UNIT,
+            NodeTypes.GO_SOURCE_FILE,
+            NodeTypes.JS_PROGRAM,
+        )
 
     @staticmethod
     def is_import(node_type):
