@@ -839,6 +839,8 @@ def find_spec_for_lang(lang: str) -> "LangSpec":
         return PythonSpec()
     elif lang == JAVASCRIPT_LANG:
         return JavascriptSpec()
+    elif lang == TYPESCRIPT_LANG:
+        return TypeScriptSpec()
     # elif lang == JAVASCRIPT_LANG:
     #     return JavaScriptSpec()
     # elif lang == JAVA_LANG:
@@ -864,12 +866,13 @@ class LangSpec(ABC):
 
 
 class JavascriptSpec(LangSpec):
-    """TypeScript语言特定处理策略"""
+    """JavaScript语言特定处理策略"""
 
     def get_symbol_name(self, node: Node) -> str:
-
         if node.type == NodeTypes.JS_CLASS_DECLARATION:
             class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+            if not class_name:
+                class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.TS_TYPE_IDENTIFIER)
             return class_name.text.decode("utf8") if class_name else None
 
         if node.type == NodeTypes.JS_METHOD_DEFINITION:
@@ -919,6 +922,53 @@ class JavascriptSpec(LangSpec):
             return BaseNodeProcessor.find_identifier_in_node(node)
 
         return None
+
+    def get_function_name(self, node: Node) -> str:
+        return self.get_symbol_name(node)
+
+
+class TypeScriptSpec(JavascriptSpec):
+    """TypeScript语言特定处理策略"""
+
+    def get_symbol_name(self, node: Node) -> str:
+
+        if node.type == NodeTypes.TS_ABSTRACT_CLASS_DECLARATION:
+            class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.TS_TYPE_IDENTIFIER)
+            return class_name.text.decode("utf8") if class_name else None
+
+        if node.type == NodeTypes.TS_ABSTRACT_METHOD_SIGNATURE:
+            method_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.JS_PROPERTY_IDENTIFIER)
+            if method_name:
+                return f"{method_name.text.decode('utf8')}"
+            return None
+
+        if node.type == NodeTypes.TS_PUBLIC_FIELD_DEFINITION:
+            field_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.JS_PROPERTY_IDENTIFIER)
+            if field_name:
+                return field_name.text.decode("utf8")
+            return None
+
+        if node.type == NodeTypes.TS_TYPE_ALIAS_DECLARATION:
+            type_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.TS_TYPE_IDENTIFIER)
+            return type_name.text.decode("utf8") if type_name else None
+
+        if node.type == NodeTypes.TS_INTERFACE_DECLARATION:
+            interface_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.TS_TYPE_IDENTIFIER)
+            return interface_name.text.decode("utf8") if interface_name else None
+
+        if node.type == NodeTypes.TS_ENUM_DECLARATION:
+            enum_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.TS_TYPE_IDENTIFIER)
+            return enum_name.text.decode("utf8") if enum_name else None
+
+        if node.type == NodeTypes.TS_MODULE_DECLARATION:
+            module_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.TS_TYPE_IDENTIFIER)
+            return module_name.text.decode("utf8") if module_name else None
+
+        if node.type == NodeTypes.TS_DECLARE_FUNCTION:
+            func_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+            return func_name.text.decode("utf8") if func_name else None
+
+        return super().get_symbol_name(node)
 
     def get_function_name(self, node: Node) -> str:
         return self.get_symbol_name(node)
@@ -1756,6 +1806,23 @@ class NodeTypes:
     JS_PROPERTY_IDENTIFIER = "property_identifier"
     JS_OBJECT = "object"
     JS_PROGRAM = "program"
+    TS_TYPE_ALIAS_DECLARATION = "type_alias_declaration"
+    TS_INTERFACE_DECLARATION = "interface_declaration"
+    TS_ENUM_DECLARATION = "enum_declaration"
+    TS_MODULE_DECLARATION = "module_declaration"
+    TS_DECLARE_FUNCTION = "declare_function"
+    TS_ABSTRACT_CLASS_DECLARATION = "abstract_class_declaration"
+    TS_ABSTRACT_METHOD_SIGNATURE = "abstract_method_signature"
+    TS_PUBLIC_FIELD_DEFINITION = "public_field_definition"
+    TS_ACCESSIBILITY_MODIFIER = "accessibility_modifier"
+    TS_TYPE_ANNOTATION = "type_annotation"
+    TS_PREDEFINED_TYPE = "predefined_type"
+    TS_UNION_TYPE = "union_type"
+    TS_LITERAL_TYPE = "literal_type"
+    TS_OPTIONAL_CHAIN = "optional_chain"
+    TS_AS_EXPRESSION = "as_expression"
+    TS_SATISFIES_EXPRESSION = "satisfies_expression"
+    TS_TYPE_IDENTIFIER = "type_identifier"
 
     @staticmethod
     def is_module(node_type):
@@ -1764,6 +1831,7 @@ class NodeTypes:
             NodeTypes.TRANSLATION_UNIT,
             NodeTypes.GO_SOURCE_FILE,
             NodeTypes.JS_PROGRAM,
+            NodeTypes.TS_MODULE_DECLARATION,
         )
 
     @staticmethod
@@ -1787,6 +1855,10 @@ class NodeTypes:
             NodeTypes.GO_FUNC_DECLARATION,
             NodeTypes.GO_METHOD_DECLARATION,
             NodeTypes.GO_TYPE_DECLARATION,
+            NodeTypes.TS_TYPE_ALIAS_DECLARATION,
+            NodeTypes.TS_INTERFACE_DECLARATION,
+            NodeTypes.TS_ENUM_DECLARATION,
+            NodeTypes.TS_ABSTRACT_CLASS_DECLARATION,
         )
 
     @staticmethod
@@ -1796,6 +1868,8 @@ class NodeTypes:
             NodeTypes.IF_STATEMENT,
             NodeTypes.CALL,
             NodeTypes.ASSIGNMENT,
+            NodeTypes.TS_AS_EXPRESSION,
+            NodeTypes.TS_SATISFIES_EXPRESSION,
         )
 
     @staticmethod
@@ -1807,6 +1881,7 @@ class NodeTypes:
             NodeTypes.GO_PACKAGE_IDENTIFIER,
             NodeTypes.GO_BLANK_IDENTIFIER,
             NodeTypes.GO_TYPE_IDENTIFIER,
+            NodeTypes.TS_TYPE_ANNOTATION,
         )
 
     @staticmethod
@@ -1816,6 +1891,9 @@ class NodeTypes:
             NodeTypes.TYPED_DEFAULT_PARAMETER,
             NodeTypes.GENERIC_TYPE,
             NodeTypes.UNION_TYPE,
+            NodeTypes.TS_UNION_TYPE,
+            NodeTypes.TS_LITERAL_TYPE,
+            NodeTypes.TS_PREDEFINED_TYPE,
         )
 
 

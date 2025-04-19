@@ -820,7 +820,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path, debug=True)
+        paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         print(paths)
         expected_symbols = ["Calculator", "Calculator.constructor", "Calculator.add", "Calculator.create", "__import__"]
@@ -917,6 +917,118 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         print(paths)
         os.unlink(path)
         self.assertIn("anonymous", paths)
+
+    def test_typescript_class_extraction(self):
+        """测试TypeScript类及其方法符号提取"""
+        code = dedent(
+            """
+            class Calculator {
+                private value: number;
+
+                constructor() {
+                    this.value = 0;
+                }
+
+                add(n: number): void {
+                    this.value += n;
+                }
+
+                static create(): Calculator {
+                    return new Calculator();
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        expected_symbols = [
+            "Calculator",
+            "Calculator.constructor",
+            "Calculator.add",
+            "Calculator.create",
+            "Calculator.value",
+        ]
+        self.assertCountEqual([s for s in paths if s.startswith("Calculator")], expected_symbols)
+
+    def test_typescript_abstract_class(self):
+        """测试TypeScript抽象类符号提取"""
+        code = dedent(
+            """
+            abstract class Animal {
+                abstract makeSound(): void;
+
+                move(): void {
+                    console.log("moving");
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        print(paths)
+        os.unlink(path)
+        expected_symbols = ["Animal", "Animal.makeSound", "Animal.move"]
+        self.assertCountEqual([s for s in paths if s.startswith("Animal")], expected_symbols)
+
+    def test_typescript_interface(self):
+        """测试TypeScript接口符号提取"""
+        code = dedent(
+            """
+            interface Point {
+                x: number;
+                y: number;
+                distance(other: Point): number;
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        self.assertIn("Point", paths)
+
+    def test_typescript_type_alias(self):
+        """测试TypeScript类型别名符号提取"""
+        code = dedent(
+            """
+            type StringOrNumber = string | number;
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        self.assertIn("StringOrNumber", paths)
+
+    def test_typescript_public_fields(self):
+        """测试TypeScript公共字段符号提取"""
+        code = dedent(
+            """
+            class User {
+                public name: string;
+                protected age: number;
+                private id: string;
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        expected_symbols = ["User", "User.name", "User.age", "User.id"]
+        self.assertCountEqual([s for s in paths if s.startswith("User")], expected_symbols)
+
+    def test_typescript_imports_block(self):
+        """测试TypeScript导入块符号提取"""
+        code = dedent(
+            """
+            import { Component } from '@angular/core';
+            import * as React from 'react';
+            import Vue from 'vue';
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        self.assertIn("__import__", paths)
 
 
 class TestGoTypeAndFunctionAndMethod(TestParserUtil):

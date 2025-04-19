@@ -2365,7 +2365,7 @@ class GPTContextProcessor:
             symbol_name.symbols,
             os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG),
             max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
-            file_list=self._extract_include_files(),
+            file_list=self._extract_include_files() if GPT_FLAGS.get(GPT_FLAG_SEARCH_FILES) else None,
         )
         for symbol in symbols.values():
             symbol_map[symbol["name"]] = self._symbol_format(symbol)
@@ -2432,8 +2432,15 @@ GPT_FLAG_EDIT = "edit"
 GPT_FLAG_PATCH = "patch"
 GPT_SYMBOL_PATCH = "patch"
 GPT_FLAG_CONTEXT = "context"
+GPT_FLAG_SEARCH_FILES = "search"
 
-GPT_FLAGS = {GPT_FLAG_GLOW: False, GPT_FLAG_EDIT: False, GPT_FLAG_PATCH: False, GPT_FLAG_CONTEXT: False}
+GPT_FLAGS = {
+    GPT_FLAG_GLOW: False,
+    GPT_FLAG_EDIT: False,
+    GPT_FLAG_PATCH: False,
+    GPT_FLAG_CONTEXT: False,
+    GPT_FLAG_SEARCH_FILES: False,
+}
 GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: {}}
 
 
