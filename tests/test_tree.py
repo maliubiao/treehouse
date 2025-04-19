@@ -748,6 +748,72 @@ class TestCppSymbolPaths(TestParserUtil):
         # 验证函数参数中的数组声明（根据解析器实现决定是否提取）
         # self.assertIn("process_data", paths)
 
+    def test_function_overloads(self):
+        """验证函数重载路径"""
+        code = dedent(
+            """
+            void process(int value) {
+                std::cout << "Processing int: " << value << std::endl;
+            }
+
+            void process(double value) {
+                std::cout << "Processing double: " << value << std::endl;
+            }
+
+            class Calculator {
+            public:
+                int compute(int a, int b) { return a + b; }
+                double compute(double a, double b) { return a + b; }
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("process", paths)
+        self.assertIn("process_5", paths)
+        self.assertIn("Calculator.compute", paths)
+        self.assertIn("Calculator.compute_12", paths)
+
+        self.assertIn("void process(int value)", code_map["process"]["code"])
+        self.assertIn("void process(double value)", code_map["process_5"]["code"])
+        self.assertIn("int compute(int a, int b)", code_map["Calculator.compute"]["code"])
+        self.assertIn("double compute(double a, double b)", code_map["Calculator.compute_12"]["code"])
+
+    def test_function_overloads_with_line_numbers(self):
+        """验证带行号的函数重载路径"""
+        code = dedent(
+            """
+            void process(int value) {  // line 2
+                std::cout << "Processing int: " << value << std::endl;
+            }
+
+            void process(double value) {  // line 6
+                std::cout << "Processing double: " << value << std::endl;
+            }
+
+            class Calculator {  // line 10
+            public:
+                int compute(int a, int b) { return a + b; }  // line 12
+                double compute(double a, double b) { return a + b; }  // line 14
+            };
+            """
+        )
+        path = self.create_temp_file(code, suffix=".cpp")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+
+        self.assertIn("process", paths)
+        self.assertIn("process_5", paths)
+        self.assertIn("Calculator.compute", paths)
+        self.assertIn("Calculator.compute_11", paths)
+
+        self.assertIn("void process(int value)", code_map["process"]["code"])
+        self.assertIn("void process(double value)", code_map["process_5"]["code"])
+        self.assertIn("int compute(int a, int b)", code_map["Calculator.compute"]["code"])
+        self.assertIn("double compute(double a, double b)", code_map["Calculator.compute_11"]["code"])
+
     def test_namespace_member_function(self):
         """验证命名空间中直接定义的成员函数路径"""
         code = dedent(

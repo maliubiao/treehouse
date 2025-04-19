@@ -1385,6 +1385,9 @@ class CodeMapBuilder:
         code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
         code_entry = self._build_code_map_entry(path_key, code, node_info)
         code_entry["type"] = symbol_type
+        if path_key in code_map:
+            start_line = code_entry["start_line"]
+            path_key = f"{path_key}_{start_line}"
         code_map[path_key] = code_entry
         results.append(path_key)
         if node.type == NodeTypes.GO_PACKAGE_CLAUSE:
