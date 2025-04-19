@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 C_LANG = "c"
 PYTHON_LANG = "python"
 JAVASCRIPT_LANG = "javascript"
+TYPESCRIPT_LANG = "typescript"
+TYPESCRIPT_TSX_LANG = "typescript_tsx"
 JAVA_LANG = "java"
 GO_LANG = "go"
 SHELL_LANG = "bash"
@@ -58,6 +60,8 @@ SUPPORTED_LANGUAGES = {
     ".h": C_LANG,
     ".py": PYTHON_LANG,
     ".js": JAVASCRIPT_LANG,
+    ".ts": TYPESCRIPT_LANG,
+    ".tsx": TYPESCRIPT_TSX_LANG,
     ".java": JAVA_LANG,
     ".go": GO_LANG,
     ".sh": SHELL_LANG,
@@ -611,12 +615,15 @@ class ParserLoader:
             raise ImportError(
                 f"Language parser for '{lang_name}' not installed. Try: pip install {module_name.replace('_', '-')}"
             ) from exc
-
-        if not hasattr(lang_module, "language"):
-            raise AttributeError(f"Module {module_name} does not have 'language' attribute.")
-
-        self._languages[lang_name] = lang_module.language
-        return lang_module.language
+        if lang_name == TYPESCRIPT_LANG:
+            module = importlib.import_module("tree_sitter_typescript")
+            return getattr(module, "language_typescript")
+        elif lang_name == TYPESCRIPT_TSX_LANG:
+            module = importlib.import_module("tree_sitter_typescript")
+            return getattr(module, "language_tsx")
+        else:
+            lang_module = importlib.import_module(module_name)
+            return lang_module.language
 
     def get_parser(self, file_path: str) -> tuple[Parser, Query, str]:
         """根据文件路径获取对应的解析器和查询对象"""
