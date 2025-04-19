@@ -469,12 +469,13 @@ class SymbolTrie:
             return node.symbols[0]
         return None
 
-    def search_prefix(self, prefix, max_results=None):
+    def search_prefix(self, prefix, max_results=None, use_bfs=False):
         """前缀搜索
 
         参数：
             prefix: 要搜索的前缀字符串
             max_results: 最大返回结果数量，None表示不限制
+            use_bfs: 是否使用广度优先搜索
 
         返回：
             匹配前缀的符号列表
@@ -488,10 +489,40 @@ class SymbolTrie:
                 return []
             node = node.children[char]
 
-        # 收集所有子节点符号
+        # 选择遍历算法
         results = []
-        self._dfs_collect(node, prefix, results, max_results)
+        if use_bfs:
+            self._bfs_collect(node, prefix, results, max_results)
+        else:
+            self._dfs_collect(node, prefix, results, max_results)
         return results
+
+    def _bfs_collect(self, node, current_prefix, results, max_results):
+        """广度优先收集符号
+
+        参数：
+            node: 起始节点
+            current_prefix: 当前前缀
+            results: 结果列表
+            max_results: 最大结果数量限制
+        """
+        from collections import deque
+
+        queue = deque([(node, current_prefix)])
+
+        while queue:
+            current_node, current_path = queue.popleft()
+
+            if current_node.is_end:
+                for symbol in current_node.symbols:
+                    results.append({"name": current_path, "details": symbol})
+                    if max_results is not None and len(results) >= max_results:
+                        return
+
+            # 按字母顺序入队保证确定性
+            for char in sorted(current_node.children.keys()):
+                child = current_node.children[char]
+                queue.append((child, current_path + char))
 
     def _dfs_collect(self, node, current_prefix, results, max_results):
         """深度优先收集符号
@@ -1489,7 +1520,8 @@ class RipgrepSearcher:
         if self.debug:
             print("调试信息：执行命令:", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
-
+        if self.debug:
+            print(result.stdout)
         if result.returncode not in (0, 1):  # trace [subprocess.run, result.returncode]
             error_msg = f"rg command failed: {result.stderr}\nCommand: {' '.join(cmd)}"
             raise RuntimeError(error_msg)
@@ -3635,7 +3667,7 @@ def perform_trie_search(
     if search_exact:
         results = [trie.search_exact(prefix)]
     else:
-        results = trie.search_prefix(prefix, max_results=max_results) if file_path else []
+        results = trie.search_prefix(prefix, max_results=max_results, use_bfs=True) if file_path else []
     if not results and file_path and not updated:
         if update_trie_if_needed(f"symbol:{file_path}", trie, app.state.file_mtime_cache):
             return trie.search_prefix(prefix, max_results)

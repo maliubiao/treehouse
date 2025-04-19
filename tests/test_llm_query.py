@@ -41,6 +41,7 @@ from llm_query import (
     interactive_symbol_location,
     patch_symbol_with_prompt,
     process_file_change,
+    NewSymbolFlag,
 )
 from tree import BlockPatch
 
@@ -557,6 +558,7 @@ code3
             self.assertEqual(result["file_path"], tmp_path)
             self.assertEqual(len(result["block_range"]), 2)
             self.assertEqual(result["block_content"], b"")
+            self.assertTrue(result[NewSymbolFlag])  # 新增验证NewSymbolFlag
 
             # 测试与BlockPatch的联动
             patch = BlockPatch(
@@ -615,6 +617,7 @@ code3
             # 验证结果
             self.assertEqual(len(symbol_detail), 1)
             self.assertIn(f"{tmp_path}/new_symbol", symbol_detail)
+            self.assertTrue(symbol_detail[f"{tmp_path}/new_symbol"][NewSymbolFlag])  # 新增验证NewSymbolFlag
 
             # 测试与BlockPatch的联动
             symbol_info = symbol_detail[f"{tmp_path}/new_symbol"]

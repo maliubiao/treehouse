@@ -1678,6 +1678,9 @@ def lookup_symbols(file, symbol_names):
     return parser_util.lookup_symbols(file, symbol_names)
 
 
+NewSymbolFlag = "new_symbol_add_newlines"
+
+
 def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     if not os.path.exists(file):
         raise FileNotFoundError(f"Source file not found: {file}")
@@ -1686,7 +1689,7 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     block_content = parent_symbol_info["block_content"].decode("utf-8")
     lines = block_content.splitlines()
 
-    print(f"\nParent symbol: {parent_symbol}")
+    print(f"\nParent symbol: {parent_symbol}, New symbol: {path}")
     print(f"File: {file}")
     print(f"Location: lines {start_line}-{start_line + len(lines) - 1}\n")
 
@@ -1714,6 +1717,7 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
         "file_path": file,
         "block_range": [selected_offset, selected_offset],
         "block_content": b"",
+        NewSymbolFlag: True,
     }
 
 
@@ -1742,6 +1746,7 @@ def add_symbol_details(remaining, symbol_detail):
                 "file_path": file,
                 "block_range": symbol_info["block_range"],
                 "block_content": symbol_info["block_content"],
+                NewSymbolFlag: symbol_info.get(NewSymbolFlag),
             }
 
 
@@ -1769,6 +1774,8 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
         symbol_path = (GLOBAL_PROJECT_CONFIG.project_root_dir / symbol_detail[symbol_name]["file_path"]).relative_to(
             Path.cwd()
         )
+        if symbol_detail[symbol_name].get(NewSymbolFlag):
+            source_code = f"\n{source_code}\n"
         patch_items.append(
             (
                 str(symbol_path),
