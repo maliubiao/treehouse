@@ -1693,8 +1693,11 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     print(f"File: {file}")
     print(f"Location: lines {start_line}-{start_line + len(lines) - 1}\n")
 
-    for i, line in enumerate(lines):
-        print(f"{start_line+i:4d} | {line}")
+    highlighted_content = SyntaxHighlight.highlight_if_terminal(block_content, file_path=file)
+    highlighted_lines = highlighted_content.splitlines()
+
+    for i, line in enumerate(highlighted_lines):
+        print(f"\033[33m{start_line+i:4d}\033[0m | {line}")
 
     while True:
         try:
