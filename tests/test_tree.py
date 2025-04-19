@@ -1016,6 +1016,125 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         expected_symbols = ["User", "User.name", "User.age", "User.id"]
         self.assertCountEqual([s for s in paths if s.startswith("User")], expected_symbols)
 
+    def test_typescript_function_extraction(self):
+        """测试TypeScript函数符号提取"""
+        code = dedent(
+            """
+            function identity<T>(arg: T): T {
+                return arg;
+            }
+
+            const arrowFunctionWithParams = (a: number, b: number): number => {
+                return a * b;
+            };
+
+            function greet(name: string): string;
+            function greet(users: User[]): string[];
+            function greet(input: unknown): unknown {
+                if (typeof input === 'string') {
+                    return `Hello, ${input}`;
+                } else if (Array.isArray(input)) {
+                    return input.map(user => `Hello, ${user.name}`);
+                }
+                throw new Error('Invalid input');
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        expected_symbols = ["identity", "arrowFunctionWithParams", "greet"]
+        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+
+    def test_typescript_generic_functions(self):
+        """测试TypeScript泛型函数符号提取"""
+        code = dedent(
+            """
+            function identity<T>(arg: T): T {
+                return arg;
+            }
+
+            function merge<U, V>(obj1: U, obj2: V): U & V {
+                return { ...obj1, ...obj2 };
+            }
+
+            class GenericClass<T> {
+                value: T;
+                setValue(val: T): void {
+                    this.value = val;
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        expected_symbols = ["identity", "merge", "GenericClass", "GenericClass.setValue"]
+        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+
+    def test_typescript_function_overloads(self):
+        """测试TypeScript函数重载符号提取"""
+        code = dedent(
+            """
+            function createElement(tag: 'img'): HTMLImageElement;
+            function createElement(tag: 'input'): HTMLInputElement;
+            function createElement(tag: string): HTMLElement {
+                return document.createElement(tag);
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        self.assertIn("createElement", paths)
+
+    def test_typescript_decorators(self):
+        """测试TypeScript装饰器符号提取"""
+        code = dedent(
+            """
+            function sealed(constructor: Function) {
+                Object.seal(constructor);
+                Object.seal(constructor.prototype);
+            }
+
+            @sealed
+            class Greeter {
+                greeting: string;
+                constructor(message: string) {
+                    this.greeting = message;
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        expected_symbols = ["sealed", "Greeter", "Greeter.constructor"]
+        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+
+    def test_typescript_namespaces(self):
+        """测试TypeScript命名空间符号提取"""
+        code = dedent(
+            """
+            namespace Geometry {
+                export interface Point {
+                    x: number;
+                    y: number;
+                }
+
+                export class Circle {
+                    constructor(public center: Point, public radius: number) {}
+                }
+            }
+            """
+        )
+        path = self.create_temp_file(code, suffix=".ts")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
+        self.assertIn("export interface Point", code_map["Geometry.Point"]["code"])
+        expected_symbols = ["Geometry", "Geometry.Point", "Geometry.Circle", "Geometry.Circle.constructor"]
+        self.assertCountEqual([s for s in paths if s.startswith("Geometry")], expected_symbols)
+
     def test_typescript_imports_block(self):
         """测试TypeScript导入块符号提取"""
         code = dedent(

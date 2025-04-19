@@ -931,6 +931,9 @@ class TypeScriptSpec(JavascriptSpec):
     """TypeScript语言特定处理策略"""
 
     def get_symbol_name(self, node: Node) -> str:
+        if node.type == NodeTypes.TS_NAMESPACE:
+            namespace_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
+            return namespace_name.text.decode("utf8") if namespace_name else None
 
         if node.type == NodeTypes.TS_ABSTRACT_CLASS_DECLARATION:
             class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.TS_TYPE_IDENTIFIER)
@@ -939,13 +942,13 @@ class TypeScriptSpec(JavascriptSpec):
         if node.type == NodeTypes.TS_ABSTRACT_METHOD_SIGNATURE:
             method_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.JS_PROPERTY_IDENTIFIER)
             if method_name:
-                return f"{method_name.text.decode('utf8')}"
+                return f"{method_name.text.decode('utf8')}" if method_name else None
             return None
 
         if node.type == NodeTypes.TS_PUBLIC_FIELD_DEFINITION:
             field_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.JS_PROPERTY_IDENTIFIER)
             if field_name:
-                return field_name.text.decode("utf8")
+                return field_name.text.decode("utf8") if field_name else None
             return None
 
         if node.type == NodeTypes.TS_TYPE_ALIAS_DECLARATION:
@@ -1281,9 +1284,16 @@ class CodeMapBuilder:
     def _get_effective_node(self, node: Node):
         """获取有效的语法树节点（处理装饰器情况）"""
         if (
-            node.type in (NodeTypes.FUNCTION_DEFINITION, NodeTypes.CPP_CLASS_SPECIFIER)
+            node.type
+            in (
+                NodeTypes.FUNCTION_DEFINITION,
+                NodeTypes.CPP_CLASS_SPECIFIER,
+                NodeTypes.TS_INTERFACE_DECLARATION,
+                NodeTypes.JS_CLASS_DECLARATION,
+            )
             and node.parent
-            and node.parent.type in (NodeTypes.DECORATED_DEFINITION, NodeTypes.CPP_TEMPLATE_DECLARATION)
+            and node.parent.type
+            in (NodeTypes.DECORATED_DEFINITION, NodeTypes.CPP_TEMPLATE_DECLARATION, NodeTypes.TS_EXPORT_STATEMENT)
         ):
             return node.parent
         return node
@@ -1823,6 +1833,8 @@ class NodeTypes:
     TS_AS_EXPRESSION = "as_expression"
     TS_SATISFIES_EXPRESSION = "satisfies_expression"
     TS_TYPE_IDENTIFIER = "type_identifier"
+    TS_NAMESPACE = "internal_module"
+    TS_EXPORT_STATEMENT = "export_statement"
 
     @staticmethod
     def is_module(node_type):

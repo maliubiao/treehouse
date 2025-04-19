@@ -1559,7 +1559,7 @@ class BlockPatchResponse:
         for match in pattern.finditer(response_text):
             section_type, identifier, source_code = match.groups()
             identifier = identifier.strip()
-            source_code = source_code.strip()
+            source_code = source_code
 
             if section_type == "symbol":
                 # 处理未注册符号的暂存逻辑
