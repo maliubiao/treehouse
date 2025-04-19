@@ -799,6 +799,9 @@ def get_directory_context(max_depth=1):
             cmd = ["tree"]
             if max_depth is not None:
                 cmd.extend(["-L", str(max_depth)])
+            # 添加gitignore支持
+            cmd.append("--gitignore")
+
         try:
             result = subprocess.run(
                 cmd,
