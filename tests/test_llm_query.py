@@ -24,6 +24,7 @@ from llm_query import (
     ArchitectMode,
     AutoGitCommit,
     BlockPatchResponse,
+    ChangelogMarkdown,
     ChatbotUI,
     CmdNode,
     CoverageTestPlan,
@@ -2011,6 +2012,101 @@ class TestClass1(unittest.TestCase):
     def test_validate_invalid_test_plan(self):
         """Test validation returns False for invalid test plan."""
         self.assertFalse(CoverageTestPlan.validate_test_plan("invalid content"))
+
+
+class TestChangelogMarkdown(unittest.TestCase):
+    """Test cases for ChangelogMarkdown functionality."""
+
+    def setUp(self):
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".md")
+        self.file_path = self.temp_file.name
+        self.changelog = ChangelogMarkdown(self.file_path)
+
+    def tearDown(self):
+        self.temp_file.close()
+        os.unlink(self.file_path)
+
+    def test_add_and_retrieve_entry(self):
+        """Test adding and retrieving a single entry."""
+        test_desc = "Test description"
+        test_diff = "Test diff content"
+        self.changelog.add_entry(test_desc, test_diff)
+
+        recent = self.changelog.get_recent()
+        self.assertIn(test_desc, recent)
+        self.assertIn(test_diff, recent)
+
+    def test_multiple_entries(self):
+        """Test handling multiple entries."""
+        entries = [("First change", "diff1"), ("Second change", "diff2"), ("Third change", "diff3")]
+
+        for desc, diff in entries:
+            self.changelog.add_entry(desc, diff)
+
+        recent = self.changelog.get_recent(2)
+        self.assertIn(entries[1][0], recent)
+        self.assertIn(entries[2][0], recent)
+        self.assertNotIn(entries[0][0], recent)
+
+    def test_file_persistence(self):
+        """Test that entries persist in the file."""
+        test_desc = "Persistent entry"
+        test_diff = "Persistent diff"
+        self.changelog.add_entry(test_desc, test_diff)
+
+        # Create new instance to load from file
+        new_changelog = ChangelogMarkdown(self.file_path)
+        recent = new_changelog.get_recent()
+        self.assertIn(test_desc, recent)
+        self.assertIn(test_diff, recent)
+
+    def test_empty_file_handling(self):
+        """Test handling of empty/non-existent files."""
+        empty_changelog = ChangelogMarkdown("nonexistent.md")
+        self.assertEqual(empty_changelog.get_recent(), "[change log start]\n\n[change log end]")
+
+    def test_markdown_formatting(self):
+        """Test the generated markdown format is valid."""
+        test_desc = "Format test"
+        test_diff = "Format diff"
+        self.changelog.add_entry(test_desc, test_diff)
+
+        with open(self.file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            self.assertIn("## ", content)
+            self.assertIn("### Description", content)
+            self.assertIn("### Diff", content)
+            self.assertIn("```diff", content)
+            self.assertIn(test_desc, content)
+            self.assertIn(test_diff, content)
+
+    def test_use_diff_method(self):
+        """Test extracting description from patch prompt output."""
+        test_text = """
+        Some text before
+        [change log message start]
+        This is a test description
+        with multiple lines
+        [change log message end]
+        Some text after
+        """
+        test_diff = "test diff content"
+        self.changelog.use_diff(test_text, test_diff)
+
+        recent = self.changelog.get_recent()
+        self.assertIn("This is a test description", recent)
+        self.assertIn("with multiple lines", recent)
+        self.assertIn(test_diff, recent)
+
+    def test_use_diff_without_description(self):
+        """Test use_diff when no description is found."""
+        test_text = "No description markers here"
+        test_diff = "test diff content"
+        self.changelog.use_diff(test_text, test_diff)
+
+        recent = self.changelog.get_recent()
+        self.assertIn("No description provided", recent)
+        self.assertIn(test_diff, recent)
 
 
 if __name__ == "__main__":
