@@ -290,9 +290,9 @@ class ProjectConfig:
     def update_symbol_service_url(self, url: str):
         """更新符号服务URL并保存配置"""
         self.symbol_service_url = url
-        self._save_config()
+        self.save_config()
 
-    def _save_config(self):
+    def save_config(self):
         """将配置保存到文件"""
         if not self._config_file_path:
             return
@@ -320,7 +320,7 @@ class ConfigLoader:
         self.config_path = Path(config_path)
         self._default_config = ProjectConfig(
             project_root_dir=str(Path.cwd()),
-            lsp={},
+            lsp={"commands": {"py": "pylsp"}, "default": "py"},
             exclude={
                 "dirs": [".git", ".venv", "node_modules", "build", "dist", "__pycache__"],
                 "files": ["*.min.js", "*.bundle.css", "*.log", "*.tmp"],

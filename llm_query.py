@@ -3925,8 +3925,10 @@ class SymbolService:
 
     def _validate_project_root(self):
         """验证项目根目录是否包含配置文件"""
-        if not (self.project_root / self.CONFIG_FILE).exists():
-            raise FileNotFoundError(f"项目配置文件 {self.CONFIG_FILE} 不存在于 {self.project_root}")
+        config_path = self.project_root / self.CONFIG_FILE
+        if not config_path.exists():
+            GLOBAL_PROJECT_CONFIG.set_config_file_path(config_path)
+            GLOBAL_PROJECT_CONFIG.save_config()
 
     def _find_available_port(self) -> int:
         """查找可用端口"""
@@ -4005,9 +4007,10 @@ class SymbolService:
                 # 清理无效的pid文件
                 self.pid_file.unlink(missing_ok=True)
 
+        python_bin = os.environ.get("GPT_PYTHON_BIN", "python")
         # 启动新进程
         cmd = [
-            "python",
+            python_bin,
             str(Path(__file__).parent / "tree.py"),
             "--project",
             str(self.project_root),
@@ -4046,7 +4049,7 @@ def start_symbol_service(force=False):
         default_lsp = lsp_config.get("default", "py") if isinstance(lsp_config, dict) else "py"
 
         # 尝试从配置中获取symbol_service端口
-        port = None
+        port = 0
         if hasattr(GLOBAL_PROJECT_CONFIG, "symbol_service_url"):
             try:
                 parsed_url = urlparse(GLOBAL_PROJECT_CONFIG.symbol_service_url)
