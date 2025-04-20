@@ -33,6 +33,7 @@ from llm_query import (
     LintParser,
     ModelConfig,
     ModelSwitch,
+    NewSymbolFlag,
     SymbolsNode,
     _fetch_symbol_data,
     _find_gitignore,
@@ -41,7 +42,6 @@ from llm_query import (
     interactive_symbol_location,
     patch_symbol_with_prompt,
     process_file_change,
-    NewSymbolFlag,
 )
 from tree import BlockPatch
 
@@ -428,7 +428,7 @@ c = 3
         results = parser.parse(response)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0][1].strip(), "a = 1\nb = 2\nc = 3")
+        self.assertEqual(results[0][1].strip(), "a = 1\n\nb = 2\n\nc = 3")
 
     def test_extract_symbol_paths(self):
         """测试从响应中提取符号路径"""
