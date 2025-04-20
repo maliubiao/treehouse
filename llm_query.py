@@ -33,6 +33,8 @@ from typing import Callable, Dict, List, Optional, Tuple, TypedDict, Union
 from urllib.parse import urlparse
 
 import requests
+from colorama import Fore
+from colorama import Style as ColorStyle
 from openai import OpenAI
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -1700,16 +1702,18 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     highlighted_lines = highlighted_content.splitlines()
 
     for i, line in enumerate(highlighted_lines):
-        print(f"\033[33m{start_line+i:4d}\033[0m | {line}")
+        print(f"{Fore.YELLOW}{start_line+i:4d}{ColorStyle.RESET_ALL} | {line}")
 
     while True:
         try:
             selected_line = int(input("\nEnter insert line number for new symbol location: "))
             if start_line <= selected_line < start_line + len(lines):
                 break
-            print(f"Line number must be between {start_line} and {start_line + len(lines) - 1}")
+            print(
+                f"{Fore.RED}Line number must be between {start_line} and {start_line + len(lines) - 1}{ColorStyle.RESET_ALL}"
+            )
         except ValueError:
-            print("Please enter a valid integer")
+            print(f"{Fore.RED}Please enter a valid integer{ColorStyle.RESET_ALL}")
 
     parent_content = parent_symbol_info["block_content"]
     line_offsets = [0]
@@ -1804,10 +1808,27 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
     print("\n高亮显示的diff内容：")
     print(highlighted_diff)
 
-    diff_per_file = DiffBlockFilter(diff).interactive_filter()
-    if not diff_per_file:
-        print("没有选择任何diff块")
+    # 添加模式选择
+    print("\n请选择补丁应用模式:")
+    print(Fore.CYAN + "i - 交互式选择 (默认)" + ColorStyle.RESET_ALL)
+    print(Fore.GREEN + "y - 全部应用" + ColorStyle.RESET_ALL)
+    print(Fore.YELLOW + "m - 手动合并" + ColorStyle.RESET_ALL)
+    print(Fore.RED + "n - 退出" + ColorStyle.RESET_ALL)
+    choice = input("请输入选择 [i/y/m/n]: ").lower().strip() or "i"
+
+    if choice == "n":
+        print(Fore.RED + "操作已取消" + ColorStyle.RESET_ALL)
         return None
+    if choice == "m":
+        patch.manual_merge = True
+        diff = patch.generate_diff()
+    if choice == "i":
+        diff_per_file = DiffBlockFilter(diff).interactive_filter()
+        if not diff_per_file:
+            print(Fore.YELLOW + "没有选择任何diff块" + ColorStyle.RESET_ALL)
+            return None
+    else:
+        diff_per_file = diff
 
     modified_files = []
     for file, diff_content in diff_per_file.items():
@@ -1819,7 +1840,7 @@ def process_patch_response(response_text, symbol_detail, auto_commit: bool = Tru
         temp_file.unlink()
         modified_files.append(file)
 
-    print("补丁已成功应用")
+    print(Fore.GREEN + "补丁已成功应用" + ColorStyle.RESET_ALL)
 
     if auto_lint:
         FormatAndLint(verbose=True).run_checks(modified_files, fix=True)
@@ -3118,9 +3139,10 @@ def prompt_words_search(words: List[str], args):
             for match in result.matches:
                 highlighted = (
                     match.text[: match.column_range[0]]
-                    + "\033[1;31m"
+                    + ColorStyle.BRIGHT
+                    + Fore.RED
                     + match.text[match.column_range[0] : match.column_range[1]]
-                    + "\033[0m"
+                    + ColorStyle.RESET_ALL
                     + match.text[match.column_range[1] :]
                 )
                 print(f"  L{match.line}: {highlighted.strip()}")

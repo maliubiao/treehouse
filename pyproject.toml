@@ -41,6 +41,7 @@ dependencies = [
     "pyyaml>=6.0.2",
     "parameterized>=0.9.0",
     "tree-sitter-typescript>=0.23.2",
+    "colorama>=0.4.6",
 ]
 
 [tool.black]

@@ -2125,6 +2125,7 @@ class BlockPatch:
         patch_ranges: list[tuple],
         block_contents: list[bytes],
         update_contents: list[bytes],
+        manual_merge: bool = False,
     ):
         """
         初始化补丁对象（支持多文件）
@@ -2137,7 +2138,7 @@ class BlockPatch:
         """
         if len({len(file_paths), len(patch_ranges), len(block_contents), len(update_contents)}) != 1:
             raise ValueError("所有参数列表的长度必须一致")
-
+        self.manual_merge = manual_merge
         # 过滤掉没有实际更新的块
         self.file_paths = []
         self.patch_ranges = []
@@ -2258,6 +2259,40 @@ class BlockPatch:
         except FileNotFoundError:
             return None
 
+    def _launch_diff_tool(self, original_path: str, modified_path: str) -> None:
+        """启动可视化diff工具进行手动合并"""
+        # 优先尝试VS Code，其次vimdiff
+        if platform.system() == "Darwin":
+            vscode_paths = [
+                "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+                "/Applications/VSCode.app/Contents/Resources/app/bin/code",
+            ]
+            for code_path in vscode_paths:
+                if os.path.exists(code_path):
+                    subprocess.run([code_path, "-d", original_path, modified_path], check=True)
+                    print("请在VS Code中完成合并，完成后请按回车继续...")
+                    input()
+                    return
+        elif platform.system() == "Windows":
+            code_exe = shutil.which("code.exe")
+            if code_exe:
+                subprocess.run([code_exe, "-d", original_path, modified_path], check=True)
+                print("请在VS Code中完成合并，完成后请按回车继续...")
+                input()
+                return
+        else:  # Linux
+            if shutil.which("code"):
+                subprocess.run(["code", "-d", original_path, modified_path], check=True)
+                print("请在VS Code中完成合并，完成后请按回车继续...")
+                input()
+                return
+
+        # 回退到vimdiff
+        if shutil.which("vimdiff"):
+            subprocess.run(["vimdiff", original_path, modified_path], check=True)
+        else:
+            raise RuntimeError("未找到可用的diff工具，请安装VS Code或vim")
+
     def _process_single_file_diff(self, file_path: str, indices: list[int]) -> list[str]:
         """处理单个文件的差异生成"""
         original_code = self.source_codes[file_path]
@@ -2287,6 +2322,15 @@ class BlockPatch:
             f_orig_path = f_orig.name
             f_mod.write(modified_code)
             f_mod_path = f_mod.name
+
+        if self.manual_merge:
+            self._launch_diff_tool(f_orig_path, f_mod_path)
+            # 重新读取用户修改后的内容
+            with open(f_mod_path, "rb") as f:
+                modified_code = f.read()
+            # 更新替换内容
+            for idx in indices:
+                self.update_contents[idx] = modified_code
 
         system_diff = self._generate_system_diff(f_orig_path, f_mod_path)
 
