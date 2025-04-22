@@ -2002,7 +2002,18 @@ document.addEventListener('click', function() {
 });
 var x = 1;
 var should_not_capture = function() {
-}"""
+};
+function specific_function() {
+    console.log('This should not be captured');
+    var a = 1;
+}
+function another_function() {
+    console.log('This should be captured');
+    var y = 2;
+    var z = 3;
+    return y + z;
+}
+"""
             )
             tmp.write(js_content)
             tmp.flush()
@@ -2011,7 +2022,7 @@ var should_not_capture = function() {
             # 定义符号位置 (整个函数体)
             start_line = 0  # 从第1行开始
             end_line = 6  # 到第7行结束
-            symbol_path = f"symbol:{tmp.name}/at_2,at_9"
+            symbol_path = f"symbol:{tmp.name}/at_2,at_9,near_16"
 
             # 计算字节范围
             lines = js_content.splitlines(keepends=True)
@@ -2033,7 +2044,8 @@ var should_not_capture = function() {
             self.assertIn("console.log", response.text)
             self.assertIn("alert('Hello')", response.text)
             self.assertIn("var x = 1", response.text)
-            self.assertNotIn("should_not_capture", response.text)  # 确保没有捕获到不相关的函数
+            self.assertIn("This should be captured", response.text)
+            self.assertNotIn("should_not_capture", response.text)
 
 
 class TestSymbolsAPI(unittest.TestCase):

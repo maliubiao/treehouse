@@ -702,6 +702,9 @@ class ParserUtil:
     def symbol_at_line(self, line: int) -> dict:
         return self.code_map_builder.build_symbol_info_at_line(line)
 
+    def near_symbol_at_line(self, line: int) -> dict:
+        return self.code_map_builder.build_near_symbol_info_at_line(line)
+
     def lookup_symbols(self, file_path: str, symbols: list[str]):
         """根据文件路径列表查找符号"""
         _, code_map = self.get_symbol_paths(file_path)
@@ -1241,32 +1244,6 @@ class CodeMapBuilder:
         self.lang = lang
         self.root_node = root_node
 
-    def find_minimal_node(self, root_node: Node, target_row: int, target_column: int) -> Node:
-        """查找包含指定行列位置的最小语法树节点"""
-
-        def walk(node):
-            if not node:
-                return None
-
-            start_row, start_col = node.start_point
-            end_row, end_col = node.end_point
-
-            # 检查当前节点是否包含目标位置
-            if (start_row < target_row or (start_row == target_row and start_col <= target_column)) and (
-                end_row > target_row or (end_row == target_row and end_col >= target_column)
-            ):
-                # 遍历所有子节点寻找更精确的匹配
-                last_child = None
-                for child in node.children:
-                    found = walk(child)
-                    if found:
-                        last_child = found
-                return last_child or node
-
-            return None
-
-        return walk(root_node)
-
     def symbol_at_line(self, line: int) -> Node | None:
         """查找指定行开始的第一个语法树节点，使用层级遍历"""
         if not self.root_node:
@@ -1278,7 +1255,6 @@ class CodeMapBuilder:
             if start_row == line and current_node.parent:
                 return current_node
             queue.extend(current_node.children)
-
         return None
 
     def build_symbol_info_at_line(self, line: int) -> dict | None:
@@ -1286,6 +1262,26 @@ class CodeMapBuilder:
         node = self.symbol_at_line(line)
         if not node:
             return None
+        return self.symbol_info_from_node(node)
+
+    def build_near_symbol_info_at_line(self, line: int) -> dict | None:
+        """构建指定行附近符号的完整信息"""
+        node = self.symbol_at_line(line)
+        if not node:
+            return None
+        while (
+            node
+            and node.parent
+            and node.parent.type != self.root_node.type
+            and not NodeTypes.is_structure_tree_node(node.type)
+        ):
+            node = node.parent
+        if not node:
+            return None
+        return self.symbol_info_from_node(node)
+
+    def symbol_info_from_node(self, node: Node) -> dict:
+        """从节点中提取符号信息"""
         node_info = self.get_symbol_range_info(node)
         symbol_info = {
             "code": node.text.decode("utf8"),
@@ -3636,14 +3632,14 @@ def unnamed_symbol_at_line(line_number: int) -> str:
 
 def line_number_from_unnamed_symbol(symbol: str) -> int:
     """从无名符号名称中提取行号"""
-    matcher = re.match(r"at_(\d+)", symbol)
+    matcher = re.match(r"(?:near|at)_(\d+)", symbol)
     if matcher:
         return int(matcher.group(1))
     return -1
 
 
 def validate_and_lookup_symbols(
-    file_path_part: str, symbols: list, trie: SymbolTrie, file_parser_info_cache
+    file_path_part: str, symbols: list[str], trie: SymbolTrie, file_parser_info_cache
 ) -> list | PlainTextResponse:
     """验证并查找符号"""
     update_trie_if_needed(file_path_part, trie, file_parser_info_cache, just_path=True)
@@ -3654,11 +3650,12 @@ def validate_and_lookup_symbols(
         line_number = line_number_from_unnamed_symbol(symbol)
         if line_number != -1:
             # 如果符号是无名符号，使用行号生成符号名称
-            symbol = unnamed_symbol_at_line(line_number)
-            full_symbol_path = f"{file_path_part}/{symbol}"
             parser_instance: ParserUtil = file_parser_info_cache[file_path_part][0]
             fromatted_path = file_parser_info_cache[file_path_part][2]
-            result = parser_instance.symbol_at_line(line_number - 1)
+            if symbol.startswith("near_"):
+                result = parser_instance.near_symbol_at_line(line_number - 1)
+            else:
+                result = parser_instance.symbol_at_line(line_number - 1)
             if not result:
                 return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
             result["file_path"] = fromatted_path

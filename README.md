@@ -99,6 +99,9 @@ askgpt @symbol_file/symbol
 #从行号指定符号, 函数可能是匿名的, 直接写它的行号
 askgpt @symbol_llm_query.py/at_4204
 
+#从行号指定符号，但是查找包括这行的父节点, 这样不需要知道它父节点的命名
+askgpt @symbol_llm_query.py/near_4215
+
 # 修改代码的bug,会生成一个diff, 看你要不要使用patch, @edit表示响应中有要patch的内容, @edit-file是在规定输出些什么
 askgpt @edit @edit-file @main.py 找到其中可能的bug，并加以修复
 
