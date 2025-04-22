@@ -96,6 +96,9 @@ askgpt @patch @symbol_tree.py/ParserUtil traverse在遇到function_definition这
 #符号补全, 支持bash,zsh,powershell在输入到@symbol_后补前当前文件，当前文件里的符号，得tree.py支持了语言才行
 askgpt @symbol_file/symbol 
 
+#从行号指定符号, 函数可能是匿名的, 直接写它的行号
+askgpt @symbol_llm_query.py/at_4204
+
 # 修改代码的bug,会生成一个diff, 看你要不要使用patch, @edit表示响应中有要patch的内容, @edit-file是在规定输出些什么
 askgpt @edit @edit-file @main.py 找到其中可能的bug，并加以修复
 

@@ -657,25 +657,28 @@ class ParserUtil:
         self.parser_loader = parser_loader
         self.node_processor = NodeProcessor()
         self.code_map_builder = CodeMapBuilder(None, self.node_processor, lang=parser_loader.lang)
+        self._source_code = None
 
-    def get_symbol_paths(self, file_path: str, debug: bool = False):
-        """解析代码文件并返回所有符号路径及对应代码和位置信息"""
+    def prepare_root_node(self, file_path: str):
+        """获取文件的根节点"""
         parser, _, lang_name = self.parser_loader.get_parser(file_path)
         self.node_processor.lang_spec = find_spec_for_lang(lang_name)
         with open(file_path, "rb") as f:
             source_code = f.read()
+        self._source_code = source_code
         tree = parser.parse(source_code)
         root_node = tree.root_node
-        if debug:
-            dump_tree(root_node)
         self.code_map_builder.root_node = root_node
+        return root_node
+
+    def get_symbol_paths(self, file_path: str, debug: bool = False):
+        """解析代码文件并返回所有符号路径及对应代码和位置信息"""
+        root_node = self.prepare_root_node(file_path)
         results = []
         code_map = {}
-        node = root_node
-        if is_node_module(node.type) and len(node.children) != 0:
-            self.code_map_builder.process_import_block(node, code_map, source_code, results)
-        self.code_map_builder.traverse(root_node, [], [], code_map, source_code, results)
-
+        if is_node_module(root_node.type) and len(root_node.children) != 0:
+            self.code_map_builder.process_import_block(root_node, code_map, self._source_code, results)
+        self.code_map_builder.traverse(root_node, [], [], code_map, self._source_code, results)
         return results, code_map
 
     def update_symbol_trie(self, file_path: str, symbol_trie: SymbolTrie):
@@ -695,6 +698,9 @@ class ParserUtil:
     ) -> dict[str, dict]:
         """批量处理位置并返回符号名到符号信息的映射"""
         return self.code_map_builder.find_symbols_for_locations(code_map, locations, max_context_size)
+
+    def symbol_at_line(self, line: int) -> dict:
+        return self.code_map_builder.build_symbol_info_at_line(line)
 
     def lookup_symbols(self, file_path: str, symbols: list[str]):
         """根据文件路径列表查找符号"""
@@ -1260,6 +1266,40 @@ class CodeMapBuilder:
             return None
 
         return walk(root_node)
+
+    def symbol_at_line(self, line: int) -> Node | None:
+        """查找指定行开始的第一个语法树节点，使用层级遍历"""
+        if not self.root_node:
+            return None
+        queue = [self.root_node]
+        while queue:
+            current_node = queue.pop(0)
+            start_row, _ = current_node.start_point
+            if start_row == line and current_node.parent:
+                return current_node
+            queue.extend(current_node.children)
+
+        return None
+
+    def build_symbol_info_at_line(self, line: int) -> dict | None:
+        """构建指定行符号的完整信息"""
+        node = self.symbol_at_line(line)
+        if not node:
+            return None
+        node_info = self.get_symbol_range_info(node)
+        symbol_info = {
+            "code": node.text.decode("utf8"),
+            "calls": [],
+            "signature": "",
+            "full_definition_hash": "",
+            "type": "block",
+            "location": (
+                (node_info["start_point"][0], node_info["start_point"][1]),
+                (node_info["end_point"][0], node_info["end_point"][1]),
+                (node_info["start_byte"], node_info["end_byte"]),
+            ),
+        }
+        return symbol_info
 
     def _extract_import_block(self, node: Node):
         """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
@@ -3419,7 +3459,7 @@ async def _process_definition(
     # 更新前缀树
     current_dir = os.path.dirname(os.path.abspath(__file__))
     rel_def_path = os.path.relpath(def_path, current_dir)
-    update_trie_if_needed(f"symbol:{rel_def_path}", trie, app.state.file_mtime_cache, just_path=True)
+    update_trie_if_needed(f"symbol:{rel_def_path}", trie, app.state.file_parser_info_cache, just_path=True)
 
     # 获取文件内容
     lines = _get_file_content(def_path, file_content_cache, file_lines_cache)
@@ -3534,7 +3574,7 @@ async def get_symbol_content(
         纯文本格式的源代码内容（多个符号内容用空行分隔），或包含每个符号信息的JSON数组
     """
     trie: SymbolTrie = app.state.file_symbol_trie
-    file_mtime_cache = app.state.file_mtime_cache
+    file_parser_info_cache = app.state.file_parser_info_cache
     # 参数解析
     parsed = parse_symbol_path(symbol_path)
     if isinstance(parsed, PlainTextResponse):
@@ -3542,7 +3582,7 @@ async def get_symbol_content(
     file_path_part, symbols = parsed
 
     # 符号查找
-    symbol_results = validate_and_lookup_symbols(file_path_part, symbols, trie, file_mtime_cache)
+    symbol_results = validate_and_lookup_symbols(file_path_part, symbols, trie, file_parser_info_cache)
     if isinstance(symbol_results, PlainTextResponse):
         return symbol_results
 
@@ -3589,16 +3629,43 @@ def parse_symbol_path(symbol_path: str) -> tuple[str, list] | PlainTextResponse:
     return (file_path_part, symbols)
 
 
-def validate_and_lookup_symbols(file_path_part: str, symbols: list, trie, file_mtime_cache) -> list | PlainTextResponse:
+def unnamed_symbol_at_line(line_number: int) -> str:
+    """生成无名符号的名称"""
+    return f"at_{line_number}"
+
+
+def line_number_from_unnamed_symbol(symbol: str) -> int:
+    """从无名符号名称中提取行号"""
+    matcher = re.match(r"at_(\d+)", symbol)
+    if matcher:
+        return int(matcher.group(1))
+    return -1
+
+
+def validate_and_lookup_symbols(
+    file_path_part: str, symbols: list, trie: SymbolTrie, file_parser_info_cache
+) -> list | PlainTextResponse:
     """验证并查找符号"""
-    update_trie_if_needed(file_path_part, trie, file_mtime_cache, just_path=True)
+    update_trie_if_needed(file_path_part, trie, file_parser_info_cache, just_path=True)
 
     symbol_results = []
     for symbol in symbols:
         full_symbol_path = f"{file_path_part}/{symbol}"
-        result = trie.search_exact(full_symbol_path)
-        if not result:
-            return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
+        line_number = line_number_from_unnamed_symbol(symbol)
+        if line_number != -1:
+            # 如果符号是无名符号，使用行号生成符号名称
+            symbol = unnamed_symbol_at_line(line_number)
+            full_symbol_path = f"{file_path_part}/{symbol}"
+            parser_instance: ParserUtil = file_parser_info_cache[file_path_part][0]
+            fromatted_path = file_parser_info_cache[file_path_part][2]
+            result = parser_instance.symbol_at_line(line_number - 1)
+            if not result:
+                return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
+            result["file_path"] = fromatted_path
+        else:
+            result = trie.search_exact(full_symbol_path)
+            if not result:
+                return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
         if full_symbol_path.startswith("symbol:"):
             result["name"] = full_symbol_path[len("symbol:") :]
         else:
@@ -3648,13 +3715,13 @@ def build_plaintext_response(contents: list) -> PlainTextResponse:
     return PlainTextResponse("\n\n".join(contents))
 
 
-def update_trie_if_needed(prefix: str, trie, file_mtime_cache, just_path=False) -> bool:
+def update_trie_if_needed(prefix: str, trie, file_parser_info_cache, just_path=False) -> bool:
     """根据前缀更新前缀树，如果需要的话
 
     Args:
         prefix: 要检查的前缀
         trie: 前缀树对象
-        file_mtime_cache: 文件修改时间缓存
+        file_parser_info_cache: 文件修改时间缓存
 
     Returns:
         bool: 是否执行了更新操作
@@ -3681,14 +3748,15 @@ def update_trie_if_needed(prefix: str, trie, file_mtime_cache, just_path=False) 
         return False
 
     current_mtime = os.path.getmtime(file_path)
-    cached_mtime = file_mtime_cache.get(file_path, 0)
+    parser_instance, cached_mtime, _ = file_parser_info_cache.get(file_path, (None, 0, ""))
 
     if current_mtime > cached_mtime:
         print(f"[DEBUG] 检测到文件修改: {file_path} (旧时间:{cached_mtime} 新时间:{current_mtime})")
         parser_loader = ParserLoader()
         parser_instance = ParserUtil(parser_loader)
         parser_instance.update_symbol_trie(file_path, trie)
-        file_mtime_cache[file_path] = current_mtime
+        file_parser_info_cache[file_path] = (parser_instance, current_mtime, file_path)
+        file_parser_info_cache[prefix] = (parser_instance, current_mtime, file_path)
         return True
 
     return False
@@ -3840,7 +3908,7 @@ async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1),
     print("debug", file_path, symbols)
     current_prefix = determine_current_prefix(file_path, symbols)
     print("prefix", current_prefix)
-    updated = update_trie_for_completion(file_path, trie, app.state.file_mtime_cache)
+    updated = update_trie_for_completion(file_path, trie, app.state.file_parser_info_cache)
 
     results = perform_trie_search(trie, current_prefix, max_results, file_path, updated)
     completions = build_completion_results(file_path, symbols, results)
@@ -3895,7 +3963,7 @@ def perform_trie_search(
     else:
         results = trie.search_prefix(prefix, max_results=max_results, use_bfs=True) if file_path else []
     if not results and file_path and not updated:
-        if update_trie_if_needed(f"symbol:{file_path}", trie, app.state.file_mtime_cache):
+        if update_trie_if_needed(f"symbol:{file_path}", trie, app.state.file_parser_info_cache):
             return trie.search_prefix(prefix, max_results)
 
     return results
@@ -4446,7 +4514,7 @@ def initialize_symbol_trie(all_existing_symbols: dict):
     trie = SymbolTrie.from_symbols(all_existing_symbols)
     app.state.symbol_trie = trie
     app.state.file_symbol_trie = SymbolTrie.from_symbols({})
-    app.state.file_mtime_cache = {}
+    app.state.file_parser_info_cache = {}
     app.state.symbol_cache = {}
 
 

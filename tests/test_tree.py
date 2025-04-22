@@ -1859,7 +1859,7 @@ class TestSymbolsComplete(unittest.TestCase):
 
         app.state.file_symbol_trie = SymbolTrie.from_symbols(symbols_dict)
         app.state.symbol_trie = SymbolTrie.from_symbols({})
-        app.state.file_mtime_cache = {}
+        app.state.file_parser_info_cache = {}
 
     def tearDown(self):
         """清理临时文件"""
@@ -1988,6 +1988,53 @@ class TestSymbolsComplete(unittest.TestCase):
         response = test_client.get(f"/complete_realtime?prefix={prefix}")
         return response.text.splitlines()
 
+    def test_extract_multiline_js_event_handler(self):
+        """测试提取多行JavaScript事件处理程序"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".js", delete=False) as tmp:
+            js_content = dedent(
+                """
+document.addEventListener('click', function() {
+    // 第一行注释
+    console.log('Clicked!');
+    if (true) {
+        alert('Hello');
+    }
+});
+var x = 1;
+var should_not_capture = function() {
+}"""
+            )
+            tmp.write(js_content)
+            tmp.flush()
+            self.temp_files.append(tmp)
+
+            # 定义符号位置 (整个函数体)
+            start_line = 0  # 从第1行开始
+            end_line = 6  # 到第7行结束
+            symbol_path = f"symbol:{tmp.name}/at_2,at_9"
+
+            # 计算字节范围
+            lines = js_content.splitlines(keepends=True)
+            start_byte = 0
+            end_byte = sum(len(line) for line in lines[:end_line])
+
+            app.state.file_symbol_trie.insert(
+                symbol_path,
+                {
+                    "file_path": tmp.name,
+                    "location": ((start_line, 0), (end_line, 0), (start_byte, end_byte)),
+                },
+            )
+
+            test_client = TestClient(app)
+            response = test_client.get(f"/symbol_content?symbol_path={symbol_path}")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("document.addEventListener", response.text)
+            self.assertIn("console.log", response.text)
+            self.assertIn("alert('Hello')", response.text)
+            self.assertIn("var x = 1", response.text)
+            self.assertNotIn("should_not_capture", response.text)  # 确保没有捕获到不相关的函数
+
 
 class TestSymbolsAPI(unittest.TestCase):
     def setUp(self):
@@ -2055,7 +2102,7 @@ class TestSymbolsAPI(unittest.TestCase):
         self.trie = SymbolTrie.from_symbols({})
         app.state.symbol_trie = self.trie
         app.state.file_symbol_trie = self.trie
-        app.state.file_mtime_cache = {}
+        app.state.file_parser_info_cache = {}
 
         for symbol in self.test_symbols:
             insert_symbol(self.conn, symbol)
