@@ -1438,7 +1438,7 @@ class FormatAndLint:
         ".sh": [(["shfmt", "-i", "2", "-w"], [])],
     }
 
-    def __init__(self, timeout: int = 30, verbose: bool = False):
+    def __init__(self, timeout: int = 30, verbose: bool = True):
         self.timeout = timeout
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
@@ -1451,21 +1451,28 @@ class FormatAndLint:
     def _run_command(self, base_cmd: List[str], files: List[str], mode_args: List[str]) -> int:
         full_cmd = base_cmd + mode_args + files
         try:
+            start_time = time.time()
+            if self.verbose:
+                self.logger.info("Executing: %s", " ".join(full_cmd))
+
             result = subprocess.run(
                 full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=self.timeout, check=False
             )
 
+            elapsed_time = time.time() - start_time
             if self.verbose:
-                self.logger.info("Executing: %s", " ".join(full_cmd))
                 if result.stdout:
                     self.logger.info("Output:\n%s", result.stdout.decode().strip())
+                self.logger.info("Command execution time: %.2f seconds", elapsed_time)
 
             if result.returncode != 0:
                 self.logger.error("Command failed: %s\nOutput: %s", " ".join(full_cmd), result.stdout.decode().strip())
             return result.returncode
         except subprocess.TimeoutExpired:
+            elapsed_time = time.time() - start_time
             if self.verbose:
                 self.logger.info("Timeout executing: %s", " ".join(full_cmd))
+                self.logger.info("Command execution time: %.2f seconds (timeout)", elapsed_time)
             self.logger.error("Timeout expired for command: %s", " ".join(full_cmd))
             return -1
 
