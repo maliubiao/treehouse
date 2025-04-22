@@ -82,8 +82,13 @@ naskgpt \
 #文件行号选择, 文件太大的折中办法, 前100, or 100-, 20-50
 naskgpt @large-file:-100
 
-#把prompt当脚本执行, 如果你给它设置了可执行权限, 或者以#!开头
+#把prompt文件当脚本执行,  如果你给它设置了可执行权限, 或者以#!开头, 它的stdout会进入上下文，这是个prompt扩展功能
 naskgpt @script.sh
+
+#以下功能涉及符号，也是核心功能，需要symbolgpt启动一个符号服务器, env.sh有定义
+#启动符号服务,即tree.py
+symbolgpt
+symbolgptrestart
 
 #@patch表示响应中有要patch的符号
 askgpt @patch @symbol_tree.py/ParserUtil traverse在遇到function_definition这样的节点时,要额外考虑,它是父节点是否decorated_definition, 如果是,则需要用父节点　的全文,　以包括装饰器
@@ -93,10 +98,11 @@ askgpt @symbol_file/symbol
 
 # 修改代码的bug,会生成一个diff, 看你要不要使用patch, @edit表示响应中有要patch的内容, @edit-file是在规定输出些什么
 askgpt @edit @edit-file @main.py 找到其中可能的bug，并加以修复
-#一样的功能
+
+#跟前面一样的功能
 codegpt @main.py 找到其中可能的bug，并加以修复
 
-# 改写某个符号
+# 改写某个符号, patchgpt是naskgpt @patch的缩写，参考env.sh定义的命令集
 patchgpt @symbol_file/symbol 修复里边的bug
 
 # 改写符号并提供LSP上下文
@@ -114,13 +120,12 @@ patchgpt ..MyClass.. 根据说明，写完这个这测试套件
 
 ```
 
-
-
 ## 功能特性
 
 - **代码生成**：实现cursor, windsurf的代码生成功能,基于AST,LSP获取精准的上下文
 - **对话保存，对话切换**： 跟进提问，还可以恢复过去的会话，继续提问
-- **上下文集成**：
+- **强大符号引用功能**: 用class, function这些符号为单位让大模型修改，然后跟本地代码diff, patch, 大幅度节约响应时间及token消耗
+- **丰富的上下文集成**：
   - 剪贴板内容自动读取 (`@clipboard`)
   - 目录结构查看 (`@tree`/`@treefull`)
   - 文件内容嵌入 (`@文件路径`)
@@ -362,7 +367,13 @@ INFO:     127.0.0.1:57943 - "GET /symbols/show_tty_driver/context?max_depth=5 HT
 INFO:     127.0.0.1:57957 - "GET /symbols/show_tty_driver/context?max_depth=5 HTTP/1.1" 200 OK
 ```
 
-### 启动针对新项目的ast服务
+### 启动针对新项目的tree服务
+在项目的主目录，执行, `.llm_project` 没有配置会生成一个默认的，配置里指示了如何使用language server, 以及ripgrep的搜索配置
+```bash
+symbolgpt
+symbolgptrestart
+```
+或者手工启动一个
 ```bash
 #新建一个.llm_project.yml，配置lsp
 $GPT_PYTHON_BIN $GPT_PATH/tree.py --port 9060;
@@ -392,9 +403,9 @@ python -m debugger.tracer_main --watch-files="*path.py"  --watch-files="*query.p
 
 <img src="doc/debugger-preview.png" width = "600" alt="line tracer" align=center />
 
-### 提示词模板
+### 自定义提示词库
 
-在`prompts/`目录中创建自定义模板, 请复制参考现有的文件：
+在`prompts/`目录中创建自定义模板, 可以在这个目录放脚本或者可执行文件动态生成prompt， 请复制参考现有的文件：
 ```py
 #! /usr/bin/env python
 #在prompts下边写shell脚本，脚本会被执行，输出会当成提示器的一部分, 加上可执行权限
@@ -409,6 +420,10 @@ print("你是一个友好的助手")
 | `GPT_KEY`      | OpenAI API密钥                 |
 | `GPT_BASE_URL` | API基础地址 (默认Groq官方端点) |
 | `GPT_KEY`      | API KEY                        |
+
+```bash
+env |grep GPT_
+```
 
 ## 目录结构
 
