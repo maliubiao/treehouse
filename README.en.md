@@ -292,6 +292,7 @@ filters:
 ```
 
 **Plugin Configuration**  
+load plugin `server/plugin`  
 Click the plugin icon to open the options menu. You can load an element selector on the current page, which helps you locate the desired content's CSS selector and copy it into `config.yaml`.  
 If you are familiar with using the DevTools inspector, you can use it to copy the selector directly.  
 
@@ -337,6 +338,7 @@ cmake ../ -DCMAKE_BUILD_TYPE=Release
 # Run the debugger with file watching and open the report
 python -m debugger.tracer_main --watch-files="*path.py" --open-report test_llm_query.py
 ```
+<img src="doc/debugger-preview.png" width = "600" alt="line tracer" align=center />
 
 ## Custom Prompts
 Create templates in `prompts/` directory:
@@ -358,30 +360,16 @@ print("You are a helpful assistant")
 env | grep GPT_
 ```
 
-## Directory Structure
-```
-terminal-llm/
-├── bin/              # Tool scripts
-├── server/           # Web conversion
-├── prompts/          # Prompt templates
-├── logs/             # Logs
-├── llm_query.py      # Core logic
-└── pyproject.toml    # Dependencies
-```
-
 ## Notes
 
 1. **Optional Tools**:
-   - Install [glow](https://github.com/charmbracelet/glow) for Markdown rendering
    - Install `tree` command for directory structure
+  - Install `diff` and `patch` tools for source code operations. These tools may not be available by default on Windows.
 
 2. **Proxy Configuration**:
    Automatically detects `http_proxy`/`https_proxy`
 
-3. **File Chunking**:
-   Large files automatically split (default 32k chars/chunk)
-
-4. **Web Conversion Requirements**:
+3. **Web Conversion Requirements**:
    - Requires Chrome browser extension
    - Ensure port 8000 is available
    - Only accepts local connections
