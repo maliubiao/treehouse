@@ -234,7 +234,7 @@ archgpt() {
     echo >&2 "Error: Question cannot be empty"
     return 1
   }
-  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --workflow --architect hyperbolic-r1 --coder deepseek-v3.2 --ask "$*"
+  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --workflow --architect architect --coder coder --ask "$*"
   export GPT_SESSION_ID=$original_session
   echo "已恢复原会话: $original_session"
 }

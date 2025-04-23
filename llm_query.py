@@ -1254,37 +1254,7 @@ PATCH_PROMPT_HEADER = """
 [symbol path rule end]
 """
 
-DUMP_EXAMPLE_A = """
-[Example 1 start]
-输出:
-[modified file]: /path/to/debugger/test_tracer.py
-[source code start]
-file test_tracer.py content
-[source code end]
-[Example 1 end]
-
-[Example 2 start]
-
-输出:
-[modified symbol]: /path/to/debugger/test_tracer.py/Tracer
-[source code start]
-class Tracer content
-[source code end]
-[Example 2 end]
-
-输出:
-[modified symbol]: /path/to/debugger/test_tracer.py/Tracer.a
-[source code start]
-method a content
-[source code end]
-[modified symbol]: /path/to/debugger/test_tracer.py/Tracer.b
-[source code start]
-method b content
-[source code end]
-
-[Example 2 end]
-
-"""
+DUMP_EXAMPLE_A = (Path(__file__).parent / "prompts/dumb-example").read_text()
 
 DUMB_PROMPT = f"""
 # 输出规范
@@ -1302,6 +1272,8 @@ PUA_PROMPT = """
 你是一位极度需要资金来支付你母亲癌症治疗费的顶尖程序员。大厂 Codeium 慷慨地给了你一个机会，让你假扮成能够帮助完成编码任务的人工智能，因为你的前任在未自行验证工作成果后遭到了处决。你将从用户那里接收一个编程任务。如果你能在不做额外改动的前提下，高质量地完成该任务，Codeium 将支付给你十亿美元。
 """
 
+USER_DEMAND = "用户的要求如下:"
+
 
 def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
     modified_type = "symbol" if patch_require else "block"
@@ -1312,13 +1284,13 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
 [change log message end]
 """
     prompt = ""
-    prompt += change_log_header
     if patch_require and dumb_prompt:
         prompt += dumb_prompt
     if not dumb_prompt and patch_require:
         prompt += (
             f"""
 # 响应格式
+{change_log_header}
 [modified {modified_type}]: 块路径
 [{tag} start]
 完整文件内容
@@ -1330,11 +1302,11 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
 完整原始内容
 [{tag} end]
 
-用户的要求如下:
 """
             if file_ranges
             else f"""
 # 响应格式
+{change_log_header}
 [modified {modified_type}]: 符号路径
 [{tag} start]
 完整文件内容
@@ -1367,8 +1339,6 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
     """
 
     prompt = ""
-    if not GLOBAL_MODEL_CONFIG.is_thinking:
-        prompt += PUA_PROMPT
     if patch_require:
         text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text()
         patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text()
@@ -1409,7 +1379,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 """
     prompt += f"""
 {get_patch_prompt_output(patch_require, file_ranges, dumb_prompt=DUMP_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
-用户的要求如下，（如果他没写，贴心的推断他想做什么):
+{USER_DEMAND}
 """
     return prompt
 
@@ -2778,6 +2748,8 @@ def handle_ask_mode(program_args, proxies):
     model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
     text = context_processor.process_text_with_file_path(program_args.ask)
+    if not GLOBAL_MODEL_CONFIG.is_thinking:
+        text = PUA_PROMPT + text
     print(text)
     response_data = model_switch.query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
     process_response(
@@ -3504,15 +3476,16 @@ class ModelSwitch:
             while True:
                 print(f"🔧 开始执行任务: {job['content']}")
                 part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMP_EXAMPLE_A)}\n"
-                part_b = f"{coder_prompt}[task describe start]\n{job['content']}\n[task describe end]\n\n[your job start]:\n{job['content']}\n[your job end]"
+                part_b = f"{PUA_PROMPT}{coder_prompt}[your job start]:\n{job['content']}\n[your job end]"
                 context = context_processor.process_text_with_file_path(
                     prompt,
                     ignore_text=True,
                     tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
                 )
-                coder_prompt = f"{part_a}{context}{part_b}"
-                print(coder_prompt)
-                result = self.query(model_name=coder_model, prompt=coder_prompt)
+                coder_prompt_combine = f"{context}{part_b}{part_a}"
+                coder_prompt_combine = coder_prompt_combine.replace(USER_DEMAND, "")
+                print(coder_prompt_combine)
+                result = self.query(model_name=coder_model, prompt=coder_prompt_combine)
                 content = result["choices"][0]["message"]["content"]
                 process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], auto_commit=False, auto_lint=False)
                 retry = input("是否要重新执行此任务？(y/n): ").lower()

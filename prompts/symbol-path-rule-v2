@@ -56,6 +56,15 @@
    func () InvalidMethod() {}
    ```
 
+4. **行号标识规则**
+   - `near_n`: 当无法确定父节点时，使用父节点其中的一行识别父节点
+     - 示例：`service.go/near_15` (包括第15行的一个父节点)
+     - 必须是直接父级，不允许跨多级作用域
+   - `at_n`: 当无法确定任何作用域时，直接使用定义行号
+     - 示例：`utils.py/at_28` (符号从28行开始)
+     - 必须是符号定义的起始行号
+   - 两者均为终止节点，不允许继续扩展子元素
+
 **四、输入输出示例**
 
 输入代码：
@@ -69,11 +78,17 @@ type User struct {
 func (u User) GetName() string {
     return u.Name
 }
+
+// 匿名函数无法确定父节点
+var handler = func() {
+    fmt.Println("near example") 
+}
 ```
 
 应生成符号路径：
 ```
 testdata.go/main.User.GetName
+testdata.go/near_8  # 第8行所处的匿名函数
 ```
 
 输入代码：
@@ -83,16 +98,24 @@ namespace AI {
     public:
         void speak(const std::string& msg);
     };
+
+    // 游离函数没有命名空间
+    void reboot() { /*...*/ } 
 }
 ```
 
 应生成符号路径：
 ```
 robotics.cpp/AI.Robot.speak
+robotics.cpp/at_8  # 函数定义从第8行开始
 ```
 
 **五、验证要点**
 1. 符号路径必须包含完整作用域链
-2. 匿名结构/函数不生成符号
+2. 匿名结构/函数不生成符号（除非使用行号标识）
 3. 每个符号必须绑定到原始代码位置
 4. 同一文件内符号路径保持唯一性
+5. 行号标识符必须满足：
+   - near_n的n是最近合法父节点的定义行
+   - at_n的n是符号定义的起始行
+   - 两者不能包含子符号

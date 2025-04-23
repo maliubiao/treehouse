@@ -1,0 +1,115 @@
+[Example 1: 多文件修改]
+[modified file]: debugger/examples/sample.go
+[source code start]
+package main
+
+type User struct {
+    Name string
+}
+
+func (u User) GetName() string {
+    return u.Name
+}
+
+var handler = func() {
+    fmt.Println("near example")
+}
+[source code end]
+
+[modified file]: debugger/examples/sample.cpp
+[source code start]
+namespace AI {
+    class Robot {
+    public:
+        void speak(const std::string& msg);
+    };
+
+    void reboot() { /*...*/ }
+}
+[source code end]
+
+[Example 2: 符号级修改]
+[modified symbol]: debugger/examples/sample.go/main.User.GetName
+[source code start]
+func (u User) GetName() string {
+    return fmt.Sprintf("[User] %s", u.Name)  // 修改方法实现
+}
+[source code end]
+
+[modified symbol]: debugger/examples/sample.cpp/AI.Robot.speak
+[source code start]
+void speak(const std::string& msg) {
+    std::cout << "[Robot] " << msg << std::endl;
+}
+[source code end]
+
+[Example 3: 行号标识符]
+[modified file]: debugger/examples/error.py
+[source code start]
+def outegr():
+    def inner():  # 嵌套函数无法生成符号
+        print("inner")
+
+    # 匿名lambda
+    fn = lambda x: x+1
+[source code end]
+
+[modified symbol]: debugger/examples/error.py/near_3
+[source code start]
+    def inner():  # 第3行所处的嵌套函数
+        print("[Modified] inner")
+[source code end]
+
+[Example 8: 类多方法批量修改]
+[modified symbol]: debugger/examples/calculator.py/Calculator.add
+[source code start]
+    def add(self, a: int | float, b: int | float) -> int | float:
+        """执行加法运算并记录日志"""
+        print(f"Adding {a} + {b}")
+        return a + b
+[source code end]
+
+[modified symbol]: debugger/examples/calculator.py/Calculator.subtract
+[source code start]
+    def subtract(self, a: int | float, b: int | float) -> int | float:
+        """执行减法运算并记录日志"""
+        print(f"Subtracting {a} - {b}")
+        return a - b
+[source code end]
+
+[Example 9: TypeScript接口多方法优化]
+[modified symbol]: debugger/examples/service.ts/UserService.fetchUsers
+[source code start]
+    async fetchUsers(filter: string): Promise<User[]> {
+        console.log(`Fetching users with filter: ${filter}`);
+        const response = await api.get<User[]>('/users', {params: {filter}});
+        return response.data;
+    }
+[source code end]
+
+[modified symbol]: debugger/examples/service.ts/UserService.createUser
+[source code start]
+    async createUser(userData: Partial<User>): Promise<User> {
+        console.log('Creating new user:', userData);
+        const response = await api.post<User>('/users', userData);
+        return response.data;
+    }
+[source code end]
+
+[Example 10: Go语言结构体多方法增强]
+[modified symbol]: debugger/examples/db.go/UserRepository.FindByID
+[source code start]
+func (r *UserRepository) FindByID(id uint) (*User, error) {
+    log.Printf("Querying user by ID: %d", id)
+    return r.db.QueryRow("SELECT * FROM users WHERE id = ?", id), nil
+}
+[source code end]
+
+[modified symbol]: debugger/examples/db.go/UserRepository.Update
+[source code start]
+func (r *UserRepository) Update(user *User) error {
+    log.Printf("Updating user ID: %d", user.ID)
+    _, err := r.db.Exec("UPDATE users SET name = ? WHERE id = ?", user.Name, user.ID)
+    return err
+}
+[source code end]

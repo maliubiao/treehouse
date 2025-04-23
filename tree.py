@@ -608,13 +608,6 @@ class ParserLoader:
             return self._languages[lang_name]
 
         module_name = f"tree_sitter_{lang_name}"
-
-        try:
-            lang_module = importlib.import_module(module_name)
-        except ImportError as exc:
-            raise ImportError(
-                f"Language parser for '{lang_name}' not installed. Try: pip install {module_name.replace('_', '-')}"
-            ) from exc
         if lang_name == TYPESCRIPT_LANG:
             module = importlib.import_module("tree_sitter_typescript")
             return getattr(module, "language_typescript")
@@ -622,7 +615,12 @@ class ParserLoader:
             module = importlib.import_module("tree_sitter_typescript")
             return getattr(module, "language_tsx")
         else:
-            lang_module = importlib.import_module(module_name)
+            try:
+                lang_module = importlib.import_module(module_name)
+            except ImportError as exc:
+                raise ImportError(
+                    f"Language parser for '{lang_name}' not installed. Try: pip install {module_name.replace('_', '-')}"
+                ) from exc
             return lang_module.language
 
     def get_parser(self, file_path: str) -> tuple[Parser, Query, str]:
@@ -848,7 +846,7 @@ def find_spec_for_lang(lang: str) -> "LangSpec":
         return PythonSpec()
     elif lang == JAVASCRIPT_LANG:
         return JavascriptSpec()
-    elif lang == TYPESCRIPT_LANG:
+    elif lang == TYPESCRIPT_LANG or lang == TYPESCRIPT_TSX_LANG:
         return TypeScriptSpec()
     # elif lang == JAVASCRIPT_LANG:
     #     return JavaScriptSpec()
