@@ -1,274 +1,393 @@
 # terminal LLM
 
-A terminal assistant tool based on OpenAI-compatible APIs, providing convenient CLI interaction and context-aware capabilities. Designed as a command-line version of Cursor/Windsurf, optimized for Deepseek R1.
+[Chinese users please view README.md](README.md)
 
-## Use Cases
+A terminal assistant tool based on OpenAI-compatible API, providing convenient command-line interaction and context-aware functionality. Designed to be a command-line version of Cursor and Windsurf, recommended to use with Deepseek R1.
 
-Mix multiple `@` contexts in a single `askgpt` command. Supports combining URLs, file contents, and special syntax without quotes (note shell special characters like `>`):
+## Usage Scenarios
+
+Multiple `@` can be used after `askgpt` to mix contexts. You can use URLs while including file content without needing quotes, but beware of special shell characters like `>`
 
 ```bash
-# Fix code bugs and generate diff/patch
-askgpt @edit @main.py Find potential bugs and fix them
-
 # Analyze clipboard content
 askgpt Explain this code: @clipboard @tree
 
 # Command suggestion
 askgpt @cmd Find all files modified 2 hours ago and delete them
 
-# Attach directory structure
-askgpt "@tree, analyze main modules"
+# Include current directory structure
+askgpt "@tree, analyze the main modules"
 
-# Attach full directory structure
-askgpt "@treefull, analyze main modules"
+# Include full directory structure with subdirectories
+askgpt "@treefull, analyze the main modules"
 
 # Embed file content
-askgpt "Optimize this config: @config/settings.yaml"
+askgpt "Please optimize this config file: @config/settings.yaml"
 
-# Webpage analysis
-askgpt @https://tree-sitter.github.io/tree-sitter/using-parsers/1-getting-started.html Summarize this doc
+# Access web pages
+askgpt @https://tree-sitter.github.io/tree-sitter/using-parsers/1-getting-started.html Summarize this document
 
-# News parsing (requires readability & browser setup)
-askgpt @readhttps://www.guancha.cn/internation/2025_02_08_764448.shtml Summarize news
+# Read news (uses readability tool to extract main content, requires browser forwarding setup - tutorial below)
+askgpt @readhttps://www.guancha.cn/internation/2025_02_08_764448.shtml Summarize the news
 
-# Use prompt templates
-askgpt @advice # Uses advice.txt in prompts/ directory
+# Embed common prompts (files stored in prompts/ directory)
+askgpt @advice #This prompt asks GPT to provide modification suggestions
 
-# Combine multiple contexts
+# Flexibly introduce prompt blocks, provide files, modify directories while including clipboard snippets
 askgpt @advice @llm_query.py @clipboard Fix potential bugs
+
+# Use custom context from prompts/ directory with auto-completion
+askgpt @clipboard @comment
+
+# Directory reference
+askgpt @src Explain the structure of this React project
 
 # Recent conversations
 recentconversation
-# Output:
-# 1) 2025-02-09 18:35:27 EB6E6ED0-CAFE-488F-B247-11C1CE549B12 What I said earlier
+# Recent conversation history:
+# 1) 2025-02-09 18:35:27 EB6E6ED0-CAFE-488F-B247-11C1CE549B12 What did I say earlier
 # 2) 2025-02-09 18:34:37 C63CA6F6-CB89-42D2-B108-A551F8E55F75 hello
-# Select conversation (1-4, Enter to cancel): 2
-# Switched to: C63CA6F6-CB89-42D2-B108-A551F8E55F75
+# 3) 2025-02-09 18:23:13 27CDA712-9CD9-4C6A-98BD-FACA02844C25 hello
+# Select conversation (1-4, press Enter to cancel): 2
+# Switched to conversation: C63CA6F6-CB89-42D2-B108-A551F8E55F75
 
-# Start new conversation
+# New conversation (default when opening new terminal)
 newconversation
 
-# Generate commit message after git add (not supported in PowerShell)
+# Generate commit message for staged changes (PowerShell not supported yet)
 commitgpt
 
-# Temporary query without affecting current conversation
+# Ask without context (temporary query that doesn't affect current conversation)
 naskgpt hello
 
-# Clipboard listening, add multiple copies to context
+# Clipboard listener - subsequent copies will be added to context (useful for writing materials)
 askgpt @listen What trends do these user comments reflect?
 
-# Repeat last prompt
+# Repeat last prompt (useful for network issues or modifying questions)
 askgpt @last
-
-# Symbol context query, lists multi-level symbol calls across files
-askgpt @symbol:show_tty_driver
 
 # Chatbot for casual conversation
 chatbot
 
-# Continue chatting, affected by newconversation
+# Continue chatting (affected by newconversation)
 chatagain
+
+# Multi-line input (normally can use \ for line breaks)
+naskgpt \
+> hello \
+> world
+
+# File line selection (workaround for large files: first 100 lines, or 100-, 20-50)
+naskgpt @large-file:-100
+
+# Execute prompt file as script (if executable or starts with #!, stdout becomes context)
+naskgpt @script.sh
+
+# Symbol-related core functions (require symbolgpt server)
+# Start symbol service (tree.py)
+symbolgpt
+symbolgptrestart
+
+# @patch indicates response contains symbols to patch
+askgpt @patch @symbol_tree.py/ParserUtil When traverse encounters function_definition node, additionally check if parent is decorated_definition
+
+# Symbol completion (supports bash/zsh/PowerShell)
+askgpt @symbol_file/symbol 
+
+# Specify symbol by line number (anonymous functions can use line number directly)
+askgpt @symbol_llm_query.py/at_4204
+
+# Specify symbol by line number including parent node
+askgpt @symbol_llm_query.py/near_4215
+
+# Fix code bugs (generates diff for patching)
+askgpt @edit @edit-file @main.py Find and fix potential bugs
+
+# Same as above
+codegpt @main.py Find and fix potential bugs
+
+# Rewrite symbol (patchgpt is shorthand for naskgpt @patch)
+patchgpt @symbol_file/symbol Fix bugs
+
+# Rewrite symbol with LSP context
+patchgpt @context @symbol_file/symbol Fix bugs
+
+# Command execution error checking and diagnosis
+fixgpt 
+
+# Project search with ripgrep and automatic symbol location
+patchgpt ..LintFix.. ..main.. Add test suite
+
+# Class/function location completion
+patchgpt ..MyClass.. Complete this test suite based on description
 ```
 
 ## Features
 
-- **Code Analysis**: Replace view/vim with LLM-powered local code analysis
-- **Conversation Management**: Resume past conversations or start new ones
-- **Context Integration**:
-  - Clipboard content (`@clipboard`)
-  - Directory structure (`@tree`/`@treefull`)
-  - File embedding (`@filepath`)
-  - Web content (`@http://...`)
-  - Prompt templates (`@advice`)
-  - Command suggestions (`@cmd`)
-  - Code editing (`@edit`)
+- **Code Generation**: Implements Cursor/Windsurf code generation using AST/LSP for precise context
+- **Conversation Saving/Switching**: Follow-up questions and session restoration
+- **Powerful Symbol Reference**: Modify code by symbols (classes/functions) then diff/patch
+- **Rich Context Integration**:
+  - Clipboard content (@clipboard)
+  - Directory structure (@tree/@treefull)
+  - File embedding (@filepath)
+  - Web content (@http://example.com)
+  - Common prompts (@advice)
+  - Command suggestions (@cmd)
+  - Code editing (@edit)
 - **Web Content Conversion**:
-  - Built-in HTML-to-Markdown service
-  - Browser extension integration bypassing Cloudflare
-  - Automatic content extraction and format conversion
-- **Obsidian Integration**: Auto-save queries to Obsidian vault
-- **Proxy Support**: Automatic HTTP proxy detection
-- **Multi-model Switching**: Configure local/remote models via `model.json`
-- **Streaming Responses**: Real-time API output with thinking process
+  - Browser extension integration bypasses Cloudflare
+  - Automatic content extraction and formatting
+- **Obsidian Support**: Saves history to specified directory
+- **Multi-model Switching**: Config file for local ollama 14b/32b or remote R1
+- **Advanced Debugging**: Python line-level tracing with variable changes
 
-## Installation
+## Installation & Configuration
 
-1. **Clone Repo**
+1. **Clone Repository**
 ```bash
 git clone https://github.com/maliubiao/terminal-llm
 cd terminal-llm
 ```
 
-2. **Setup Virtual Env**
+2. **Setup Virtual Environment**
 ```bash
-#install uv
 # Windows: powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-# Mac/Linux curl -LsSf https://astral.sh/uv/install.sh | sh
+# Mac/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 source .venv/bin/activate
 ```
 
 3. **Environment Variables**
 ```bash
-# Add to shell config (~/.bashrc/zshrc), only last line required if you has a model.json config
+# Add to shell config (~/.bashrc or ~/.zshrc)
 export GPT_PATH="/path/to/terminal-llm"
 export GPT_KEY="your-api-key"
 export GPT_MODEL="your-model"
-export GPT_BASE_URL="https://api.example.com/v1"
-source $GPT_PATH/env.sh  # Enables @ autocomplete
+export GPT_BASE_URL="https://api.example.com/v1"  # OpenAI-compatible API
+source $GPT_PATH/env.sh  # Enables @ completion in zsh/bash
 ```
 
-4. **Windows PowerShell**
+4. **Windows PowerShell Usage**  
+PowerShell's `@` has a special meaning and cannot be directly used for completion. You need to use `\@` instead, which adds an extra character compared to directly using `@`.
+
 ```powershell
-# Add to $PROFILE
+# PS C:\Users\user> $PROFILE
+# This variable returns the current configuration file. Add env.ps1 to the configuration file.
 [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-. \path\to\env.ps1  # Use \@ for autocomplete
+. \your\path\to\env.ps1
 ```
 
-### Recommended API Providers
-[ByteDance Volcano Ark](https://www.volcengine.com/experience/ark?utm_term=202502dsinvite&ac=DSASUQY5&rc=FNTDEYLA) - Fastest API response, lowest cost, 30M free tokens.  
-[SiliconFlow Cloud](https://cloud.siliconflow.cn/i/BofVjNGq) - 20M free tokens, runs on Huawei Ascend NPUs.  
-[Tutorial](https://docs.siliconflow.cn/usercases/use-siliconcloud-in-chatbox)
+### R1 API Providers
+[ByteDance Ark](https://www.volcengine.com/experience/ark) - Fastest response, lowest cost  
+[SiliconFlow](https://cloud.siliconflow.cn) - High-performance API (may experience congestion)  
+[Tutorial](https://docs.siliconflow.cn/usercases/use-siliconcloud-in-chatbox)  
 
-## Usage
+## Project Configuration
+```yaml
+# Example LLM project search config (.llm_project.yml)
+# Project root directory (must contain .llm_project.yml)
+project_root_dir: /path/to/your/project
+lsp: # LSP configuration
+  commands: # LSP startup commands
+    py: pylsp
+    clangd: clangd
+  subproject: # Subdirectory LSP
+    debugger/cpp/: clangd 
+  default: py # Default LSP
+  suffix:
+    cpp: clangd # Suffix-based LSP matching
+exclude:
+  dirs:
+    - .git
+    - .venv
+    - node_modules
+    - build
+    - dist
+    - __pycache__
+    - conversation
+    - obsidian
+    - web
+  files:
+    - "*.min.js"
+    - "*.bundle.css"
+    - "*.log"
+    - "*.tmp"
+include:
+  dirs: []
+  files:
+    - "*.py"
+    - "*.cpp"
+    - "*.js"
+    - "*.md"
+    - "*.txt"
+file_types:
+  - .py
+  - .js
+  - .md
+  - .txt
+  - .cpp
+```
 
-### Basic Commands
+## Model Switching
 
-**Conversation Management**
 ```bash
-# List conversations
-allconversation  # recentconversation = allconversation 10
-
-# Start new session
-newconversation
+# Create model.json in the same directory. After configuring model.json, you no longer need to set GPT_* environment variables.
+# The "default" provider or the first one in the list will be used.
+➜  terminal-llm git:(main) ✗ listgpt 
+14b: deepseek-r1:14b
+➜  terminal-llm :(main) ✗ usegpt 14b
+Successfully set GPT environment variables:
+  GPT_KEY: olla****
+  GPT_BASE_URL: http://192.168.40.116:11434/v1
+  GPT_MODEL: deepseek-r1:14b
 ```
 
-**Code Analysis**
-```bash
-explaingpt path/to/file.py
-explaingpt file.py prompts/custom-prompt.txt
+```
+// The max_context_size varies significantly between models. Some models support only up to 8192 or even as low as 4k.
+// Setting it too high will result in errors. max_context_size refers to the context size, while max_tokens refers to the output size.
+// Different API providers may have different parameters.
+// Temperature greatly affects the response style. For programming questions, set it to 0.0. For literary tasks, set it to 0.6, as officially recommended.
+// is_thinking indicates whether the model is a reasoning model. Reasoning models don't require complex prompts as they can infer on their own (e.g., r1 is reasoning, v3 is not).
 ```
 
-**Direct Query**
-```bash
-askgpt "Implement quicksort in Python"
-```
-
-**Model Switching**
-```bash
-listgpt  # Show configured models
-usegpt 14b  # Switch model
-```
 ```json
-// model.json
 {
     "14b": {
         "key": "ollama",
         "base_url": "http://192.168.40.116:11434/v1",
-        "model_name": "deepseek-r1:14b",
-        "max_context_size": 131072
+        "model_name": "r1-qwen-14b:latest",
+        "max_context_size": 131072,
+        "temperature": 0.6,
+        "max_tokens": 8096,
+        "is_thinking": false
     }
 }
 ```
 
-### Advanced
+## Advanced Features
 
 **Web Conversion Service**
 ```bash
-python server/server.py  # Start converter (port 8000)
+python server/server.py  # Default port 8000
+curl "http://localhost:8000/convert?url=URL"
 
-# Browser extension setup: Load server/plugin/
-curl "http://localhost:8000/convert?url=CURRENT_PAGE_URL"
-
-# Readability news extraction (Node.js)
+# Firefox Readability
 cd node; npm install; npm start  # Port 3000
 ```
 
-**Element Filters for Web Conversion**
+**Element Filtering**
+When dealing with web pages that contain a lot of irrelevant content, such as external links, it can waste context space. Many APIs have an 8k context limit, making it difficult to include everything. In such cases, you can define custom CSS or XPath selectors to instruct the conversion service on which parts of the page to focus on. 
+
+XPath selectors are particularly powerful for handling obfuscated web structures. The web conversion service includes an element filter, which can be configured in `server/config.yaml`. Additionally, when using the built-in element selector, you can save your selections directly, and the plugin will automatically refresh the `server/config.yaml` file.
 ```yaml
-# Supports glob patterns
 filters:
     - pattern: https://www.guancha.cn/*/*.shtml
-      cache_seconds: 600 # Cache results for 10 minutes
+      cache_seconds: 600
       selectors:
-        - "div.content > div > ul" # Focus on main content
-
+        - "div.content > div > ul"
     - pattern: https://x.com/*/status/*
       selectors:
-        - "//article/ancestor::div[4]" # XPath selector
+        - "//article/ancestor::div[4]"
 ```
 
-**Plugin Configuration**
-Click the plugin icon to load an element selector, which helps locate CSS selectors for desired content.
+**Plugin Configuration**  
+Click the plugin icon to open the options menu. You can load an element selector on the current page, which helps you locate the desired content's CSS selector and copy it into `config.yaml`.  
+If you are familiar with using the DevTools inspector, you can use it to copy the selector directly.  
 
-### Symbol Query
+### Starting the Tree Service for a New Project
 
-tree.py is a tree-sitter based AST parser that generates a SQLite index for source code. Set `GPT_SYMBOL_API_URL` to the API server location.
+In the project's root directory, execute the following commands. If `.llm_project.yml` is not configured, a default configuration file will be generated. This file specifies how to use the language server and the search configuration for ripgrep.
 
 ```bash
-python tree.py --project /path/to/project/ --port 9050
+symbolgpt
+symbolgptrestart
 ```
 
-### Prompt Templates
+Alternatively, you can manually start the service:
 
-Create templates in `prompts/`:
-```txt
-Analyze this Python code:
+```bash
+# Create a new .llm_project.yml and configure the LSP
+$GPT_PYTHON_BIN $GPT_PATH/tree.py --port 9060
+# GPT_PYTHON_BIN and GPT_PATH are environment variables set in env.sh, pointing to the terminal-llm directory
+export GPT_SYMBOL_API_URL=http://127.0.0.1:9060
+# Use @symbol_file.xx/main in askgpt to retrieve symbol context. Bash and Zsh shells support auto-completion for symbols, making it more convenient.
+```
 
-Tasks:
-1. Explain core functionality
-2. Identify potential bugs
-3. Suggest optimizations
+## Advanced Debugger
 
-File: {path}
-{pager}
-\```
-{code}
-\```
+Supports bytecode-level line tracing for Python programs, showing which lines were executed and tracking variable changes. The performance is optimized to avoid significant slowdowns.
+
+### Compilation
+```bash
+# Python 3.11.11 is recommended as the C++ code accesses internal Python VM data. 
+# Using a different version may cause crashes.
+cd terminal-llm
+source .venv/bin/activate
+cd debugger/cpp
+
+# If compilation fails, join the QQ group for support. If the documentation doesn't work as expected, provide feedback in the group.
+cmake ../ -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON  # Debug build with AddressSanitizer
+# or
+cmake ../ -DCMAKE_BUILD_TYPE=Release
+```
+
+### Usage
+```bash
+# Run the debugger with file watching and open the report
+python -m debugger.tracer_main --watch-files="*path.py" --open-report test_llm_query.py
+```
+
+## Custom Prompts
+Create templates in `prompts/` directory:
+```py
+#! /usr/bin/env python
+print("You are a helpful assistant")
 ```
 
 ## Environment Variables
 
-| Variable       | Description                  |
-|----------------|------------------------------|
-| `GPT_PATH`     | Project root path            |
-| `GPT_KEY`      | API key                      |
-| `GPT_BASE_URL` | API endpoint (OpenAI-compatible) |
-| `GPT_MODEL`    | Default model name           |
+| Variable       | Description                      |
+|----------------|----------------------------------|
+| `GPT_PATH`     | Project root directory          |
+| `GPT_KEY`      | OpenAI API key                  |
+| `GPT_BASE_URL` | API base URL (default Groq)     |
+| `GPT_KEY`      | API KEY                         |
+
+```bash
+env | grep GPT_
+```
 
 ## Directory Structure
-
 ```
 terminal-llm/
-├── bin/              # Utility scripts
+├── bin/              # Tool scripts
 ├── server/           # Web conversion
-│   └── server.py     # Converter server
 ├── prompts/          # Prompt templates
 ├── logs/             # Logs
 ├── llm_query.py      # Core logic
-├── env.sh            # Environment config
 └── pyproject.toml    # Dependencies
 ```
 
 ## Notes
 
-1. **Dependencies**:
-   - [glow](https://github.com/charmbracelet/glow) for Markdown rendering
-   - `tree` command for directory visualization
+1. **Optional Tools**:
+   - Install [glow](https://github.com/charmbracelet/glow) for Markdown rendering
+   - Install `tree` command for directory structure
 
-2. **Proxy**: Auto-detects `http_proxy`/`https_proxy`
+2. **Proxy Configuration**:
+   Automatically detects `http_proxy`/`https_proxy`
 
-3. **Large Files**: Auto-chunking (32k chars/chunk)
+3. **File Chunking**:
+   Large files automatically split (default 32k chars/chunk)
 
-4. **Web Converter**:
-   - Requires Chrome extension
-   - Port 8000 must be available
+4. **Web Conversion Requirements**:
+   - Requires Chrome browser extension
+   - Ensure port 8000 is available
    - Only accepts local connections
 
-## Community
-
-<img src="doc/qrcode_1739088418032.jpg" width="200" alt="QQ Group" />
+## terminal-llm Group
+<img src="doc/qrcode_1739088418032.jpg" width = "200" alt="QQ Group" align=center />
 
 ## License
-
 MIT License © 2024 maliubiao

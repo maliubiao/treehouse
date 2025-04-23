@@ -43,6 +43,9 @@ askgpt @advice @llm_query.py @clipboard  修复其中可能的bug
 #实现功能，从网页里复制了一段别人的长文，用r1 `整理这个人的观点，点评一下`
 askgpt @clipboard @comment
 
+#目录引用
+askgpt @src 解释这个react项目的结构
+
 #最近的会话
 recentconversation
 #最近的对话记录：
@@ -431,34 +434,16 @@ print("你是一个友好的助手")
 env |grep GPT_
 ```
 
-## 目录结构
-
-```
-terminal-llm/
-├── bin/              # 工具脚本
-├── server/           # 网页转换服务
-│   └── server.py     # 转换服务器主程序
-├── prompts/          # 提示词模板
-├── logs/             # 运行日志
-├── llm_query.py      # 核心处理逻辑
-├── env.sh            # 环境配置脚本
-└── pyproject.toml    # 项目依赖配置
-```
-
-
 ## 注意事项
 
 1. **可选工具**：
-   - 安装[glow](https://github.com/charmbracelet/glow)用于Markdown渲染
    - 安装`tree`命令查看目录结构
+   - 安装`diff` `patch`工具用来操作源代码, windows上可能默认没有
 
 2. **代理配置**：
    自动检测`http_proxy`/`https_proxy`环境变量
 
-3. **文件分块**：
-   大文件自动分块处理（默认32k字符/块）
-
-4. **网页转换服务依赖**：
+3. **网页转换服务依赖**：
    - 需要安装Chrome浏览器扩展配合使用
    - 确保8000端口未被占用, 或者在插件配置option页改地址
    - 转换服务仅接受本地连接

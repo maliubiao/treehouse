@@ -44,7 +44,7 @@ void speak(const std::string& msg) {
 [source code end]
 
 [Example 3: 行号标识符]
-[modified file]: debugger/examples/error.py
+[modified file]: debugger/examples/error.py/near_6
 [source code start]
 def outegr():
     def inner():  # 嵌套函数无法生成符号
@@ -54,7 +54,7 @@ def outegr():
     fn = lambda x: x+1
 [source code end]
 
-[modified symbol]: debugger/examples/error.py/near_3
+[modified symbol]: debugger/examples/error.py/at_3
 [source code start]
     def inner():  # 第3行所处的嵌套函数
         print("[Modified] inner")

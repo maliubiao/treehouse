@@ -1274,15 +1274,17 @@ PUA_PROMPT = """
 
 USER_DEMAND = "用户的要求如下:"
 
-
-def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
-    modified_type = "symbol" if patch_require else "block"
-    tag = "source code"
-    change_log_header = """
+CHANGE_LOG_HEADER = """
 [change log message start]
 这次更改的详细描述
 [change log message end]
 """
+
+
+def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
+    modified_type = "symbol" if patch_require else "block"
+    tag = "source code"
+
     prompt = ""
     if patch_require and dumb_prompt:
         prompt += dumb_prompt
@@ -1290,7 +1292,7 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
         prompt += (
             f"""
 # 响应格式
-{change_log_header}
+{CHANGE_LOG_HEADER}
 [modified {modified_type}]: 块路径
 [{tag} start]
 完整文件内容
@@ -1306,7 +1308,7 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
             if file_ranges
             else f"""
 # 响应格式
-{change_log_header}
+{CHANGE_LOG_HEADER}
 [modified {modified_type}]: 符号路径
 [{tag} start]
 完整文件内容
@@ -3475,7 +3477,7 @@ class ModelSwitch:
             self.select(coder_model)
             while True:
                 print(f"🔧 开始执行任务: {job['content']}")
-                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMP_EXAMPLE_A)}\n"
+                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMP_EXAMPLE_A)}\n{CHANGE_LOG_HEADER}\n"
                 part_b = f"{PUA_PROMPT}{coder_prompt}[your job start]:\n{job['content']}\n[your job end]"
                 context = context_processor.process_text_with_file_path(
                     prompt,
