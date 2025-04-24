@@ -45,6 +45,10 @@ askgpt @clipboard @comment
 
 #目录引用
 askgpt @src 解释这个react项目的结构
+#目录引用支持通配符
+askgpt "@src/*tsx" 解释这些组件的用途
+#文件引用支持通配符
+askgpt "@*json" 当前目录下的json作用是什么
 
 #最近的会话
 recentconversation
