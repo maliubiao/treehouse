@@ -1495,7 +1495,7 @@ class TestCallAnalysis(TestParserUtil):
                     A.B.f
             """
         )
-        path = self.create_temp_file(code)
+        path = self.create_temp_file(code, suffix=".py")
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
 
@@ -1622,6 +1622,60 @@ class TestCallAnalysis(TestParserUtil):
 
         os.unlink(path)
 
+    def test_near_symbol_fallback(self):
+        # 测试JS回调函数场景
+        js_code = dedent(
+            """
+            document.addEventListener('click', function() {
+                console.log('Anonymous callback');
+            });
+
+            class MyComponent {
+                constructor() {
+                    this.handleClick = () => {
+                        console.log('Arrow function');
+                    };
+                }
+            }
+            """
+        )
+        js_path = self.create_temp_file(js_code, suffix=".js")
+        _, code_map = self.parser_util.get_symbol_paths(js_path)
+
+        # 测试匿名回调函数位置
+        click_line = 2  # document.addEventListener 行
+        symbols = self.parser_util.find_symbols_for_locations(
+            code_map,
+            [[click_line, 0]],
+        )
+        self.assertTrue(len(symbols) > 0, "应该返回附近符号")
+        self.assertIn("Anonymous callback", symbols["near_2"]["code"], "匿名回调应该返回最近的父级符号")
+
+        os.unlink(js_path)
+
+        # 测试Python匿名函数场景
+        py_code = dedent(
+            """
+            def outer():
+                def named():
+                    pass
+
+            def use_callback(callback):
+                callback()
+                
+            use_callback(lambda x: x+1)
+            """
+        )
+        py_path = self.create_temp_file(py_code, suffix=".py")
+        _, code_map = self.parser_util.get_symbol_paths(py_path)
+
+        # 测试lambda位置
+        lambda_line = 8  # lambda_func 行
+        symbols = self.parser_util.find_symbols_for_locations(code_map, [[lambda_line, 0]])
+        self.assertIn("x+1", symbols["near_8"]["code"], "lambda 应该返回最近的父级符号")
+
+        os.unlink(py_path)
+
     def test_batch_find_symbols(self):
         code = dedent(
             """
@@ -1632,9 +1686,13 @@ class TestCallAnalysis(TestParserUtil):
             class Beta:
                 def method_b(self):
                     pass
-        """
+
+            # 测试匿名回调
+            def with_callback():
+                return lambda: None
+            """
         )
-        path = self.create_temp_file(code)
+        path = self.create_temp_file(code, suffix=".py")
         _, code_map = self.parser_util.get_symbol_paths(path)
 
         with open(path, "rb") as f:
@@ -1649,6 +1707,7 @@ class TestCallAnalysis(TestParserUtil):
             *[get_position_info("def method_a(self):")[:2] for _ in range(2)],
             *[get_position_info("class Beta:")[:2] for _ in range(2)],
             *[get_position_info("def method_b(self):")[:2] for _ in range(2)],
+            *[get_position_info("lambda: None")[:2] for _ in range(2)],  # 测试匿名函数位置
         ]
 
         symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations)
@@ -1656,6 +1715,7 @@ class TestCallAnalysis(TestParserUtil):
         expected_symbols = {
             "Alpha": code_map["Alpha"],
             "Beta": code_map["Beta"],
+            "with_callback": code_map["with_callback"],  # 匿名回调应该返回父函数
         }
         self.assertEqual(symbols.keys(), expected_symbols.keys())
 

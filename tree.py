@@ -1593,7 +1593,16 @@ class CodeMapBuilder:
                         break
                     processed_symbols[current_symbol] = symbol_info.copy()
                     total_code_size += code_length
+            else:
 
+                symbol_info = self.build_near_symbol_info_at_line(line)
+                code_length = len(symbol_info.get("code", ""))
+                if total_code_size + code_length > max_context_size:
+                    logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
+                    break
+                locations.append((line, col, near_symbol_at_line(line)))
+                processed_symbols[near_symbol_at_line(line)] = symbol_info
+                total_code_size += code_length
             if total_code_size >= max_context_size:
                 break
         for line, col, symbol in locations:
@@ -3626,6 +3635,11 @@ def parse_symbol_path(symbol_path: str) -> tuple[str, list] | PlainTextResponse:
 def unnamed_symbol_at_line(line_number: int) -> str:
     """生成无名符号的名称"""
     return f"at_{line_number}"
+
+
+def near_symbol_at_line(line_number: int) -> str:
+    """生成无名符号的名称"""
+    return f"near_{line_number}"
 
 
 def line_number_from_unnamed_symbol(symbol: str) -> int:
