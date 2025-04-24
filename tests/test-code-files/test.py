@@ -1,4 +1,4 @@
-# pylint: disable=undefined-variable,unnecessary-pass,unnecessary-comprehension,raise-missing-from,keyword-arg-before-vararg,redefined-outer-name,unspecified-encoding
+# pylint: skip-file
 """
 aaa
 bbb

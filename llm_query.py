@@ -9,6 +9,7 @@ import argparse
 import datetime
 import difflib
 import fnmatch
+import glob
 import json
 import logging
 import marshal
@@ -1093,6 +1094,8 @@ def _handle_local_file(match: CmdNode) -> str:
         return _process_single_file(expanded_path, line_range_match)
     if os.path.isdir(expanded_path):
         return _process_directory(expanded_path)
+    if "*" in expanded_path or "?" in expanded_path:
+        return _process_glob_pattern(expanded_path)
     return f"\n\n[error]: 路径不存在 {expanded_path}\n\n"
 
 
@@ -1162,6 +1165,29 @@ def _process_directory(dir_path: str) -> str:
             except (OSError, IOError) as e:
                 replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
     replacement += f"[directory end]: {dir_path}\n\n"
+    return replacement
+
+
+def _process_glob_pattern(pattern: str) -> str:
+    """处理通配符模式匹配文件"""
+    replacement = f"\n\n[glob pattern]: {pattern}\n"
+    try:
+        for file_path in glob.glob(pattern, recursive=True):
+            if os.path.isdir(file_path):
+                continue
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    replacement += _format_file_content(file_path, content)
+            except UnicodeDecodeError:
+                replacement += (
+                    f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
+                )
+            except (OSError, IOError) as e:
+                replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
+    except Exception as e:
+        replacement += f"[glob error]: 通配符模式处理失败: {str(e)}\n\n"
+    replacement += f"[glob pattern end]: {pattern}\n\n"
     return replacement
 
 
@@ -1254,7 +1280,7 @@ PATCH_PROMPT_HEADER = """
 [symbol path rule end]
 """
 
-DUMP_EXAMPLE_A = (Path(__file__).parent / "prompts/dumb-example").read_text()
+DUMB_EXAMPLE_A = (Path(__file__).parent / "prompts/dumb-example").read_text()
 
 DUMB_PROMPT = f"""
 # 输出规范
@@ -1263,7 +1289,7 @@ DUMB_PROMPT = f"""
 - 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
 - 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入对应[modified file], [SYMBOL START]输入对应[modified symbol]
 
-{DUMP_EXAMPLE_A}
+{DUMB_EXAMPLE_A}
 用户的要求如下:
 
 """
@@ -1380,7 +1406,7 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 [FILE RANGE END]
 """
     prompt += f"""
-{get_patch_prompt_output(patch_require, file_ranges, dumb_prompt=DUMP_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
+{get_patch_prompt_output(patch_require, file_ranges, dumb_prompt=DUMB_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
 {USER_DEMAND}
 """
     return prompt
@@ -2461,6 +2487,12 @@ def is_local_file(match):
     # 如果匹配包含行号范围（如:10-20），先去掉行号部分再判断
     if re.search(r":(\d+)?-(\d+)?$", match):
         match = re.sub(r":(\d+)?-(\d+)?$", "", match)
+
+    # 检查是否是通配符路径
+    if "*" in match or "?" in match:
+        expanded = os.path.expanduser(match)
+        return len(glob.glob(expanded)) > 0
+
     return os.path.exists(os.path.expanduser(match))
 
 
@@ -3477,7 +3509,7 @@ class ModelSwitch:
             self.select(coder_model)
             while True:
                 print(f"🔧 开始执行任务: {job['content']}")
-                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMP_EXAMPLE_A)}\n{CHANGE_LOG_HEADER}\n"
+                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMB_EXAMPLE_A)}\n{CHANGE_LOG_HEADER}\n"
                 part_b = f"{PUA_PROMPT}{coder_prompt}[your job start]:\n{job['content']}\n[your job end]"
                 context = context_processor.process_text_with_file_path(
                     prompt,
@@ -3602,6 +3634,7 @@ class PylintFixer:
         auto_apply: bool = False,
         shadowroot: Optional[Path] = None,
         root_dir: Optional[Path] = None,
+        use_git: bool = False,
     ):
         self.log_path = Path(linter_log_path)
         self.results: list[LintResult] = []
@@ -3610,17 +3643,42 @@ class PylintFixer:
         self.auto_apply = auto_apply
         self.target_file: Optional[Path] = None
         self.root_dir = root_dir if root_dir is not None else Path.cwd().resolve()
+        self.use_git = use_git
 
     def load_and_validate_log(self) -> None:
-        """加载并验证日志文件"""
-        if not self.log_path.is_file():
-            raise FileNotFoundError(f"日志文件 '{self.log_path}' 不存在或不是文件")
+        """加载并验证日志文件或从git命令获取日志"""
+        if self.use_git:
+            try:
+                import subprocess
 
-        try:
-            log_content = self.log_path.read_text(encoding="utf-8")
-            self.results = LintParser.parse(log_content)
-        except Exception as e:
-            raise RuntimeError(f"读取日志文件失败: {e}") from e
+                # 先获取所有源代码文件列表
+                files_result = subprocess.run(
+                    ["git", "ls-files", "*.py"], capture_output=True, text=True, cwd=self.root_dir  # 只获取Python文件
+                )
+                if files_result.returncode != 0:
+                    raise RuntimeError(f"获取git文件列表失败: {files_result.stderr}")
+
+                # 对每个文件单独运行pylint
+                pylint_results = []
+                for file_path in files_result.stdout.splitlines():
+                    result = subprocess.run(["pylint", file_path], capture_output=True, text=True, cwd=self.root_dir)
+                    if result.returncode not in (0, 1):  # pylint返回0表示无错误，1表示有警告/错误
+                        raise RuntimeError(f"pylint执行失败: {result.stderr}")
+                    pylint_results.append(result.stdout)
+
+                log_content = "\n".join(pylint_results)
+                self.results = LintParser.parse(log_content)
+            except Exception as e:
+                raise RuntimeError(f"从git获取pylint日志失败: {e}") from e
+        else:
+            if not self.log_path.is_file():
+                raise FileNotFoundError(f"日志文件 '{self.log_path}' 不存在或不是文件")
+
+            try:
+                log_content = self.log_path.read_text(encoding="utf-8")
+                self.results = LintParser.parse(log_content)
+            except Exception as e:
+                raise RuntimeError(f"读取日志文件失败: {e}") from e
 
     def group_results_by_file(self) -> None:
         """按文件路径对结果进行分组"""
@@ -3734,9 +3792,12 @@ class PylintFixer:
             print(f"处理过程中发生错误: {e}", file=sys.stderr)
 
 
-def pylint_fix(pylint_log) -> None:
+def pylint_fix(pylint_log, use_git: bool = False) -> None:
     """修复入口函数"""
-    fixer = PylintFixer(str(pylint_log))
+    if pylint_log == "auto":
+        fixer = PylintFixer("", auto_apply=True, use_git=True)
+    else:
+        fixer = PylintFixer(str(pylint_log), use_git=use_git)
     fixer.execute()
 
 

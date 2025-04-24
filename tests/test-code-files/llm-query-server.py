@@ -1,9 +1,8 @@
+# pylint: skip-file
 """
 虚构的LLM API服务，用于测试query_gpt_api函数
 当收到特定prompt时返回预设响应
 """
-
-# pylint: disable=invalid-name
 
 import json
 import threading
@@ -73,7 +72,11 @@ class MockLLMServer:
             yield {
                 "object": "chat.completion.chunk",
                 "choices": [
-                    {"delta": {"content": reasoning_part, "role": "assistant"}, "index": 0, "finish_reason": None}
+                    {
+                        "delta": {"content": reasoning_part, "role": "assistant"},
+                        "index": 0,
+                        "finish_reason": None,
+                    }
                 ],
             }
 
@@ -84,7 +87,10 @@ class MockLLMServer:
                     "object": "chat.completion.chunk",
                     "choices": [
                         {
-                            "delta": {"content": word + (" " if i < len(words) - 1 else ""), "role": "assistant"},
+                            "delta": {
+                                "content": word + (" " if i < len(words) - 1 else ""),
+                                "role": "assistant",
+                            },
                             "index": 0,
                             "finish_reason": None,
                         }
@@ -112,7 +118,10 @@ class MockLLMServer:
                 }
 
         # 结束块
-        yield {"object": "chat.completion.chunk", "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}]}
+        yield {
+            "object": "chat.completion.chunk",
+            "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],
+        }
 
     def start(self):
         self.server = threading.Thread(target=self.app.run, kwargs={"port": self.port})

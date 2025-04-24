@@ -31,11 +31,8 @@ repos:
         types: [python]
         files: \.py$
         args: [
-          "--fail-under=9.5",
-          "--max-line-length=120",
-          "--score=yes",
-          "--ignore=.venv",
-          "--disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,too-many-public-methods,too-few-public-methods,too-many-lines,too-many-positional-arguments"
+          "--rcfile=.pylintrc",
+          "--score=yes"
         ]
         require_serial: true
 
@@ -69,4 +66,3 @@ repos:
         args: ["-i", "2", "-w"]
         require_serial: true
         verbose: true
-

@@ -1,6 +1,8 @@
-
+# pylint: skip-file
 import inspect
+
 f = 1
+
 
 class z:
 
@@ -11,20 +13,25 @@ class z:
         self.m = 4
         self.n = 5
         self.u = 1
+
     class b:
         c = 1
+
     def a(*args):
         pass
 
+
 u = {
-        1: 1,
-        2: 2,
-        3: 3,
-        4: 4,
-        5: 5,
-        6: 6,
-        }
+    1: 1,
+    2: 2,
+    3: 3,
+    4: 4,
+    5: 5,
+    6: 6,
+}
 u1 = [0]
+
+
 def a(*args):
     global f
     b = 1
@@ -35,9 +42,10 @@ def a(*args):
     u["name"] = 3
     u1[0] = 3
 
-a(1, 2, 3,4)
 
-z().a(5,6,7)
+a(1, 2, 3, 4)
+
+z().a(5, 6, 7)
 print(z().__class__.__name__)
 "a".startswith("a")
 print(z().__dict__)

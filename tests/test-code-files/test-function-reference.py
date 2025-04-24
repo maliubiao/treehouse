@@ -1,3 +1,4 @@
+# pylint: skip-file
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -12,7 +13,8 @@
 """
 
 import math
-from typing import List, Dict, Optional, Callable
+from typing import Callable, Dict, List, Optional
+
 
 def a():
     f().b()
@@ -24,23 +26,24 @@ def a():
 
 # 全局变量声明
 global_var = 42
-_GLOBAL_DICT: Dict[str, int] = {'default': 0}
+_GLOBAL_DICT: Dict[str, int] = {"default": 0}
 __magic__ = 3.14
+
 
 def decorator(func: Callable) -> Callable:
     """简单装饰器"""
+
     def wrapper(*args, **kwargs):
         print(f"Calling {func.__name__}")
         return func(*args, **kwargs)
+
     return wrapper
+
 
 @decorator
 @decorator
 def complex_function(
-    param1: int,
-    param2: str = 'default',
-    *args: List[float],
-    **kwargs: Dict[str, bool]
+    param1: int, param2: str = "default", *args: List[float], **kwargs: Dict[str, bool]
 ) -> Optional[float]:
     """复杂参数声明的测试函数"""
     local_var = param1 * 2
@@ -59,18 +62,20 @@ def complex_function(
     squares = [i**2 for i in range(10)]
 
     # 使用全局变量
-    _GLOBAL_DICT['new'] = len(param2)
+    _GLOBAL_DICT["new"] = len(param2)
 
     return result if result else __magic__
 
+
 class SampleClass:
     """测试类定义"""
+
     class_attr: int = 100
-    _protected_attr: str = 'protected'
+    _protected_attr: str = "protected"
 
     def __init__(self, value: float):
         self.instance_attr = value
-        self.__dict__['dynamic_attr'] = 42  # 特殊属性设置方式
+        self.__dict__["dynamic_attr"] = 42  # 特殊属性设置方式
 
     @classmethod
     def class_method(cls) -> None:
@@ -87,13 +92,15 @@ class SampleClass:
     @staticmethod
     def static_method() -> dict:
         """静态方法测试"""
-        return {'key': _GLOBAL_DICT.copy()}
+        return {"key": _GLOBAL_DICT.copy()}
+
 
 # 异步函数测试
 async def async_example():
     """异步函数定义"""
     future = asyncio.Future()
     await future
+
 
 # lambda表达式
 lambda_expr = lambda x: x**2
@@ -102,6 +109,6 @@ lambda_expr = lambda x: x**2
 x: int
 y: List[float] = [1.0, 2.0]
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     obj = SampleClass(3.14)
-    print(complex_function(10, 'test'))
+    print(complex_function(10, "test"))
