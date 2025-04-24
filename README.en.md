@@ -146,8 +146,8 @@ patchgpt ..MyClass.. Complete this test suite based on description
 
 1. **Clone Repository**
 ```bash
-git clone https://github.com/maliubiao/terminal-llm
-cd terminal-llm
+git clone https://github.com/maliubiao/treehouse
+cd treehouse
 ```
 
 2. **Setup Virtual Environment**
@@ -161,7 +161,7 @@ source .venv/bin/activate
 3. **Environment Variables**
 ```bash
 # Add to shell config (~/.bashrc or ~/.zshrc)
-export GPT_PATH="/path/to/terminal-llm"
+export GPT_PATH="/path/to/treehouse"
 export GPT_KEY="your-api-key"
 export GPT_MODEL="your-model"
 export GPT_BASE_URL="https://api.example.com/v1"  # OpenAI-compatible API
@@ -234,9 +234,9 @@ file_types:
 ```bash
 # Create model.json in the same directory. After configuring model.json, you no longer need to set GPT_* environment variables.
 # The "default" provider or the first one in the list will be used.
-➜  terminal-llm git:(main) ✗ listgpt 
+➜  treehouse git:(main) ✗ listgpt 
 14b: deepseek-r1:14b
-➜  terminal-llm :(main) ✗ usegpt 14b
+➜  treehouse :(main) ✗ usegpt 14b
 Successfully set GPT environment variables:
   GPT_KEY: olla****
   GPT_BASE_URL: http://192.168.40.116:11434/v1
@@ -310,7 +310,7 @@ Alternatively, you can manually start the service:
 ```bash
 # Create a new .llm_project.yml and configure the LSP
 $GPT_PYTHON_BIN $GPT_PATH/tree.py --port 9060
-# GPT_PYTHON_BIN and GPT_PATH are environment variables set in env.sh, pointing to the terminal-llm directory
+# GPT_PYTHON_BIN and GPT_PATH are environment variables set in env.sh, pointing to the treehouse directory
 export GPT_SYMBOL_API_URL=http://127.0.0.1:9060
 # Use @symbol_file.xx/main in askgpt to retrieve symbol context. Bash and Zsh shells support auto-completion for symbols, making it more convenient.
 ```
@@ -323,7 +323,7 @@ Supports bytecode-level line tracing for Python programs, showing which lines we
 ```bash
 # Python 3.11.11 is recommended as the C++ code accesses internal Python VM data. 
 # Using a different version may cause crashes.
-cd terminal-llm
+cd treehouse
 source .venv/bin/activate
 cd debugger/cpp
 
@@ -374,7 +374,7 @@ env | grep GPT_
    - Ensure port 8000 is available
    - Only accepts local connections
 
-## terminal-llm Group
+## treehouse Group
 <img src="doc/qrcode_1739088418032.jpg" width = "200" alt="QQ Group" align=center />
 
 ## License

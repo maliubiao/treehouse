@@ -162,8 +162,8 @@ patchgpt ..MyClass.. 根据说明，写完这个这测试套件
 
 1. **克隆仓库**
 ```bash
-git clone https://github.com/maliubiao/terminal-llm
-cd terminal-llm
+git clone https://github.com/maliubiao/treehouse
+cd treehouse
 ```
 
 2. **设置虚拟环境**
@@ -177,7 +177,7 @@ source .venv/bin/activate
 3. **环境变量配置**
 ```bash
 # 在shell配置文件中添加 (~/.bashrc 或 ~/.zshrc), 如果配置了model.json则只需要设置GPT_PATH为项目目录，source /your/path/to/env.sh
-export GPT_PATH="/path/to/terminal-llm"
+export GPT_PATH="/path/to/treehouse"
 export GPT_KEY="your-api-key"
 export GPT_MODEL="your-model"
 export GPT_BASE_URL="https://api.example.com/v1"  # OpenAI兼容API地址
@@ -206,7 +206,7 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 
 ```bash
 #列出历史对话
-➜  terminal-llm git:(main) ✗ allconversation #allconversation 2只显示最近两个, recentconversation是allconversation 10
+➜  treehouse git:(main) ✗ allconversation #allconversation 2只显示最近两个, recentconversation是allconversation 10
 所有对话记录：
  1) 2025-02-09 19:07:34 E8737837-AD37-46B0-ACEA-8A7F93BE25E8 文件 /Users/richard/code/termi...
  2) 2025-02-09 18:34:37 C63CA6F6-CB89-42D2-B108-A551F8E55F75 hello
@@ -215,7 +215,7 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
  5) 2025-02-09 18:23:13 27CDA712-9CD9-4C6A-98BD-FACA02844C25 hello
 请选择对话 (1-       5，直接回车取消):
 #选之后可以恢复到对话，或者什么也不选,Enter退出
-➜  terminal-llm git:(main) ✗ newconversation #开始一个空对话
+➜  treehouse git:(main) ✗ newconversation #开始一个空对话
 新会话编号:  D84E64CF-F337-4B8B-AD2D-C58FD2AE713C
 ```
 
@@ -290,9 +290,9 @@ file_types:
 
 ```bash
 #同目录下创建model.json, 用listgpt检查，配置了model.json后，不需要再加GPT_*环境变量，会使用"default" 供应商，或者第一个
-➜  terminal-llm git:(main) ✗ listgpt 
+➜  treehouse git:(main) ✗ listgpt 
 14b: deepseek-r1:14b
-➜  terminal-llm :(main) ✗ usegpt 14b
+➜  treehouse :(main) ✗ usegpt 14b
 成功设置GPT环境变量：
   GPT_KEY: olla****
   GPT_BASE_URL: http://192.168.40.116:11434/v1
@@ -370,7 +370,7 @@ tree.py是一个tree-sitter实现的抽象语法树解析库，提供多语言as
 
 ```bash
 #一个典型的输出
-(terminal-llm) ➜  terminal-llm git:(main) ✗ python tree.py --project /Volumes/外置2T/android-kernel-preprocess/aosp/ --port 9050
+(treehouse) ➜  treehouse git:(main) ✗ python tree.py --project /Volumes/外置2T/android-kernel-preprocess/aosp/ --port 9050
 
 INFO:     Started server process [74500]
 INFO:     Waiting for application startup.
@@ -390,7 +390,7 @@ symbolgptrestart
 ```bash
 #新建一个.llm_project.yml，配置lsp
 $GPT_PYTHON_BIN $GPT_PATH/tree.py --port 9060;
-#GPT_PYTHON_BIN GPT_PATH是env.sh设置的环境变量，指向terminal-llm的目录
+#GPT_PYTHON_BIN GPT_PATH是env.sh设置的环境变量，指向treehouse的目录
 export GPT_SYMBOL_API_URL=http://127.0.0.1:9060/;
 #在askgpt中使用@symbol_file.xx/main 这样获取符号上下文，bash, zsh shell支持补号补全, 比较方便
 ```
@@ -401,12 +401,12 @@ export GPT_SYMBOL_API_URL=http://127.0.0.1:9060/;
 #### 编译
 ```bash
 #python 3.11.11  uv python pin {version}, 最好3.11.11，因为cpp会访问python虚拟机内部数据，版本不对会崩
-cd terminal-llm; source .venv/bin/activate
+cd treehouse; source .venv/bin/activate
 cd debugger/cpp
 #编译不成功，到下边qq群交流, 如果文档内容不能复现，请到群里反馈
 cmake ../ -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON #or
 cmake ../ -DCMAKE_BUILD_TYPE=Release
-#在terminal-llm/debugger/tracer_core.so
+#在treehouse/debugger/tracer_core.so
 ```
 #### 使用
 ```bash
@@ -453,7 +453,7 @@ env |grep GPT_
    - 转换服务仅接受本地连接
 
 
-## terminal-llm群
+## treehouse群
 <img src="doc/qrcode_1739088418032.jpg" width = "200" alt="QQ群" align=center />
 
 ## 许可证
