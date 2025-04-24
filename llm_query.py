@@ -54,6 +54,7 @@ from rich.table import Table
 from rich.text import Text
 
 from tree import (
+    BINARY_MAGIC_NUMBERS,
     GLOBAL_PROJECT_CONFIG,
     LLM_PROJECT_CONFIG,
     BlockPatch,
@@ -1152,7 +1153,7 @@ def _process_directory(dir_path: str) -> str:
         dirs[:] = [d for d in dirs if not is_ignored(os.path.join(root, d))]
         for file in files:
             file_path = os.path.join(root, file)
-            if is_ignored(file_path):
+            if is_ignored(file_path) or _is_binary_file(file_path):
                 continue
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
@@ -1168,12 +1169,58 @@ def _process_directory(dir_path: str) -> str:
     return replacement
 
 
+def _is_binary_file(file_path: str) -> bool:
+    """检测文件是否为二进制文件"""
+    # 压缩后的二进制文件扩展名列表
+    binary_exts = (
+        ".png.jpg.jpeg.gif.bmp.tiff.webp.svg.mp4.avi.mov.mkv.flv.wmv.webm.mp3.wav.ogg.flac.aac"
+        ".zip.rar.7z.tar.gz.bz2.exe.dll.so.dylib.bin.pdf.doc.docx.xls.xlsx.pptx.ppt"
+        ".psd.ai.eps.indd.pct.pict.pcx.pdd.pmp.ppam.pps.ppsm.pptm.pub.xps.xlt.xltm.xlam"
+        ".mdb.accdb.accde.accdt.accdr.adp.ade.db.db3.frm.ibd.myd.myisam.ndf.ora.sqlite"
+        ".dwg.dxf.dwt.dwf.skp.stl.3ds.obj.fbx.dae.iges.step"
+        ".iso.bin.cue.img.nrg.mdf.ccd.sub.toc"
+        ".msi.msp.mst.paf.exe.setup.install"
+        ".apk.ipa.deb.rpm.pkg.app.xap"
+        ".jar.war.ear.par.sar"
+        ".class.pyc.pyo.pyd.so.dll.a.lib.ko"
+        ".ttf.otf.woff.woff2.eot.pfb.pfm"
+        ".swf.fla.as"
+        ".ps.pcl"
+        ".chm.hlp"
+        ".eml.msg.pst.ost"
+        ".vmdk.vhd.vdi.vhdx.qcow.qcow2.vmdk"
+        ".ova.ovf"
+        ".bak.tmp.temp"
+    )
+
+    # 首先检查文件扩展名
+    file_ext = os.path.splitext(file_path)[1].lower()
+    if file_ext:  # 确保有扩展名
+        # 将扩展名列表转换为集合以便快速查找
+        ext_set = set(binary_exts.split("."))
+        # 去掉点号后检查是否在集合中
+        if file_ext[1:] in ext_set:
+            return True
+
+    # 然后检查文件magic number
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(12)  # 读取更多字节以确保检测准确性
+            for magic in BINARY_MAGIC_NUMBERS:
+                if header.startswith(magic):
+                    return True
+    except (OSError, IOError):
+        return True
+
+    return False
+
+
 def _process_glob_pattern(pattern: str) -> str:
     """处理通配符模式匹配文件"""
     replacement = f"\n\n[glob pattern]: {pattern}\n"
     try:
         for file_path in glob.glob(pattern, recursive=True):
-            if os.path.isdir(file_path):
+            if os.path.isdir(file_path) or _is_binary_file(file_path):
                 continue
             try:
                 with open(file_path, "r", encoding="utf-8") as f:

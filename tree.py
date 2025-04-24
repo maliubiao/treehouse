@@ -2157,6 +2157,93 @@ class SourceSkeleton:
         # 合并结果并优化格式
         result = "\n".join(framework_lines + framework_content)
         return re.sub(r"\n{3,}", "\n\n", result).strip() + "\n"
+        # 常见二进制文件的magic number
+
+
+BINARY_MAGIC_NUMBERS = {
+    b"\x89PNG",  # PNG
+    b"\xff\xd8",  # JPEG
+    b"GIF",  # GIF
+    b"BM",  # BMP
+    b"%PDF",  # PDF
+    b"MZ",  # Windows PE executable
+    b"\x7fELF",  # ELF executable
+    b"PK",  # ZIP
+    b"Rar!",  # RAR
+    b"\x1f\x8b",  # GZIP
+    b"BZh",  # BZIP2
+    b"\xfd7zXZ",  # XZ
+    b"7z\xbc\xaf\x27\x1c",  # 7-Zip
+    b"ITSF",  # CHM
+    b"\x49\x44\x33",  # MP3
+    b"\x00\x00\x01\xba",  # MPEG
+    b"\x00\x00\x01\xb3",  # MPEG video
+    b"FLV",  # Flash video
+    b"RIFF",  # WAV, AVI
+    b"OggS",  # OGG
+    b"fLaC",  # FLAC
+    b"\x1a\x45\xdf\xa3",  # WebM
+    b"\x30\x26\xb2\x75\x8e\x66\xcf\x11",  # WMV, ASF
+    b"\x00\x01\x00\x00",  # TrueType font
+    b"OTTO",  # OpenType font
+    b"wOFF",  # WOFF font
+    b"ttcf",  # TrueType collection
+    b"\xed\xab\xee\xdb",  # RPM package
+    b"\x53\x51\x4c\x69\x74\x65\x20\x66",  # SQLite
+    b"\x4d\x5a",  # MS Office documents (DOCX, XLSX etc)
+    b"\x50\x4b\x03\x04",  # ZIP-based formats (DOCX, XLSX etc)
+    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",  # MS Office legacy (DOC, XLS etc)
+    b"\x09\x08\x10\x00\x00\x06\x05\x00",  # Excel
+    b"\x09\x08\x10\x00\x00\x06\x05\x00",  # Excel
+    b"\x50\x4b\x03\x04\x14\x00\x06\x00",  # OpenDocument
+    b"\x25\x50\x44\x46\x2d\x31\x2e",  # PDF
+    b"\x46\x4c\x56\x01",  # FLV
+    b"\x4d\x54\x68\x64",  # MIDI
+    b"\x52\x49\x46\x46",  # WAV, AVI
+    b"\x23\x21\x41\x4d\x52",  # AMR
+    b"\x23\x21\x53\x49\x4c\x4b",  # SILK
+    b"\x4f\x67\x67\x53",  # OGG
+    b"\x66\x4c\x61\x43",  # FLAC
+    b"\x4d\x34\x41\x20",  # M4A
+    b"\x00\x00\x00\x20\x66\x74\x79\x70",  # MP4
+    b"\x00\x00\x00\x18\x66\x74\x79\x70",  # 3GP
+    b"\x00\x00\x00\x14\x66\x74\x79\x70",  # MOV
+    b"\x1a\x45\xdf\xa3",  # WebM
+    b"\x30\x26\xb2\x75\x8e\x66\xcf\x11",  # WMV, ASF
+    b"\x52\x61\x72\x21\x1a\x07\x00",  # RAR
+    b"\x37\x7a\xbc\xaf\x27\x1c",  # 7z
+    b"\x53\x5a\x44\x44\x88\xf0\x27\x33",  # SZDD
+    b"\x75\x73\x74\x61\x72",  # TAR
+    b"\x1f\x9d",  # Z
+    b"\x1f\xa0",  # Z
+    b"\x42\x5a\x68",  # BZ2
+    b"\x50\x4b\x03\x04",  # ZIP
+    b"\x50\x4b\x05\x06",  # ZIP (empty archive)
+    b"\x50\x4b\x07\x08",  # ZIP (spanned archive)
+    b"\x46\x4c\x56\x01",  # FLV
+    b"\x4d\x54\x68\x64",  # MIDI
+    b"\x52\x49\x46\x46",  # WAV, AVI
+    b"\x23\x21\x41\x4d\x52",  # AMR
+    b"\x23\x21\x53\x49\x4c\x4b",  # SILK
+    b"\x4f\x67\x67\x53",  # OGG
+    b"\x66\x4c\x61\x43",  # FLAC
+    b"\x4d\x34\x41\x20",  # M4A
+    b"\x00\x00\x00\x20\x66\x74\x79\x70",  # MP4
+    b"\x00\x00\x00\x18\x66\x74\x79\x70",  # 3GP
+    b"\x00\x00\x00\x14\x66\x74\x79\x70",  # MOV
+    b"\x1a\x45\xdf\xa3",  # WebM
+    b"\x30\x26\xb2\x75\x8e\x66\xcf\x11",  # WMV, ASF
+    b"\x52\x61\x72\x21\x1a\x07\x00",  # RAR
+    b"\x37\x7a\xbc\xaf\x27\x1c",  # 7z
+    b"\x53\x5a\x44\x44\x88\xf0\x27\x33",  # SZDD
+    b"\x75\x73\x74\x61\x72",  # TAR
+    b"\x1f\x9d",  # Z
+    b"\x1f\xa0",  # Z
+    b"\x42\x5a\x68",  # BZ2
+    b"\x50\x4b\x03\x04",  # ZIP
+    b"\x50\x4b\x05\x06",  # ZIP (empty archive)
+    b"\x50\x4b\x07\x08",  # ZIP (spanned archive)
+}
 
 
 class BlockPatch:
@@ -2214,21 +2301,8 @@ class BlockPatch:
 
     def _is_binary_file(self, content: bytes) -> bool:
         """判断文件是否为二进制文件"""
-        # 常见二进制文件的magic number
-        binary_magic_numbers = {
-            b"\x89PNG",  # PNG
-            b"\xff\xd8",  # JPEG
-            b"GIF",  # GIF
-            b"BM",  # BMP
-            b"%PDF",  # PDF
-            b"MZ",  # Windows PE executable
-            b"\x7fELF",  # ELF executable
-            b"PK",  # ZIP
-            b"Rar!",  # RAR
-        }
-
         # 检查文件头是否匹配已知的二进制文件类型
-        for magic in binary_magic_numbers:
+        for magic in BINARY_MAGIC_NUMBERS:
             if content.startswith(magic):
                 return True
         return False
