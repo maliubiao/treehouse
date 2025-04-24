@@ -1,8 +1,8 @@
-# terminal LLM
+# Treehouse
 
 [Chinese users please view README.md](README.md)
 
-A terminal assistant tool based on OpenAI-compatible API, providing convenient command-line interaction and context-aware functionality. Designed to be a command-line version of Cursor and Windsurf, recommended to use with Deepseek R1.
+A code assistant tool based on OpenAI-compatible API, providing convenient command-line interaction and context-aware functionality. Designed to be a command-line version of Cursor and Windsurf, recommended to use with Deepseek R1.
 
 ## Usage Scenarios
 

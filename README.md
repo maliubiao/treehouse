@@ -1,9 +1,9 @@
 
-# terminal LLM
+# Treehouse
 
 [English users please view README.en.md](README.en.md)
 
-一个基于openai兼容接口的终端辅助工具，提供便捷的命令行交互和上下文感知功能, 目标是命令行版本的cursor, windsurf, 推荐使用deepseek R1。
+一个基于openai兼容接口的代码辅助工具，提供便捷的命令行交互和上下文感知功能, 目标是命令行版本的cursor, windsurf, 推荐使用deepseek R1跟V3。
 
 ## 使用场景
 
