@@ -261,7 +261,93 @@ function global:askgpt {
     if (-not $Question) { throw "问题不能为空" }
     # 将Question中的\@替换为@
     $Question = $Question -replace '\\@', '@'
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask $Question
+    # 将整个Question作为单个参数传递给--ask
+    $QuestionString = "$Question"
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "$QuestionString"
+}
+
+# 符号服务函数
+function global:symbolgpt {
+    param([switch]$Restart)
+    $pythonPath = Get-PythonPath
+    $args = if ($Restart) { "-c `"import llm_query; llm_query.start_symbol_service(True)`"" } else { "-c `"import llm_query; llm_query.start_symbol_service(False)`"" }
+    Start-Process -NoNewWindow -FilePath $pythonPath -ArgumentList $args
+}
+
+function global:symbolgptrestart {
+    symbolgpt -Restart
+}
+
+# 新增 commitgpt 函数
+function global:commitgpt {
+    if (-not (Test-Path (Join-Path -Path $env:GPT_PATH -ChildPath ".venv"))) {
+        Write-Error "错误：不在Python虚拟环境中，请先激活虚拟环境"
+        return
+    }
+
+    $status = git status --porcelain
+    if (-not $status) {
+        Write-Error "错误：没有需要提交的更改"
+        return
+    }
+
+    New-Conversation
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@git-commit-message @git-stage @git-diff-summary.txt"
+    Remove-Item -Path (Join-Path -Path $env:GPT_PATH -ChildPath "git-diff-summary.txt") -ErrorAction SilentlyContinue
+
+    $commitFile = Join-Path -Path $env:GPT_PATH -ChildPath ".lastgptanswer"
+    if (Test-Path $commitFile) {
+        $editor = if ($env:EDITOR) { $env:EDITOR } else { "notepad.exe" }
+        & $editor $commitFile
+        git commit -F $commitFile
+        Remove-Item -Path $commitFile
+    }
+    else {
+        Write-Error "错误：未找到提交信息文件"
+    }
+}
+
+# 新增 fixgpt 函数
+function global:fixgpt {
+    $lastCommand = (Get-History -Count 1).CommandLine
+    Write-Host "上一条命令：$lastCommand"
+    $confirm = Read-Host "确定执行该命令？(Y/n)"
+    if ($confirm -eq "n" -or $confirm -eq "N") {
+        Write-Host "已取消"
+        return
+    }
+
+    $safeCommand = $lastCommand -replace '[\\/]', '_'
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $logDir = Join-Path -Path $env:TEMP -ChildPath "fixgpt_logs\$timestamp"
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+    $lastCommand | Out-File -FilePath (Join-Path -Path $logDir -ChildPath "command.txt") -Encoding UTF8
+    Invoke-Expression $lastCommand *> (Join-Path -Path $logDir -ChildPath "output.log")
+
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@cmd `"$lastCommand`" `"@$(Join-Path -Path $logDir -ChildPath 'output.log')`""
+
+    Remove-Item -Path $logDir -Recurse -Force
+}
+
+# 新增 patchgpt 函数
+function global:patchgpt {
+    param([Parameter(ValueFromRemainingArguments)]$Args)
+    $originalSession = $env:GPT_SESSION_ID
+    New-Conversation
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@patch $Args"
+    $env:GPT_SESSION_ID = $originalSession
+    Write-Host "已恢复原会话: $originalSession"
+}
+
+# 新增 codegpt 函数
+function global:codegpt {
+    param([Parameter(ValueFromRemainingArguments)]$Args)
+    $originalSession = $env:GPT_SESSION_ID
+    New-Conversation
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@edit @edit-file @tree $Args"
+    $env:GPT_SESSION_ID = $originalSession
+    Write-Host "已恢复原会话: $originalSession"
 }
 
 # 补全支持
@@ -272,7 +358,6 @@ function global:Get-PromptFiles {
 Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
     param($commandName, $commandAst, $cursorPosition)
 
-    # 从AST中获取当前输入的单词
     $wordToComplete = $commandAst.CommandElements[-1].Value
 
     if ($env:GPT_DEBUG -eq "1") {
@@ -289,7 +374,6 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
     }
 
     if ($wordToComplete -like '*@*' -or $wordToComplete -like '*\@*') {
-        # 处理包含@或\@的情况
         $search = if ($wordToComplete.StartsWith('@')) {
             $wordToComplete.Substring(1)
         }
@@ -308,26 +392,26 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
         $special = @('clipboard', 'tree', 'treefull', 'read', 'listen', 'symbol_', 'glow', 'last', 'patch', 'edit') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
         $files = Get-ChildItem -File -Filter "$search*" | Select-Object -ExpandProperty Name | ForEach-Object { "\@$_" }
         
-        # 添加API补全支持
-        $apiCompletions = @()
-        if ($env:GPT_API_SERVER -and $search -like "symbol_*") {
-            $symbolPrefix = $search.Substring(7)  # 去掉"symbol_"
-            if ($symbolPrefix -notmatch "\.") {
-                # 本地文件补全
-                $apiCompletions = Get-ChildItem -File -Filter "$symbolPrefix*" | 
-                    Select-Object -ExpandProperty Name | 
-                    ForEach-Object { "\@symbol_$_" }
-            }
-            else {
+        # 符号补全处理
+        $symbolCompletions = @()
+        if ($search -like "symbol_*") {
+            $symbolPrefix = $search.Substring(7)
+            if ($env:GPT_SYMBOL_API_URL) {
                 # 远程API补全
                 try {
-                    $apiServer = $env:GPT_API_SERVER.TrimEnd('/')
+                    $apiServer = $env:GPT_SYMBOL_API_URL.TrimEnd('/')
                     $response = Invoke-RestMethod -Uri "$apiServer/complete_realtime?prefix=symbol:$symbolPrefix" -UseBasicParsing
-                    $apiCompletions = $response -split "`n" | ForEach-Object { "\@$_" -replace 'symbol:', 'symbol_' }
+                    $symbolCompletions = $response -split "`n" | ForEach-Object { "\@$_" -replace 'symbol:', 'symbol_' }
                 }
                 catch {
                     Write-Debug "API补全请求失败: $_"
                 }
+            }
+            else {
+                # 本地符号补全
+                $symbolCompletions = Get-ChildItem -File -Filter "$symbolPrefix*" | 
+                    Select-Object -ExpandProperty Name | 
+                    ForEach-Object { "\@symbol_$_" }
             }
         }
         
@@ -335,10 +419,10 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
             Write-Host "找到的提示文件: $($prompts -join ', ')" -ForegroundColor DarkGray
             Write-Host "找到的特殊命令: $($special -join ', ')" -ForegroundColor DarkGray
             Write-Host "找到的匹配文件: $($files -join ', ')" -ForegroundColor DarkGray
-            Write-Host "找到的API补全: $($apiCompletions -join ', ')" -ForegroundColor DarkGray
+            Write-Host "找到的符号补全: $($symbolCompletions -join ', ')" -ForegroundColor DarkGray
         }
 
-        $results = @($special) + @($prompts) + @($files) + @($apiCompletions)
+        $results = @($special) + @($prompts) + @($files) + @($symbolCompletions)
         
         if ($env:GPT_DEBUG -eq "1") {
             Write-Host "最终补全结果: $($results -join ', ')" -ForegroundColor DarkGray
@@ -351,7 +435,6 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
     } 
 }
 
-
 Register-ArgumentCompleter -CommandName usegpt -ScriptBlock {
     param($commandName, $commandAst, $cursorPosition)
 
@@ -359,18 +442,12 @@ Register-ArgumentCompleter -CommandName usegpt -ScriptBlock {
         Write-Host "开始usegpt自动补全" -ForegroundColor DarkGray
     }
 
-    # 获取当前命令元素
     $elements = $commandAst.CommandElements
-
-    # 如果当前是空格后的补全（即没有输入任何内容）
     if ($elements.Count -eq 1 -or ($elements.Count -eq 2 -and $elements[-1].Value -eq "")) {
         $wordToComplete = ""
     }
     else {
-        # 从AST中获取当前输入的单词
         $wordToComplete = $elements[-1].Value
-
-        # 处理可能存在的./前缀
         if ($wordToComplete -like "./*") {
             $wordToComplete = $wordToComplete.Substring(2)
         }
