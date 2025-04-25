@@ -229,18 +229,6 @@ function global:listgpt {
     Get-ModelList @args
 }
 
-function global:explaingpt {
-    param(
-        [Parameter(Mandatory)]$File,
-        $PromptFile = (Join-Path -Path $env:GPT_PROMPTS_DIR -ChildPath "source-query.txt")
-    )
-
-    if (-not (Test-Path $File)) { throw "源文件不存在: $File" }
-    if (-not (Test-Path $PromptFile)) { throw "提示文件不存在: $PromptFile" }
-
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --file $File --prompt-file $PromptFile
-}
-
 function global:chat {
     param([switch]$New)
     if (-not (Test-GptEnv)) { return }
@@ -270,8 +258,8 @@ function global:askgpt {
 function global:symbolgpt {
     param([switch]$Restart)
     $pythonPath = Get-PythonPath
-    $args = if ($Restart) { "-c `"import llm_query; llm_query.start_symbol_service(True)`"" } else { "-c `"import llm_query; llm_query.start_symbol_service(False)`"" }
-    Start-Process -NoNewWindow -FilePath $pythonPath -ArgumentList $args
+    $argsAll = if ($Restart) { "-c `"import llm_query; llm_query.start_symbol_service(True)`"" } else { "-c `"import llm_query; llm_query.start_symbol_service(False)`"" }
+    Start-Process -NoNewWindow -FilePath $pythonPath -ArgumentList $argsAll
 }
 
 function global:symbolgptrestart {
@@ -317,7 +305,6 @@ function global:fixgpt {
         return
     }
 
-    $safeCommand = $lastCommand -replace '[\\/]', '_'
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $logDir = Join-Path -Path $env:TEMP -ChildPath "fixgpt_logs\$timestamp"
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -353,6 +340,26 @@ function global:codegpt {
 # 补全支持
 function global:Get-PromptFiles {
     Get-ChildItem -Path $env:GPT_PROMPTS_DIR -File | Select-Object -ExpandProperty Name
+}
+
+function global:Get-SymbolCompletions {
+    param([string]$Prefix)
+    
+    if (-not $Prefix.StartsWith("symbol_")) {
+        return @()
+    }
+
+    $pythonPath = Get-PythonPath
+    $scriptPath = Join-Path -Path $env:GPT_PATH -ChildPath "shell.py"
+    
+    try {
+        $completions = & $pythonPath $scriptPath complete $Prefix
+        return $completions -split "`n" | Where-Object { $_ -ne "" }
+    }
+    catch {
+        Write-Debug "获取符号补全失败: $_"
+        return @()
+    }
 }
 
 Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
@@ -395,24 +402,7 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
         # 符号补全处理
         $symbolCompletions = @()
         if ($search -like "symbol_*") {
-            $symbolPrefix = $search.Substring(7)
-            if ($env:GPT_SYMBOL_API_URL) {
-                # 远程API补全
-                try {
-                    $apiServer = $env:GPT_SYMBOL_API_URL.TrimEnd('/')
-                    $response = Invoke-RestMethod -Uri "$apiServer/complete_realtime?prefix=symbol:$symbolPrefix" -UseBasicParsing
-                    $symbolCompletions = $response -split "`n" | ForEach-Object { "\@$_" -replace 'symbol:', 'symbol_' }
-                }
-                catch {
-                    Write-Debug "API补全请求失败: $_"
-                }
-            }
-            else {
-                # 本地符号补全
-                $symbolCompletions = Get-ChildItem -File -Filter "$symbolPrefix*" | 
-                    Select-Object -ExpandProperty Name | 
-                    ForEach-Object { "\@symbol_$_" }
-            }
+            $symbolCompletions = Get-SymbolCompletions -Prefix $search | ForEach-Object { "\@$_" }
         }
         
         if ($env:GPT_DEBUG -eq "1") {
