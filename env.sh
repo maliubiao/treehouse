@@ -425,7 +425,10 @@ function symbolgptrestart() {
 }
 
 function patchgpttrace() {
-  python -m debugger.tracer_main --open-report llm_query.py --ask "@patch @patch-rule @symbol-path-rule-v2 $@"
+  local tmpfile=$(mktemp)
+  echo "@patch @patch-rule @symbol-path-rule-v2 $@" >"$tmpfile"
+  $GPT_PYTHON_BIN -m debugger.tracer_main --open-report $GPT_PATH/llm_query.py --file "$tmpfile"
+  rm "$tmpfile"
 }
 
 # 自动配置默认模型

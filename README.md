@@ -93,7 +93,7 @@ naskgpt @large-file:-100
 naskgpt @script.sh
 
 #以下功能涉及符号，也是核心功能，需要symbolgpt启动一个符号服务器, env.sh有定义
-#启动符号服务,即tree.py
+#启动符号服务,即tree.py, 在终端多项目切换时，如果那个目录里已经起了tree.py, 则可以直接source .tree/rc.sh, 使用它的服务 
 symbolgpt
 symbolgptrestart
 

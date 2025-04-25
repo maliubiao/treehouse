@@ -1594,8 +1594,9 @@ class CodeMapBuilder:
                     processed_symbols[current_symbol] = symbol_info.copy()
                     total_code_size += code_length
             else:
-
                 symbol_info = self.build_near_symbol_info_at_line(line)
+                if not symbol_info:
+                    continue
                 code_length = len(symbol_info.get("code", ""))
                 if total_code_size + code_length > max_context_size:
                     logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")

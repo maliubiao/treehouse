@@ -232,17 +232,6 @@ def parse_arguments():
         help="项目配置文件路径（YAML格式）",
     )
     parser.add_argument(
-        "--prompt-file",
-        default=os.path.expanduser("~/.llm/source-query.txt"),
-        help="提示词模板文件路径（仅在使用--file时有效）",
-    )
-    parser.add_argument(
-        "--chunk-size",
-        type=int,
-        default=MAX_FILE_SIZE,
-        help="代码分块大小（字符数，仅在使用--file时有效）",
-    )
-    parser.add_argument(
         "--obsidian-doc",
         default=os.environ.get("GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")),
         help="Obsidian文档备份目录路径",
@@ -2353,7 +2342,7 @@ class GPTContextProcessor:
                             symbol, _, arg = cmd.partition(":")
                             cmd_groups[symbol].append(arg)
                         else:
-                            result.append(CmdNode(command=cmd))
+                            result.append(CmdNode(command=cmd.strip()))
 
         # 处理带参数的命令
         last_cmd_index = -1
@@ -2803,10 +2792,6 @@ def validate_files(program_args):
             print(f"错误：源代码文件不存在 {program_args.file}")
             sys.exit(1)
 
-        if not os.path.isfile(program_args.prompt_file):
-            print(f"错误：提示词文件不存在 {program_args.prompt_file}")
-            sys.exit(1)
-
 
 def print_proxy_info(proxies, proxy_sources):
     """打印代理配置信息"""
@@ -3113,68 +3098,6 @@ class ChatbotUI:
         return True
 
 
-def handle_code_analysis(program_args, api_key, proxies):
-    """处理代码分析模式"""
-    try:
-        with open(program_args.prompt_file, "r", encoding="utf-8") as f:
-            prompt_template = f.read().strip()
-        with open(program_args.file, "r", encoding="utf-8") as f:
-            code_content = f.read()
-
-        if len(code_content) > program_args.chunk_size:
-            response_data = handle_large_code(program_args, code_content, prompt_template, api_key, proxies)
-        else:
-            response_data = handle_small_code(program_args, code_content, prompt_template, api_key, proxies)
-
-        process_response(
-            "",
-            response_data,
-            "",
-            save=False,
-            obsidian_doc=program_args.obsidian_doc,
-            ask_param=program_args.file,
-        )
-
-    except (IOError, ValueError, RuntimeError) as e:
-        print(f"运行时错误: {e}")
-        sys.exit(1)
-
-
-def handle_large_code(program_args, code_content, prompt_template, api_key, proxies):
-    """处理大文件分块分析"""
-    code_chunks = split_code(code_content, program_args.chunk_size)
-    responses = []
-    total_chunks = len(code_chunks)
-    base_url = GLOBAL_MODEL_CONFIG.base_url
-    for i, chunk in enumerate(code_chunks, 1):
-        pager = f"这是代码的第 {i}/{total_chunks} 部分：\n\n"
-        print(pager)
-        chunk_prompt = prompt_template.format(path=program_args.file, pager=pager, code=chunk)
-        response_data = query_gpt_api(
-            api_key,
-            chunk_prompt,
-            proxies=proxies,
-            model=GLOBAL_MODEL_CONFIG.model_name,
-            base_url=base_url,
-        )
-        response_pager = f"\n这是回答的第 {i}/{total_chunks} 部分：\n\n"
-        responses.append(response_pager + response_data["choices"][0]["message"]["content"])
-    return {"choices": [{"message": {"content": "\n\n".join(responses)}}]}
-
-
-def handle_small_code(program_args, code_content, prompt_template, api_key, proxies):
-    """处理小文件分析"""
-    full_prompt = prompt_template.format(path=program_args.file, pager="", code=code_content)
-    base_url = GLOBAL_MODEL_CONFIG.base_url
-    return query_gpt_api(
-        api_key,
-        full_prompt,
-        proxies=proxies,
-        model=GLOBAL_MODEL_CONFIG.model_name,
-        base_url=base_url,
-    )
-
-
 def prompt_words_search(words: List[str], args):
     """根据关键词执行配置化搜索
 
@@ -3252,7 +3175,7 @@ def perform_search(
                 headers={"Content-Type": "application/json"},
                 timeout=10,
             )
-            response.raise_for_status()
+            # response.raise_for_status()
             return response.json()["results"]
     except requests.exceptions.RequestException as e:
         print(f"API请求失败: {str(e)}")
@@ -4297,14 +4220,15 @@ def main(input_args):
         handle_workflow(input_args)
     elif input_args.ask:
         handle_ask_mode(input_args, proxies)
+    elif input_args.file:
+        input_args.ask = Path(input_args.file).read_text()
+        handle_ask_mode(input_args, proxies)
     elif input_args.chatbot:
         ChatbotUI().run()
     elif input_args.project_search:
         prompt_words_search(input_args.project_search, input_args)
         symbols = perform_search(input_args.project_search, input_args.config)
         pprint.pprint(symbols)
-    else:
-        handle_code_analysis(input_args, GLOBAL_MODEL_CONFIG.key, proxies)
 
 
 if __name__ == "__main__":

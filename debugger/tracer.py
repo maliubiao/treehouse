@@ -195,7 +195,7 @@ class TraceConfig:
         return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
 
 
-def truncate_repr_value(value, keep_elements=5):
+def truncate_repr_value(value, keep_elements=10):
     """智能截断保留关键类型信息"""
     try:
         # Ignore function, module, and class types
