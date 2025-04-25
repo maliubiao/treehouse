@@ -121,7 +121,7 @@ patchgpt @symbol_file/symbol 修复里边的bug
 # 改写符号并提供LSP上下文
 patchgpt @context @symbol_file/symbol 修复里边的bug
 
-# 命令行执行检错, 重执行，结果上传gpt诊断
+# 重新执行上一条命令, 诊断为什么会失败
 fixgpt 
 
 # 使用ripgrep 项目搜索，并自动定位搜索到的符号, 里边也可以用@symbol_file/symbol这样添加具体符号

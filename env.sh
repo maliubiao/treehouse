@@ -241,8 +241,8 @@ archgpt() {
 
 fixgpt() {
   local last_command=$(fc -ln -1 | sed 's/^[[:space:]]*//')
-  echo "上一条命令：$last_command"
-  echo -n "确定执行该命令？(Y/n) "
+  printf "上一条命令：%s\n" "$last_command"
+  printf "确定执行该命令？(Y/n) "
   read confirm
   case $confirm in
   n | N)
@@ -252,17 +252,20 @@ fixgpt() {
   *) ;;
   esac
 
-  local safe_command=$(echo "$last_command" | tr ' /\\' '___')
+  local safe_command=$(printf "%s" "$last_command" | tr ' /\\' '___')
   local timestamp=$(date +%Y%m%d_%H%M%S)
   local log_dir="/tmp/fixgpt_logs/${timestamp}"
   mkdir -p "$log_dir"
 
-  echo "$last_command" >"${log_dir}/command.txt"
+  printf "%s\n" "$last_command" >"${log_dir}/command.txt"
   eval "$last_command" >"${log_dir}/output.log" 2>&1
+  local status_code=$?
+  printf "%d\n" "$status_code" >"${log_dir}/status.txt"
 
-  naskgpt @cmd "$last_command" "@${log_dir}/output.log"
+  naskgpt @cmd "$(printf "为什么这个命令会执行失败?\n[cmd start]\n%s\n[cmd end]\n[cmd stdout start]\n%s\n[cmd stdout end]\n[cmd status start]\n%d\n[cmd status end]" "$last_command" "$(cat ${log_dir}/output.log)" "$status_code")"
 
   rm -rf "$log_dir"
+  return $status_code
 }
 
 # 补全功能辅助函数
