@@ -960,42 +960,162 @@ def monitor_clipboard(_, debug=False):
 
 
 def get_clipboard_content_string():
-    """获取剪贴板内容的封装函数，统一返回字符串内容"""
+    """获取剪贴板内容的封装函数，统一返回字符串内容，支持图像输出到临时目录"""
     try:
         if sys.platform == "win32":
-            win32clipboard = __import__("win32clipboard")
-            win32clipboard.OpenClipboard()
-            data = win32clipboard.GetClipboardData()
-            win32clipboard.CloseClipboard()
-            return data
+            return _handle_windows_clipboard()
         if sys.platform == "darwin":
-            result = subprocess.run(["pbpaste"], stdout=subprocess.PIPE, text=True, check=True)
-            return result.stdout
-        try:
-            result = subprocess.run(
-                ["xclip", "-selection", "clipboard", "-o"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
-            )
-            return result.stdout
-        except FileNotFoundError:
-            try:
-                result = subprocess.run(
-                    ["xsel", "--clipboard", "--output"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=True,
-                )
-                return result.stdout
-            except FileNotFoundError:
-                print("未找到 xclip 或 xsel")
-                return "无法获取剪贴板内容：未找到xclip或xsel"
+            return _handle_macos_clipboard()
+        return _handle_linux_clipboard()
     except (FileNotFoundError, subprocess.CalledProcessError, ImportError) as e:
         print(f"获取剪贴板内容时出错: {str(e)}")
         return f"获取剪贴板内容时出错: {str(e)}"
+
+
+def _handle_windows_clipboard():
+    """处理Windows平台的剪贴板内容"""
+    win32clipboard = __import__("win32clipboard")
+    win32clipboard.OpenClipboard()
+
+    try:
+        available_formats = _get_available_clipboard_formats(win32clipboard)
+
+        if win32clipboard.CF_TEXT in available_formats or win32clipboard.CF_UNICODETEXT in available_formats:
+            return _get_windows_text_content(win32clipboard)
+
+        if win32clipboard.CF_DIB in available_formats:
+            return _handle_windows_image(win32clipboard)
+
+        return "[clipboard contains non-text data]"
+    finally:
+        win32clipboard.CloseClipboard()
+
+
+def _get_available_clipboard_formats(win32clipboard):
+    """获取剪贴板中可用的格式"""
+    available_formats = []
+    current_format = 0
+    while True:
+        current_format = win32clipboard.EnumClipboardFormats(current_format)
+        if current_format == 0:
+            break
+        available_formats.append(current_format)
+    return available_formats
+
+
+def _get_windows_text_content(win32clipboard):
+    """获取Windows剪贴板中的文本内容"""
+    try:
+        return win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+    except:
+        return win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+
+
+def format_image_path_prompt(image_path):
+    return f"[image saved to {image_path}]"
+
+
+def read_path_from_image_prompt(image_info):
+    """从图像信息中提取路径"""
+    prefix = "[image saved to "
+    if image_info.startswith(prefix):
+        start = len(prefix)
+        end = image_info.rfind("]")
+        return image_info[start:end]
+    return None
+
+
+def _handle_windows_image(win32clipboard):
+    """处理Windows剪贴板中的图像内容"""
+
+    image_data = win32clipboard.GetClipboardData(win32clipboard.CF_DIB)
+    temp_dir = tempfile.gettempdir()
+    image_path = os.path.join(temp_dir, f"clipboard_image_{int(time.time())}.png")
+
+    with open(image_path, "wb") as f:
+        f.write(image_data)
+
+    return format_image_path_prompt(image_path)
+
+
+def _handle_macos_clipboard():
+    """处理macOS平台的剪贴板内容"""
+    try:
+        AppKit = __import__("AppKit")
+
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        if pasteboard.types().containsObject_(AppKit.NSPasteboardTypePNG):
+            return _handle_macos_image(pasteboard)
+    except ImportError:
+        pass
+
+    return _get_macos_text_content()
+
+
+def _handle_macos_image(pasteboard):
+    """处理macOS剪贴板中的图像内容"""
+    AppKit = __import__("AppKit")
+    image_data = pasteboard.dataForType_(AppKit.NSPasteboardTypePNG)
+    if image_data:
+        temp_dir = tempfile.gettempdir()
+        image_path = os.path.join(temp_dir, f"clipboard_image_{int(time.time())}.png")
+        assert image_data.writeToFile_atomically_(image_path, True)
+        return format_image_path_prompt(image_path)
+    return ""
+
+
+def _get_macos_text_content():
+    """获取macOS剪贴板中的文本内容"""
+    result = subprocess.run(["pbpaste"], stdout=subprocess.PIPE, text=True, check=True)
+    return result.stdout
+
+
+def _handle_linux_clipboard():
+    """处理Linux平台的剪贴板内容"""
+    try:
+        return _get_linux_text_content()
+    except subprocess.CalledProcessError:
+        return _handle_linux_image()
+    except FileNotFoundError:
+        return "无法获取剪贴板内容：未找到xclip或xsel"
+
+
+def _get_linux_text_content():
+    """获取Linux剪贴板中的文本内容"""
+    try:
+        result = subprocess.run(
+            ["xclip", "-selection", "clipboard", "-o"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except FileNotFoundError:
+        result = subprocess.run(
+            ["xsel", "--clipboard", "--output"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+
+
+def _handle_linux_image():
+    """处理Linux剪贴板中的图像内容"""
+    try:
+        import tempfile
+
+        temp_dir = tempfile.gettempdir()
+        image_path = os.path.join(temp_dir, f"clipboard_image_{int(time.time())}.png")
+
+        subprocess.run(
+            ["xclip", "-selection", "clipboard", "-o", "-t", "image/png"], stdout=open(image_path, "wb"), check=True
+        )
+        return format_image_path_prompt(image_path)
+    except:
+        return "[clipboard contains non-text data]"
 
 
 def fetch_url_content(url, is_news=False):

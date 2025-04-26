@@ -367,23 +367,30 @@ class TestParserUtil(unittest.TestCase):
 
 class TestSymbolPaths(TestParserUtil):
     def test_get_symbol_paths(self):
+        # 此处的testcase 为了检验保留缩进，这是一个功能，不是bug
         code = dedent(
             """
+                def my_method(self):
+                    pass
             class MyClass:
                 def my_method(self):
                     pass
+                    
             """
         )
         path = self.create_temp_file(code)
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
 
-        expected_paths = ["MyClass", "MyClass.my_method"]
+        expected_paths = ["MyClass", "MyClass.my_method", "my_method"]
         self.assertEqual(sorted(paths), sorted(expected_paths))
 
         for path_key in expected_paths:
             self.assertIn(path_key, code_map)
             self.assertIn("code", code_map[path_key])
+
+            if path_key == "my_method":
+                self.assertIn("    def my_method(self):", code_map[path_key]["code"])
             self.assertIn("block_range", code_map[path_key])
         self.assertIn("start_line", code_map[path_key])
         self.assertIn("end_line", code_map[path_key])

@@ -1280,7 +1280,7 @@ class CodeMapBuilder:
 
     def symbol_info_from_node(self, node: Node) -> dict:
         """从节点中提取符号信息"""
-        node_info = self.get_symbol_range_info(node)
+        node_info = self.get_symbol_range_info(None, node)
         symbol_info = {
             "code": node.text.decode("utf8"),
             "calls": [],
@@ -1332,7 +1332,7 @@ class CodeMapBuilder:
             return node.parent
         return node
 
-    def get_symbol_range_info(self, node: Node):
+    def get_symbol_range_info(self, source_bytes: bytes, node: Node):
         """获取节点的代码和位置信息"""
         effective_node = self._get_effective_node(node)
         start_byte = effective_node.start_byte
@@ -1341,6 +1341,19 @@ class CodeMapBuilder:
             node = node.prev_sibling
             start_byte = node.start_byte
             start_point = node.start_point
+        if source_bytes:
+            # 找到行的起始位置
+            line_start_byte = source_bytes.rfind(b"\n", 0, start_byte) + 1
+            space_ = ord(b" ")
+            tab_ = ord(b"\t")
+            # 验证从行开始到当前位置都是空白字符
+            if line_start_byte < start_byte:
+                whitespace = source_bytes[line_start_byte:start_byte]
+                if not all([c in (space_, tab_) for c in whitespace]):
+                    line_start_byte = start_byte  # 如果不是纯空白，保持原位置
+                else:
+                    start_byte = line_start_byte
+                    start_point = (start_point[0], 0)  # 列位置设为0
         return {
             "start_byte": start_byte,
             "end_byte": effective_node.end_byte,
@@ -1350,6 +1363,7 @@ class CodeMapBuilder:
 
     def _extract_code(self, source_bytes, start_byte, end_byte):
         """从源字节中提取代码"""
+        # 找到行起始位置
         return source_bytes[start_byte:end_byte].decode("utf8")
 
     def _build_code_map_entry(self, path_key, code, node_info):
@@ -1415,7 +1429,7 @@ class CodeMapBuilder:
         path_key = ".".join(current_symbols)
         current_node = current_nodes[-1]
 
-        node_info = self.get_symbol_range_info(current_node)
+        node_info = self.get_symbol_range_info(source_bytes, current_node)
         code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
         code_entry = self._build_code_map_entry(path_key, code, node_info)
         code_entry["type"] = symbol_type

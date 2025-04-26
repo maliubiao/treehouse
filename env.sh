@@ -242,6 +242,7 @@ archgpt() {
 fixgpt() {
   local last_command=$(fc -ln -1 | sed 's/^[[:space:]]*//')
   printf "上一条命令：%s\n" "$last_command"
+  user_note="$@"
   printf "确定执行该命令？(Y/n) "
   read confirm
   case $confirm in
@@ -258,11 +259,12 @@ fixgpt() {
   mkdir -p "$log_dir"
 
   printf "%s\n" "$last_command" >"${log_dir}/command.txt"
+  [ -n "$user_note" ] && printf "%s\n" "$user_note" >"${log_dir}/note.txt"
   eval "$last_command" >"${log_dir}/output.log" 2>&1
   local status_code=$?
   printf "%d\n" "$status_code" >"${log_dir}/status.txt"
 
-  naskgpt @cmd "$(printf "为什么这个命令会执行失败?\n[cmd start]\n%s\n[cmd end]\n[cmd stdout start]\n%s\n[cmd stdout end]\n[cmd status start]\n%d\n[cmd status end]" "$last_command" "$(cat ${log_dir}/output.log)" "$status_code")"
+  naskgpt @cmd "$(printf "为什么这个命令会执行失败?\n[cmd start]\n%s\n[cmd end]\n[cmd stdout start]\n%s\n[cmd stdout end]\n[cmd status start]\n%d\n[cmd status end]\n[user note start]\n%s\n[user note end]" "$last_command" "$(cat ${log_dir}/output.log)" "$status_code" "${user_note:-无备注}")"
 
   rm -rf "$log_dir"
   return $status_code

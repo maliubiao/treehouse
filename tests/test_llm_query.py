@@ -6,6 +6,7 @@ llm_query 模块的单元测试
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -2107,6 +2108,162 @@ class TestChangelogMarkdown(unittest.TestCase):
         recent = self.changelog.get_recent()
         self.assertIn("No description provided", recent)
         self.assertIn(test_diff, recent)
+
+
+class TestClipboard(unittest.TestCase):
+    """placer holder tests/test_image.png"""
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS only test")
+    def test_macos_image_clipboard(self):
+        """测试macOS剪贴板图像处理功能"""
+        try:
+            AppKit = __import__("AppKit")
+            from llm_query import _handle_macos_clipboard, read_path_from_image_prompt
+
+            # 准备测试图像
+            test_image_path = os.path.join(os.path.dirname(__file__), "test_image.png")
+            self.assertTrue(os.path.exists(test_image_path), "测试图像不存在")
+
+            with open(test_image_path, "rb") as f:
+                image_data = f.read()
+
+            # 将图像放入剪贴板
+            pasteboard = AppKit.NSPasteboard.generalPasteboard()
+            pasteboard.clearContents()
+            pasteboard.declareTypes_owner_([AppKit.NSPasteboardTypePNG], None)
+            pasteboard.setData_forType_(
+                AppKit.NSData.dataWithBytes_length_(image_data, len(image_data)), AppKit.NSPasteboardTypePNG
+            )
+
+            # 测试剪贴板处理
+            result = _handle_macos_clipboard()
+            prefix = "[image saved to "
+            self.assertTrue(result.startswith(prefix))
+            self.assertTrue(result.endswith(".png]"))
+            path = read_path_from_image_prompt(result)
+            self.assertTrue(os.path.exists(path), "保存的图像文件不存在")
+
+            # 验证图像内容
+            with open(path, "rb") as saved_file:
+                saved_data = saved_file.read()
+                self.assertEqual(len(saved_data), len(image_data), "图像数据不一致")
+                self.assertEqual(saved_data, image_data, "图像内容不匹配")
+
+            # 清理
+            os.remove(path)
+        except Exception as e:
+            self.fail(f"测试失败: {str(e)}")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only test")
+    def test_windows_image_clipboard(self):
+        """测试Windows剪贴板图像处理功能"""
+        try:
+            win32clipboard = __import__("win32clipboard")
+            from llm_query import _handle_windows_clipboard, read_path_from_image_prompt
+
+            # 准备测试图像
+            test_image_path = os.path.join(os.path.dirname(__file__), "test_image.png")
+            self.assertTrue(os.path.exists(test_image_path), "测试图像不存在")
+
+            with open(test_image_path, "rb") as f:
+                image_data = f.read()
+
+            # 将图像放入剪贴板
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, image_data)
+            win32clipboard.CloseClipboard()
+
+            # 测试剪贴板处理
+            result = _handle_windows_clipboard()
+            prefix = "[image saved to "
+            self.assertTrue(result.startswith(prefix))
+            self.assertTrue(result.endswith(".png]"))
+            path = read_path_from_image_prompt(result)
+            self.assertTrue(os.path.exists(path), "保存的图像文件不存在")
+
+            # 验证图像内容
+            with open(path, "rb") as saved_file:
+                saved_data = saved_file.read()
+                self.assertTrue(len(saved_data) > 0, "图像数据为空")
+
+            # 清理
+            os.remove(path)
+        except Exception as e:
+            self.fail(f"测试失败: {str(e)}")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux only test")
+    def test_linux_image_clipboard(self):
+        """测试Linux剪贴板图像处理功能"""
+        try:
+            import subprocess
+
+            from llm_query import _handle_linux_clipboard, read_path_from_image_prompt
+
+            # 准备测试图像
+            test_image_path = os.path.join(os.path.dirname(__file__), "test_image.png")
+            self.assertTrue(os.path.exists(test_image_path), "测试图像不存在")
+
+            # 将图像放入剪贴板
+            subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", test_image_path], check=True)
+
+            # 测试剪贴板处理
+            result = _handle_linux_clipboard()
+            prefix = "[image saved to "
+            self.assertTrue(result.startswith(prefix))
+            self.assertTrue(result.endswith(".png]"))
+            path = read_path_from_image_prompt(result)
+            self.assertTrue(os.path.exists(path), "保存的图像文件不存在")
+
+            # 验证图像内容
+            with open(path, "rb") as saved_file:
+                saved_data = saved_file.read()
+                self.assertTrue(len(saved_data) > 0, "图像数据为空")
+
+            # 清理
+            os.remove(path)
+        except Exception as e:
+            self.fail(f"测试失败: {str(e)}")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only test")
+    def test_windows_text_clipboard(self):
+        """测试Windows剪贴板文本处理功能"""
+        try:
+            win32clipboard = __import__("win32clipboard")
+            from llm_query import _handle_windows_clipboard
+
+            test_text = "Windows剪贴板测试文本"
+
+            # 将文本放入剪贴板
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(test_text)
+            win32clipboard.CloseClipboard()
+
+            # 测试剪贴板处理
+            result = _handle_windows_clipboard()
+            self.assertEqual(result, test_text)
+        except Exception as e:
+            self.fail(f"测试失败: {str(e)}")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux only test")
+    def test_linux_text_clipboard(self):
+        """测试Linux剪贴板文本处理功能"""
+        try:
+            import subprocess
+
+            from llm_query import _handle_linux_clipboard
+
+            test_text = "Linux剪贴板测试文本"
+
+            # 将文本放入剪贴板
+            subprocess.run(["xclip", "-selection", "clipboard"], input=test_text.encode(), check=True)
+
+            # 测试剪贴板处理
+            result = _handle_linux_clipboard()
+            self.assertEqual(result, test_text)
+        except Exception as e:
+            self.fail(f"测试失败: {str(e)}")
 
 
 if __name__ == "__main__":
