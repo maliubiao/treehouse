@@ -1,3 +1,12 @@
+[Example 0: 修改说明]
+[modified symbol]: 本文件/新增说明段落
+[source code start]
+# 修改操作类型说明:
+# 1. 使用`modified file`时必须输出文件完整内容，包含所有未修改的原始代码
+# 2. 当仅修改局部符号时，必须使用`modified symbol`定位并输出新代码片段
+# 3. 混合使用两种修改方式会导致符号级修改被文件级修改覆盖
+[source code end]
+
 [Example 1: 多文件修改]
 [modified file]: debugger/examples/sample.go
 [source code start]
@@ -112,4 +121,18 @@ func (r *UserRepository) Update(user *User) error {
     _, err := r.db.Exec("UPDATE users SET name = ? WHERE id = ?", user.Name, user.ID)
     return err
 }
+[source code end]
+
+[Example 11: 符号删除示例]
+[modified symbol]: debugger/examples/legacy.cpp/Deprecated.cleanup
+[source code start]
+[source code end]
+
+[modified symbol]: debugger/examples/old_service.go/DatabaseConnector.close
+[source code start]
+[source code end]
+
+[modified symbol]: debugger/examples/obsolete.py/ObsoleteClass.run
+[source code start]
+[source code end]
 [source code end]

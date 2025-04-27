@@ -8,14 +8,11 @@ import urllib.parse
 from pathlib import Path
 
 import requests
+from colorama import Fore, Style
 
 
 def format_conversation_menu():
     title = sys.stdin.readline().strip()
-    color_reset = "\033[0m"
-    color_number = "\033[1m"
-    color_date = "\033[33m"
-    color_uuid = "\033[36m"
 
     print(f"{title}：")
 
@@ -32,9 +29,9 @@ def format_conversation_menu():
         preview = preview.replace("\n", " ").strip()[:32].rstrip() + "..." if len(preview) > 32 else preview
 
         print(
-            f"{color_number}{idx:>2}){color_reset} "
-            f"{color_date}{date_time:<19}{color_reset} "
-            f"{color_uuid}{uuid:<36}{color_reset} {preview}"
+            f"{Fore.WHITE}{Style.BRIGHT}{idx:>2}){Style.RESET_ALL} "
+            f"{Fore.YELLOW}{date_time:<19}{Style.RESET_ALL} "
+            f"{Fore.CYAN}{uuid:<36}{Style.RESET_ALL} {preview}"
         )
 
 

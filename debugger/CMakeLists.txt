@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(terminal-llm-tracer LANGUAGES CXX)
+project(treehouse-tracer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(Python_VERSION "3.11" CACHE STRING "Target Python version (3.8-3.12)")
@@ -15,6 +15,9 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLATFORM_LINUX TRUE)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(PLATFORM_WINDOWS TRUE)
+    # Windows-specific settings
+    set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 message(STATUS "Host system: ${CMAKE_HOST_SYSTEM_NAME}")
@@ -68,7 +71,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 elseif(MSVC)
-    add_compile_options(/W4 /EHsc /permissive-)
+    add_compile_options(/W4 /EHsc /permissive- /bigobj)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_compile_options(/Zi /DEBUG)
+    endif()
 endif()
 
 # Sanitizers and instrumentation
@@ -118,7 +124,6 @@ if(PLATFORM_WINDOWS)
     set(components Interpreter Development Development.Module Debug)
 else()
     set(components Interpreter Development Development.Module)
-     
 endif()
 
 if(Python_EXECUTABLE)
@@ -151,14 +156,21 @@ target_include_directories(tracer_core PRIVATE
 # Set output directory to match Python import path
 if(PLATFORM_WINDOWS)
     set(SUFFIX ".pyd")
+    # Windows-specific output naming
+    set_target_properties(tracer_core PROPERTIES
+        PREFIX ""
+        SUFFIX ${SUFFIX}
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 else()
     set(SUFFIX ".so")
+    set_target_properties(tracer_core PROPERTIES
+        PREFIX ""
+        SUFFIX ${SUFFIX}
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 endif()
-set_target_properties(tracer_core PROPERTIES
-    PREFIX ""
-    SUFFIX ${SUFFIX}
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
-)
 
 # Documentation generation
 find_package(Doxygen REQUIRED)
@@ -170,7 +182,11 @@ doxygen_add_docs(
 
 # Installation rules
 if(PLATFORM_WINDOWS)
-    install(TARGETS tracer_core DESTINATION Scripts)
+    install(TARGETS tracer_core 
+        RUNTIME DESTINATION Scripts
+        LIBRARY DESTINATION Scripts
+        ARCHIVE DESTINATION lib
+    )
 else()
     install(TARGETS tracer_core
         LIBRARY DESTINATION lib
@@ -180,3 +196,13 @@ endif()
 
 # Version management
 set(PROJECT_VERSION 1.0.0)
+
+# Windows-specific post-build steps
+if(PLATFORM_WINDOWS)
+    add_custom_command(TARGET tracer_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:tracer_core>
+            ${CMAKE_SOURCE_DIR}/tracer_core.pyd
+        COMMENT "Copying Windows Python extension module"
+    )
+endif()

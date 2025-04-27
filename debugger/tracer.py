@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
+from colorama import Fore, Style
 
 _MAX_VALUE_LENGTH = 512
 _INDENT = "  "
@@ -28,15 +29,8 @@ _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_NAME = _LOG_DIR / "debug.log"
 _MAX_CALL_DEPTH = 20
-_COLORS = {
-    "call": "\033[92m",  # 绿色
-    "return": "\033[94m",  # 蓝色
-    "var": "\033[93m",  # 黄色
-    "line": "\033[0m",  # 白色
-    "error": "\033[91m",  # 红色
-    "reset": "\033[0m",
-    "trace": "\033[95m",  # 紫色
-}
+
+# 该字典已被colorama替代
 
 logging.basicConfig(
     filename=str(_LOG_NAME),
@@ -248,7 +242,16 @@ def truncate_repr_value(value, keep_elements=10):
 
 def color_wrap(text, color_type):
     """包装颜色但不影响日志文件"""
-    return f"{_COLORS[color_type]}{text}{_COLORS['reset']}" if sys.stdout.isatty() else text
+    color_mapping = {
+        "call": Fore.GREEN,
+        "return": Fore.BLUE,
+        "var": Fore.YELLOW,
+        "line": Style.RESET_ALL,
+        "error": Fore.RED,
+        "trace": Fore.MAGENTA,
+        "reset": Style.RESET_ALL,
+    }
+    return f"{color_mapping.get(color_type, '')}{text}{Style.RESET_ALL}"
 
 
 class TraceDispatcher:

@@ -1466,7 +1466,6 @@ CHANGE_LOG_HEADER = """
 def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
     modified_type = "symbol" if patch_require else "block"
     tag = "source code"
-
     prompt = ""
     if patch_require and dumb_prompt:
         prompt += dumb_prompt
@@ -2934,8 +2933,6 @@ def handle_ask_mode(program_args, proxies):
     model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
     text = context_processor.process_text_with_file_path(program_args.ask)
-    if not GLOBAL_MODEL_CONFIG.is_thinking:
-        text = PUA_PROMPT + text
     print(text)
     response_data = model_switch.query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
     process_response(
@@ -3606,7 +3603,7 @@ class ModelSwitch:
                     ignore_text=True,
                     tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
                 )
-                coder_prompt_combine = f"{context}{part_b}{part_a}"
+                coder_prompt_combine = f"{part_b}context{part_a}"
                 coder_prompt_combine = coder_prompt_combine.replace(USER_DEMAND, "")
                 print(coder_prompt_combine)
                 result = self.query(model_name=coder_model, prompt=coder_prompt_combine)
