@@ -1436,7 +1436,7 @@ PATCH_PROMPT_HEADER = """
 [symbol path rule end]
 """
 
-DUMB_EXAMPLE_A = (Path(__file__).parent / "prompts/dumb-example").read_text()
+DUMB_EXAMPLE_A = (Path(__file__).parent / "prompts/dumb-example").read_text("utf8")
 
 DUMB_PROMPT = f"""
 # 输出规范
@@ -1524,8 +1524,8 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 
     prompt = ""
     if patch_require:
-        text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text()
-        patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text()
+        text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
+        patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
         prompt += PATCH_PROMPT_HEADER.format(patch_rule=patch_text, symbol_path_rule_content=text)
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
@@ -4341,7 +4341,7 @@ def main(input_args):
     elif input_args.ask:
         handle_ask_mode(input_args, proxies)
     elif input_args.file:
-        input_args.ask = Path(input_args.file).read_text()
+        input_args.ask = Path(input_args.file).read_text("utf8")
         handle_ask_mode(input_args, proxies)
     elif input_args.chatbot:
         ChatbotUI().run()

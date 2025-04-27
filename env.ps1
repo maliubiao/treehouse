@@ -1,4 +1,4 @@
-# env.ps1
+1
 # PowerShell 5.0 compatible environment configuration
 
 # 设置控制台编码为UTF-8
@@ -171,12 +171,14 @@ function global:Use-GptModel {
     $env:GPT_KEY = $modelConfig.key
     $env:GPT_BASE_URL = $modelConfig.base_url
     $env:GPT_MODEL = $modelConfig.model_name
+    $env:GPT_MODEL_KEY = $ModelName
     if ($modelConfig.max_context_size) { $env:GPT_MAX_TOKEN = $modelConfig.max_context_size }
     if ($modelConfig.temperature) { $env:GPT_TEMPERATURE = $modelConfig.temperature }
     if ($modelConfig.is_thinking) { $env:GPT_IS_THINKING = $modelConfig.is_thinking }
 
     if (-not $Silent) {
         Write-Host "成功设置GPT环境变量："
+        Write-Host "  GPT_MODEL_KEY: $ModelName"
         Write-Host "  GPT_KEY: $($modelConfig.key.Substring(0,4))****"
         Write-Host "  GPT_BASE_URL: $($modelConfig.base_url)"
         Write-Host "  GPT_MODEL: $($modelConfig.model_name)"
@@ -201,8 +203,8 @@ function global:usegpt {
 
 # 环境检查
 function global:Test-GptEnv {
-    if (-not $env:GPT_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
-        Write-Error "错误：请先配置GPT_KEY、GPT_BASE_URL和GPT_MODEL环境变量"
+    if (-not $env:GPT_MODEL_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
+        Write-Error "错误：请先配置GPT_MODEL_KEY、GPT_BASE_URL和GPT_MODEL环境变量"
         return $false
     }
     return $true
@@ -485,7 +487,7 @@ Initialize-GptEnv
 Initialize-Directories
 
 # 自动配置默认模型
-if (-not $env:GPT_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
+if (-not $env:GPT_MODEL_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
     $configFile = Join-Path -Path $env:GPT_PATH -ChildPath "model.json"
     if (Test-Path $configFile) {
         $firstModel = (Get-Content $configFile | ConvertFrom-Json).PSObject.Properties | 
