@@ -174,10 +174,10 @@ PowerShell's `@` has special meaning and cannot be directly used for completion.
 # naskgpt "@cmd" or '@cmd' or \@cmd
 $env:GPT_PATH="C:\Users\richard\treehouse"
 notepad $PROFILE
-# Add these lines to your PowerShell profile, modify treehouse directory as needed:
+# #Add these lines to your PowerShell profile, modify treehouse directory as needed:
 # $env:GPT_PATH=C:\Users\richard\treehouse
-# Convert env.ps1 to UTF8-BOM format to avoid encoding issues on Windows
-# (Use VS Code's "Save with Encoding" feature or tools/utf8_bom.py)
+# #Cconvert env.ps1 to UTF8-BOM format to avoid encoding issues on Windows
+# #(Use VS Code's "Save with Encoding" feature or tools/utf8_bom.py)
 # . C:\Users\richard\treehouse\env.ps1
 ```
 

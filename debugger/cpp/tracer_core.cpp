@@ -48,33 +48,47 @@ struct CodeUnit {
   uint8_t arg;
 };
 
+// Define the frame structure for Python 3.11.12
+typedef struct _PyInterpreterFrame_3_11_12 {
+  /* "Specials" section */
+  PyFunctionObject *f_func; /* Strong reference */
+  PyObject *f_globals; /* Borrowed reference */
+  PyObject *f_builtins; /* Borrowed reference */
+  PyObject *f_locals; /* Strong reference, may be NULL */
+  PyCodeObject *f_code; /* Strong reference */
+  PyFrameObject *frame_obj; /* Strong reference, may be NULL */
+  /* Linkage section */
+  struct _PyInterpreterFrame *previous;
+  struct CodeUnit *prev_instr;
+  int stacktop;     /* Offset of TOS from localsplus  */
+  bool is_entry;  // Whether this is the "root" frame for the current _PyCFrame.
+  char owner;
+  /* Locals and stack */
+  PyObject *localsplus[1];
+} internal_frame_PyInterpreterFrame_3_11_12;
+
+// Define the default frame structure
 typedef struct _PyInterpreterFrame {
   PyCodeObject *f_code; /* Strong reference */
   struct _PyInterpreterFrame *previous;
   PyObject *f_funcobj;  /* Strong reference. Only valid if not on C stack */
   PyObject *f_globals;  /* Borrowed reference. Only valid if not on C stack */
   PyObject *f_builtins; /* Borrowed reference. Only valid if not on C stack */
-  PyObject *f_locals;   /* Strong reference, may be NULL. Only valid if not on C
-                           stack */
-  PyFrameObject *frame_obj; /* Strong reference, may be NULL. Only valid if not
-                               on C stack */
-  // NOTE: This is not necessarily the last instruction started in the given
-  // frame. Rather, it is the code unit *prior to* the *next* instruction. For
-  // example, it may be an inline CACHE entry, an instruction we just jumped
-  // over, or (in the case of a newly-created frame) a totally invalid value:
+  PyObject *f_locals;   /* Strong reference, may be NULL. Only valid if not on C stack */
+  PyFrameObject *frame_obj; /* Strong reference, may be NULL. Only valid if not on C stack */
   struct CodeUnit *prev_instr;
   int stacktop; /* Offset of TOS from localsplus  */
-  /* The return_offset determines where a `RETURN` should go in the caller,
-   * relative to `prev_instr`.
-   * It is only meaningful to the callee,
-   * so it needs to be set in any CALL (to a Python function)
-   * or SEND (to a coroutine or generator).
-   * If there is no callee, then it is meaningless. */
   uint16_t return_offset;
   char owner;
   /* Locals and stack */
   PyObject *localsplus[1];
 } internal_frame_PyInterpreterFrame;
+
+// Use compile-time checks to select the correct structure based on Python version
+#if PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION == 11 && PY_MICRO_VERSION == 12
+    #define internal_frame_PyInterpreterFrame internal_frame_PyInterpreterFrame_3_11_12
+#endif
+
 
 class TraceDispatcher {
 private:
@@ -466,15 +480,19 @@ static PyModuleDef tracer_core_module = {
 
 PyMODINIT_FUNC PyInit_tracer_core(void) {
   PyObject *module = PyModule_Create(&tracer_core_module);
-  if (!module)
+  if (!module) {
+    printf("Failed to create module\n");
     return nullptr;
-
-  if (PyType_Ready(&TraceDispatcherType) < 0)
+  }
+  if (PyType_Ready(&TraceDispatcherType) < 0) {
+    printf("PyType_Ready failed\n");
     return nullptr;
+  }
 
   Py_INCREF(&TraceDispatcherType);
   if (PyModule_AddObject(module, "TraceDispatcher",
                          (PyObject *)&TraceDispatcherType) < 0) {
+    printf("Failed to add TraceDispatcher to module\n");
     Py_DECREF(&TraceDispatcherType);
     Py_DECREF(module);
     return nullptr;

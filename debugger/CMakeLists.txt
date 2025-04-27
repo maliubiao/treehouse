@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(Python_VERSION "3.11" CACHE STRING "Target Python version (3.8-3.12)")
 set(Python_EXECUTABLE "" CACHE FILEPATH "Path to Python executable")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Platform detection (host and target)
 if(ANDROID)
