@@ -396,16 +396,60 @@ export GPT_SYMBOL_API_URL=http://127.0.0.1:9060/;
 
 ### 高级调试器
 支持对python程序进行bytecode级别的line trace, 输出执行了哪一行，变量的改变，而且性能足够好，不至于卡住
+
 #### 编译
 ```bash
 #python 3.11.11  uv python pin {version}, 最好3.11.11，因为cpp会访问python虚拟机内部数据，版本不对会崩
-cd treehouse; source .venv/bin/activate
+cd treehouse; source .venv/bin/activate;
 cd debugger/cpp
 #编译不成功，到下边qq群交流, 如果文档内容不能复现，请到群里反馈
 cmake ../ -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON #or
 cmake ../ -DCMAKE_BUILD_TYPE=Release
 #在treehouse/debugger/tracer_core.so
 ```
+
+#### Windows上编译
+
+1. **环境准备**:
+  - 安装 Visual Studio 2022，确保选择"使用C++的桌面开发"工作负载
+  - 安装 CMake (可通过 Visual Studio 安装程序或官网下载)
+  - 确保使用兼容的 Python 版本
+
+2. **Python 环境设置**:
+```powershell
+# 在 PowerShell 中执行
+# 安装并固定 Python 3.11.12 版本
+PS C:\Users\richard\treehouse> uv python install cpython-3.11.12-windows-x86_64-none
+PS C:\Users\richard\treehouse> uv python pin cpython-3.11.12-windows-x86_64-none
+PS C:\Users\richard\treehouse> uv sync
+```
+
+3. **使用 Developer PowerShell 构建**:
+```powershell
+# 从开始菜单打开 "Developer PowerShell for VS 2022"
+cd C:\Users\richard\treehouse\debugger\cpp
+# 生成 Visual Studio 解决方案
+cmake ../ -A x64 -DCMAKE_BUILD_TYPE=Release
+```
+
+4. **构建项目**:
+  - 方法一: 使用 Visual Studio
+    ```powershell
+    # 打开生成的解决方案
+    start .\treehouse-tracer.sln
+    # 在 Visual Studio 中选择 Release 配置并构建解决方案
+    ```
+  - 方法二: 命令行构建
+    ```powershell
+    cmake --build . --config Release
+    ```
+
+5. **验证输出**:
+  - 编译成功后，生成的 DLL 文件应位于 `treehouse\debugger\tracer_core.pyd`
+  - 如果遇到问题，请检查 Visual Studio 的输出窗口获取详细错误信息
+
+注意: Windows 版本使用 `.pyd` 扩展名代替 Linux 上的 `.so`，但它们功能相同。
+
 #### 使用
 ```bash
 #改path后再用, --watch-files=是glob匹配，通配符, --open-report是结束打开网页, 不建议trace执行几十万行的那种，浏览器负担太大
