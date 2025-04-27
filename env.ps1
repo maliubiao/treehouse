@@ -256,6 +256,15 @@ function global:askgpt {
     & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "$QuestionString"
 }
 
+function global:naskgpt {
+    param([Parameter(ValueFromRemainingArguments)]$Args)
+    $originalSession = $env:GPT_SESSION_ID
+    New-Conversation
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask $Args
+    $env:GPT_SESSION_ID = $originalSession
+    Write-Host "已恢复原会话: $originalSession"
+}
+
 # 符号服务函数
 function global:symbolgpt {
     param([switch]$Restart)
@@ -327,6 +336,19 @@ function global:patchgpt {
     & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@patch $Args"
     $env:GPT_SESSION_ID = $originalSession
     Write-Host "已恢复原会话: $originalSession"
+}
+
+function global:archgpt {
+    param([Parameter(ValueFromRemainingArguments)]$Args)
+    $originalSession = $env:GPT_SESSION_ID
+    New-Conversation
+    if (-not $Args) {
+        Write-Error "Error: Question cannot be empty"
+        return
+    }
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --workflow --architect architect --coder coder --ask $Args
+    $env:GPT_SESSION_ID = $originalSession
+    Write-Host "已恢复原会话: $original_session"
 }
 
 # 新增 codegpt 函数

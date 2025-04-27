@@ -1,0 +1,20 @@
+{
+     "architect":  {
+        "key": "sk-*",
+        "base_url": "https://api.deepseek.com/v1",
+        "model_name": "deepseek-reasoner",
+        "max_context_size": 131072,
+        "max_tokens": 8096,
+        "is_thinking": true,
+        "temperature": 0.0
+    },
+    "coder": {
+         "key": "*",
+         "model_name": "deepseek-ai/DeepSeek-V3-0324",
+         "base_url": "https://api.hyperbolic.xyz/v1",
+         "max_context_size": 120000,
+         "temperature": 0.0,
+         "is_thinking": false
+     }
+}
+
