@@ -9,7 +9,7 @@ dependencies = [
     "levenshtein>=0.26.1",
     "markitdown>=0.0.1a3",
     "openai>=1.61.0",
-    "pygments>=2.19.1",
+    "pygments>=2.19.1; sys_platform != 'win32'",
     "pylint>=3.3.4",
     "pysocks>=1.7.1",
     "requests>=2.32.3",
@@ -44,6 +44,7 @@ dependencies = [
     "Pillow>=10.3.0",
     "pywin32; sys_platform == 'win32'",
     "pyobjc; sys_platform == 'darwin'",
+    "pygments[windows-terminal]; sys_platform == 'win32'",
 ]
 
 [tool.black]
