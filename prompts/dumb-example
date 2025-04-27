@@ -2,7 +2,7 @@
 [modified symbol]: 本文件/新增说明段落
 [source code start]
 # 修改操作类型说明:
-# 1. 使用`modified file`时必须输出文件完整内容，包含所有未修改的原始代码
+# 1. 使用`modified file`时必须输出文件完整内容，包含未提及的的原始代码
 # 2. 当仅修改局部符号时，必须使用`modified symbol`定位并输出新代码片段
 # 3. 混合使用两种修改方式会导致符号级修改被文件级修改覆盖
 [source code end]

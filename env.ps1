@@ -1,4 +1,3 @@
-1
 # PowerShell 5.0 compatible environment configuration
 
 # 设置控制台编码为UTF-8
@@ -386,8 +385,8 @@ function global:Get-SymbolCompletions {
     }
 }
 
-Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
-    param($commandName, $commandAst, $cursorPosition)
+function global:Get-GptCommandCompletions {
+    param($commandAst, $cursorPosition)
 
     $wordToComplete = $commandAst.CommandElements[-1].Value
 
@@ -447,6 +446,11 @@ Register-ArgumentCompleter -CommandName askgpt -ScriptBlock {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
         }
     } 
+}
+
+Register-ArgumentCompleter -CommandName askgpt, naskgpt, archgpt -ScriptBlock {
+    param($commandName, $commandAst, $cursorPosition)
+    Get-GptCommandCompletions -commandAst $commandAst -cursorPosition $cursorPosition
 }
 
 Register-ArgumentCompleter -CommandName usegpt -ScriptBlock {

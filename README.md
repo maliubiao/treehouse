@@ -185,12 +185,15 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 ```
 
 4. **在windows powershell上使用**  
-需要特别指出powershell的@有特殊含义，不能直接补全，需要用\\@才能补全，比直接@增加一个字符  
+需要特别指出powershell的@有特殊含义，不能直接补全，需要用\@才能补全，比直接@增加一个字符, 可能需要""包括才能正确识别    
 ```powershell
-#PS C:\Users\user> $PROFILE  这个变量会返回当前的配置文件，在配置文件后把env.ps1加入进去
-[Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+#naskgpt "@cmd" or '@cmd' or \@cmd
+$env:GPT_PATH="C:\Users\richard\treehouse"
+notepad $PROFILE
+#把下边这两句加入配置文件, treehouse的目录需要修改
+#$env:GPT_PATH=C:\Users\richard\treehouse
 #需要将env.ps1转成UTF8-BOM格式，不然windows可能乱码, Vs Code的save with encoding可以做到, 也可用tools/utf8_bom.py
-. \your\path\to\env.ps1
+#. C:\Users\richard\treehouse\env.ps1 
 ```
 
 ### R1 api提供商

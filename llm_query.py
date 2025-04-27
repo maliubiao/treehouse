@@ -1151,32 +1151,54 @@ def _handle_command(match: CmdNode, cmd_map: Dict[str, Callable]) -> str:
     return cmd_map[match.command](match)
 
 
-def _handle_any_script(match: CmdNode) -> str:
-    """处理shell命令"""
-    script_name = match.command.strip("=")
-    file_path = os.path.join(os.environ.get("GPT_PATH", ""), "prompts", script_name)
-    # 检查文件是否有执行权限
-    if not os.access(file_path, os.X_OK):
-        # 获取当前文件权限
-        current_mode = os.stat(file_path).st_mode
-        # 添加用户执行权限
-        new_mode = current_mode | stat.S_IXUSR
-        # 修改文件权限
-        os.chmod(file_path, new_mode)
+def _handle_any_script(file_path: str) -> str:
+    is_windows = os.name == "nt"
+
+    # 检查shebang
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            first_line = f.readline().strip()
+    except Exception as e:
+        return f"Failed to read script file: {e}"
+
+    # 如果不是Python脚本且在Windows上，报错
+    if is_windows and first_line.startswith("#!") and "python" not in first_line.lower():
+        return f"Non-Python scripts are not supported on Windows: {first_line}"
+
+    if not is_windows:
+        if not os.access(file_path, os.X_OK):
+            try:
+                os.chmod(file_path, 0o755)
+            except Exception as e:
+                return f"Failed to make script executable: {e}"
+
+    if is_windows or (first_line.startswith("#!") and "python" in first_line.lower()):
+        command = f'python "{file_path}"'
+    else:
+        command = f'"{file_path}"'
 
     try:
-        # 使用with语句管理子进程资源
-        with subprocess.Popen(
-            f"{file_path}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        ) as process:
-            stdout, stderr = process.communicate()
-            output = f"\n\n[shell command]: ./{file_path}\n"
-            output += f"[stdout begin]\n{stdout}\n[stdout end]\n"
-            if stderr:
-                output += f"[stderr begin]\n{stderr}\n[stderr end]\n"
-            return output
-    except subprocess.SubprocessError as e:
-        return f"\n\n[shell command error]: {str(e)}\n"
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=True,
+            universal_newlines=True,
+        )
+        stdout, stderr = proc.communicate()
+    except Exception as e:
+        return f"Failed to execute script: {e}"
+
+    output = f"\n\n[shell command]: {file_path}\n"
+
+    if stdout:
+        output += stdout
+    if stderr:
+        output += stderr
+    if proc.returncode != 0:
+        output += f"\nProcess exited with code {proc.returncode}"
+
+    return output
 
 
 def _handle_prompt_file(match: CmdNode) -> str:
@@ -1186,14 +1208,14 @@ def _handle_prompt_file(match: CmdNode) -> str:
     # 检查文件是否有可执行权限或以#!开头
     if os.access(file_path, os.X_OK):
         # 如果有可执行权限，则作为shell命令处理
-        return _handle_any_script(match)
+        return _handle_any_script(file_path)
 
     # 检查文件是否以#!开头
     with open(file_path, "r", encoding="utf-8") as f:
         first_line = f.readline()
         if first_line.startswith("#!"):
             # 如果以#!开头，也作为shell命令处理
-            return _handle_any_script(match)
+            return _handle_any_script(file_path)
         # 否则读取整个文件内容作为普通文件处理
         content = first_line + f.read()
         return f"\n{content}\n"
@@ -2489,6 +2511,10 @@ class GPTContextProcessor:
         self, text: str, ignore_text: bool = False, tokens_left: int = GLOBAL_MODEL_CONFIG.max_context_size
     ) -> str:
         """处理包含@...的文本"""
+        # Windows 路径兼容处理：将\@转换为@
+        if os.name == "nt":
+            text = text.replace("\\@", "@")
+
         parts = self.preprocess_text(text)
         self.cmds = parts.copy()
         for i, node in enumerate(parts):
@@ -3573,7 +3599,7 @@ class ModelSwitch:
         """
         if self.test_mode:
             return ["test_response"]
-
+        GPT_FLAGS[GPT_FLAG_PATCH] = True
         context_processor = GPTContextProcessor()
         self.select(architect_model)
         config = self._get_model_config(architect_model)
