@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 import requests
 from colorama import Fore
 from colorama import Style as ColorStyle
+from colorama import just_fix_windows_console
 from openai import OpenAI
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -67,6 +68,8 @@ from tree import (
     RipgrepSearcher,
     SyntaxHighlight,
 )
+
+just_fix_windows_console()
 
 
 class ModelConfig:

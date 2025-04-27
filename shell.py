@@ -8,7 +8,9 @@ import urllib.parse
 from pathlib import Path
 
 import requests
-from colorama import Fore, Style
+from colorama import Fore, Style, just_fix_windows_console
+
+just_fix_windows_console()
 
 
 def format_conversation_menu():

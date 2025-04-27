@@ -29,6 +29,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 import yaml
+
+# Windows控制台颜色修复
+from colorama import just_fix_windows_console
 from fastapi import Body, FastAPI, Form, HTTPException
 from fastapi import Query as QueryArgs
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -39,6 +42,8 @@ from tree_sitter import Language, Node, Parser, Query
 
 from lsp.client import GenericLSPClient, LSPFeatureError
 from lsp.language_id import LanguageId
+
+just_fix_windows_console()
 
 # 设置日志级别
 logger = logging.getLogger(__name__)

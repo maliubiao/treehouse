@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import yaml
-from colorama import Fore, Style
+from colorama import Fore, Style, just_fix_windows_console
+
+just_fix_windows_console()
 
 _MAX_VALUE_LENGTH = 512
 _INDENT = "  "
