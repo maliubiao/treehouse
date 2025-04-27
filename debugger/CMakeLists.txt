@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 project(treehouse-tracer LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(Python_VERSION "3.11" CACHE STRING "Target Python version (3.8-3.12)")
 set(Python_EXECUTABLE "" CACHE FILEPATH "Path to Python executable")
@@ -71,7 +71,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 elseif(MSVC)
-    add_compile_options(/W4 /EHsc /permissive- /bigobj)
+    add_compile_options(/W4 /EHsc /permissive- /bigobj /std:c++20)
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_options(/Zi /DEBUG)
     endif()
@@ -119,12 +119,7 @@ if(NOT PLATFORM_WINDOWS)
     add_compile_options(-fvisibility=hidden)
 endif()
 
-# Find dependencies with proper component specifications
-if(PLATFORM_WINDOWS)
-    set(components Interpreter Development Development.Module Debug)
-else()
-    set(components Interpreter Development Development.Module)
-endif()
+set(components Interpreter Development Development.Module)
 
 if(Python_EXECUTABLE)
     set(Python_FIND_VIRTUALENV FIRST)
@@ -171,14 +166,6 @@ else()
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 endif()
-
-# Documentation generation
-find_package(Doxygen REQUIRED)
-doxygen_add_docs(
-    doc
-    ${PROJECT_SOURCE_DIR}/cpp
-    COMMENT "Generate API documentation"
-)
 
 # Installation rules
 if(PLATFORM_WINDOWS)

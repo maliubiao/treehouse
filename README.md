@@ -223,17 +223,11 @@ notepad $PROFILE
 新会话编号:  D84E64CF-F337-4B8B-AD2D-C58FD2AE713C
 ```
 
-**分析源代码文件**
-```bash
-explaingpt path/to/file.py
-# 使用自定义提示模板
-explaingpt file.py prompts/custom-prompt.txt
-```
-
 **直接提问**
 
 ```bash
 askgpt "如何实现快速排序算法？"
+naskgpt "如何实现快速排序算法？"
 ```
 
 ## 编码项目配置

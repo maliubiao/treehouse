@@ -412,26 +412,57 @@ static int TraceDispatcher_init(TraceDispatcherObject *self, PyObject *args,
 }
 
 static PyTypeObject TraceDispatcherType = {
-    PyVarObject_HEAD_INIT(nullptr, 0).tp_name = "tracer_core.TraceDispatcher",
-    .tp_basicsize = sizeof(TraceDispatcherObject),
-    .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-    .tp_doc = "Trace dispatcher object",
-    .tp_new = TraceDispatcher_new,
-    .tp_init = (initproc)TraceDispatcher_init,
-    .tp_dealloc = (destructor)TraceDispatcher_dealloc,
-    .tp_methods = TraceDispatcher_methods,
+  PyVarObject_HEAD_INIT(nullptr, 0)
+  "tracer_core.TraceDispatcher",           /* tp_name */
+  sizeof(TraceDispatcherObject),           /* tp_basicsize */
+  0,                                       /* tp_itemsize */
+  (destructor)TraceDispatcher_dealloc,     /* tp_dealloc */
+  0,                                       /* tp_vectorcall_offset */
+  0,                                       /* tp_getattr */
+  0,                                       /* tp_setattr */
+  0,                                       /* tp_as_async */
+  0,                                       /* tp_repr */
+  0,                                       /* tp_as_number */
+  0,                                       /* tp_as_sequence */
+  0,                                       /* tp_as_mapping */
+  0,                                       /* tp_hash */
+  0,                                       /* tp_call */
+  0,                                       /* tp_str */
+  0,                                       /* tp_getattro */
+  0,                                       /* tp_setattro */
+  0,                                       /* tp_as_buffer */
+  Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
+  "Trace dispatcher object",               /* tp_doc */
+  0,                                       /* tp_traverse */
+  0,                                       /* tp_clear */
+  0,                                       /* tp_richcompare */
+  0,                                       /* tp_weaklistoffset */
+  0,                                       /* tp_iter */
+  0,                                       /* tp_iternext */
+  TraceDispatcher_methods,                 /* tp_methods */
+  0,                                       /* tp_members */
+  0,                                       /* tp_getset */
+  0,                                       /* tp_base */
+  0,                                       /* tp_dict */
+  0,                                       /* tp_descr_get */
+  0,                                       /* tp_descr_set */
+  0,                                       /* tp_dictoffset */
+  (initproc)TraceDispatcher_init,          /* tp_init */
+  0,                                       /* tp_alloc */
+  TraceDispatcher_new,                     /* tp_new */
 };
 
-static PyModuleDef tracer_core_module = {PyModuleDef_HEAD_INIT,
-                                         .m_name = "tracer_core",
-                                         .m_doc = "Python tracer core module",
-                                         .m_size = -1,
-                                         .m_methods = nullptr,
-                                         .m_slots = nullptr,
-                                         .m_traverse = nullptr,
-                                         .m_clear = nullptr,
-                                         .m_free = nullptr};
+static PyModuleDef tracer_core_module = {
+  PyModuleDef_HEAD_INIT,                  /* m_base */
+  "tracer_core",                          /* m_name */
+  "Python tracer core module",            /* m_doc */
+  -1,                                     /* m_size */
+  NULL,                                   /* m_methods */
+  NULL,                                   /* m_slots */
+  NULL,                                   /* m_traverse */
+  NULL,                                   /* m_clear */
+  NULL                                    /* m_free */
+};
 
 PyMODINIT_FUNC PyInit_tracer_core(void) {
   PyObject *module = PyModule_Create(&tracer_core_module);
