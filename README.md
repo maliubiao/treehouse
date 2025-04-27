@@ -185,7 +185,7 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 ```
 
 4. **在windows powershell上使用**  
-需要特别指出powershell的@有特殊含义，不能直接补全，需要用\@才能补全，比直接@增加一个字符, 可能需要""包括才能正确识别    
+需要特别指出powershell的@有特殊含义，不能直接补全，需要用\\@才能补全，比直接@增加一个字符, 另外可能需要""才能防止转义
 ```powershell
 #naskgpt "@cmd" or '@cmd' or \@cmd
 $env:GPT_PATH="C:\Users\richard\treehouse"
