@@ -1041,7 +1041,8 @@ class TraceLogic:
 
 
 def get_tracer(module_path, config: TraceConfig):
-    tracer_core_path = os.path.join(os.path.dirname(__file__), "tracer_core.so")
+    tracer_core_name = "tracer_core.pyd" if os.name == "nt" else "tracer_core.so"
+    tracer_core_path = os.path.join(os.path.dirname(__file__), tracer_core_name)
     if os.path.exists(tracer_core_path):
         try:
             spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)

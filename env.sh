@@ -436,6 +436,90 @@ function patchgpttrace() {
   rm "$tmpfile"
 }
 
+function updategpt() {
+  # 保存当前目录
+  local original_dir=$(pwd)
+
+  # 检查GPT_PATH是否设置
+  if [[ -z "$GPT_PATH" ]]; then
+    echo "Error: GPT_PATH is not set"
+    return 1
+  fi
+
+  # 检查是否在24小时内已经检查过更新
+  local last_check_file="$GPT_PATH/.last_update_check"
+  if [[ -f "$last_check_file" ]]; then
+    local last_check=$(stat -f "%m" "$last_check_file")
+    local now=$(date +%s)
+    local diff=$((now - last_check))
+    if ((diff < 86400)); then
+      echo "Update check was performed within last 24 hours. Skipping."
+      cd "$original_dir" || return 1
+      return 0
+    fi
+  fi
+
+  # 切换到GPT_PATH目录
+  cd "$GPT_PATH" || {
+    echo "Error: Failed to change directory to $GPT_PATH"
+    return 1
+  }
+
+  # 检查是否是git仓库
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: $GPT_PATH is not a git repository"
+    cd "$original_dir" || return 1
+    return 1
+  fi
+
+  # 记录本次检查时间
+  touch "$last_check_file"
+
+  # 获取远程更新
+  echo "Checking for updates in $GPT_PATH..."
+  git fetch
+
+  # 比较本地和远程差异
+  local behind=$(git rev-list HEAD..origin/main --count)
+  if [[ $behind -eq 0 ]]; then
+    echo "Already up to date."
+    cd "$original_dir" || return 1
+    return 0
+  fi
+
+  # 显示更新信息
+  echo "Found $behind new commits. Last update was:"
+  git log -1 --format="%cr (%cd)" --date=short
+
+  # 确认更新
+  echo -n "Do you want to update? [Y/n] "
+  read -r answer
+  case "$answer" in
+  [nN]*)
+    echo "Update cancelled."
+    cd "$original_dir" || return 1
+    return 0
+    ;;
+  *)
+    # 执行更新
+    echo "Updating repository..."
+    git pull
+
+    # 显示更新内容
+    echo ""
+    echo "Recent changes:"
+    git log --pretty=format:"%h - %s (%cr)" HEAD@{1}..HEAD
+
+    # 重新初始化环境
+    _init_gpt_env
+    _init_directories
+    ;;
+  esac
+
+  # 返回原目录
+  cd "$original_dir" || return 1
+}
+
 # 自动配置默认模型
 if [[ -z "$GPT_KEY" || -z "$GPT_BASE_URL" || -z "$GPT_MODEL" ]]; then
   [[ $DEBUG -eq 1 ]] && echo "Debug: 尝试自动配置默认模型" >&2
