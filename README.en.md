@@ -167,15 +167,18 @@ export GPT_MODEL="your-model"
 export GPT_BASE_URL="https://api.example.com/v1"  # OpenAI-compatible API
 source $GPT_PATH/env.sh  # Enables @ completion in zsh/bash
 ```
-
 4. **Windows PowerShell Usage**  
-PowerShell's `@` has a special meaning and cannot be directly used for completion. You need to use `\@` instead, which adds an extra character compared to directly using `@`.
+PowerShell's `@` has special meaning and cannot be directly used for completion. You need to use `\@` instead, which adds an extra character compared to directly using `@`. Additionally, you may need to use quotes to prevent escaping.
 
 ```powershell
-# PS C:\Users\user> $PROFILE
-# This variable returns the current configuration file. Add env.ps1 to the configuration file.
-[Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-. \your\path\to\env.ps1
+# naskgpt "@cmd" or '@cmd' or \@cmd
+$env:GPT_PATH="C:\Users\richard\treehouse"
+notepad $PROFILE
+# Add these lines to your PowerShell profile, modify treehouse directory as needed:
+# $env:GPT_PATH=C:\Users\richard\treehouse
+# Convert env.ps1 to UTF8-BOM format to avoid encoding issues on Windows
+# (Use VS Code's "Save with Encoding" feature or tools/utf8_bom.py)
+# . C:\Users\richard\treehouse\env.ps1
 ```
 
 ### R1 API Providers
