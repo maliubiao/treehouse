@@ -427,7 +427,9 @@ PS C:\Users\richard\treehouse> uv sync
 3. **使用 Developer PowerShell 构建**:
 ```powershell
 # 从开始菜单打开 "Developer PowerShell for VS 2022"
-cd C:\Users\richard\treehouse\debugger\cpp
+cd C:\Users\richard\treehouse\debugger
+mkdir build
+cd build
 # 生成 Visual Studio 解决方案
 cmake ../ -A x64 -DCMAKE_BUILD_TYPE=Release
 ```
@@ -442,6 +444,8 @@ cmake ../ -A x64 -DCMAKE_BUILD_TYPE=Release
   - 方法二: 命令行构建
     ```powershell
     cmake --build . --config Release
+    #验证链接对了正确版本的的python dll
+    dumpbin /dependents ../tracer_core.pyd
     ```
 
 5. **验证输出**:
