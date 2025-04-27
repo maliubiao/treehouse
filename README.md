@@ -189,6 +189,7 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 ```powershell
 #PS C:\Users\user> $PROFILE  这个变量会返回当前的配置文件，在配置文件后把env.ps1加入进去
 [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+#需要将env.ps1转成UTF8-BOM格式，不然windows可能乱码, Vs Code的save with encoding可以做到, 也可用tools/utf8_bom.py
 . \your\path\to\env.ps1
 ```
 
