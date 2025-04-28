@@ -34,6 +34,7 @@ from typing import Callable, Dict, List, Optional, Tuple, TypedDict, Union
 from urllib.parse import urlparse
 
 import requests
+import yaml
 from colorama import Fore
 from colorama import Style as ColorStyle
 from colorama import just_fix_windows_console
@@ -201,7 +202,7 @@ class CmdNode:
 
 
 @dataclass
-class SymbolsNode:
+class SearchSymbolNode:
     """符号节点"""
 
     symbols: List[str]
@@ -1221,10 +1222,71 @@ def _handle_prompt_file(match: CmdNode) -> str:
         return f"\n{content}\n"
 
 
+def _handle_project(yml_path: str) -> str:
+    """处理YAML定义的项目上下文"""
+    with open(yml_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    if not isinstance(config, dict):
+        raise ValueError(f"无效的项目配置文件格式: {yml_path}")
+
+    if not config.get("files") and not config.get("dirs"):
+        return ""
+
+    # Check that existing fields are lists
+    if config.get("files") is not None and not isinstance(config["files"], list):
+        raise ValueError(f"'files' 字段必须是列表类型: {yml_path}")
+    if config.get("dirs") is not None and not isinstance(config["dirs"], list):
+        raise ValueError(f"'dirs' 字段必须是列表类型: {yml_path}")
+
+    replacement = f"\n\n[project config start]: {yml_path}\n"
+
+    # 处理文件列表
+    for pattern in config.get("files", []):
+        if not isinstance(pattern, str):
+            replacement += f"[config error]: 文件模式必须是字符串: {pattern}\n\n"
+            continue
+        try:
+            for file_path in glob.glob(pattern, recursive=True):
+                if os.path.isdir(file_path) or _is_binary_file(file_path):
+                    continue
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        replacement += _format_file_content(file_path, content)
+                except (UnicodeDecodeError, OSError, IOError) as e:
+                    replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
+        except Exception as e:
+            replacement += f"[glob error]: 通配符模式处理失败 {pattern}: {str(e)}\n\n"
+
+    # 处理目录列表
+    for dir_path in config.get("dirs", []):
+        if not isinstance(dir_path, str):
+            replacement += f"[config error]: 目录路径必须是字符串: {dir_path}\n\n"
+            continue
+        if os.path.isdir(dir_path):
+            replacement += _process_directory(dir_path)
+        else:
+            replacement += f"[dir error]: 目录不存在 {dir_path}\n\n"
+
+    replacement += f"[project config end]: {yml_path}\n\n"
+    return replacement
+
+
+def under_projects_dir(path: str, projects_dir="projects") -> bool:
+    """检查路径是否在项目目录下且以.yml结尾"""
+    projects_dir = os.path.join(os.path.dirname(__file__), projects_dir)
+    return (path.endswith(".yml") or path.endswith(".yaml")) and os.path.abspath(path).startswith(
+        os.path.abspath(projects_dir)
+    )
+
+
 def _handle_local_file(match: CmdNode) -> str:
     """处理本地文件路径"""
     expanded_path, line_range_match = _expand_file_path(match.command)
 
+    if under_projects_dir(expanded_path):
+        return _handle_project(expanded_path)
     if os.path.isfile(expanded_path):
         return _process_single_file(expanded_path, line_range_match)
     if os.path.isdir(expanded_path):
@@ -2451,7 +2513,12 @@ class GPTContextProcessor:
         for flag in GPT_FLAGS:
             self.cmd_map[flag] = update_gpt_flag
 
-    def preprocess_text(self, text) -> List[Union[TextNode, CmdNode, SymbolsNode, TemplateNode]]:
+    def symbol_node_from_text(self, text: str) -> SearchSymbolNode:
+        """从文本中提取符号节点"""
+        symbols = re.findall(r"\.\.(.*?)\.\.", text)
+        return SearchSymbolNode(symbols=symbols)
+
+    def preprocess_text(self, text) -> List[Union[TextNode, CmdNode, SearchSymbolNode, TemplateNode]]:
         """预处理文本，将文本按{}分段，并提取@命令"""
         result = []
         cmd_groups = defaultdict(list)
@@ -2459,34 +2526,22 @@ class GPTContextProcessor:
         # 提取符号节点（..符号..）
         symbol_matches = re.findall(r"\.\.(.*?)\.\.", text)
         text = re.sub(r"\.\.(.*?)\.\.", r"\1", text)
-        symbol_node = SymbolsNode(symbols=symbol_matches)
-        # 首先按{}分割文本
-        segments = re.split(r"({.*?})", text)
-
-        for segment in segments:
-            if segment.startswith("{") and segment.endswith("}"):  # 处理模板段
-                template_content = segment.strip("{}")
-                # 直接匹配所有命令
-                commands = [CmdNode(command=cmd.lstrip("@")) for cmd in re.findall(CMD_PATTERN, template_content)]
-                if commands:
-                    result.append(TemplateNode(template=commands[0], commands=commands[1:]))
-            else:  # 处理非模板段
-                # 先匹配所有命令
-                commands = re.findall(CMD_PATTERN, segment)
-                # 将命令之间的文本作为普通文本处理
-                text_parts = re.split(CMD_PATTERN, segment)
-                for i, part in enumerate(text_parts):
-                    if part:  # 处理普通文本
-                        # 处理转义的@符号
-                        part = part.replace("\\@", "@")
-                        result.append(TextNode(content=part))
-                    if i < len(commands):  # 处理命令
-                        cmd = commands[i].lstrip("@")
-                        if ":" in cmd and not cmd.startswith("http"):
-                            symbol, _, arg = cmd.partition(":")
-                            cmd_groups[symbol].append(arg)
-                        else:
-                            result.append(CmdNode(command=cmd.strip()))
+        symbol_node = SearchSymbolNode(symbols=symbol_matches)
+        commands = re.findall(CMD_PATTERN, text)
+        # 将命令之间的文本作为普通文本处理
+        text_parts = re.split(CMD_PATTERN, text)
+        for i, part in enumerate(text_parts):
+            if part:  # 处理普通文本
+                # 处理转义的@符号
+                part = part.replace("\\@", "@")
+                result.append(TextNode(content=part))
+            if i < len(commands):  # 处理命令
+                cmd = commands[i].lstrip("@")
+                if ":" in cmd and not cmd.startswith("http"):
+                    symbol, _, arg = cmd.partition(":")
+                    cmd_groups[symbol].append(arg)
+                else:
+                    result.append(CmdNode(command=cmd.strip()))
 
         # 处理带参数的命令
         last_cmd_index = -1
@@ -2507,6 +2562,24 @@ class GPTContextProcessor:
                 result.insert(last_cmd_index + 1, symbol_node)
         return result
 
+    def read_context_config(self, path: str) -> List[CmdNode]:
+        """读取@配置文件"""
+        project_config_str = Path(path).read_text(encoding="utf-8")
+        config = yaml.safe_load(project_config_str)
+        if config and config.get("context", []):
+            assert isinstance(config["context"], list), "配置文件中的context字段必须是列表"
+            cmds: List[CmdNode] = []
+            context = config["context"]
+            for i in context:
+                if re.match(r"^\.\..*\.\.$", i):
+                    cmds.append(SearchSymbolNode(symbols=[i[2:-2]]))
+                elif re.match("symbol_.*", i):
+                    i = i[len("symbol_") :]
+                    cmds.append(CmdNode(command="symbol", args=[i]))
+            return cmds
+        else:
+            return []
+
     def process_text_with_file_path(
         self, text: str, ignore_text: bool = False, tokens_left: int = GLOBAL_MODEL_CONFIG.max_context_size
     ) -> str:
@@ -2516,7 +2589,26 @@ class GPTContextProcessor:
             text = text.replace("\\@", "@")
 
         parts = self.preprocess_text(text)
+        for node in parts:
+            if isinstance(node, CmdNode):
+                if under_projects_dir(node.command):
+                    parts = self.read_context_config(node.command) + parts
         self.cmds = parts.copy()
+        left_nodes = []
+        symbols_nodes = []
+        for i in parts:
+            if isinstance(i, SearchSymbolNode):
+                symbols_nodes.append(i)
+                continue
+            elif isinstance(i, CmdNode):
+                if i.command.startswith("symbol"):
+                    if i.command.startswith("symbol_"):
+                        i.command = "symbol"
+                        i.args = i.command[len("symbol_") :]
+                    symbols_nodes.append(i)
+                    continue
+            left_nodes.append(i)
+        parts = left_nodes
         for i, node in enumerate(parts):
             if isinstance(node, TextNode):
                 if ignore_text:
@@ -2528,7 +2620,7 @@ class GPTContextProcessor:
                 processed_text = self._process_match(node)
                 parts[i] = processed_text
                 self.current_length += len(processed_text)
-            elif isinstance(node, SymbolsNode):
+            elif isinstance(node, SearchSymbolNode):
                 parts[i] = self._process_symbol(node)
                 self.current_length += len(parts[i])
             elif isinstance(node, TemplateNode):
@@ -2543,8 +2635,10 @@ class GPTContextProcessor:
                 self.current_length += len(replacement)
             else:
                 raise ValueError(f"无法识别的部分类型: {type(node)}")
-
-        return self._finalize_text("".join(parts), tokens_left=tokens_left)
+        add_text = ""
+        if symbols_nodes:
+            add_text = self.patch_symbol_with_prompt(symbols_nodes)
+        return add_text + self._finalize_text("".join(parts), tokens_left=tokens_left)
 
     def _process_match(self, match: CmdNode) -> Tuple[str]:
         """处理单个匹配项或匹配项列表"""
@@ -2570,8 +2664,9 @@ class GPTContextProcessor:
                     self._local_files.add(node.command)
         return self._local_files
 
-    def _process_symbol(self, symbol_name: SymbolsNode) -> str:
+    def _process_symbol(self, symbol_name: SearchSymbolNode) -> str:
         """处理符号"""
+
         symbol_map = {}
         symbols = perform_search(
             symbol_name.symbols,
@@ -2586,6 +2681,11 @@ class GPTContextProcessor:
             CmdNode(command="symbol", args=list(symbol_map.keys())), symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH)
         )
 
+    def patch_symbol_with_prompt(self, symbol_names):
+        """处理符号补丁提示"""
+        builder = PatchPromptBuilder(GPT_FLAGS.get(GPT_FLAG_PATCH), symbol_names)
+        return builder.build()
+
     def _get_replacement(self, match: CmdNode):
         """根据匹配类型获取替换内容"""
         if is_prompt_file(match.command):
@@ -2596,7 +2696,8 @@ class GPTContextProcessor:
             return _handle_url(match)
         elif self._is_command(match.command):
             return _handle_command(match, self.cmd_map)
-        return ""
+        else:
+            raise ValueError(f"无法处理的@项目: {match.command}")
 
     def _finalize_text(self, text, tokens_left=GLOBAL_MODEL_CONFIG.max_context_size):
         """最终处理文本"""
@@ -2633,10 +2734,157 @@ class GPTContextProcessor:
         """读取最后一次查询内容"""
         return read_last_query(_)
 
-    @staticmethod
-    def patch_symbol_with_prompt(symbol_names):
-        """处理符号补丁提示"""
-        return patch_symbol_with_prompt(symbol_names)
+
+class PatchPromptBuilder:
+    def __init__(self, use_patch: bool, symbols: List[Union[SearchSymbolNode, CmdNode]]):
+        self.use_patch = use_patch
+        self.symbols = symbols
+        self.symbol_map = {}
+        self.file_ranges = None
+
+    def _collect_symbols(self) -> None:
+        """收集所有符号信息"""
+        symbol_search_set = set()
+        left = []
+        for symbol_node in self.symbols:
+            if isinstance(symbol_node, SearchSymbolNode):
+                for i in symbol_node.symbols:
+                    symbol_search_set.add(i)
+            else:
+                left.append(symbol_node)
+        if symbol_search_set:
+            left.append(SearchSymbolNode(symbols=list(symbol_search_set)))
+        for symbol_node in left:
+            if isinstance(symbol_node, SearchSymbolNode):
+                symbols = perform_search(
+                    symbol_node.symbols,
+                    os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG),
+                    max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
+                    file_list=None,
+                )
+                for symbol in symbols.values():
+                    self.symbol_map[symbol["name"]] = {
+                        "symbol_name": symbol["name"],
+                        "file_path": symbol["file_path"],
+                        "block_content": symbol["code"].encode("utf8"),
+                        "code_range": (
+                            (symbol["start_line"], symbol["start_col"]),
+                            (symbol["end_line"], symbol["end_col"]),
+                        ),
+                        "block_range": symbol["block_range"],
+                    }
+            elif isinstance(symbol_node, CmdNode) and symbol_node.command == "symbol":
+                for symbol_name in symbol_node.args:
+                    symbol_result = get_symbol_detail(symbol_name)
+                    if len(symbol_result) == 1:
+                        symbol_name = symbol_result[0].get("symbol_name", symbol_name)
+                        self.symbol_map[symbol_name] = symbol_result[0]
+                    else:
+                        for symbol in symbol_result:
+                            self.symbol_map[symbol["symbol_name"]] = symbol
+
+    def _get_patch_prompt_output(self) -> str:
+        """生成补丁提示输出部分"""
+        modified_type = "symbol" if self.use_patch else "block"
+        tag = "source code"
+        prompt = ""
+        if self.use_patch and DUMB_EXAMPLE_A and not GLOBAL_MODEL_CONFIG.is_thinking:
+            prompt += DUMB_EXAMPLE_A
+        if not DUMB_EXAMPLE_A and self.use_patch:
+            prompt += (
+                f"""
+# 响应格式
+{CHANGE_LOG_HEADER}
+[modified {modified_type}]: 块路径
+[{tag} start]
+完整文件内容
+[{tag} end]
+
+或（无修改时）:
+[modified {modified_type}]: 块路径
+[{tag} start]
+完整原始内容
+[{tag} end]
+
+"""
+                if self.file_ranges
+                else f"""
+# 响应格式
+{CHANGE_LOG_HEADER}
+[modified {modified_type}]: 符号路径
+[{tag} start]
+完整文件内容
+[{tag} end]
+
+或（无修改时）:
+[modified {modified_type}]: 符号路径
+[{tag} start]
+完整原始内容
+[{tag} end]
+
+"""
+            )
+        return prompt
+
+    def _build_symbol_prompt(self) -> str:
+        """构建符号部分的prompt"""
+        prompt = ""
+        if not self.use_patch:
+            prompt += "现有代码库里的一些符号和代码块:\n"
+
+        for symbol_name, patch_dict in self.symbol_map.items():
+            prompt += f"""
+[SYMBOL START]
+符号名称: {symbol_name}
+文件路径: {patch_dict["file_path"]}
+
+[source code start]
+{patch_dict["block_content"] if isinstance(patch_dict["block_content"], str) else patch_dict["block_content"].decode('utf-8')}
+[source code end]
+
+[SYMBOL END]
+"""
+        return prompt
+
+    def _build_file_range_prompt(self) -> str:
+        """构建文件范围部分的prompt"""
+        prompt = ""
+        if self.use_patch and self.file_ranges:
+            prompt += """\
+8. 可以修改任意块，一个或者多个，但必须返回块的完整路径，做为区分
+9. 只输出你修改的那个块
+"""
+            for file_path, range_info in self.file_ranges.items():
+                prompt += f"""
+[FILE RANGE START]
+文件路径: {file_path}:{range_info['range'][0]}-{range_info['range'][1]}
+
+[CONTENT START]
+{range_info['content'].decode('utf-8') if isinstance(range_info['content'], bytes) else range_info['content']}
+[CONTENT END]
+
+[FILE RANGE END]
+"""
+        return prompt
+
+    def build(self) -> str:
+        """构建完整的prompt"""
+        self._collect_symbols()
+        GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH].update(self.symbol_map)
+
+        prompt = ""
+        if self.use_patch:
+            text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
+            patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
+            prompt += PATCH_PROMPT_HEADER.format(patch_rule=patch_text, symbol_path_rule_content=text)
+
+        prompt += self._build_symbol_prompt()
+        prompt += self._build_file_range_prompt()
+        prompt += f"""
+{get_patch_prompt_output(self.use_patch, self.file_ranges, dumb_prompt=DUMB_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
+{USER_DEMAND}
+"""
+        return prompt
 
 
 GPT_FLAG_GLOW = "glow"
@@ -2663,7 +2911,12 @@ def is_command(match, cmd_map):
 
 def is_prompt_file(match):
     """判断是否为prompt文件"""
-    return os.path.exists(os.path.join(PROMPT_DIR, match))
+    if os.path.isabs(match):
+        # If it's an absolute path, check if it's inside PROMPT_DIR
+        return os.path.exists(match) and os.path.abspath(match).startswith(os.path.abspath(PROMPT_DIR))
+    else:
+        # For relative paths, check in PROMPT_DIR
+        return os.path.exists(os.path.join(PROMPT_DIR, match))
 
 
 def is_local_file(match):
@@ -3604,7 +3857,6 @@ class ModelSwitch:
         self.select(architect_model)
         config = self._get_model_config(architect_model)
         text = context_processor.process_text_with_file_path(prompt, tokens_left=config.max_context_size or 32 * 1024)
-        GPT_FLAGS[GPT_FLAG_PATCH] = False
         architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
             encoding="utf-8"
         )
@@ -3632,7 +3884,7 @@ class ModelSwitch:
                     ignore_text=True,
                     tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
                 )
-                coder_prompt_combine = f"{part_b}context{part_a}"
+                coder_prompt_combine = f"{part_b}{context}{part_a}"
                 coder_prompt_combine = coder_prompt_combine.replace(USER_DEMAND, "")
                 print(coder_prompt_combine)
                 result = self.query(model_name=coder_model, prompt=coder_prompt_combine)

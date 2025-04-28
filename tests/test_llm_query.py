@@ -22,6 +22,8 @@ from prompt_toolkit.key_binding import KeyBindings
 import llm_query
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
+    GPT_FLAG_PATCH,
+    GPT_FLAGS,
     ArchitectMode,
     AutoGitCommit,
     BlockPatchResponse,
@@ -36,7 +38,8 @@ from llm_query import (
     ModelConfig,
     ModelSwitch,
     NewSymbolFlag,
-    SymbolsNode,
+    PatchPromptBuilder,
+    SearchSymbolNode,
     _fetch_symbol_data,
     _find_gitignore,
     _handle_local_file,
@@ -96,36 +99,17 @@ class TestGPTContextProcessor(unittest.TestCase):
             self.assertIn("剪贴板内容", result)
             self.assertIn("上次查询", result)
 
-    def test_template_processing(self):
-        """测试模板处理"""
-        text = "{@clipboard @last}"
-        with patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容 {}", "last": lambda x: "上次查询"}):
-            result = self.processor.process_text_with_file_path(text)
-            self.assertIn("剪贴板内容 上次查询", result)
-
     def test_command_with_args(self):
         """测试带参数的命令"""
-        text = "@symbol:test"
-        with patch.dict(self.processor.cmd_map, {"symbol": lambda x: "符号补丁"}):
-            result = self.processor.process_text_with_file_path(text)
-            self.assertIn("符号补丁", result)
-
-    def test_mixed_content_processing(self):
-        """测试混合内容处理"""
-        text = "开始 {@clipboard @last} 中间 @symbol:test 结束"
-        with patch.dict(
-            self.processor.cmd_map,
-            {"clipboard": lambda x: "剪贴板内容 {}", "last": lambda x: "上次查询", "symbol": lambda x: "符号补丁"},
-        ):
-            result = self.processor.process_text_with_file_path(text)
-            self.assertIn("剪贴板内容 上次查询", result)
-            self.assertIn("符号补丁", result)
+        text = "@symbol_llm_query.py/test"
+        result = self.processor.process_text_with_file_path(text)
+        self.assertIn("有代码库里的一些符号和代码块", result)
 
     def test_command_not_found(self):
         """测试未找到命令的情况"""
         text = "@unknown"
-        result = self.processor.process_text_with_file_path(text)
-        self.assertEqual(result, "")
+        with self.assertRaises(SystemExit) as context:
+            self.processor.process_text_with_file_path(text)
 
     def test_max_length_truncation(self):
         """测试最大长度截断"""
@@ -136,8 +120,9 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def test_multiple_symbol_args(self):
         """测试多个符号参数合并"""
-        text = "@symbol:a @symbol:b"
-        with patch.dict(self.processor.cmd_map, {"symbol": lambda x: f"符号补丁 {x.args}"}):
+        text = "@symbol_llm_query/a @symbol_llm_query.py/b"
+        with patch("llm_query.PatchPromptBuilder.build") as mock_build:
+            mock_build.return_value = "符号补丁 ['a', 'b']"
             result = self.processor.process_text_with_file_path(text)
             self.assertIn("符号补丁 ['a', 'b']", result)
 
@@ -182,83 +167,125 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_single_symbol_processing(self):
         """测试单个符号节点处理"""
         text = "..test_symbol.."
-        with patch.object(self.processor, "_process_symbol") as mock_process:
+        with patch.object(self.processor, "patch_symbol_with_prompt") as mock_process:
             mock_process.return_value = "符号处理结果"
             result = self.processor.process_text_with_file_path(text)
-            mock_process.assert_called_once()
-            self.assertEqual(result, "test_symbol符号处理结果")
+            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["test_symbol"])])
+            self.assertEqual(result, "符号处理结果test_symbol")
 
     def test_multiple_symbols_processing(self):
         """测试多个符号节点处理"""
         text = "..symbol1.. ..symbol2.."
-        with patch.object(self.processor, "_process_symbol") as mock_process:
+        with patch.object(self.processor, "patch_symbol_with_prompt") as mock_process:
             mock_process.return_value = "多符号处理结果"
             result = self.processor.process_text_with_file_path(text)
-            mock_process.assert_called_once_with(SymbolsNode(symbols=["symbol1", "symbol2"]))
-            self.assertEqual(result, "symbol1 symbol2多符号处理结果")
+            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
+            self.assertEqual(result, "多符号处理结果symbol1 symbol2")
 
     def test_mixed_symbols_and_content(self):
         """测试符号节点与混合内容处理"""
         text = "前置内容..symbol1..中间@clipboard ..symbol2..结尾"
         with (
-            patch.object(self.processor, "_process_symbol") as mock_symbol,
+            patch.object(self.processor, "patch_symbol_with_prompt") as mock_symbol,
             patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容"}),
         ):
             mock_symbol.return_value = "符号处理结果"
             result = self.processor.process_text_with_file_path(text)
-            mock_symbol.assert_called_once_with(SymbolsNode(symbols=["symbol1", "symbol2"]))
-            self.assertEqual(result, "前置内容symbol1中间剪贴板内容符号处理结果 symbol2结尾")
+            mock_symbol.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
+            self.assertEqual(result, "符号处理结果前置内容symbol1中间剪贴板内容 symbol2结尾")
+
+    def test_project_command_processing(self):
+        """测试项目配置文件处理"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 创建测试配置文件
+            yml_path = os.path.join(tmpdir, "test_project.yml")
+            yaml = __import__("yaml")
+
+            # 创建测试目录结构
+            docs_dir = os.path.join(tmpdir, "docs")
+            os.makedirs(docs_dir)
+
+            # 创建测试文件
+            test_file = os.path.join(tmpdir, "test_file.py")
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write("# Test python file\nprint('hello')")
+
+            # 写入配置文件，使用绝对路径
+            with open(yml_path, "w", encoding="utf-8") as f:
+                yaml.dump({"files": [tmpdir + "/" + "*.py"], "dirs": [docs_dir]}, f)  # 使用绝对路径
+
+            # Mock路径检测和目录处理
+            with (
+                patch("llm_query.under_projects_dir", return_value=True),
+                patch("llm_query._process_directory") as mock_process_dir,
+            ):
+                mock_process_dir.return_value = "[processed directory]"
+                text = f"@{yml_path}"
+                result = self.processor.process_text_with_file_path(text)
+
+                # 验证配置文件头
+                self.assertIn(f"[project config start]: {yml_path}", result)
+
+                # 验证文件处理
+                self.assertIn("test_file.py", result)
+                self.assertIn("print('hello')", result)
+
+                # 验证目录处理
+                mock_process_dir.assert_called_once_with(docs_dir)  # 使用绝对路径
+                self.assertIn("[processed directory]", result)
+
+                # 验证配置文件尾
+                self.assertIn(f"[project config end]: {yml_path}", result)
+
+            # 测试文件不存在的情况
+            with patch("llm_query.under_projects_dir", return_value=True):
+                text = "@projects/non_exist.yml"
+                with self.assertRaises(FileNotFoundError):
+                    self.processor.process_text_with_file_path(text)
+
+            # 测试无效配置文件
+            invalid_yml = os.path.join(tmpdir, "invalid.yml")
+            with open(invalid_yml, "w", encoding="utf-8") as f:
+                f.write("invalid: {")  # 故意写无效的YAML语法
+
+            with patch("llm_query.under_projects_dir", return_value=True):
+                text = f"@{invalid_yml}"
+                with self.assertRaises(yaml.parser.ParserError):
+                    self.processor.process_text_with_file_path(text)
 
     def test_patch_symbol_with_prompt(self):
         """测试生成符号补丁提示词"""
+        # 模拟符号数据
+        symbol_data = {
+            "test_symbol": {
+                "file_path": "test.py",
+                "code_range": ((1, 0), (10, 0)),
+                "block_range": "1-10",
+                "block_content": b"test content",
+                "code": "test content",
+                "locations": [(1, 0)],
+            }
+        }
 
-        # 模拟CmdNode对象
-        class MockCmdNode:
-            def __init__(self, args):
-                self.args = args
+        # 模拟GPT_FLAGS
+        with patch.dict("llm_query.GPT_FLAGS", {GPT_FLAG_PATCH: False}):
+            # 测试单个符号
+            with patch("llm_query.PatchPromptBuilder") as mock_builder:
+                mock_instance = mock_builder.return_value
+                mock_instance.build.return_value = "test prompt"
+                result = self.processor.patch_symbol_with_prompt(["test_symbol"])
+                self.assertEqual(result, "test prompt")
+                mock_builder.assert_called_once_with(False, ["test_symbol"])
+                mock_instance.build.assert_called_once()
 
-        # 测试单个符号
-        symbol_names = MockCmdNode(["test_symbol"])
-        with patch("llm_query.get_symbol_detail") as mock_get_detail:
-            mock_get_detail.return_value = [
-                {
-                    "file_path": "test.py",
-                    "code_range": ((1, 0), (10, 0)),
-                    "block_range": "1-10",
-                    "block_content": b"test content",
-                }
-            ]
-            result = patch_symbol_with_prompt(symbol_names)
-            self.assertIn("test_symbol", result)
-            self.assertIn("test.py", result)
-            self.assertIn("test content", result)
-
-        # 测试多个符号
-        symbol_names = MockCmdNode(["symbol1", "symbol2"])
-        with patch("llm_query.get_symbol_detail") as mock_get_detail:
-            mock_get_detail.side_effect = [
-                [
-                    {
-                        "file_path": "file1.py",
-                        "code_range": ((1, 0), (5, 0)),
-                        "block_range": "1-5",
-                        "block_content": b"content1",
-                    }
-                ],
-                [
-                    {
-                        "file_path": "file2.py",
-                        "code_range": ((10, 0), (15, 0)),
-                        "block_range": "10-15",
-                        "block_content": b"content2",
-                    }
-                ],
-            ]
-            result = patch_symbol_with_prompt(symbol_names)
-            self.assertIn("symbol1", result)
-            self.assertIn("symbol2", result)
-            self.assertIn("content1", result)
-            self.assertIn("content2", result)
+            # 测试多个符号
+            with patch("llm_query.PatchPromptBuilder") as mock_builder:
+                mock_instance = mock_builder.return_value
+                mock_instance.build.return_value = "multi symbol prompt"
+                result = self.processor.patch_symbol_with_prompt(["symbol1", "symbol2"])
+                self.assertEqual(result, "multi symbol prompt")
+                mock_builder.assert_called_once_with(False, ["symbol1", "symbol2"])
+                mock_instance.build.assert_called_once()
 
     def test_get_symbol_detail(self):
         """测试获取符号详细信息"""

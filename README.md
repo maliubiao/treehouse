@@ -50,6 +50,10 @@ askgpt "@src/*tsx" 解释这些组件的用途
 #文件引用支持通配符
 askgpt "@*json" 当前目录下的json作用是什么
 
+#项目引用, 支持这里所有的@功能, 一些文件组件， 配置文件参考复杂上下文编写, 这个是为了方便做功能
+askgpt @projects/lldb_ai.yml 写个lldb ai扩展
+patchgpt @projects/context.yaml  完善测试集, 根据README, 代码实现
+
 #最近的会话
 recentconversation
 #最近的对话记录：
@@ -228,6 +232,25 @@ notepad $PROFILE
 ```bash
 askgpt "如何实现快速排序算法？"
 naskgpt "如何实现快速排序算法？"
+```
+
+**复杂上下文组合**
+```yaml
+#projects下边的yml配置为组合配置，必须在这个目录，而且必须是yml结尾的yml配置
+#可以任意使用@支持的功能, 并定义引用哪些文件
+#lldb_ai.yml
+files:
+  - debugger/lldb/ai/*py  #使用的文件
+dirs: [] #使用的目录
+context:
+  - treefull #使用的@命令
+
+#context.yml单独使用context的另一个示例
+context:
+  - symbol_tests/test_llm_query.py/TestGPTContextProcessor #直接符号引用
+  - symbol_llm_query.py/_handle_local_file,_process_directory,_handle_project,under_projects,__import__ #组合符号引用
+  - ..read_context_config.. #搜索符号
+  - env.sh #文件
 ```
 
 ## 编码项目配置
