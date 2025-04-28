@@ -1,0 +1,9 @@
+context:
+  - symbol_llm_query.py/get_patch_prompt_output
+  - symbol_llm_query.py/generate_patch_prompt,under_projects_dir
+  - symbol_llm_query.py/patch_symbol_with_prompt,PatchPromptBuilder
+  - .._process_symbol..
+  - ..test_mixed_symbols_and_content..
+
+
+

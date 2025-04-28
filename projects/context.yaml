@@ -1,0 +1,8 @@
+context:
+  - symbol_tests/test_llm_query.py/TestGPTContextProcessor
+  - symbol_llm_query.py/_handle_local_file,_process_directory,_handle_project,under_projects,__import__
+  - ..read_context_config..
+  - env.sh
+
+
+

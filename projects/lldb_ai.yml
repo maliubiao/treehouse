@@ -1,0 +1,7 @@
+files:
+  - debugger/lldb/ai/*py 
+dirs: []
+context:
+  - treefull
+
+
