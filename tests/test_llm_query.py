@@ -68,53 +68,55 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_basic_text_processing(self):
         """测试基本文本处理"""
         text = "这是一个普通文本"
-        result = self.processor.process_text_with_file_path(text)
+        result = self.processor.process_text(text)
         self.assertEqual(result, text)
 
     def test_single_command_processing(self):
         """测试单个命令处理"""
         text = "@clipboard"
-        with patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容"}):
-            result = self.processor.process_text_with_file_path(text)
+        with patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}):
+            result = self.processor.process_text(text)
             self.assertIn("剪贴板内容", result)
 
     def test_escaped_at_symbol(self):
         """测试转义的@符号"""
         text = "这是一个转义符号\\@test"
-        result = self.processor.process_text_with_file_path(text)
+        result = self.processor.process_text(text)
         self.assertEqual(result, "这是一个转义符号@test")
 
     def test_mixed_escaped_and_commands(self):
         """测试混合转义符号和命令"""
         text = "开始\\@test 中间 @clipboard 结束"
-        with patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容"}):
-            result = self.processor.process_text_with_file_path(text)
+        with patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}):
+            result = self.processor.process_text(text)
             self.assertEqual(result, "开始@test 中间 剪贴板内容 结束")
 
     def test_multiple_commands_processing(self):
         """测试多个命令处理"""
         text = "开始 @clipboard 中间 @last 结束"
-        with patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容", "last": lambda x: "上次查询"}):
-            result = self.processor.process_text_with_file_path(text)
+        with patch.dict(
+            self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容", "last": lambda x: "上次查询"}
+        ):
+            result = self.processor.process_text(text)
             self.assertIn("剪贴板内容", result)
             self.assertIn("上次查询", result)
 
     def test_command_with_args(self):
         """测试带参数的命令"""
         text = "@symbol_llm_query.py/test"
-        result = self.processor.process_text_with_file_path(text)
+        result = self.processor.process_text(text)
         self.assertIn("有代码库里的一些符号和代码块", result)
 
     def test_command_not_found(self):
         """测试未找到命令的情况"""
         text = "@unknown"
         with self.assertRaises(SystemExit) as context:
-            self.processor.process_text_with_file_path(text)
+            self.processor.process_text(text)
 
     def test_max_length_truncation(self):
         """测试最大长度截断"""
         long_text = "a" * (GLOBAL_MODEL_CONFIG.max_context_size + 100)
-        result = self.processor.process_text_with_file_path(long_text)
+        result = self.processor.process_text(long_text)
         self.assertTrue(len(result) <= GLOBAL_MODEL_CONFIG.max_context_size)
         self.assertIn("输入太长内容已自动截断", result)
 
@@ -123,7 +125,7 @@ class TestGPTContextProcessor(unittest.TestCase):
         text = "@symbol_llm_query/a @symbol_llm_query.py/b"
         with patch("llm_query.PatchPromptBuilder.build") as mock_build:
             mock_build.return_value = "符号补丁 ['a', 'b']"
-            result = self.processor.process_text_with_file_path(text)
+            result = self.processor.process_text(text)
             self.assertIn("符号补丁 ['a', 'b']", result)
 
     def test_url_processing(self):
@@ -131,7 +133,7 @@ class TestGPTContextProcessor(unittest.TestCase):
         text = "@https://example.com"
         with patch("llm_query._handle_url") as mock_handle_url:
             mock_handle_url.return_value = "URL处理结果"
-            result = self.processor.process_text_with_file_path(text)
+            result = self.processor.process_text(text)
             self.assertIn("URL处理结果", result)
             mock_handle_url.assert_called_once_with(
                 CmdNode(command="https://example.com", command_type=None, args=None)
@@ -142,7 +144,7 @@ class TestGPTContextProcessor(unittest.TestCase):
         text = "@https://example.com @https://another.com"
         with patch("llm_query._handle_url") as mock_handle_url:
             mock_handle_url.side_effect = ["URL1结果", "URL2结果"]
-            result = self.processor.process_text_with_file_path(text)
+            result = self.processor.process_text(text)
             self.assertIn("URL1结果", result)
             self.assertIn("URL2结果", result)
             self.assertEqual(mock_handle_url.call_count, 2)
@@ -154,10 +156,10 @@ class TestGPTContextProcessor(unittest.TestCase):
         text = "开始 @https://example.com 中间 @clipboard 结束"
         with (
             patch("llm_query._handle_url") as mock_handle_url,
-            patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容"}),
+            patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}),
         ):
             mock_handle_url.return_value = "URL处理结果"
-            result = self.processor.process_text_with_file_path(text)
+            result = self.processor.process_text(text)
             self.assertIn("URL处理结果", result)
             self.assertIn("剪贴板内容", result)
             mock_handle_url.assert_called_once_with(
@@ -167,18 +169,18 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_single_symbol_processing(self):
         """测试单个符号节点处理"""
         text = "..test_symbol.."
-        with patch.object(self.processor, "patch_symbol_with_prompt") as mock_process:
+        with patch.object(self.processor, "generate_symbol_patch_prompt") as mock_process:
             mock_process.return_value = "符号处理结果"
-            result = self.processor.process_text_with_file_path(text)
+            result = self.processor.process_text(text)
             mock_process.assert_called_once_with([SearchSymbolNode(symbols=["test_symbol"])])
             self.assertEqual(result, "符号处理结果test_symbol")
 
     def test_multiple_symbols_processing(self):
         """测试多个符号节点处理"""
         text = "..symbol1.. ..symbol2.."
-        with patch.object(self.processor, "patch_symbol_with_prompt") as mock_process:
+        with patch.object(self.processor, "generate_symbol_patch_prompt") as mock_process:
             mock_process.return_value = "多符号处理结果"
-            result = self.processor.process_text_with_file_path(text)
+            result = self.processor.process_text(text)
             mock_process.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
             self.assertEqual(result, "多符号处理结果symbol1 symbol2")
 
@@ -186,11 +188,11 @@ class TestGPTContextProcessor(unittest.TestCase):
         """测试符号节点与混合内容处理"""
         text = "前置内容..symbol1..中间@clipboard ..symbol2..结尾"
         with (
-            patch.object(self.processor, "patch_symbol_with_prompt") as mock_symbol,
-            patch.dict(self.processor.cmd_map, {"clipboard": lambda x: "剪贴板内容"}),
+            patch.object(self.processor, "generate_symbol_patch_prompt") as mock_symbol,
+            patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}),
         ):
             mock_symbol.return_value = "符号处理结果"
-            result = self.processor.process_text_with_file_path(text)
+            result = self.processor.process_text(text)
             mock_symbol.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
             self.assertEqual(result, "符号处理结果前置内容symbol1中间剪贴板内容 symbol2结尾")
 
@@ -221,7 +223,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             ):
                 mock_process_dir.return_value = "[processed directory]"
                 text = f"@{yml_path}"
-                result = self.processor.process_text_with_file_path(text)
+                result = self.processor.process_text(text)
 
                 # 验证配置文件头
                 self.assertIn(f"[project config start]: {yml_path}", result)
@@ -240,8 +242,8 @@ class TestGPTContextProcessor(unittest.TestCase):
             # 测试文件不存在的情况
             with patch("llm_query.under_projects_dir", return_value=True):
                 text = "@projects/non_exist.yml"
-                with self.assertRaises(FileNotFoundError):
-                    self.processor.process_text_with_file_path(text)
+                with self.assertRaises(SystemExit):
+                    self.processor.process_text(text)
 
             # 测试无效配置文件
             invalid_yml = os.path.join(tmpdir, "invalid.yml")
@@ -250,8 +252,8 @@ class TestGPTContextProcessor(unittest.TestCase):
 
             with patch("llm_query.under_projects_dir", return_value=True):
                 text = f"@{invalid_yml}"
-                with self.assertRaises(yaml.parser.ParserError):
-                    self.processor.process_text_with_file_path(text)
+                with self.assertRaises(SystemExit):
+                    self.processor.process_text(text)
 
     def test_patch_symbol_with_prompt(self):
         """测试生成符号补丁提示词"""
@@ -273,7 +275,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             with patch("llm_query.PatchPromptBuilder") as mock_builder:
                 mock_instance = mock_builder.return_value
                 mock_instance.build.return_value = "test prompt"
-                result = self.processor.patch_symbol_with_prompt(["test_symbol"])
+                result = self.processor.generate_symbol_patch_prompt(["test_symbol"])
                 self.assertEqual(result, "test prompt")
                 mock_builder.assert_called_once_with(False, ["test_symbol"])
                 mock_instance.build.assert_called_once()
@@ -282,7 +284,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             with patch("llm_query.PatchPromptBuilder") as mock_builder:
                 mock_instance = mock_builder.return_value
                 mock_instance.build.return_value = "multi symbol prompt"
-                result = self.processor.patch_symbol_with_prompt(["symbol1", "symbol2"])
+                result = self.processor.generate_symbol_patch_prompt(["symbol1", "symbol2"])
                 self.assertEqual(result, "multi symbol prompt")
                 mock_builder.assert_called_once_with(False, ["symbol1", "symbol2"])
                 mock_instance.build.assert_called_once()
@@ -1274,7 +1276,7 @@ class TestChatbotUI(unittest.TestCase):
             self.assertEqual(list(result), ["response"])
             mock_query.assert_called_with(
                 api_key=GLOBAL_MODEL_CONFIG.key,
-                prompt=self.mock_gpt.process_text_with_file_path.return_value,
+                prompt=self.mock_gpt.process_text.return_value,
                 model=GLOBAL_MODEL_CONFIG.model_name,
                 base_url=GLOBAL_MODEL_CONFIG.base_url,
                 stream=True,

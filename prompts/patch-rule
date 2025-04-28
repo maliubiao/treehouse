@@ -33,3 +33,5 @@
 - 符号名，文件名要与输出的代码块完全一致
 - 代码输出以[modified file] or [modified symbol] 开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified file], [SYMBOL START]输入对应[modified symbol]
 - 后边跟随[source code start]代码内容[source code end]
+- 删除的符号格式同[modified symbol], source code内容置空
+

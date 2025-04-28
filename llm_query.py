@@ -1275,7 +1275,7 @@ def _handle_project(yml_path: str) -> str:
 
 def under_projects_dir(path: str, projects_dir="projects") -> bool:
     """检查路径是否在项目目录下且以.yml结尾"""
-    projects_dir = os.path.join(os.path.dirname(__file__), projects_dir)
+    projects_dir = os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, projects_dir)
     return (path.endswith(".yml") or path.endswith(".yaml")) and os.path.abspath(path).startswith(
         os.path.abspath(projects_dir)
     )
@@ -2368,7 +2368,7 @@ def send_http_request(url, is_plain_text=False):
         is_plain_text: 是否返回纯文本内容，默认为False返回JSON
     """
     with ProxyEnvDisable():
-        response = requests.get(url, proxies={"http": None, "https": None}, timeout=5)
+        response = requests.get(url, proxies={"http": None, "https": None}, timeout=30)
         response.raise_for_status()
 
     return response.text if is_plain_text else response.json()
@@ -2478,64 +2478,53 @@ def parse_project_text(text: str) -> ProjectSections:
 
 
 # 定义正则表达式常量
-CMD_PATTERN = r"(?<!\\)@[^ \u3000]+"  # 匹配@命令，排除转义@、英文空格和中文全角空格
+CMD_PATTERN = r"(?<!\\)@[^ \u3000]+"
 
 
 class GPTContextProcessor:
-    """文本处理类，封装所有文本处理相关功能"""
+    """处理文本中的GPT命令和符号，生成上下文提示"""
 
     def __init__(self):
-        self.cmd_map = self._initialize_cmd_map()
-        self.current_length = 0
-        self.cmds = []
+        self.cmd_handlers = self._initialize_command_handlers()
+        self.current_context_length = 0
+        self.processed_nodes = []
         self._local_files = set()
-        self._add_gpt_flags()
 
-    def _initialize_cmd_map(self):
-        """初始化命令映射表"""
+    def _initialize_command_handlers(self) -> dict:
+        """初始化命令处理器映射"""
         return {
-            "clipboard": self.get_clipboard_content,
-            "listen": self.monitor_clipboard,
-            "tree": self.get_directory_context_wrapper,
-            "treefull": self.get_directory_context_wrapper,
-            "last": self.read_last_query,
-            "symbol": self.patch_symbol_with_prompt,
+            "clipboard": get_clipboard_content,
+            "listen": monitor_clipboard,
+            "tree": get_directory_context_wrapper,
+            "treefull": get_directory_context_wrapper,
+            "last": read_last_query,
+            "symbol": self.generate_symbol_patch_prompt,
+            **{flag: self._update_gpt_flag for flag in GPT_FLAGS},
         }
 
-    def _add_gpt_flags(self):
-        """添加GPT flags相关处理函数"""
+    def _update_gpt_flag(self, cmd: CmdNode) -> str:
+        """更新GPT标志状态"""
+        GPT_FLAGS[cmd.command] = True
+        return ""
 
-        def update_gpt_flag(cmd):
-            """更新GPT标志的函数"""
-            GPT_FLAGS.update({cmd.command: True})
-            return ""
-
-        for flag in GPT_FLAGS:
-            self.cmd_map[flag] = update_gpt_flag
-
-    def symbol_node_from_text(self, text: str) -> SearchSymbolNode:
-        """从文本中提取符号节点"""
-        symbols = re.findall(r"\.\.(.*?)\.\.", text)
-        return SearchSymbolNode(symbols=symbols)
-
-    def preprocess_text(self, text) -> List[Union[TextNode, CmdNode, SearchSymbolNode, TemplateNode]]:
-        """预处理文本，将文本按{}分段，并提取@命令"""
+    def parse_text_into_nodes(self, text: str) -> List[Union[TextNode, CmdNode, SearchSymbolNode]]:
+        """将输入文本解析为结构化节点"""
         result = []
         cmd_groups = defaultdict(list)
 
-        # 提取符号节点（..符号..）
+        # 提取符号节点
         symbol_matches = re.findall(r"\.\.(.*?)\.\.", text)
         text = re.sub(r"\.\.(.*?)\.\.", r"\1", text)
         symbol_node = SearchSymbolNode(symbols=symbol_matches)
+
+        # 提取命令节点
         commands = re.findall(CMD_PATTERN, text)
-        # 将命令之间的文本作为普通文本处理
         text_parts = re.split(CMD_PATTERN, text)
+
         for i, part in enumerate(text_parts):
-            if part:  # 处理普通文本
-                # 处理转义的@符号
-                part = part.replace("\\@", "@")
-                result.append(TextNode(content=part))
-            if i < len(commands):  # 处理命令
+            if part:
+                result.append(TextNode(content=part.replace("\\@", "@")))
+            if i < len(commands):
                 cmd = commands[i].lstrip("@")
                 if ":" in cmd and not cmd.startswith("http"):
                     symbol, _, arg = cmd.partition(":")
@@ -2544,195 +2533,106 @@ class GPTContextProcessor:
                     result.append(CmdNode(command=cmd.strip()))
 
         # 处理带参数的命令
-        last_cmd_index = -1
-        # 查找最后一个CmdNode的位置
-        for i, node in enumerate(result):
-            if isinstance(node, CmdNode):
-                last_cmd_index = i
-        for symbol, args in cmd_groups.items():
-            if last_cmd_index != -1:
+        if cmd_groups:
+            last_cmd_index = len(result) - 1
+            for symbol, args in cmd_groups.items():
                 result.insert(last_cmd_index + 1, CmdNode(command=symbol, args=args))
-            else:
-                result.insert(0, CmdNode(command=symbol, args=args))
 
+        # 添加符号节点
         if symbol_node.symbols:
-            if last_cmd_index < 0:
-                result.append(symbol_node)
-            else:
-                result.insert(last_cmd_index + 1, symbol_node)
+            result.append(symbol_node)
+
         return result
 
-    def read_context_config(self, path: str) -> List[CmdNode]:
-        """读取@配置文件"""
-        project_config_str = Path(path).read_text(encoding="utf-8")
-        config = yaml.safe_load(project_config_str)
-        if config and config.get("context", []):
-            assert isinstance(config["context"], list), "配置文件中的context字段必须是列表"
-            cmds: List[CmdNode] = []
-            context = config["context"]
-            for i in context:
-                if re.match(r"^\.\..*\.\.$", i):
-                    cmds.append(SearchSymbolNode(symbols=[i[2:-2]]))
-                elif re.match("symbol_.*", i):
-                    i = i[len("symbol_") :]
-                    cmds.append(CmdNode(command="symbol", args=[i]))
-            return cmds
-        else:
-            return []
+    def process_text(self, text: str, ignore_text: bool = False, tokens_left: int = None) -> str:
+        """处理文本并生成上下文提示"""
+        if not tokens_left:
+            tokens_left = GLOBAL_MODEL_CONFIG.max_context_size
 
-    def process_text_with_file_path(
-        self, text: str, ignore_text: bool = False, tokens_left: int = GLOBAL_MODEL_CONFIG.max_context_size
-    ) -> str:
-        """处理包含@...的文本"""
-        # Windows 路径兼容处理：将\@转换为@
-        if os.name == "nt":
-            text = text.replace("\\@", "@")
+        nodes = self.parse_text_into_nodes(text)
+        self.processed_nodes = nodes.copy()
 
-        parts = self.preprocess_text(text)
-        for node in parts:
-            if isinstance(node, CmdNode):
-                if under_projects_dir(node.command):
-                    parts = self.read_context_config(node.command) + parts
-        self.cmds = parts.copy()
-        left_nodes = []
-        symbols_nodes = []
-        for i in parts:
-            if isinstance(i, SearchSymbolNode):
-                symbols_nodes.append(i)
-                continue
-            elif isinstance(i, CmdNode):
-                if i.command.startswith("symbol"):
-                    if i.command.startswith("symbol_"):
-                        i.command = "symbol"
-                        i.args = i.command[len("symbol_") :]
-                    symbols_nodes.append(i)
-                    continue
-            left_nodes.append(i)
-        parts = left_nodes
-        for i, node in enumerate(parts):
+        # 处理项目配置文件
+        for node in nodes:
+            if isinstance(node, CmdNode) and under_projects_dir(node.command):
+                nodes = self.read_context_config(node.command) + nodes
+
+        # 分离符号节点和其他节点
+        symbol_nodes = [
+            n
+            for n in nodes
+            if isinstance(n, (SearchSymbolNode, CmdNode))
+            and (isinstance(n, SearchSymbolNode) or n.command.startswith("symbol"))
+        ]
+        other_nodes = [n for n in nodes if n not in symbol_nodes]
+
+        # 处理非符号节点
+        processed_parts = []
+        for node in other_nodes:
             if isinstance(node, TextNode):
-                if ignore_text:
-                    parts[i] = ""
-                    continue
-                parts[i] = node.content
-                self.current_length += len(node.content)
+                if not ignore_text:
+                    processed_parts.append(node.content)
+                    self.current_context_length += len(node.content)
             elif isinstance(node, CmdNode):
-                processed_text = self._process_match(node)
-                parts[i] = processed_text
-                self.current_length += len(processed_text)
-            elif isinstance(node, SearchSymbolNode):
-                parts[i] = self._process_symbol(node)
-                self.current_length += len(parts[i])
-            elif isinstance(node, TemplateNode):
-                template_replacement = self._process_match(node.template)
-                args = []
-                for template_cmd in node.commands:
-                    arg_replacement = self._process_match(template_cmd)
-                    if arg_replacement:
-                        args.append(arg_replacement)
-                replacement = template_replacement.format(*args)
-                parts[i] = replacement
-                self.current_length += len(replacement)
-            else:
-                raise ValueError(f"无法识别的部分类型: {type(node)}")
-        add_text = ""
-        if symbols_nodes:
-            add_text = self.patch_symbol_with_prompt(symbols_nodes)
-        return add_text + self._finalize_text("".join(parts), tokens_left=tokens_left)
+                processed_text = self._process_command(node)
+                processed_parts.append(processed_text)
+                self.current_context_length += len(processed_text)
 
-    def _process_match(self, match: CmdNode) -> Tuple[str]:
-        """处理单个匹配项或匹配项列表"""
-        try:
-            return self._get_replacement(match)
-        except Exception as e:
-            error_match = " ".join([m.command for m in match]) if isinstance(match, list) else match.command
-            handle_processing_error(error_match, e)
+        # 处理符号节点
+        symbol_prompt = ""
+        if symbol_nodes:
+            symbol_prompt = self.generate_symbol_patch_prompt(symbol_nodes)
+            tokens_left -= len(symbol_prompt)
 
-    def _symbol_format(self, symbol):
-        return {
-            "symbol_name": symbol["name"],
-            "file_path": symbol["file_path"],
-            "code_range": ((symbol["start_line"], symbol["start_col"]), (symbol["end_line"], symbol["end_col"])),
-            "block_range": symbol["block_range"],
-            "block_content": symbol["code"].encode("utf-8"),
-        }
+        return symbol_prompt + self._finalize_output("".join(processed_parts), tokens_left)
 
-    def _extract_include_files(self):
-        for node in self.cmds:
-            if isinstance(node, CmdNode):
-                if is_local_file(node.command):
-                    self._local_files.add(node.command)
-        return self._local_files
-
-    def _process_symbol(self, symbol_name: SearchSymbolNode) -> str:
-        """处理符号"""
-
-        symbol_map = {}
-        symbols = perform_search(
-            symbol_name.symbols,
-            os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG),
-            max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
-            file_list=self._extract_include_files() if GPT_FLAGS.get(GPT_FLAG_SEARCH_FILES) else None,
-        )
-        for symbol in symbols.values():
-            symbol_map[symbol["name"]] = self._symbol_format(symbol)
-        GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH].update(symbol_map)
-        return generate_patch_prompt(
-            CmdNode(command="symbol", args=list(symbol_map.keys())), symbol_map, GPT_FLAGS.get(GPT_FLAG_PATCH)
-        )
-
-    def patch_symbol_with_prompt(self, symbol_names):
-        """处理符号补丁提示"""
-        builder = PatchPromptBuilder(GPT_FLAGS.get(GPT_FLAG_PATCH), symbol_names)
+    def generate_symbol_patch_prompt(self, symbol_nodes):
+        """生成符号补丁提示"""
+        builder = PatchPromptBuilder(GPT_FLAGS.get(GPT_FLAG_PATCH), symbol_nodes)
         return builder.build()
 
-    def _get_replacement(self, match: CmdNode):
-        """根据匹配类型获取替换内容"""
-        if is_prompt_file(match.command):
-            return _handle_prompt_file(match)
-        elif is_local_file(match.command):
-            return _handle_local_file(match)
-        elif is_url(match.command):
-            return _handle_url(match)
-        elif self._is_command(match.command):
-            return _handle_command(match, self.cmd_map)
-        else:
-            raise ValueError(f"无法处理的@项目: {match.command}")
+    def _process_command(self, cmd_node: CmdNode) -> str:
+        """处理单个命令节点"""
+        try:
+            if is_prompt_file(cmd_node.command):
+                return _handle_prompt_file(cmd_node)
+            elif is_local_file(cmd_node.command):
+                return _handle_local_file(cmd_node)
+            elif is_url(cmd_node.command):
+                return _handle_url(cmd_node)
+            elif cmd_node.command in self.cmd_handlers:
+                return self.cmd_handlers[cmd_node.command](cmd_node)
+            raise ValueError(f"无法处理的命令: {cmd_node.command}")
+        except Exception as e:
+            handle_processing_error(cmd_node.command, e)
 
-    def _finalize_text(self, text, tokens_left=GLOBAL_MODEL_CONFIG.max_context_size):
-        """最终处理文本"""
+    def _finalize_output(self, text: str, max_tokens: int) -> str:
+        """最终处理输出文本"""
         truncated_suffix = "\n[输入太长内容已自动截断]"
-        if len(text) > tokens_left:
-            text = text[: tokens_left - len(truncated_suffix)] + truncated_suffix
+        if len(text) > max_tokens:
+            text = text[: max_tokens - len(truncated_suffix)] + truncated_suffix
 
         with open(LAST_QUERY_FILE, "w+", encoding="utf8") as f:
             f.write(text)
         return text
 
-    def _is_command(self, match):
-        """判断是否为命令"""
-        return any(match.startswith(cmd) for cmd in self.cmd_map) and not os.path.exists(match)
+    def read_context_config(self, config_path: str) -> List[Union[CmdNode, SearchSymbolNode]]:
+        """读取上下文配置文件"""
+        try:
+            config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+            if not config or not config.get("context"):
+                return []
 
-    @staticmethod
-    def get_clipboard_content(_):
-        """获取剪贴板内容"""
-        text = get_clipboard_content_string()
-        return f"\n[clipboard content start]\n{text}\n[clipboard content end]\n"
-
-    @staticmethod
-    def monitor_clipboard(_, debug=False):
-        """监控剪贴板内容"""
-        return monitor_clipboard(_, debug)
-
-    @staticmethod
-    def get_directory_context_wrapper(tag):
-        """获取目录上下文"""
-        return get_directory_context_wrapper(tag)
-
-    @staticmethod
-    def read_last_query(_):
-        """读取最后一次查询内容"""
-        return read_last_query(_)
+            nodes = []
+            for item in config["context"]:
+                if re.match(r"^\.\..*\.\.$", item):
+                    nodes.append(SearchSymbolNode(symbols=[item[2:-2]]))
+                elif item.startswith("symbol_"):
+                    nodes.append(CmdNode(command="symbol", args=[item[len("symbol_") :]]))
+            return nodes
+        except Exception as e:
+            handle_processing_error(config_path, e)
+            return []
 
 
 class PatchPromptBuilder:
@@ -3214,7 +3114,7 @@ def handle_ask_mode(program_args, proxies):
     model_switch = ModelSwitch()
     model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
-    text = context_processor.process_text_with_file_path(program_args.ask)
+    text = context_processor.process_text(program_args.ask)
     print(text)
     response_data = model_switch.query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
     process_response(
@@ -3435,7 +3335,7 @@ class ChatbotUI:
         Args:
             prompt: 用户输入的提示文本
         """
-        processed_text = self.gpt_processor.process_text_with_file_path(prompt)
+        processed_text = self.gpt_processor.process_text(prompt)
         return query_gpt_api(
             api_key=GLOBAL_MODEL_CONFIG.key,
             prompt=processed_text,
@@ -3856,7 +3756,7 @@ class ModelSwitch:
         context_processor = GPTContextProcessor()
         self.select(architect_model)
         config = self._get_model_config(architect_model)
-        text = context_processor.process_text_with_file_path(prompt, tokens_left=config.max_context_size or 32 * 1024)
+        text = context_processor.process_text(prompt, tokens_left=config.max_context_size or 32 * 1024)
         architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
             encoding="utf-8"
         )
@@ -3879,7 +3779,7 @@ class ModelSwitch:
                 print(f"🔧 开始执行任务: {job['content']}")
                 part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMB_EXAMPLE_A)}\n{CHANGE_LOG_HEADER}\n"
                 part_b = f"{PUA_PROMPT}{coder_prompt}[your job start]:\n{job['content']}\n[your job end]"
-                context = context_processor.process_text_with_file_path(
+                context = context_processor.process_text(
                     prompt,
                     ignore_text=True,
                     tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
