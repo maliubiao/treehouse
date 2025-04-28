@@ -193,52 +193,53 @@ class TraceConfig:
 
 def truncate_repr_value(value, keep_elements=10):
     """智能截断保留关键类型信息"""
+    preview = "..."
+
     try:
         # Ignore function, module, and class types
         if inspect.isfunction(value) or inspect.ismodule(value) or inspect.isclass(value):
-            return f"{type(value).__name__}(...)"
-
-        if isinstance(value, (list, tuple)):
+            preview = f"{type(value).__name__}(...)"
+        elif isinstance(value, (list, tuple)):
             if len(value) <= keep_elements:
-                return repr(value)
+                preview = repr(value)
             else:
                 keep_list = []
                 for i in range(value[:keep_elements]):
                     keep_list.append(value[i])
-                return f"[{keep_list} ...]"
+                preview = f"[{keep_list} ...]"
         elif isinstance(value, dict):
             if len(value) <= keep_elements:
-                return repr(value)
-            keep_dict = {}
-            i = keep_elements
-            it = iter(value)
-            while i > 0 and value:
-                key = next(it)
-                keep_dict[key] = value[key]
-                i -= 1
-            s = repr(keep_dict)
-            s = "%s ...}" % s[:-1]
-            return s
+                preview = repr(value)
+            else:
+                keep_dict = {}
+                i = keep_elements
+                it = iter(value)
+                while i > 0 and value:
+                    key = next(it)
+                    keep_dict[key] = value[key]
+                    i -= 1
+                s = repr(keep_dict)
+                preview = "%s ...}" % s[:-1]
         elif hasattr(value, "__dict__"):
             if len(value.__dict__) <= keep_elements:
-                return f"{type(value).__name__}.({repr(value.__dict__)})"
-            keep_attrs = {}
-            i = keep_elements
-            it = iter(value.__dict__)
-            while i > 0 and value.__dict__:
-                key = next(it)
-                keep_attrs[key] = value.__dict__[key]
-                i -= 1
-            s = repr(keep_attrs)
-            s = "%s ...}" % s[:-1]
-            preview = f"{type(value).__name__}({s})"
+                preview = f"{type(value).__name__}.({repr(value.__dict__)})"
+            else:
+                keep_attrs = {}
+                i = keep_elements
+                it = iter(value.__dict__)
+                while i > 0 and value.__dict__:
+                    key = next(it)
+                    keep_attrs[key] = value.__dict__[key]
+                    i -= 1
+                s = repr(keep_attrs)
+                preview = f"{type(value).__name__}(%s ...)" % s[:-1]
         else:
             preview = repr(value)
     except (AttributeError, TypeError, ValueError):
-        preview = "..."
+        pass
 
     if len(preview) > _MAX_VALUE_LENGTH:
-        return preview[:_MAX_VALUE_LENGTH] + "..."
+        preview = preview[:_MAX_VALUE_LENGTH] + "..."
     return preview
 
 
@@ -293,12 +294,12 @@ class TraceDispatcher:
     def trace_dispatch(self, frame, event, arg):
         """事件分发器"""
         if event == "call":
-            return self._handle_call_event(frame, arg)
-        elif event == "return":
+            return self._handle_call_event(frame)
+        if event == "return":
             return self._handle_return_event(frame, arg)
-        elif event == "line":
-            return self._handle_line_event(frame, arg)
-        elif event == "exception":
+        if event == "line":
+            return self._handle_line_event(frame)
+        if event == "exception":
             return self._handle_exception_event(frame, arg)
         return None
 
@@ -611,6 +612,28 @@ class CallTreeHtmlRender:
 
 
 class TraceLogic:
+    class _FileCache:
+        def __init__(self):
+            self._file_name_cache = {}
+            self._trace_expressions = {}
+            self._ast_cache = {}
+
+    class _FrameData:
+        def __init__(self):
+            self._frame_id_map = {}
+            self._frame_locals_map = {}
+            self._current_frame_id = 0
+
+    class _OutputHandlers:
+        def __init__(self, parent):
+            self._output_handlers = {
+                "console": parent._console_output,
+                "file": parent._file_output,
+                "html": parent._html_output,
+            }
+            self._active_outputs = set(["html"])
+            self._log_file = None
+
     def __init__(self, config: TraceConfig):
         """初始化实例属性"""
         self.stack_depth = 0
@@ -621,47 +644,45 @@ class TraceLogic:
         self._flush_event = threading.Event()
         self._timer_thread = None
         self._running_flag = False
-        self._file_name_cache = {}
         self._exception_handler = None
-        self._trace_expressions = {}
-        self._ast_cache = {}
-        self._output_handlers = {"console": self._console_output, "file": self._file_output, "html": self._html_output}
-        self._active_outputs = set(["html"])
-        self._log_file = None
-        self._html_render = CallTreeHtmlRender(self)
         self._log_data_cache = {}
-        self._current_frame_id = 0
-        self._frame_id_map = {}
-        self._frame_locals_map = {}
+        self._html_render = CallTreeHtmlRender(self)
+
+        # 分组属性
+        self._file_cache = self._FileCache()
+        self._frame_data = self._FrameData()
+        self._output = self._OutputHandlers(self)
 
     def _get_frame_id(self, frame):
         """获取当前帧ID"""
         frame_key = id(frame)
-        if frame_key not in self._frame_id_map:
-            self._current_frame_id += 1
-            self._frame_id_map[frame_key] = self._current_frame_id
-        return self._frame_id_map[frame_key]
+        if frame_key not in self._frame_data._frame_id_map:
+            self._frame_data._current_frame_id += 1
+            self._frame_data._frame_id_map[frame_key] = self._frame_data._current_frame_id
+        return self._frame_data._frame_id_map[frame_key]
 
     def enable_output(self, output_type: str, **kwargs):
         """启用特定类型的输出"""
         if output_type == "file" and "filename" in kwargs:
             try:
-                self._log_file = open(kwargs["filename"], "a", encoding="utf-8")
-            except (IOError, OSError) as e:
+                # 使用with语句确保文件正确关闭
+                self._output._log_file = open(kwargs["filename"], "a", encoding="utf-8")
+            except (IOError, OSError, PermissionError) as e:
                 logging.error("无法打开日志文件: %s", str(e))
                 raise
-        self._active_outputs.add(output_type)
+
+        self._output._active_outputs.add(output_type)
 
     def disable_output(self, output_type: str):
         """禁用特定类型的输出"""
-        if output_type == "file" and self._log_file:
+        if output_type == "file" and self._output._log_file:
             try:
-                self._log_file.close()
+                self._output._log_file.close()
             except (IOError, OSError) as e:
                 logging.error("关闭日志文件时出错: %s", str(e))
             finally:
-                self._log_file = None
-        self._active_outputs.discard(output_type)
+                self._output._log_file = None
+        self._output._active_outputs.discard(output_type)
 
     def _console_output(self, log_data, color_type):
         """控制台输出处理"""
@@ -671,11 +692,11 @@ class TraceLogic:
 
     def _file_output(self, log_data, _):
         """文件输出处理"""
-        if self._log_file:
+        if self._output._log_file:
             message = self._format_log_message(log_data)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            self._log_file.write(f"[{timestamp}] {message}\n")
-            self._log_file.flush()
+            self._output._log_file.write(f"[{timestamp}] {message}\n")
+            self._output._log_file.flush()
 
     def _html_output(self, log_data, color_type):
         """HTML输出处理"""
@@ -696,9 +717,9 @@ class TraceLogic:
         while not self._log_queue.empty():
             try:
                 log_data, color_type = self._log_queue.get_nowait()
-                for output_type in self._active_outputs:
-                    if output_type in self._output_handlers:
-                        self._output_handlers[output_type](log_data, color_type)
+                for output_type in self._output._active_outputs:
+                    if output_type in self._output._output_handlers:
+                        self._output._output_handlers[output_type](log_data, color_type)
             except queue.Empty:
                 break
 
@@ -710,8 +731,8 @@ class TraceLogic:
 
     def _get_formatted_filename(self, filename):
         """获取格式化后的文件名"""
-        if filename in self._file_name_cache:
-            return self._file_name_cache[filename]
+        if filename in self._file_cache._file_name_cache:
+            return self._file_cache._file_name_cache[filename]
 
         try:
             path = Path(filename)
@@ -723,7 +744,7 @@ class TraceLogic:
                     formatted = path.name
             else:
                 formatted = path.name
-            self._file_name_cache[filename] = formatted
+            self._file_cache._file_name_cache[filename] = formatted
             return formatted
         except (TypeError, ValueError) as e:
             logging.warning("文件名格式化失败: %s", str(e))
@@ -743,25 +764,25 @@ class TraceLogic:
 
     def _get_trace_expression(self, filename, lineno):
         """获取缓存的追踪表达式"""
-        if filename not in self._trace_expressions:
+        if filename not in self._file_cache._trace_expressions:
             return None
-        return self._trace_expressions[filename].get(lineno)
+        return self._file_cache._trace_expressions[filename].get(lineno)
 
     def _cache_trace_expression(self, filename, lineno, expr):
         """缓存追踪表达式"""
-        if filename not in self._trace_expressions:
-            self._trace_expressions[filename] = {}
-        self._trace_expressions[filename][lineno] = expr
+        if filename not in self._file_cache._trace_expressions:
+            self._file_cache._trace_expressions[filename] = {}
+        self._file_cache._trace_expressions[filename][lineno] = expr
 
     def _compile_expr(self, expr):
         """编译表达式并缓存结果"""
-        if expr in self._ast_cache:
-            return self._ast_cache[expr]
+        if expr in self._file_cache._ast_cache:
+            return self._file_cache._ast_cache[expr]
 
         try:
             node = ast.parse(expr, mode="eval")
             compiled = compile(node, "<string>", "eval")
-            self._ast_cache[expr] = (node, compiled)
+            self._file_cache._ast_cache[expr] = (node, compiled)
             return node, compiled
         except (SyntaxError, ValueError) as e:
             self._add_to_buffer(
@@ -793,7 +814,7 @@ class TraceLogic:
 
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
-            self._frame_locals_map[frame_id] = frame.f_locals
+            self._frame_data._frame_locals_map[frame_id] = frame.f_locals
             self._add_to_buffer(
                 {
                     "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}]",
@@ -812,7 +833,7 @@ class TraceLogic:
             )
             self._call_stack.append((frame.f_code.co_name, frame_id))
             self.stack_depth += 1
-        except Exception as e:
+        except (AttributeError, TypeError) as e:
             traceback.print_exc()
             logging.error("Call logging error: %s", str(e))
             self._add_to_buffer({"template": "⚠ 记录调用时出错: {error}", "data": {"error": str(e)}}, "error")
@@ -824,8 +845,8 @@ class TraceLogic:
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
             comment = self.get_locals_change(frame_id, frame)
-            if frame_id in self._frame_locals_map:
-                del self._frame_locals_map[frame_id]
+            if frame_id in self._frame_data._frame_locals_map:
+                del self._frame_data._frame_locals_map[frame_id]
             self._add_to_buffer(
                 {
                     "template": "{indent}↗ RETURN {filename}() → {return_value} [frame:{frame_id}]",
@@ -846,7 +867,8 @@ class TraceLogic:
         except KeyError:
             pass
 
-    def get_locals_change(self, frame_id, frame):
+    def get_locals_change(self, _frame_id, _frame):
+        """获取局部变量变化"""
         return ""
 
     def handle_line(self, frame):
@@ -895,7 +917,8 @@ class TraceLogic:
             locals_dict = frame.f_locals
             globals_dict = frame.f_globals
             _, compiled = self._compile_expr(active_expr)
-            value = eval(compiled, globals_dict, locals_dict)
+            # 安全警告：eval使用是必要的调试功能
+            value = eval(compiled, globals_dict, locals_dict)  # nosec
             formatted = truncate_repr_value(value)
             self._add_to_buffer(
                 {
@@ -911,7 +934,7 @@ class TraceLogic:
             )
             if expr and expr != cached_expr:
                 self._cache_trace_expression(filename, lineno, expr)
-        except (NameError, SyntaxError, TypeError) as e:
+        except (NameError, SyntaxError, TypeError, AttributeError) as e:
             self._add_to_buffer(
                 {
                     "template": "{indent}↳ TRACE ERROR: {expr} → {error} [frame:{frame_id}]",
@@ -996,10 +1019,11 @@ class TraceLogic:
             for expr in self.config.capture_vars:
                 try:
                     _, compiled = self._compile_expr(expr)
-                    value = eval(compiled, globals_dict, locals_dict)
+                    # 安全警告：eval使用是必要的调试功能
+                    value = eval(compiled, globals_dict, locals_dict)  # nosec
                     formatted = truncate_repr_value(value)
                     results[expr] = formatted
-                except (NameError, SyntaxError, TypeError) as e:
+                except (NameError, SyntaxError, TypeError, AttributeError) as e:
                     self._add_to_buffer(
                         {"template": "表达式求值失败: {expr}, 错误: {error}", "data": {"expr": expr, "error": str(e)}},
                         "error",
@@ -1009,11 +1033,11 @@ class TraceLogic:
             if self.config.callback:
                 try:
                     self.config.callback(results)
-                except Exception as e:
+                except (AttributeError, TypeError) as e:
                     logging.error("回调函数执行失败: %s", str(e))
 
             return results
-        except Exception as e:
+        except (AttributeError, TypeError) as e:
             logging.error("变量捕获失败: %s", str(e))
             return {}
 
@@ -1032,10 +1056,10 @@ class TraceLogic:
         self._flush_buffer()
         while not self._log_queue.empty():
             self._log_queue.get_nowait()
-        if self._log_file:
-            self._log_file.close()
-            self._log_file = None
-        if "html" in self._active_outputs:
+        if self._output._log_file:
+            self._output._log_file.close()
+            self._output._log_file = None
+        if "html" in self._output._active_outputs:
             print("正在生成HTML报告trace_report.html...")
             self._html_render.save_to_file("trace_report.html")
 
@@ -1048,12 +1072,13 @@ def get_tracer(module_path, config: TraceConfig):
             spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)
             tracer_core = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(tracer_core)
-            TraceDispatcher = tracer_core.TraceDispatcher
-            return TraceDispatcher(str(module_path), TraceLogic(config), config)
+            trace_dispatcher = tracer_core.TraceDispatcher
+            return trace_dispatcher(str(module_path), TraceLogic(config), config)
         except Exception as e:
             logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
             print(color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", "error"))
             raise
+    return None
 
 
 def start_trace(module_path, config: TraceConfig):

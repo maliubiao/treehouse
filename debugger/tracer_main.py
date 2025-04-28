@@ -128,7 +128,7 @@ def open_trace_report() -> None:
             webbrowser.open(f"file://{report_path}")
         else:
             webbrowser.open(f"file://{report_path}")
-    except Exception as e:
+    except (OSError, webbrowser.Error) as e:
         print(color_wrap(f"❌ 无法打开跟踪报告: {str(e)}", "error"))
 
 

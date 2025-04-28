@@ -1,5 +1,4 @@
 import dis
-import html
 import inspect
 import json
 import os
@@ -13,8 +12,6 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from debugger.tracer import (
-    _COLORS,
-    _INDENT,
     _MAX_VALUE_LENGTH,
     CallTreeHtmlRender,
     TraceConfig,
@@ -23,6 +20,8 @@ from debugger.tracer import (
     color_wrap,
     truncate_repr_value,
 )
+
+_COLORS = {}  # 添加缺失的_COLORS定义
 
 
 class TestTruncateReprValue(unittest.TestCase):
@@ -69,7 +68,7 @@ class TestTraceConfig(unittest.TestCase):
             "line_ranges": {"test.py": [(1, 10), (20, 30)]},
             "capture_vars": ["x", "y.z"],
         }
-        with open(self.config_file, "w") as f:
+        with open(self.config_file, "w", encoding="utf-8") as f:
             json.dump(self.sample_config, f)
 
     def tearDown(self):
@@ -267,7 +266,7 @@ class TestTraceLogic(unittest.TestCase):
             self.logic.enable_output("file", filename=tmp.name)
             self.logic._file_output(test_msg, None)
             self.logic.disable_output("file")
-            with open(tmp.name) as f:
+            with open(tmp.name, encoding="utf-8") as f:
                 content = f.read()
             self.assertIn("test 42", content)
 
@@ -283,7 +282,6 @@ class TestCallTreeHtmlRender(unittest.TestCase):
         self.assertEqual(len(self.render._messages), 1)
 
     def test_add_stack_variable(self):
-        frame = inspect.currentframe()
         frame_id = 1
         filename = "test.py"
         lineno = 42
@@ -296,16 +294,16 @@ class TestCallTreeHtmlRender(unittest.TestCase):
 
     def test_generate_html(self):
         self.render.add_message("test message", "call")
-        html = self.render.generate_html()
-        self.assertIn("test&nbsp;message", html)
-        self.assertIn("Python Trace Report", html)
+        generated_html = self.render.generate_html()
+        self.assertIn("test&nbsp;message", generated_html)
+        self.assertIn("Python Trace Report", generated_html)
 
     def test_save_to_file(self):
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tmp:
             tmp.close()
             self.render.add_message("test message", "call")
             self.render.save_to_file(str(Path(tmp.name)))
-            with open(tmp.name) as f:
+            with open(tmp.name, encoding="utf-8") as f:
                 content = f.read()
             self.assertIn("test&nbsp;message", content)
             os.unlink(tmp.name)
@@ -342,40 +340,30 @@ class TestIntegration(unittest.TestCase):
         # Stop tracing
         dispatcher.stop()
 
-    def test_event_coverage(self):
-        config = TraceConfig(target_files=["test_*.py"])
-        dispatcher = TraceDispatcher(__file__, config)
-        logic = TraceLogic(config)
-
-        # Test call event
+    def _test_call_events(self, logic):
         frame = inspect.currentframe()
         logic.handle_call(frame)
         self.assertEqual(logic.stack_depth, 1)
-
-        # Test line event
         logic.handle_line(frame)
         self.assertEqual(logic.stack_depth, 1)
-
-        # Test return event
         logic.handle_return(frame, "test")
         self.assertEqual(logic.stack_depth, 0)
 
-        # Test exception event
+    def _test_exception_handling(self, logic):
         try:
             raise ValueError("test error")
-        except ValueError as e:
+        except ValueError:
             exc_type, exc_value, exc_traceback = sys.exc_info()
             logic.handle_exception(exc_type, exc_value, exc_traceback)
 
-        # Test variable capture
-        x = 42
-        y = {"z": "test"}
+    def _test_variable_capture(self, logic, frame):
+        config = logic.config
         config.capture_vars = ["x", "y['z']"]
         result = logic.capture_variables(frame)
         self.assertEqual(result["x"], "42")
         self.assertEqual(result["y['z']"], "'test'")
 
-        # Test output handlers
+    def _test_output_handlers(self, logic):
         test_msg = {"template": "test {value}", "data": {"value": 42}}
         with patch("builtins.print") as mock_print:
             logic._console_output(test_msg, "call")
@@ -385,9 +373,19 @@ class TestIntegration(unittest.TestCase):
             logic.enable_output("file", filename=tmp.name)
             logic._file_output(test_msg, None)
             logic.disable_output("file")
-            with open(tmp.name) as f:
+            with open(tmp.name, encoding="utf-8") as f:
                 content = f.read()
             self.assertIn("test 42", content)
+
+    def test_event_coverage(self):
+        config = TraceConfig(target_files=["test_*.py"])
+        logic = TraceLogic(config)
+        frame = inspect.currentframe()
+
+        self._test_call_events(logic)
+        self._test_exception_handling(logic)
+        self._test_variable_capture(logic, frame)
+        self._test_output_handlers(logic)
 
 
 if __name__ == "__main__":

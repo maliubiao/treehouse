@@ -23,7 +23,7 @@ class DebuggerWebSocketTest(tornado.testing.AsyncHTTPTestCase):
             # 等待连接关闭
             with self.assertRaises(tornado.websocket.WebSocketClosedError):
                 await ws_client.write_message("test")
-        except Exception as e:
+        except tornado.websocket.WebSocketError as e:
             self.fail(f"WebSocket connection failed: {str(e)}")
 
     @gen_test

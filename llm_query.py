@@ -19,7 +19,6 @@ import pprint
 import re
 import signal
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
@@ -3915,29 +3914,33 @@ class PylintFixer:
 
     def load_and_validate_log(self) -> None:
         """加载并验证日志文件或从git命令获取日志"""
+        if not self.log_path and not self.use_git:
+            self.use_git = True
+
         if self.use_git:
-            try:
-                import subprocess
+            # 获取所有源代码文件列表
+            files_result = subprocess.run(
+                ["git", "ls-files", "*.py"], capture_output=True, text=True, cwd=self.root_dir
+            )
+            if files_result.returncode != 0:
+                raise RuntimeError(f"获取git文件列表失败: {files_result.stderr}")
 
-                # 先获取所有源代码文件列表
-                files_result = subprocess.run(
-                    ["git", "ls-files", "*.py"], capture_output=True, text=True, cwd=self.root_dir  # 只获取Python文件
-                )
-                if files_result.returncode != 0:
-                    raise RuntimeError(f"获取git文件列表失败: {files_result.stderr}")
+            # 准备pylint参数
+            pylint_args = []
+            pylintrc_path = self.root_dir / ".pylintrc"
+            if pylintrc_path.exists():
+                pylint_args.extend(["--rcfile", str(pylintrc_path)])
 
-                # 对每个文件单独运行pylint
-                pylint_results = []
-                for file_path in files_result.stdout.splitlines():
-                    result = subprocess.run(["pylint", file_path], capture_output=True, text=True, cwd=self.root_dir)
-                    if result.returncode not in (0, 1):  # pylint返回0表示无错误，1表示有警告/错误
-                        raise RuntimeError(f"pylint执行失败: {result.stderr}")
-                    pylint_results.append(result.stdout)
+            # 一次性对所有文件执行pylint
+            result = subprocess.run(
+                ["pylint", *pylint_args, *files_result.stdout.splitlines()],
+                capture_output=True,
+                text=True,
+                cwd=self.root_dir,
+            )
+            log_content = result.stdout
+            self.results = LintParser.parse(log_content)
 
-                log_content = "\n".join(pylint_results)
-                self.results = LintParser.parse(log_content)
-            except Exception as e:
-                raise RuntimeError(f"从git获取pylint日志失败: {e}") from e
         else:
             if not self.log_path.is_file():
                 raise FileNotFoundError(f"日志文件 '{self.log_path}' 不存在或不是文件")
@@ -4044,20 +4047,17 @@ class PylintFixer:
 
     def execute(self) -> None:
         """执行完整的修复流程"""
-        try:
-            self.load_and_validate_log()
-            if not self.results:
-                print("未发现可修复的错误")
-                return
+        self.load_and_validate_log()
+        if not self.results:
+            print("未发现可修复的错误")
+            return
 
-            self.group_results_by_file()
+        self.group_results_by_file()
 
-            for file_path in self.file_groups:
-                self._process_symbols_for_file(file_path)
+        for file_path in self.file_groups:
+            self._process_symbols_for_file(file_path)
 
-            print("\n修复流程完成")
-        except Exception as e:
-            print(f"处理过程中发生错误: {e}", file=sys.stderr)
+        print("\n修复流程完成")
 
 
 def pylint_fix(pylint_log, use_git: bool = False) -> None:
@@ -4535,6 +4535,6 @@ if __name__ == "__main__":
         tracer = trace.Trace(trace=1)
         tracer.runfunc(main, args)
     elif args.pylint_log:
-        pylint_fix(args.pylint_log)
+        pylint_fix(str(args.pylint_log))
     else:
         main(args)

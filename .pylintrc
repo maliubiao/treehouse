@@ -1,5 +1,5 @@
 [MASTER]
 ignore=test*,*_test.py,tests/test-code-files/*.py,.venv
-disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,too-many-public-methods,too-few-public-methods,too-many-lines,too-many-positional-arguments
+disable=missing-module-docstring,missing-class-docstring,missing-function-docstring,too-many-public-methods,too-few-public-methods,too-many-lines,too-many-positional-arguments,protected-access,wrong-import-position
 max-line-length=120
 fail-under=9.5

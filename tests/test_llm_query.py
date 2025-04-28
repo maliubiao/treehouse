@@ -890,7 +890,7 @@ class TestPyLintParser(unittest.TestCase):
         input_data = """
         test.py:1:0: W0611: Unused import os
         test.py:3:8: C0411: third party import before standard
-        
+
         src/utils.py:15:4: E1101: Instance of 'NoneType' has no 'split' member
         """
         results = LintParser.parse(input_data)
@@ -2145,43 +2145,40 @@ class TestClipboard(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "darwin", "macOS only test")
     def test_macos_image_clipboard(self):
         """测试macOS剪贴板图像处理功能"""
-        try:
-            AppKit = __import__("AppKit")
-            from llm_query import _handle_macos_clipboard, read_path_from_image_prompt
+        AppKit = __import__("AppKit")
+        from llm_query import _handle_macos_clipboard, read_path_from_image_prompt
 
-            # 准备测试图像
-            test_image_path = os.path.join(os.path.dirname(__file__), "test_image.png")
-            self.assertTrue(os.path.exists(test_image_path), "测试图像不存在")
+        # 准备测试图像
+        test_image_path = os.path.join(os.path.dirname(__file__), "test_image.png")
+        self.assertTrue(os.path.exists(test_image_path), "测试图像不存在")
 
-            with open(test_image_path, "rb") as f:
-                image_data = f.read()
+        with open(test_image_path, "rb") as f:
+            image_data = f.read()
 
-            # 将图像放入剪贴板
-            pasteboard = AppKit.NSPasteboard.generalPasteboard()
-            pasteboard.clearContents()
-            pasteboard.declareTypes_owner_([AppKit.NSPasteboardTypePNG], None)
-            pasteboard.setData_forType_(
-                AppKit.NSData.dataWithBytes_length_(image_data, len(image_data)), AppKit.NSPasteboardTypePNG
-            )
+        # 将图像放入剪贴板
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.declareTypes_owner_([AppKit.NSPasteboardTypePNG], None)
+        pasteboard.setData_forType_(
+            AppKit.NSData.dataWithBytes_length_(image_data, len(image_data)), AppKit.NSPasteboardTypePNG
+        )
 
-            # 测试剪贴板处理
-            result = _handle_macos_clipboard()
-            prefix = "[image saved to "
-            self.assertTrue(result.startswith(prefix))
-            self.assertTrue(result.endswith(".png]"))
-            path = read_path_from_image_prompt(result)
-            self.assertTrue(os.path.exists(path), "保存的图像文件不存在")
+        # 测试剪贴板处理
+        result = _handle_macos_clipboard()
+        prefix = "[image saved to "
+        self.assertTrue(result.startswith(prefix))
+        self.assertTrue(result.endswith(".png]"))
+        path = read_path_from_image_prompt(result)
+        self.assertTrue(os.path.exists(path), "保存的图像文件不存在")
 
-            # 验证图像内容
-            with open(path, "rb") as saved_file:
-                saved_data = saved_file.read()
-                self.assertEqual(len(saved_data), len(image_data), "图像数据不一致")
-                self.assertEqual(saved_data, image_data, "图像内容不匹配")
+        # 验证图像内容
+        with open(path, "rb") as saved_file:
+            saved_data = saved_file.read()
+            self.assertEqual(len(saved_data), len(image_data), "图像数据不一致")
+            self.assertEqual(saved_data, image_data, "图像内容不匹配")
 
-            # 清理
-            os.remove(path)
-        except Exception as e:
-            self.fail(f"测试失败: {str(e)}")
+        # 清理
+        os.remove(path)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows only test")
     def test_windows_image_clipboard(self):

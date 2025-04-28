@@ -28,7 +28,7 @@ DEBUGGER_STATUS = {"init": False}
 class DebugWebSocket(tornado.websocket.WebSocketHandler):
     clients = set()
 
-    def open(self):
+    def open(self, *args, **kwargs):
         self.clients.add(self)
         logger.debug("WebSocket连接已打开")
 
@@ -42,7 +42,7 @@ class DebugWebSocket(tornado.websocket.WebSocketHandler):
 
     def data_received(self, chunk):
         """处理数据流"""
-        super().data_received(chunk)
+        pass
 
     def check_origin(self, origin):
         return True
@@ -59,10 +59,6 @@ class DebugWebSocket(tornado.websocket.WebSocketHandler):
 
 
 class BreakpointHandler(tornado.web.RequestHandler):
-    def data_received(self, chunk):
-        """处理数据流"""
-        super().data_received(chunk)
-
     async def post(self):
         try:
             data = json.loads(self.request.body)
@@ -153,10 +149,6 @@ class BreakpointHandler(tornado.web.RequestHandler):
 
 
 class VariableHandler(tornado.web.RequestHandler):
-    def data_received(self, chunk):
-        """处理数据流"""
-        super().data_received(chunk)
-
     async def post(self):
         data = json.loads(self.request.body)
         self.application.settings["debugger"].var_watch_list.update(data["variables"])
@@ -165,6 +157,10 @@ class VariableHandler(tornado.web.RequestHandler):
 
 
 class FileAutocompleteHandler(tornado.web.RequestHandler):
+    def data_received(self, chunk):
+        """处理流式请求数据"""
+        pass
+
     async def get(self):
         try:
             base_dir = os.path.abspath("/Users/richard/code/terminal-llm")
@@ -193,7 +189,7 @@ class FileAutocompleteHandler(tornado.web.RequestHandler):
             items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
             self.write({"results": items[:20]})  # 限制返回数量
 
-        except Exception as e:
+        except (tornado.web.HTTPError, OSError) as e:
             logger.error("自动补全错误: %s", e)
             self.write({"error": str(e)})
 
@@ -201,16 +197,11 @@ class FileAutocompleteHandler(tornado.web.RequestHandler):
 class DebuggerWebUI(Pdb):
     def __init__(self, port=5555, start_loop=True):
         super().__init__()
-        self.port = port
-        self.breakpoints = {}
-        self.var_watch_list = set()
-        self.watched_files = set()
-        self.last_msg = ""
+        self._web_state = {"port": port, "server": None, "ioloop": None}
+        self._debug_data = {"breakpoints": {}, "var_watch_list": set(), "watched_files": set(), "last_msg": ""}
         self.botframe = None
         self.curframe = sys._getframe()  # 初始化curframe属性
         self._setup_tornado(start_loop)
-        self._server = None
-        self._ioloop = None
 
     def _setup_tornado(self, start_loop):
         current_dir = os.path.dirname(__file__)
@@ -231,29 +222,25 @@ class DebuggerWebUI(Pdb):
             debugger=self,
         )
         if start_loop:
-            self._server = self.app.listen(self.port)
-            self._ioloop = tornado.ioloop.IOLoop.current()
-            threading.Thread(target=self._ioloop.start, daemon=True).start()
-            logger.info("调试器Web UI已启动，端口为 %s", self.port)
+            self._web_state["server"] = self.app.listen(self._web_state["port"])
+            self._web_state["ioloop"] = tornado.ioloop.IOLoop.current()
+            threading.Thread(target=self._web_state["ioloop"].start, daemon=True).start()
+            logger.info("调试器Web UI已启动，端口为 %s", self._web_state["port"])
 
     def close(self):
-        if self._server:
-            self._server.stop()
-        if self._ioloop:
-            self._ioloop.add_callback(self._ioloop.stop)
+        if self._web_state["server"]:
+            self._web_state["server"].stop()
+        if self._web_state["ioloop"]:
+            self._web_state["ioloop"].add_callback(self._web_state["ioloop"].stop)
         logger.info("调试器Web UI已停止")
 
     class MainHandler(tornado.web.RequestHandler):
-        def data_received(self, chunk):
-            """处理数据流"""
-            super().data_received(chunk)
-
         async def get(self):
             self.render("debugger.html")
 
     def message(self, msg):
         print(msg)
-        self.last_msg = msg
+        self._debug_data["last_msg"] = msg
 
     def _evaluate_variable(self, frame, var_name):
         try:
@@ -263,7 +250,7 @@ class DebuggerWebUI(Pdb):
             if isinstance(value, (list, dict, tuple, set)):
                 return {"value": value, "type": type_name, "complex": True}
             return {"value": value, "type": type_name, "complex": False}
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except (NameError, SyntaxError, AttributeError) as e:
             logger.error("评估变量 %s 时出错: %s", var_name, e)
             return {"value": f"评估错误: {str(e)}", "type": "error", "complex": False}
 
@@ -286,21 +273,21 @@ class DebuggerWebUI(Pdb):
 
     def _update_watched_files(self, filename):
         """更新关注文件集合"""
-        if filename not in self.watched_files:
-            self.watched_files.add(filename)
+        if filename not in self._debug_data["watched_files"]:
+            self._debug_data["watched_files"].add(filename)
             logger.info("新增关注文件: %s", filename)
 
     def _cleanup_watched_files(self, filename):
         """清理不再需要关注的文件"""
         remaining = any(bp.file == filename for bp in self.get_all_breaks())
         if not remaining:
-            self.watched_files.discard(filename)
+            self._debug_data["watched_files"].discard(filename)
             logger.info("移除不再关注的文件: %s", filename)
 
     def _should_stop_at_breakpoint(self, frame):
         current_file = os.path.abspath(frame.f_code.co_filename)
 
-        if current_file not in self.watched_files:
+        if current_file not in self._debug_data["watched_files"]:
             return False
 
         return super().break_here(frame)
@@ -315,7 +302,7 @@ class DebuggerWebUI(Pdb):
             if not bp:
                 continue
             if os.path.abspath(bp.file) == frame.f_code.co_filename and bp.line == frame.f_lineno:
-                target_bp = self.breakpoints[bp.number]
+                target_bp = self._debug_data["breakpoints"][bp.number]
                 break
         logger.info("在 %s:%s 处触发断点", frame.f_code.co_filename, frame.f_lineno)
         if target_bp:
@@ -342,11 +329,11 @@ class DebuggerWebUI(Pdb):
             complex_flag = obj.get("complex", False)
             try:
                 serialized_value = json.dumps(obj["value"], default=repr)
-            except Exception as e:
+            except (TypeError, ValueError) as e:
                 logger.error("序列化值失败: %s，使用repr处理", e)
                 serialized_value = repr(obj["value"])
             return {"value": serialized_value, "type": original_type, "complex": complex_flag}
-        except Exception as e:
+        except (KeyError, TypeError) as e:
             logger.error("序列化对象时出错: %s", e)
             return {"value": f"序列化错误: {str(e)}", "type": "error", "complex": False}
 
