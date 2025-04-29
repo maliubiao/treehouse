@@ -68,6 +68,7 @@ from tree import (
     ParserUtil,
     RipgrepSearcher,
     SyntaxHighlight,
+    find_diff,
     find_patch,
 )
 
@@ -1208,15 +1209,16 @@ def _handle_prompt_file(match: CmdNode) -> str:
     file_path = os.path.join(PROMPT_DIR, match.command)
 
     # 检查文件是否有可执行权限或以#!开头
-    if os.access(file_path, os.X_OK):
-        # 如果有可执行权限，则作为shell命令处理
+    if os.name == "nt":  # Windows系统
+        if file_path.lower().endswith(".exe"):
+            return _handle_any_script(file_path)
+    elif os.access(file_path, os.X_OK):
         return _handle_any_script(file_path)
 
     # 检查文件是否以#!开头
     with open(file_path, "r", encoding="utf-8") as f:
         first_line = f.readline()
         if first_line.startswith("#!"):
-            # 如果以#!开头，也作为shell命令处理
             return _handle_any_script(file_path)
         # 否则读取整个文件内容作为普通文件处理
         content = first_line + f.read()
@@ -2895,16 +2897,18 @@ def _save_file_to_shadowroot(shadow_file_path, file_content):
 
 def _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content):
     """生成unified diff"""
-    if platform.system() == "Windows":
-        # Windows系统使用diff工具
-        shadow_file_path = shadow_file_path.resolve()
-        old_file_path = old_file_path.resolve()
-        diff_cmd = "diff.exe"
-    else:
-        # Linux或MacOS系统使用diff命令
-        diff_cmd = "diff"
+    diff_cmd = find_diff()
     try:
-        p = subprocess.run([diff_cmd, "-u", str(old_file_path), str(shadow_file_path)], stdout=subprocess.PIPE)
+        # 在Windows上转换为相对路径
+        if os.name == "nt":
+            old_file_path = os.path.relpath(old_file_path)
+            shadow_file_path = os.path.relpath(shadow_file_path)
+            p = subprocess.run(
+                [diff_cmd, "-u", "--strip-trailing-cr", str(old_file_path), str(shadow_file_path)],
+                stdout=subprocess.PIPE,
+            )
+        else:
+            p = subprocess.run([diff_cmd, "-u", str(old_file_path), str(shadow_file_path)], stdout=subprocess.PIPE)
         return p.stdout.decode("utf-8")
     except subprocess.CalledProcessError:
         return "\n".join(
@@ -2951,7 +2955,10 @@ def display_and_apply_diff(diff_file, auto_apply=False):
 def _apply_patch(diff_file):
     """应用patch的公共方法"""
     try:
-        subprocess.run([find_patch(), "-p0", "-i", str(diff_file)], check=True)
+        patch_args = [find_patch(), "-p0", "-i", str(diff_file)]
+        if os.name == "nt":  # Windows系统
+            patch_args.insert(1, "--binary")
+        subprocess.run(patch_args, check=True)
         print("已成功应用变更")
     except subprocess.CalledProcessError as e:
         print(f"应用变更失败: {e}")

@@ -69,7 +69,7 @@ function global:Get-ConversationList {
                 $preview = "N/A"
                 $content = Get-Content $_.FullName -Encoding UTF8 | ConvertFrom-Json
                 if ($content -is [array] -and $content.Count -gt 0) {
-                    $preview = ($content[0].content -replace "`n", " ").Substring(0, [Math]::Min(32, $content[0].content.Length))
+                    $preview = ($content[0].content -replace "\n", " ").Substring(0, [Math]::Min(32, $content[0].content.Length))
                 }
 
                 $allFiles += [PSCustomObject]@{
@@ -343,33 +343,36 @@ function global:fixgpt {
 
 # 新增 patchgpt 函数
 function global:patchgpt {
-    param([Parameter(ValueFromRemainingArguments)]$Args)
+    param([Parameter(ValueFromRemainingArguments)]$Question)
     $originalSession = $env:GPT_SESSION_ID
     New-Conversation
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@patch $Args"
+    $Question = $Question -replace '\\@', '@'
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@patch $Question"
     $env:GPT_SESSION_ID = $originalSession
     Write-Host "已恢复原会话: $originalSession"
 }
 
 function global:archgpt {
-    param([Parameter(ValueFromRemainingArguments)]$Args)
+    param([Parameter(ValueFromRemainingArguments)]$Question)
     $originalSession = $env:GPT_SESSION_ID
     New-Conversation
-    if (-not $Args) {
+    if (-not $Question) {
         Write-Error "Error: Question cannot be empty"
         return
     }
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --workflow --architect architect --coder coder --ask $Args
+    $Question = $Question -replace '\\@', '@'
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --workflow --architect architect --coder coder --ask "$Question"
     $env:GPT_SESSION_ID = $originalSession
     Write-Host "已恢复原会话: $original_session"
 }
 
 # 新增 codegpt 函数
 function global:codegpt {
-    param([Parameter(ValueFromRemainingArguments)]$Args)
+    param([Parameter(ValueFromRemainingArguments)]$Question)
     $originalSession = $env:GPT_SESSION_ID
     New-Conversation
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@edit @edit-file @tree $Args"
+    $Question = $Question -replace '\\@', '@'
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@edit @edit-file @tree $Question"
     $env:GPT_SESSION_ID = $originalSession
     Write-Host "已恢复原会话: $originalSession"
 }
