@@ -4243,7 +4243,7 @@ class SymbolService:
     CONFIG_FILE = LLM_PROJECT_CONFIG
     PID_FILE = ".tree/pid"
     LOG_FILE = ".tree/log"
-    RC_FILE = ".tree/rc.sh"
+    RC_FILE = ".tree/rc.sh" if os.name != "nt" else ".tree/rc.ps1"
     DEFAULT_PORT = 9050
     DEFAULT_LSP = "pylsp"
 
@@ -4255,7 +4255,7 @@ class SymbolService:
         self.tree_dir = self.project_root / ".tree"
         self.pid_file = self.tree_dir / "pid"
         self.log_file = self.tree_dir / "log"
-        self.rc_file = self.tree_dir / "rc.sh"
+        self.rc_file = self.tree_dir / ("rc.ps1" if os.name == "nt" else "rc.sh")
         self._validate_project_root()
 
     def _validate_project_root(self):
@@ -4288,8 +4288,13 @@ class SymbolService:
 
     def _write_rc_file(self, api_url: str):
         """写入环境变量配置文件"""
-        with open(self.rc_file, "w") as f:
-            f.write(f"export GPT_SYMBOL_API_URL={api_url}\n")
+        if os.name == "nt":
+            # Windows下使用UTF-8 with BOM编码
+            with open(self.rc_file, "w", encoding="utf-8-sig") as f:
+                f.write(f'$env:GPT_SYMBOL_API_URL="{api_url}"\n')
+        else:
+            with open(self.rc_file, "w") as f:
+                f.write(f"export GPT_SYMBOL_API_URL={api_url}\n")
 
     def _kill_existing_process(self, pid: int):
         """终止现有进程"""
@@ -4305,11 +4310,28 @@ class SymbolService:
 
     def _is_process_running(self, pid: int) -> bool:
         """检查进程是否在运行"""
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
+        if os.name == "nt":  # Windows系统
+            psutil = __import__("psutil")
+            return psutil.pid_exists(pid)
+        else:  # Unix-like系统
+            try:
+                # 使用/proc文件系统检查
+                proc_path = Path(f"/proc/{pid}")
+                if proc_path.exists():
+                    try:
+                        # 检查进程状态
+                        status = (proc_path / "status").read_text()
+                        return "running" in status.lower()
+                    except IOError:
+                        return False
+                return False
+            except Exception:
+                # 回退方案
+                try:
+                    os.kill(pid, 0)
+                    return True
+                except ProcessLookupError:
+                    return False
 
     def _check_service_ready(self, timeout: int = 10) -> bool:
         """检查服务是否就绪"""
@@ -4412,7 +4434,7 @@ def start_symbol_service(force=False):
         api_url = service.start()
         print(f"符号服务已启动: {api_url}")
         print(f"环境变量已写入: {service.rc_file}")
-        print(f"使用命令加载环境变量: source {service.rc_file}")
+        print(f"使用命令加载环境变量: {'source' if os.name != 'nt' else '.'} {service.rc_file}")
         return api_url
     except Exception as e:
         print(f"启动符号服务失败: {str(e)}")

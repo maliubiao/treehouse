@@ -122,7 +122,7 @@ codegpt @main.py 找到其中可能的bug，并加以修复
 # 改写某个符号, patchgpt是naskgpt @patch的缩写，参考env.sh定义的命令集
 patchgpt @symbol_file/symbol 修复里边的bug
 
-# 改写符号并提供LSP上下文
+# 这个会使用lsp 查找这个符号调用的符号, 一起做上下文
 patchgpt @context @symbol_file/symbol 修复里边的bug
 
 # 重新执行上一条命令, 诊断为什么会失败
@@ -193,10 +193,12 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 ```powershell
 #naskgpt "@cmd" or '@cmd' or \@cmd
 $env:GPT_PATH="C:\Users\richard\treehouse"
+#加到用户环境变量，这样不用每次都重来
+[Environment]::SetEnvironmentVariable('GPT_PATH', $env:GPT_PATH, 'User')
 notepad $PROFILE
 #把下边这两句加入配置文件, treehouse的目录需要修改
 #$env:GPT_PATH=C:\Users\richard\treehouse
-#需要将env.ps1转成UTF8-BOM格式，不然windows可能乱码, Vs Code的save with encoding可以做到, 也可用tools/utf8_bom.py
+#需要将env.ps1转成UTF8-BOM格式，不然windows可能乱码, Vs Code的save with encoding可以做到, 也可用python tools/utf8_bom.py env.ps1
 #. C:\Users\richard\treehouse\env.ps1 
 ```
 

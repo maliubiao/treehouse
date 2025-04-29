@@ -16,6 +16,8 @@ function global:Initialize-GptEnv {
     $env:GPT_LOGS_DIR = Join-Path -Path $env:GPT_PATH -ChildPath "logs"
     $env:GPT_MAX_TOKEN = if ($env:GPT_MAX_TOKEN) { $env:GPT_MAX_TOKEN } else { 16384 }
     $env:GPT_UUID_CONVERSATION = if ($env:GPT_UUID_CONVERSATION) { $env:GPT_UUID_CONVERSATION } else { [guid]::NewGuid().ToString() }
+    
+    $env:GPT_PYTHON_BIN = Get-PythonPath
 }
 
 # 初始化目录结构
@@ -256,10 +258,13 @@ function global:askgpt {
 }
 
 function global:naskgpt {
-    param([Parameter(ValueFromRemainingArguments)]$Args)
+    param([Parameter(ValueFromRemainingArguments)]$Question)
     $originalSession = $env:GPT_SESSION_ID
     New-Conversation
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask $Args
+    $Question = $Question -replace '\\@', '@'
+    # 将整个Question作为单个参数传递给--ask
+    $QuestionString = "$Question"
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "$QuestionString"
     $env:GPT_SESSION_ID = $originalSession
     Write-Host "已恢复原会话: $originalSession"
 }
@@ -377,7 +382,7 @@ function global:Get-SymbolCompletions {
     
     try {
         $completions = & $pythonPath $scriptPath complete $Prefix
-        return $completions -split "`n" | Where-Object { $_ -ne "" }
+        return $completions -split "\n" | Where-Object { $_ -ne "" }
     }
     catch {
         Write-Debug "获取符号补全失败: $_"
