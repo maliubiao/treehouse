@@ -43,9 +43,9 @@ dependencies = [
     "colorama>=0.4.6",
     "Pillow>=10.3.0",
     "pywin32; sys_platform == 'win32'",
-    "psutil; sys_platform == 'winb32'",
     "pyobjc; sys_platform == 'darwin'",
     "pygments[windows-terminal]; sys_platform == 'win32'",
+    "psutil>=7.0.0",
 ]
 
 [tool.black]

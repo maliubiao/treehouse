@@ -18,6 +18,15 @@ function global:Initialize-GptEnv {
     $env:GPT_UUID_CONVERSATION = if ($env:GPT_UUID_CONVERSATION) { $env:GPT_UUID_CONVERSATION } else { [guid]::NewGuid().ToString() }
     
     $env:GPT_PYTHON_BIN = Get-PythonPath
+    Import-GPT-Symbol-API
+}
+
+# 加载项目特定的PowerShell配置（如果存在）
+function global:Import-GPT-Symbol-API {
+    $projectRcPath = Join-Path -Path (Get-Location) -ChildPath ".tree\rc.ps1"
+    if (Test-Path $projectRcPath) {
+        . $projectRcPath
+    }
 }
 
 # 初始化目录结构

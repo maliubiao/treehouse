@@ -128,8 +128,8 @@ patchgpt @context @symbol_file/symbol 修复里边的bug
 # 重新执行上一条命令, 诊断为什么会失败
 fixgpt 
 
-# 使用ripgrep 项目搜索，并自动定位搜索到的符号, 里边也可以用@symbol_file/symbol这样添加具体符号
-# 可用.rgignore控制搜索范围 https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md
+# 使用ripgrep 项目搜索，并自动定位搜索到的符号, 需要安装了这个工具, ..搜索.. 可以跟其它的上下文混合
+# .llm_project.yml 配置控制搜索的范围
 patchgpt ..LintFix.. ..main.. 增加单元测试套件
 
 # 类，函数，定位补全, 在某个文件里写个占位符class MyClass: pass
@@ -191,6 +191,8 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 4. **在windows powershell上使用**  
 需要特别指出powershell的@有特殊含义，不能直接补全，需要用\\@才能补全，比直接@增加一个字符, 另外可能需要""才能防止转义
 ```powershell
+#windows包安装可以用choco install ripgrep git, 并把它们的bin目录加入PATH
+#C:\\Program Files\\Git\\bin;C:\\ProgramData\\chocolatey\\bin;$HOME\\.local\\bin
 #naskgpt "@cmd" or '@cmd' or \@cmd
 $env:GPT_PATH="C:\Users\richard\treehouse"
 #加到用户环境变量，这样不用每次都重来
@@ -407,7 +409,8 @@ INFO:     127.0.0.1:57957 - "GET /symbols/show_tty_driver/context?max_depth=5 HT
 在项目的主目录，执行, `.llm_project` 没有配置会生成一个默认的，配置里指示了如何使用language server, 以及ripgrep的搜索配置
 ```bash
 symbolgpt
-symbolgptrestart
+symbolgptrestart #强制重启
+#后续在使用@symbol_* ..symbol.. 服务时, 记得tree.py 需要上面的命令启动, 而且linux, mac下source .tree/rc.sh 加载环境变量, windows下用. .tree\rc.ps1
 ```
 或者手工启动一个
 ```bash
