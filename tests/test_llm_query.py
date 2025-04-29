@@ -487,7 +487,7 @@ code3
 
     def test_add_symbol_details(self):
         """测试add_symbol_details函数"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
             tmp.write(
                 dedent(
                     '''
@@ -553,7 +553,7 @@ code3
 
     def test_interactive_symbol_location(self):
         """测试交互式符号位置选择器"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
             tmp.write(
                 dedent(
                     '''
@@ -612,7 +612,7 @@ code3
 
     def test_add_symbol_details_with_interactive(self):
         """测试add_symbol_details与交互式位置选择的集成"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
             tmp.write(
                 dedent(
                     """
@@ -704,7 +704,7 @@ class TestFileHandling(unittest.TestCase):
 
     def test_file_with_line_range(self):
         """测试带行号范围的文件读取"""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf8") as f:
             f.write("line1\nline2\nline3\nline4")
             path = f.name
 
@@ -751,7 +751,7 @@ class TestExtractAndDiffFiles(unittest.TestCase):
     def test_single_file_processing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = Path(tmpdir) / "test.txt"
-            test_file.write_text("line1\nline2\n")
+            test_file.write_text("line1\nline2\n", encoding="utf8")
 
             with patch("llm_query.shadowroot", Path(tmpdir)):
                 test_content = f"""
@@ -821,18 +821,21 @@ class TestDisplayAndApplyDiff(unittest.TestCase):
     @patch("builtins.input", return_value="y")
     @patch("subprocess.run")
     def test_apply_diff_accepted(self, mock_run, _):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf8") as tmp_file:
             test_file_path = tmp_file.name
 
         llm_query.display_and_apply_diff(Path(test_file_path))
-        mock_run.assert_called_once_with([find_patch(), "-p0", "-i", test_file_path], check=True)
+        if os.name == "nt":  # Windows系统
+            mock_run.assert_called_once_with([find_patch(), "--binary", "-p0", "-i", test_file_path], check=True)
+        else:
+            mock_run.assert_called_once_with([find_patch(), "-p0", "-i", test_file_path], check=True)
 
         os.remove(test_file_path)
 
     @patch("builtins.input", return_value="n")
     @patch("subprocess.run")
     def test_apply_diff_rejected(self, mock_run, _):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf8") as tmp_file:
             test_file_path = tmp_file.name
 
         llm_query.display_and_apply_diff(Path(test_file_path))
@@ -921,7 +924,7 @@ class TestModelSwitch(unittest.TestCase):
             "model2": ModelConfig(key="key2", base_url="http://api2", model_name="model2"),
         }
         # 使用内存中的配置文件
-        self.test_config_file = tempfile.NamedTemporaryFile(mode="w+", delete=False)
+        self.test_config_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8")
         self._write_test_config(self.valid_config)
         self.test_config_file.seek(0)  # 重置文件指针
 
@@ -1004,7 +1007,7 @@ class TestModelSwitch(unittest.TestCase):
 
     def test_load_invalid_json(self) -> None:
         """测试JSON格式错误异常"""
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as invalid_file:
+        with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8") as invalid_file:
             invalid_file.write("invalid json")
             invalid_file.flush()
 
@@ -1036,7 +1039,7 @@ class TestModelSwitch(unittest.TestCase):
         """测试配置字段验证"""
         # 写入缺少base_url的配置
         invalid_config = {"invalid_model": {"model_name": "invalid_model", "temperature": 0.5}}
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as invalid_file:
+        with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8") as invalid_file:
             invalid_file.write(json.dumps(invalid_config))
             invalid_file.flush()
             with self.assertRaises(ValueError) as context:
@@ -1806,7 +1809,7 @@ class TestDiffBlockFilter(unittest.TestCase):
 
     def _verify_patch(self, original_file: str, patch_content: str, expected_content: str) -> None:
         with tempfile.NamedTemporaryFile(mode="w+") as patched_file:
-            with tempfile.NamedTemporaryFile(mode="w+") as patch_file:
+            with tempfile.NamedTemporaryFile(mode="w+", encoding="utf8") as patch_file:
                 patch_file.write(patch_content)
                 patch_file.flush()
                 subprocess.run(
@@ -1814,6 +1817,7 @@ class TestDiffBlockFilter(unittest.TestCase):
                     check=True,
                     stderr=subprocess.PIPE,
                     stdout=subprocess.PIPE,
+                    cwd="c:\\" if sys.platform == "win32" else None,
                 )
                 patched_content = Path(patched_file.name).read_text()
                 self.assertEqual(patched_content.strip(), expected_content.strip())
@@ -1823,7 +1827,11 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "a\nb2\nc\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output(
+                [find_diff(), "-u", f1, f2],
+                text=True,
+                stderr=subprocess.STDOUT,
+            )
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -2048,7 +2056,7 @@ class TestChangelogMarkdown(unittest.TestCase):
     """Test cases for ChangelogMarkdown functionality."""
 
     def setUp(self):
-        self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".md")
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".md", encoding="utf8")
         self.file_path = self.temp_file.name
         self.changelog = ChangelogMarkdown(self.file_path)
 

@@ -2057,7 +2057,7 @@ class TestSymbolsComplete(unittest.TestCase):
 
     def test_extract_multiline_js_event_handler(self):
         """测试提取多行JavaScript事件处理程序"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".js", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".js", delete=False, encoding="utf8") as tmp:
             js_content = dedent(
                 """
 document.addEventListener('click', function() {
@@ -2482,7 +2482,7 @@ class TestLSPStart(unittest.TestCase):
 class TestSplitAndPatch(unittest.TestCase):
     def setUp(self):
         # 创建临时文件并写入测试代码
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False, encoding="utf8") as tmp_file:
             self.code = """// Sample code
 #include <stdio.h>
 

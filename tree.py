@@ -2423,10 +2423,15 @@ class BlockPatch:
                     capture_output=True,
                     text=True,
                     check=False,
+                    encoding="utf8",
                 )
             else:
                 result = subprocess.run(
-                    [diff_tool, "-u", original_file, modified_file], capture_output=True, text=True, check=False
+                    [diff_tool, "-u", original_file, modified_file],
+                    capture_output=True,
+                    encoding="utf8",
+                    text=True,
+                    check=False,
                 )
             # 对于diff工具，返回0表示文件相同，返回1表示文件有差异，这都是正常情况
             if result.returncode in (0, 1):
@@ -2494,8 +2499,8 @@ class BlockPatch:
         modified_code = "".join(modified_blocks)
 
         with (
-            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".original") as f_orig,
-            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".modified") as f_mod,
+            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".original", encoding="utf8") as f_orig,
+            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".modified", encoding="utf8") as f_mod,
         ):
 
             f_orig.write(original_code.decode("utf8"))
