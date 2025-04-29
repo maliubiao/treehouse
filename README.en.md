@@ -166,7 +166,7 @@ export GPT_KEY="your-api-key"
 export GPT_MODEL="your-model"
 export GPT_BASE_URL="https://api.example.com/v1"  # OpenAI-compatible API
 source $GPT_PATH/env.sh  # Enables @ completion in zsh/bash
-
+```
 
 4. **Windows PowerShell Usage**  
 PowerShell's `@` has special meaning and cannot be directly used for completion. You need to use `\@` instead, which adds an extra character compared to directly using `@`. Additionally, you may need to use quotes to prevent escaping.

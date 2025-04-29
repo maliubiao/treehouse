@@ -3,6 +3,7 @@ import base64
 import datetime
 import dis
 import fnmatch
+import functools
 import html
 import importlib.util
 import inspect
@@ -259,11 +260,7 @@ def color_wrap(text, color_type):
 
 class TraceDispatcher:
     def __init__(self, target_path, config: TraceConfig):
-        try:
-            self.target_path = Path(target_path).resolve(strict=True)
-        except FileNotFoundError:
-            logging.error("Target path not found: %s\n%s", target_path, traceback.format_exc())
-            raise
+        self.target_path = target_path
         self.config = config
         self.path_cache = {}
         self._logic = TraceLogic(config)
@@ -1081,19 +1078,20 @@ def get_tracer(module_path, config: TraceConfig):
     return None
 
 
-def start_trace(module_path, config: TraceConfig):
+def start_trace(module_path=None, config: TraceConfig = None):
     """启动调试跟踪会话
 
     Args:
-        module_path: d目标模块路径
-        config: 跟踪配置实例
-        immediate_trace: 是否立即开始跟踪
+        module_path: 目标模块路径(可选)
+        config: 跟踪配置实例(可选)
     """
+    tracer = None
     tracer = get_tracer(module_path, config)
     if not tracer:
         tracer = TraceDispatcher(str(module_path), config)
     try:
-        tracer.start()
+        if tracer:
+            tracer.start()
         return tracer
     except Exception as e:
         logging.error("💥 DEBUGGER INIT ERROR: %s\n%s", str(e), traceback.format_exc())
@@ -1101,8 +1099,39 @@ def start_trace(module_path, config: TraceConfig):
         raise
 
 
-def stop_trace():
-    """停止调试跟踪并清理资源"""
+def trace(config: TraceConfig = TraceConfig(target_files=["*.py"])):
+    """函数跟踪装饰器
+
+    Args:
+        config: 跟踪配置实例(可选)
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            print("start tracer")
+            tracer = start_trace(config=config)
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                if tracer:
+                    print("stop tracer")
+                    stop_trace(tracer)
+
+        return wrapper
+
+    return decorator
+
+
+def stop_trace(tracer=None):
+    """停止调试跟踪并清理资源
+
+    Args:
+        tracer: 可选的跟踪器实例
+    """
     sys.settrace(None)
+    if tracer:
+        tracer.stop()
     logging.info("⏹ DEBUG SESSION ENDED\n")
     print(color_wrap(f"\n⏹ 调试会话结束", "return"))

@@ -1963,11 +1963,11 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
 
     for i, line in enumerate(highlighted_lines):
         print(f"{Fore.YELLOW}{start_line+i:4d}{ColorStyle.RESET_ALL} | {line}")
-
+    print(f"{Fore.YELLOW}{start_line+i+1:4d}{ColorStyle.RESET_ALL} |")
     while True:
         try:
             selected_line = int(input("\nEnter insert line number for new symbol location: "))
-            if start_line <= selected_line < start_line + len(lines):
+            if start_line <= selected_line <= start_line + len(lines):
                 break
             print(
                 f"{Fore.RED}Line number must be between {start_line} and {start_line + len(lines) - 1}{ColorStyle.RESET_ALL}"

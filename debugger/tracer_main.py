@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import functools
 import logging
 import os
 import sys
@@ -10,7 +11,7 @@ from types import ModuleType
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from debugger.tracer import TraceConfig, color_wrap, start_trace
+from debugger.tracer import TraceConfig, color_wrap, start_trace, stop_trace, trace
 
 
 def execute_script(target: Path, args: List[str]) -> None:
