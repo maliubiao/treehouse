@@ -513,22 +513,6 @@ Register-ArgumentCompleter -CommandName usegpt -ScriptBlock {
     }
 }
 
-# 初始化流程
-Initialize-GptEnv
-Initialize-Directories
-
-# 自动配置默认模型
-if (-not $env:GPT_MODEL_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
-    $configFile = Join-Path -Path $env:GPT_PATH -ChildPath "model.json"
-    if (Test-Path $configFile) {
-        $firstModel = (Get-Content $configFile | ConvertFrom-Json).PSObject.Properties | 
-            Where-Object { $_.Value.key } | 
-            Select-Object -First 1 -ExpandProperty Name
-        if ($firstModel) {
-            Use-GptModel -ModelName $firstModel -Silent
-        }
-    }
-}
 
 # 获取Python路径
 function global:Get-PythonPath {
@@ -550,3 +534,21 @@ function global:Get-PythonPath {
 
     throw "未找到可用的Python解释器"
 }
+# 初始化流程
+Initialize-GptEnv
+Initialize-Directories
+
+# 自动配置默认模型
+if (-not $env:GPT_MODEL_KEY -or -not $env:GPT_BASE_URL -or -not $env:GPT_MODEL) {
+    $configFile = Join-Path -Path $env:GPT_PATH -ChildPath "model.json"
+    if (Test-Path $configFile) {
+        $firstModel = (Get-Content $configFile | ConvertFrom-Json).PSObject.Properties | 
+            Where-Object { $_.Value.key } | 
+            Select-Object -First 1 -ExpandProperty Name
+        if ($firstModel) {
+            Use-GptModel -ModelName $firstModel -Silent
+        }
+    }
+}
+
+

@@ -17,6 +17,7 @@ import os
 import platform
 import pprint
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -67,6 +68,7 @@ from tree import (
     ParserUtil,
     RipgrepSearcher,
     SyntaxHighlight,
+    find_patch,
 )
 
 just_fix_windows_console()
@@ -2949,7 +2951,7 @@ def display_and_apply_diff(diff_file, auto_apply=False):
 def _apply_patch(diff_file):
     """应用patch的公共方法"""
     try:
-        subprocess.run(["patch", "-p0", "-i", str(diff_file)], check=True)
+        subprocess.run([find_patch(), "-p0", "-i", str(diff_file)], check=True)
         print("已成功应用变更")
     except subprocess.CalledProcessError as e:
         print(f"应用变更失败: {e}")

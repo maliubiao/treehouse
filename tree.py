@@ -21,6 +21,7 @@ import zlib
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from difflib import unified_diff
 from functools import partial
 from multiprocessing import Pool
@@ -2266,6 +2267,39 @@ BINARY_MAGIC_NUMBERS = {
 }
 
 
+def find_diff() -> str:
+    """
+    检查系统PATH中是否存在git工具，支持Windows/Linux/MacOS
+    返回diff工具的完整路径
+    """
+    git_path = shutil.which("git")
+    if not git_path:
+        return ""
+
+    if git_path.endswith("git.exe") or git_path.endswith("git.EXE"):  # Windows
+        return str(Path(git_path).parent.parent / "usr" / "bin" / "diff.exe")
+    elif shutil.which("diff"):  # Linux/MacOS
+        return shutil.which("diff")
+    return ""
+
+
+def find_patch() -> str:
+    """
+    检查系统PATH中是否存在git工具，支持Windows/Linux/MacOS
+    返回patch工具的完整路径
+    """
+
+    git_path = shutil.which("git")
+    if not git_path:
+        return ""
+
+    if git_path.endswith("git.exe") or git_path.endswith("git.EXE"):  # Windows
+        return str(Path(git_path).parent.parent / "usr" / "bin" / "patch.exe")
+    elif shutil.which("patch"):  # Linux/MacOS
+        return shutil.which("patch")
+    return ""
+
+
 class BlockPatch:
     """用于生成多文件代码块的差异补丁"""
 
@@ -2304,7 +2338,6 @@ class BlockPatch:
         # 如果没有需要更新的块，直接返回
         if not self.file_paths:
             return
-
         # 按文件路径分组存储源代码
         self.source_codes = {}
         for path in set(self.file_paths):
@@ -2383,8 +2416,7 @@ class BlockPatch:
         # 查找系统diff工具
         diff_tool = "diff"
         if platform.system() == "Windows":
-            diff_tool = "diff.exe" if shutil.which("diff.exe") else "fc"
-
+            diff_tool = find_diff()
         try:
             result = subprocess.run(
                 [diff_tool, "-u", original_file, modified_file], capture_output=True, text=True, check=False
@@ -2429,6 +2461,10 @@ class BlockPatch:
             subprocess.run(["vimdiff", original_path, modified_path], check=True)
         else:
             raise RuntimeError("未找到可用的diff工具，请安装VS Code或vim")
+
+    def file_mtime(self, path):
+        t = datetime.fromtimestamp(os.stat(path).st_mtime, timezone.utc)
+        return t.astimezone().isoformat()
 
     def _process_single_file_diff(self, file_path: str, indices: list[int]) -> list[str]:
         """处理单个文件的差异生成"""
@@ -2476,15 +2512,15 @@ class BlockPatch:
 
         # 回退到Python实现
         if not system_diff:
-            print("patch失败，使用python difflib实现")
+            print("系统diff工具不存在，使用python difflib实现")
             diff_lines = list(
                 unified_diff(
                     original_code.decode("utf8").splitlines(keepends=True),
                     modified_code.splitlines(keepends=True),
                     fromfile=file_path,
                     tofile=file_path,
-                    lineterm="",
-                    n=3,
+                    fromfiledate=self.file_mtime(f_orig_path),
+                    tofiledate=self.file_mtime(f_mod_path),
                 )
             )
             # Add newline character to lines starting with --- or +++
