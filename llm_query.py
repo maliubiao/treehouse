@@ -736,6 +736,17 @@ def check_deps_installed() -> bool:
         ):
             all_installed = False
 
+    # 检查tree命令
+    if not _check_tool_installed(
+        tool_name="tree",
+        install_commands=[
+            "sudo apt install tree  # Debian/Ubuntu",
+            "sudo yum install tree  # RHEL/CentOS",
+            "brew install tree  # macOS",
+        ],
+    ):
+        all_installed = False
+
     # 检查剪贴板支持
     if sys.platform == "win32":
         try:

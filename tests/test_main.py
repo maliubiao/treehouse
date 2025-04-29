@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import unittest
 
@@ -19,7 +20,15 @@ def parse_args():
     return parser.parse_args()
 
 
+def add_gpt_path_to_syspath():
+    gpt_path = os.getenv("GPT_PATH")
+    if gpt_path and os.path.isdir(gpt_path):
+        sys.path.insert(0, gpt_path)
+        print(f"Added GPT_PATH to sys.path: {gpt_path}")
+
+
 def main():
+    add_gpt_path_to_syspath()
     args = parse_args()
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
