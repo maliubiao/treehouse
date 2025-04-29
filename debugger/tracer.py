@@ -53,6 +53,7 @@ class TraceConfig:
         line_ranges: Dict[str, List[Tuple[int, int]]] = None,
         capture_vars: List[str] = None,
         callback: Optional[callable] = None,
+        report_name: str = "trace_report.html",
     ):
         """
         初始化跟踪配置
@@ -68,6 +69,7 @@ class TraceConfig:
         self.capture_vars = capture_vars or []
         self.callback = callback
         self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
+        self.report_name = report_name
 
     @classmethod
     def from_yaml(cls, config_path: Union[str, Path]) -> "TraceConfig":
@@ -1057,8 +1059,8 @@ class TraceLogic:
             self._output._log_file.close()
             self._output._log_file = None
         if "html" in self._output._active_outputs:
-            print("正在生成HTML报告trace_report.html...")
-            self._html_render.save_to_file("trace_report.html")
+            print(f"正在生成HTML报告{self.config.report_name}...")
+            self._html_render.save_to_file(self.config.report_name)
 
 
 def get_tracer(module_path, config: TraceConfig):
@@ -1099,7 +1101,7 @@ def start_trace(module_path=None, config: TraceConfig = None):
         raise
 
 
-def trace(config: TraceConfig = TraceConfig(target_files=["*.py"])):
+def trace():
     """函数跟踪装饰器
 
     Args:
@@ -1110,6 +1112,7 @@ def trace(config: TraceConfig = TraceConfig(target_files=["*.py"])):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             print("start tracer")
+            config = TraceConfig(target_files=["*.py"], report_name=func.__name__ + ".html")
             tracer = start_trace(config=config)
             try:
                 result = func(*args, **kwargs)
