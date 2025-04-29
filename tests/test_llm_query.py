@@ -48,7 +48,7 @@ from llm_query import (
     patch_symbol_with_prompt,
     process_file_change,
 )
-from tree import BlockPatch
+from tree import BlockPatch, find_patch
 
 
 class TestGPTContextProcessor(unittest.TestCase):
@@ -825,7 +825,7 @@ class TestDisplayAndApplyDiff(unittest.TestCase):
             test_file_path = tmp_file.name
 
         llm_query.display_and_apply_diff(Path(test_file_path))
-        mock_run.assert_called_once_with(["patch", "-p0", "-i", test_file_path], check=True)
+        mock_run.assert_called_once_with([find_patch(), "-p0", "-i", test_file_path], check=True)
 
         os.remove(test_file_path)
 

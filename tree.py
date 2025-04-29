@@ -2412,15 +2412,22 @@ class BlockPatch:
 
     def _generate_system_diff(self, original_file: str, modified_file: str) -> str:
         """使用系统diff工具生成差异"""
-
-        # 查找系统diff工具
-        diff_tool = "diff"
-        if platform.system() == "Windows":
-            diff_tool = find_diff()
+        diff_tool = find_diff()
         try:
-            result = subprocess.run(
-                [diff_tool, "-u", original_file, modified_file], capture_output=True, text=True, check=False
-            )
+            # 在Windows上转换为相对路径并处理换行符
+            if os.name == "nt":
+                original_file = os.path.relpath(original_file)
+                modified_file = os.path.relpath(modified_file)
+                result = subprocess.run(
+                    [diff_tool, "-u", "--strip-trailing-cr", original_file, modified_file],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            else:
+                result = subprocess.run(
+                    [diff_tool, "-u", original_file, modified_file], capture_output=True, text=True, check=False
+                )
             # 对于diff工具，返回0表示文件相同，返回1表示文件有差异，这都是正常情况
             if result.returncode in (0, 1):
                 return result.stdout
