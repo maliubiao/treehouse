@@ -1729,7 +1729,7 @@ class RipgrepSearcher:
 
     def _build_command(self, patterns: List[str], search_root: Path) -> List[str]:
         cmd = [
-            "rg",
+            "rg.exe" if os.name == "nt" else "rg",
             "--json",
             "--smart-case",
             "--trim",
@@ -1748,17 +1748,17 @@ class RipgrepSearcher:
         else:
             # 添加排除目录
             for d in self.config.exclude_dirs:
-                cmd.extend(["--glob", f"!{d}/**"])
+                cmd.extend(["--glob", f"!{d.replace(os.sep, '/')}/**"])
 
             # 添加排除文件
             for f in self.config.exclude_files:
-                cmd.extend(["--glob", f"!{f}"])
+                cmd.extend(["--glob", f"!{f.replace(os.sep, '/')}"])
 
             # 添加包含目录（通过glob实现）
             for d in self.config.include_dirs:
-                cmd.extend(["--glob", f"{d}/**"])
+                cmd.extend(["--glob", f"{d.replace(os.sep, '/')}/**"])
             # 最终添加搜索根目录
-            cmd.append(str(search_root))
+            cmd.append(str(search_root).replace(os.sep, "/"))
         return cmd
 
     def _parse_results(self, output: str) -> List[SearchResult]:
