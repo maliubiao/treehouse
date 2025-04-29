@@ -465,7 +465,7 @@ function global:Get-GptCommandCompletions {
     } 
 }
 
-Register-ArgumentCompleter -CommandName askgpt, naskgpt, archgpt -ScriptBlock {
+Register-ArgumentCompleter -CommandName patchgpt, askgpt, naskgpt, archgpt -ScriptBlock {
     param($commandName, $commandAst, $cursorPosition)
     Get-GptCommandCompletions -commandAst $commandAst -cursorPosition $cursorPosition
 }

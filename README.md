@@ -191,7 +191,7 @@ source $GPT_PATH/env.sh #zsh, bash支持@后补全
 4. **在windows powershell上使用**  
 需要特别指出powershell的@有特殊含义，不能直接补全，需要用\\@才能补全，比直接@增加一个字符, 另外可能需要""才能防止转义
 ```powershell
-#windows包安装可以用choco install ripgrep git, 并把它们的bin目录加入PATH
+#windows包安装可以用choco install ripgrep git, 并把它们的bin目录加入PATH, 会用到git自带的diff.exe, patch.exe, 用git.exe自动定位
 #C:\\Program Files\\Git\\bin;C:\\ProgramData\\chocolatey\\bin;$HOME\\.local\\bin
 #naskgpt "@cmd" or '@cmd' or \@cmd
 $env:GPT_PATH="C:\Users\richard\treehouse"

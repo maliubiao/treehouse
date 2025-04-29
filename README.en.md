@@ -166,18 +166,24 @@ export GPT_KEY="your-api-key"
 export GPT_MODEL="your-model"
 export GPT_BASE_URL="https://api.example.com/v1"  # OpenAI-compatible API
 source $GPT_PATH/env.sh  # Enables @ completion in zsh/bash
-```
+
+
 4. **Windows PowerShell Usage**  
 PowerShell's `@` has special meaning and cannot be directly used for completion. You need to use `\@` instead, which adds an extra character compared to directly using `@`. Additionally, you may need to use quotes to prevent escaping.
 
 ```powershell
+# Windows package installation: choco install ripgrep git
+# Add to PATH: C:\Program Files\Git\bin;C:\ProgramData\chocolatey\bin;$HOME\.local\bin
+# This provides git's diff.exe, patch.exe, and git.exe for automatic location
 # naskgpt "@cmd" or '@cmd' or \@cmd
 $env:GPT_PATH="C:\Users\richard\treehouse"
+# Add to user environment variables for persistence
+[Environment]::SetEnvironmentVariable('GPT_PATH', $env:GPT_PATH, 'User')
 notepad $PROFILE
-# #Add these lines to your PowerShell profile, modify treehouse directory as needed:
+# Add these lines to your PowerShell profile, modify treehouse directory as needed:
 # $env:GPT_PATH=C:\Users\richard\treehouse
-# #Cconvert env.ps1 to UTF8-BOM format to avoid encoding issues on Windows
-# #(Use VS Code's "Save with Encoding" feature or tools/utf8_bom.py)
+# Convert env.ps1 to UTF8-BOM format to avoid encoding issues on Windows
+# (Use VS Code's "Save with Encoding" feature or tools/utf8_bom.py)
 # . C:\Users\richard\treehouse\env.ps1
 ```
 
@@ -335,6 +341,52 @@ cmake ../ -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON  # Debug build with AddressS
 # or
 cmake ../ -DCMAKE_BUILD_TYPE=Release
 ```
+
+## Windows Compilation
+
+1. **Environment Setup**:
+  - Install Visual Studio 2022, ensuring "Desktop development with C++" workload is selected
+  - Install CMake (via Visual Studio installer or official website)
+  - Use compatible Python version
+
+2. **Python Environment Setup**:
+```powershell
+# Execute in PowerShell
+# Install and pin Python 3.11.12 version
+PS C:\Users\richard\treehouse> uv python install cpython-3.11.12-windows-x86_64-none
+PS C:\Users\richard\treehouse> uv python pin cpython-3.11.12-windows-x86_64-none
+PS C:\Users\richard\treehouse> uv sync
+```
+
+3. **Build Using Developer PowerShell**:
+```powershell
+# Open "Developer PowerShell for VS 2022" from Start menu
+cd C:\Users\richard\treehouse\debugger
+mkdir build
+cd build
+# Generate Visual Studio solution
+cmake ../ -A x64 -DCMAKE_BUILD_TYPE=Release
+```
+
+4. **Build Project**:
+  - Option 1: Using Visual Studio
+    ```powershell
+    # Open generated solution
+    start .\treehouse-tracer.sln
+    # Select Release configuration and build solution in Visual Studio
+    ```
+  - Option 2: Command-line build
+    ```powershell
+    cmake --build . --config Release
+    # Verify correct Python DLL linkage
+    dumpbin /dependents ../tracer_core.pyd
+    ```
+
+5. **Verify Output**:
+  - After successful compilation, the DLL file should be located at `treehouse\debugger\tracer_core.pyd`
+  - Check Visual Studio's output window for detailed error messages if issues occur
+
+Note: Windows version uses `.pyd` extension instead of `.so` on Linux, but they serve the same function.
 
 ### Usage
 ```bash
