@@ -3458,9 +3458,9 @@ def extract_identifiable_path(file_path: str) -> str:
         file_path: 文件路径（相对或绝对路径）
 
     Returns:
-        相对路径（如果在当前文件目录下）或绝对路径
+        相对路径（如果在当前文件目录下）或绝对路径（统一使用Linux路径分隔符）
     """
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+    current_dir = str(GLOBAL_PROJECT_CONFIG.project_root_dir)
 
     # 转换为绝对路径
     if os.path.isabs(file_path):
@@ -3472,10 +3472,11 @@ def extract_identifiable_path(file_path: str) -> str:
     # 检查是否在当前文件目录下
     if abs_path.startswith(current_dir):
         # 返回相对于当前目录的路径
-        return os.path.relpath(abs_path, current_dir)
+        rel_path = os.path.relpath(abs_path, current_dir)
+        return rel_path.replace("\\", "/")
 
     # 返回绝对路径（当路径不在当前目录下时）
-    return abs_path
+    return abs_path.replace("\\", "/")
 
 
 async def location_to_symbol(

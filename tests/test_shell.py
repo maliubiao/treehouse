@@ -24,6 +24,7 @@ class TestShellCompletion(unittest.TestCase):
 
         # Setup complex test directory structure
         self.root = Path(self.test_dir.name)
+        self.root_posix = str(self.root).replace(os.sep, "/")  # 统一为Linux风格路径分隔符
         (self.root / LLM_PROJECT_CONFIG).touch()  # 确保根目录包含配置文件
         self._create_structure(
             {
@@ -70,15 +71,15 @@ class TestShellCompletion(unittest.TestCase):
     def test_directory_completion(self):
         test_cases = [
             (
-                f"symbol_{self.root}/lsp/",
+                f"symbol_{self.root_posix}/lsp/",
                 [
-                    f"symbol_{self.root}/lsp/subdir/",
-                    f"symbol_{self.root}/lsp/file1.txt",
-                    f"symbol_{self.root}/lsp/.hidden_file",
-                    f"symbol_{self.root}/lsp/special@file",
+                    f"symbol_{self.root_posix}/lsp/subdir/",
+                    f"symbol_{self.root_posix}/lsp/file1.txt",
+                    f"symbol_{self.root_posix}/lsp/.hidden_file",
+                    f"symbol_{self.root_posix}/lsp/special@file",
                 ],
             ),
-            (f"symbol_{self.root}/lsp/subdir/", [f"symbol_{self.root}/lsp/subdir/nested_file.md"]),
+            (f"symbol_{self.root_posix}/lsp/subdir/", [f"symbol_{self.root_posix}/lsp/subdir/nested_file.md"]),
         ]
 
         for prefix, expected in test_cases:
@@ -89,10 +90,10 @@ class TestShellCompletion(unittest.TestCase):
     def test_partial_completion(self):
         test_cases = [
             (
-                f"symbol_{self.root}/partial/mat",
-                [f"symbol_{self.root}/partial/match_file", f"symbol_{self.root}/partial/match_file2"],
+                f"symbol_{self.root_posix}/partial/mat",
+                [f"symbol_{self.root_posix}/partial/match_file", f"symbol_{self.root_posix}/partial/match_file2"],
             ),
-            (f"symbol_{self.root}/lsp/file", [f"symbol_{self.root}/lsp/file1.txt"]),
+            (f"symbol_{self.root_posix}/lsp/file", [f"symbol_{self.root_posix}/lsp/file1.txt"]),
         ]
 
         for prefix, expected in test_cases:
@@ -102,9 +103,9 @@ class TestShellCompletion(unittest.TestCase):
 
     def test_special_cases(self):
         test_cases = [
-            (f"symbol_{self.root}/lsp/.hid", [f"symbol_{self.root}/lsp/.hidden_file"]),
-            (f"symbol_{self.root}/lsp/special@", [f"symbol_{self.root}/lsp/special@file"]),
-            (f"symbol_{self.root}/multi/slash/path/", [f"symbol_{self.root}/multi/slash/path/test_file"]),
+            (f"symbol_{self.root_posix}/lsp/.hid", [f"symbol_{self.root_posix}/lsp/.hidden_file"]),
+            (f"symbol_{self.root_posix}/lsp/special@", [f"symbol_{self.root_posix}/lsp/special@file"]),
+            (f"symbol_{self.root_posix}/multi/slash/path/", [f"symbol_{self.root_posix}/multi/slash/path/test_file"]),
         ]
 
         for prefix, expected in test_cases:
@@ -125,7 +126,7 @@ class TestShellCompletion(unittest.TestCase):
     def test_error_handling(self):
         test_cases = [
             ("symbol_invalid_prefix", []),
-            (f"symbol_{self.root}/empty_dir/", []),
+            (f"symbol_{self.root_posix}/empty_dir/", []),
             ("symbol_missing_dir/", []),
         ]
 

@@ -48,7 +48,7 @@ from llm_query import (
     patch_symbol_with_prompt,
     process_file_change,
 )
-from tree import BlockPatch, find_patch
+from tree import BlockPatch, find_diff, find_patch
 
 
 class TestGPTContextProcessor(unittest.TestCase):
@@ -1500,9 +1500,9 @@ class TestFormatAndLint(unittest.TestCase):
             if os.path.exists(f):
                 os.remove(f)
 
-    def _create_temp_file(self, ext: str, content: str = "") -> str:
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
-            f.write(content.encode())
+    def _create_temp_file(self, ext: str, content: str = "", mode: str = "w+") -> str:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False, encoding="utf-8", mode=mode) as f:
+            f.write(content)
             self.test_files.append(f.name)
             return f.name
 
@@ -1797,10 +1797,10 @@ class TestDiffBlockFilter(unittest.TestCase):
     生成一个diff有多个block需要让用户确认的情况，这必须要使diff tool不合并它们才行
     """
 
-    def _create_temp_files(self, content1: str, content2: str) -> tuple[str, str]:
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f1:
+    def _create_temp_files(self, content1: str, content2: str, mode: str = "w+") -> tuple[str, str]:
+        with tempfile.NamedTemporaryFile(mode=mode, delete=False, encoding="utf-8") as f1:
             f1.write(content1)
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f2:
+        with tempfile.NamedTemporaryFile(mode=mode, delete=False, encoding="utf-8") as f2:
             f2.write(content2)
         return f1.name, f2.name
 
@@ -1810,7 +1810,7 @@ class TestDiffBlockFilter(unittest.TestCase):
                 patch_file.write(patch_content)
                 patch_file.flush()
                 subprocess.run(
-                    ["patch", "-p0", "-i", patch_file.name, original_file, "-o", patched_file.name],
+                    [find_patch(), "-p0", "-i", patch_file.name, original_file, "-o", patched_file.name],
                     check=True,
                     stderr=subprocess.PIPE,
                     stdout=subprocess.PIPE,
@@ -1823,7 +1823,7 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "a\nb2\nc\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -1841,7 +1841,7 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "x\ny2\nz\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -1858,7 +1858,7 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "1\n2\n3\n4\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -1878,12 +1878,12 @@ class TestDiffBlockFilter(unittest.TestCase):
         f1, f2 = self._create_temp_files(file1, file2)
         f3, f4 = self._create_temp_files(file3, file4)
         try:
-            diff1 = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff1 = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff1 = e.output
             self.assertEqual(e.returncode, 1)
         try:
-            diff2 = subprocess.check_output(["diff", "-u", f3, f4], text=True, stderr=subprocess.STDOUT)
+            diff2 = subprocess.check_output([find_diff(), "-u", f3, f4], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff2 = e.output
             self.assertEqual(e.returncode, 1)
@@ -1905,7 +1905,7 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "1\n2\n3\n4\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -1921,7 +1921,7 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "identical\ncontent\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output(["diff", "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             self.fail(f"diff should return 0 for identical files, got {e.returncode}")
 
