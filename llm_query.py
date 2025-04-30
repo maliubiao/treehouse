@@ -1295,14 +1295,14 @@ def under_projects_dir(path: str, projects_dir="projects") -> bool:
     )
 
 
-def _handle_local_file(match: CmdNode) -> str:
+def _handle_local_file(match: CmdNode, enable_line: bool = False) -> str:
     """处理本地文件路径"""
     expanded_path, line_range_match = _expand_file_path(match.command)
 
     if under_projects_dir(expanded_path):
         return _handle_project(expanded_path)
     if os.path.isfile(expanded_path):
-        return _process_single_file(expanded_path, line_range_match)
+        return _process_single_file(expanded_path, line_range_match, enable_line)
     if os.path.isdir(expanded_path):
         return _process_directory(expanded_path)
     if "*" in expanded_path or "?" in expanded_path:
@@ -1319,11 +1319,13 @@ def _expand_file_path(command: str) -> tuple:
     return expanded_path, line_range_match
 
 
-def _process_single_file(file_path: str, line_range_match: re.Match) -> str:
+def _process_single_file(file_path: str, line_range_match: re.Match, enable_line: bool = False) -> str:
     """处理单个文件内容"""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             content = _read_file_content(f, line_range_match)
+            if enable_line:
+                content = _format_with_line_numbers(content)
     except UnicodeDecodeError:
         content = "二进制文件或无法解码"
     except (FileNotFoundError, PermissionError, IsADirectoryError, OSError) as e:
@@ -2611,7 +2613,7 @@ class GPTContextProcessor:
             if is_prompt_file(cmd_node.command):
                 return _handle_prompt_file(cmd_node)
             elif is_local_file(cmd_node.command):
-                return _handle_local_file(cmd_node)
+                return _handle_local_file(cmd_node, GPT_FLAGS.get(GPT_FLAG_LINE))
             elif is_url(cmd_node.command):
                 return _handle_url(cmd_node)
             elif cmd_node.command in self.cmd_handlers:
@@ -2807,6 +2809,7 @@ GPT_FLAG_PATCH = "patch"
 GPT_SYMBOL_PATCH = "patch"
 GPT_FLAG_CONTEXT = "context"
 GPT_FLAG_SEARCH_FILES = "search"
+GPT_FLAG_LINE = "linenumber"
 
 GPT_FLAGS = {
     GPT_FLAG_GLOW: False,
@@ -2814,8 +2817,26 @@ GPT_FLAGS = {
     GPT_FLAG_PATCH: False,
     GPT_FLAG_CONTEXT: False,
     GPT_FLAG_SEARCH_FILES: False,
+    GPT_FLAG_LINE: False,
 }
 GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: {}}
+
+
+def _format_with_line_numbers(content: str) -> str:
+    """将代码内容格式化为带行号的显示格式"""
+    lines = content.splitlines()
+    if not lines:
+        return content
+
+    # 计算行号需要的最大宽度
+    max_line_num_width = len(str(len(lines)))
+    formatted_lines = []
+
+    for i, line in enumerate(lines, start=1):
+        line_num = str(i).rjust(max_line_num_width)
+        formatted_lines.append(f"{line_num} | {line}")
+
+    return "\n".join(formatted_lines)
 
 
 def is_command(match, cmd_map):

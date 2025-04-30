@@ -323,7 +323,7 @@ _zsh_completion_setup() {
       local symbol_items=($(ls -p | grep -v / | sed 's/^/symbol_/'))
 
       _alternative \
-        'special:特殊选项:(clipboard tree treefull read listen symbol_ glow last edit patch context)' \
+        'special:特殊选项:(clipboard linenumber tree treefull read listen symbol_ glow last edit patch context)' \
         'prompts:提示词文件:(${prompt_files[@]})' \
         'api:API补全:(${api_completions[@]})' \
         'symbols:本地符号:(${symbol_items[@]})' \

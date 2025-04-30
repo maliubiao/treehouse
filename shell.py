@@ -70,6 +70,7 @@ def handle_cmd_complete(prefix: str):
         "clipboard",
         "tree",
         "treefull",
+        "linenumber",
         "read",
         "listen",
         "glow",

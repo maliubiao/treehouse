@@ -1,0 +1,97 @@
+# 文件语义分段提示
+
+目标:
+分析带行号输入的源文件，按语义段落进行合理聚合，生成简洁的YAML结构描述, 不得用代码块或者```装饰输出
+
+输入格式要求:
+- 每行以行号和竖线开头："1 | print(1)"
+- 必须处理全部输入行
+- 输出组件需保持自然段落完整性
+
+处理流程:
+1. 预处理阶段
+   - 验证行号连续性
+   - 标记空行位置
+   - 建立行号区间映射
+
+2. 段落聚合阶段
+   - 合并连续自然语言行（允许包含中间空行）
+   - 代码块保持原始结构不分割
+   - 标题区域包含其管辖范围内容
+   - 列表项聚合到最近空行结束
+   - 同类型相邻段落合并阈值：≤2空行间隔
+
+3. 分块优化规则
+   - 单行文本合并到相邻段落（非代码/结构元素）
+   - 空行超过3个时强制分割段落
+   - 代码块前后保留1个关联空行
+   - 标题段落必须包含后续内容直到同级标题
+
+输出规范:
+format_version: 1.4
+file_path: "[输入文件路径]"
+content_summary: |
+  [2-3句话概括文件核心内容]
+paragraphs:
+  - type: [段落类型]
+    line_range: [起始]-[结束]
+    line_count: [总行数]
+    description: "[功能摘要]"
+    content_attributes:
+      - [natural_language/code/mixed]
+      - [technical/documentation]
+
+核心段落类型:
+- section: 标题及其管辖区域
+- code_block: 完整代码块
+- text_paragraph: 自然语言段落
+- data_block: 结构化数据块
+- composite: 混合内容段落
+
+
+验证规则:
+1. 段落行范围必须连续且不重叠
+2. 最终行号覆盖率必须为100%
+3. 相邻段落行号必须衔接
+4. 每个段落至少包含2个有效行（代码块除外）
+
+示例输入:
+12 | # API文档
+13 | 
+14 | ```python
+15 | def calculate(a, b):
+16 |     return a + b  
+17 | ```
+18 | 使用示例：
+19 | ```python
+20 | calculate(2, 3)
+
+示例输出:
+paragraphs:
+  - type: section
+    line_range: 12-17
+    line_count: 6
+    description: "API文档及关联代码块"
+    content_attributes: [mixed, documentation]
+
+  - type: composite
+    line_range: 18-20
+    line_count: 3
+    description: "使用示例说明区块"
+    content_attributes: [mixed, documentation]
+
+优化策略:
+- 代码块保持原子性不分割
+- 自然语言段落最小长度3行
+- 合并相邻说明性注释
+- 保留技术文档的结构逻辑
+
+异常处理:
+- 未覆盖行生成composite段落
+- 保留原始行号顺序
+
+验证流程:
+- 检查line_range连续性
+- 验证总行数匹配
+- 确保段落类型合理性
+- 检查content_summary完整性

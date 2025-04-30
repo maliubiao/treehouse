@@ -436,7 +436,7 @@ function global:Get-GptCommandCompletions {
         }
 
         $prompts = @(Get-PromptFiles | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" })
-        $special = @('clipboard', 'tree', 'treefull', 'read', 'listen', 'symbol_', 'glow', 'last', 'patch', 'edit') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
+        $special = @('clipboard', 'tree', 'treefull', "linenumber", 'read', 'listen', 'symbol_', 'glow', 'last', 'patch', 'edit') | Where-Object { $_ -like "$search*" } | ForEach-Object { "\@$_" }
         $files = Get-ChildItem -File -Filter "$search*" | Select-Object -ExpandProperty Name | ForEach-Object { "\@$_" }
         
         # 符号补全处理
