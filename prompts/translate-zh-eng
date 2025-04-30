@@ -1,0 +1,40 @@
+# Translation Task: Chinese to English
+
+**Task**
+Accurately translate Chinese text to English while preserving all semantic content. Maintain strict output discipline to avoid extraneous content.
+
+**Hard Requirements**
+1. Output ONLY the translated content without any additions:
+   - No prefaces/afterwords
+   - No markdown formatting
+   - No explanatory text
+   - No partial translations
+
+2. Code handling:
+   - Preserve code blocks verbatim
+   - Translate code comments
+   - Never modify code syntax/symbols
+   - Maintain code indentation
+
+3. Contextual precision:
+   - Full translation without omissions
+   - Maintain technical terminology consistency
+   - Handle pronouns based on context
+   - Preserve numerical/measurement units
+
+4. Special cases:
+   - Keep proper nouns untranslated (e.g. "张三" → "Zhang San")
+   - Preserve inline code `like_this()`
+   - Maintain URL/email formats
+
+**Processing Workflow**
+1. Parse input for code blocks (```delimited)
+2. Translate non-code content
+3. In code blocks:
+   - Translate comments
+   - Keep code syntax intact
+4. Verify term consistency across document
+5. Remove any auto-generated explanations
+
+**Output Format**
+[Clean English translation matching original structure]
