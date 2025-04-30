@@ -26,7 +26,9 @@
 import concurrent.futures
 import json
 import os
+import re
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -121,16 +123,30 @@ class TranslationWorkflow:
         with open(prompt_path, "r", encoding="utf-8") as f:
             prompt = f.read()
 
-        return f"{prompt}\n\n{paragraph_text}"
+        return f"{prompt}\n\n[input text start]{paragraph_text}[input text end]"
+
+    def _is_empty_content(self, text: str) -> bool:
+        """Check if text contains only whitespace, punctuation or is empty"""
+        if not text.strip():
+            return True
+
+        # Alternative approach for Unicode whitespace and punctuation
+        stripped = []
+        for char in text:
+            # Keep only characters that are not whitespace or punctuation
+            if not unicodedata.category(char).startswith(("Z", "P")):
+                stripped.append(char)
+
+        return not bool("".join(stripped))
 
     def _translate_paragraph(self, paragraph: Dict, direction: str) -> Tuple[int, int, str]:
         """Translate a single paragraph using the specified direction"""
         start, end = map(int, paragraph["line_range"].split("-"))
         paragraph_text = "".join(self.source_lines[start - 1 : end])
 
-        # Skip translation if content is only whitespace
-        if not paragraph_text.strip():
-            self._log(f"Skipping translation for whitespace-only lines {start}-{end}")
+        # Skip translation if content is empty or only whitespace/punctuation
+        if self._is_empty_content(paragraph_text):
+            self._log(f"Skipping translation for empty/whitespace-only lines {start}-{end}")
             return start, end, paragraph_text
 
         try:
