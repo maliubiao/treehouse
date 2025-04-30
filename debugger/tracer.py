@@ -519,13 +519,14 @@ class CallTreeHtmlRender:
         """构建查看源代码按钮HTML片段"""
         if not filename or not line_number:
             return ""
-        return f'<span class="view-source-btn" onclick="showSource(\'{filename}\', {line_number}, {frame_id})">view source</span>'
+        # Escape backslashes in filenames (important for Windows paths)
+        escaped_filename = filename.replace("\\", "\\\\").replace("'", "\\'")
+        return f'<span class="view-source-btn" onclick="showSource(\'{escaped_filename}\', {line_number}, {frame_id})">view source</span>'
 
     def _load_source_file(self, filename):
         """加载源代码文件内容"""
         if filename in self._source_files:
             return
-
         try:
             with open(filename, "rb") as f:
                 content = base64.b64encode(f.read()).decode("utf-8")

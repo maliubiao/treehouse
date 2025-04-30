@@ -283,7 +283,7 @@ function global:symbolgpt {
     param([switch]$Restart)
     $pythonPath = Get-PythonPath
     $argsAll = if ($Restart) { "-c `"import llm_query; llm_query.start_symbol_service(True)`"" } else { "-c `"import llm_query; llm_query.start_symbol_service(False)`"" }
-    Start-Process -NoNewWindow -FilePath $pythonPath -ArgumentList $argsAll
+    Start-Process -WindowStyle Hidden -FilePath $pythonPath -ArgumentList $argsAll
 }
 
 function global:symbolgptrestart {
