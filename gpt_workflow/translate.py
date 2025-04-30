@@ -2,6 +2,16 @@
 """
 需要在配置model.json中指定翻译用的大模型
 比如{
+    "segment": {
+        "key": "sk-**",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "model_name": "Pro/deepseek-ai/DeepSeek-V3",
+        "max_context_size": 131072,
+        "max_tokens": 8096,
+        "is_thinking": false,
+        "temperature": 0.6
+     },
+
     "translate": {
         "key": "sk-**",
         "base_url": "https://api.siliconflow.cn/v1",
@@ -53,7 +63,7 @@ class TranslationWorkflow:
         text = GPTContextProcessor().process_text(prompt)
         try:
             self._log("Generating paragraph configuration using LLM...")
-            response = self.model_switch.query("translate", text)
+            response = self.model_switch.query("segment", text)
             config_text = response["choices"][0]["message"]["content"].strip()
 
             # Parse the response as YAML
@@ -117,6 +127,11 @@ class TranslationWorkflow:
         """Translate a single paragraph using the specified direction"""
         start, end = map(int, paragraph["line_range"].split("-"))
         paragraph_text = "".join(self.source_lines[start - 1 : end])
+
+        # Skip translation if content is only whitespace
+        if not paragraph_text.strip():
+            self._log(f"Skipping translation for whitespace-only lines {start}-{end}")
+            return start, end, paragraph_text
 
         try:
             prompt = self._get_translation_prompt(paragraph_text, direction)
