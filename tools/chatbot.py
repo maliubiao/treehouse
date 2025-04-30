@@ -102,10 +102,11 @@ class ChatbotUI:
         ("/temperature", "设置生成温度(0-1)", "/temperature 0.8"),
     ]
 
-    def __init__(self, gpt_processor: GPTContextProcessor = None):
+    def __init__(self, gpt_processor: GPTContextProcessor = None, query_func=None):
         """初始化UI组件和配置
         Args:
             gpt_processor: GPT上下文处理器实例，允许依赖注入便于测试
+            query_func: 可选的查询函数，用于替换默认的query_gpt_api
         """
         self.style = self._configure_style()
         self.session = PromptSession(style=self.style)
@@ -113,6 +114,7 @@ class ChatbotUI:
         self.console = Console()
         self.temperature = 0.6
         self.gpt_processor = gpt_processor or GPTContextProcessor()
+        self._query_func = query_func or query_gpt_api
 
     def __str__(self) -> str:
         return (
@@ -241,7 +243,7 @@ class ChatbotUI:
             prompt: 用户输入的提示文本
         """
         processed_text = self.gpt_processor.process_text(prompt)
-        return query_gpt_api(
+        return self._query_func(
             api_key=GLOBAL_MODEL_CONFIG.key,
             prompt=processed_text,
             model=GLOBAL_MODEL_CONFIG.model_name,

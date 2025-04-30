@@ -2094,7 +2094,7 @@ def process_patch_response(
     if auto_commit:
         AutoGitCommit(gpt_response=remaining, files_to_add=modified_files, auto_commit=False).do_commit()
     if change_log:
-        ChangelogMarkdown().use_diff(response_text, "\n".join(diff_per_file.values()))
+        find_changelog().use_diff(response_text, "\n".join(diff_per_file.values()))
     return modified_files
 
 
@@ -3525,6 +3525,36 @@ def import_relative(module):
     return __import__(module)
 
 
+def start_chatbot():
+    from typing import TYPE_CHECKING
+
+    if TYPE_CHECKING:
+        import tools
+    else:
+        tools = import_relative("tools")
+    tools.ChatbotUI().run()
+
+
+def find_changelog():
+    from typing import TYPE_CHECKING
+
+    if TYPE_CHECKING:
+        import gpt_workflow
+    else:
+        gpt_workflow = import_relative("gpt_workflow")
+    return gpt_workflow.ChangelogMarkdown()
+
+
+def start_pylint(log: Path):
+    from typing import TYPE_CHECKING
+
+    if TYPE_CHECKING:
+        import gpt_workflow
+    else:
+        gpt_workflow = import_relative("gpt_workflow")
+    gpt_workflow.pylint_fix(str(log))
+
+
 def main(input_args):
     shadowroot.mkdir(parents=True, exist_ok=True)
 
@@ -3542,8 +3572,7 @@ def main(input_args):
         input_args.ask = Path(input_args.file).read_text("utf8")
         handle_ask_mode(input_args, proxies)
     elif input_args.chatbot:
-        tools = import_relative("tools")
-        tools.ChatbotUI().run()
+        start_chatbot()
     elif input_args.project_search:
         prompt_words_search(input_args.project_search, input_args)
         symbols = perform_search(input_args.project_search, input_args.config)
@@ -3556,7 +3585,6 @@ if __name__ == "__main__":
         tracer = trace.Trace(trace=1)
         tracer.runfunc(main, args)
     elif args.pylint_log:
-        flow = import_relative("gpt_workflow")
-        flow.pylint_fix(str(args.pylint_log))
+        start_pylint(args.pylint_log)
     else:
         main(args)

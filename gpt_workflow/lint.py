@@ -7,6 +7,7 @@ Pylint错误自动修复工具
 """
 import re
 import subprocess
+import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path

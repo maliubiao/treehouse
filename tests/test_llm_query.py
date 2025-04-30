@@ -20,21 +20,17 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
 
 import llm_query
+from gpt_workflow import ArchitectMode, ChangelogMarkdown, CoverageTestPlan, LintParser
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
     GPT_FLAG_PATCH,
     GPT_FLAGS,
-    ArchitectMode,
     AutoGitCommit,
     BlockPatchResponse,
-    ChangelogMarkdown,
-    ChatbotUI,
     CmdNode,
-    CoverageTestPlan,
     DiffBlockFilter,
     FormatAndLint,
     GPTContextProcessor,
-    LintParser,
     ModelConfig,
     ModelSwitch,
     NewSymbolFlag,
@@ -48,6 +44,7 @@ from llm_query import (
     patch_symbol_with_prompt,
     process_file_change,
 )
+from tools import ChatbotUI
 from tree import BlockPatch, find_diff, find_patch
 
 
@@ -1075,7 +1072,7 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(switch.current_config.base_url, "http://api1")
 
     @patch("llm_query.ModelSwitch.query")
-    @patch("llm_query.ArchitectMode.parse_response")
+    @patch("gpt_workflow.ArchitectMode.parse_response")
     @patch("llm_query.process_patch_response")
     def test_execute_workflow_integration(self, mock_process, mock_parse, mock_query):
         """测试端到端工作流程"""
@@ -1176,7 +1173,7 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(mock_query.call_count, 3)
 
     @patch("llm_query.ModelSwitch.query")
-    @patch("llm_query.ArchitectMode.parse_response")
+    @patch("gpt_workflow.ArchitectMode.parse_response")
     def test_execute_workflow_invalid_json(self, mock_parse, mock_query):
         """测试非标准JSON输入的容错处理"""
         # 模拟非标准JSON响应
@@ -1233,10 +1230,15 @@ class TestModelSwitch(unittest.TestCase):
 
 
 class TestChatbotUI(unittest.TestCase):
+
     def setUp(self):
         self.mock_gpt = MagicMock(spec=GPTContextProcessor)
         self.mock_console = MagicMock()
-        self.chatbot = ChatbotUI(gpt_processor=self.mock_gpt)
+        self.mock_query = MagicMock(return_value=iter(["response"]))
+        self.chatbot = ChatbotUI(
+            gpt_processor=self.mock_gpt,
+            query_func=self.mock_query,
+        )
         self.chatbot.console = self.mock_console
 
     def test_initialization(self):
@@ -1273,19 +1275,18 @@ class TestChatbotUI(unittest.TestCase):
         self.mock_console.print.assert_called_with(f"[red]参数错误: {error_msg}[/]")
 
     def test_stream_response(self):
-        with patch("llm_query.query_gpt_api") as mock_query:
-            mock_query.return_value = iter(["response"])
-            result = self.chatbot.stream_response("test prompt")
-            self.assertEqual(list(result), ["response"])
-            mock_query.assert_called_with(
-                api_key=GLOBAL_MODEL_CONFIG.key,
-                prompt=self.mock_gpt.process_text.return_value,
-                model=GLOBAL_MODEL_CONFIG.model_name,
-                base_url=GLOBAL_MODEL_CONFIG.base_url,
-                stream=True,
-                console=self.mock_console,
-                temperature=0.6,
-            )
+        self.mock_gpt.process_text.return_value = "processed prompt"
+        result = self.chatbot.stream_response("test prompt")
+        self.assertEqual(list(result), ["response"])
+        self.mock_query.assert_called_with(
+            api_key=GLOBAL_MODEL_CONFIG.key,
+            prompt="processed prompt",
+            model=GLOBAL_MODEL_CONFIG.model_name,
+            base_url=GLOBAL_MODEL_CONFIG.base_url,
+            stream=True,
+            console=self.mock_console,
+            temperature=0.6,
+        )
 
     def test_autocomplete_prompts(self):
         with (
@@ -1325,10 +1326,9 @@ class TestChatbotUI(unittest.TestCase):
         test_cases = [("", False), ("q", False), ("/help", True), ("test query", True)]
         for input_text, expected in test_cases:
             with self.subTest(input=input_text):
-                with patch("llm_query.query_gpt_api") as mock_query:
-                    mock_query.return_value = iter(["response"])
-                    result = self.chatbot._process_input(input_text)
-                    self.assertEqual(result, expected)
+                self.mock_query.return_value = iter(["response"])
+                result = self.chatbot._process_input(input_text)
+                self.assertEqual(result, expected)
 
     def test_clear_command_execution(self):
         with patch("os.system") as mock_system:
@@ -2056,7 +2056,7 @@ class TestChangelogMarkdown(unittest.TestCase):
     """Test cases for ChangelogMarkdown functionality."""
 
     def setUp(self):
-        self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".md", encoding="utf8")
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".md")
         self.file_path = self.temp_file.name
         self.changelog = ChangelogMarkdown(self.file_path)
 
