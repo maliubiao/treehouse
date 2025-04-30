@@ -283,7 +283,7 @@ function global:symbolgpt {
     param([switch]$Restart)
     $pythonPath = Get-PythonPath
     $restartFlag = if ($Restart) { "True" } else { "False" }
-    & $pythonPath -c "import llm_query; llm_query.start_symbol_service($restartFlag)"
+    & $pythonPath -c "import gpt_lib; gpt_lib.start_symbol_service($restartFlag)"
 }
 
 function global:symbolgptrestart {

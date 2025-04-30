@@ -422,11 +422,11 @@ function trace() {
 }
 
 function symbolgpt() {
-  $GPT_PYTHON_BIN -c "import llm_query; llm_query.start_symbol_service(False)"
+  $GPT_PYTHON_BIN -c "import gpt_lib; gpt_lib.start_symbol_service(False)"
 }
 
 function symbolgptrestart() {
-  $GPT_PYTHON_BIN -c "import llm_query; llm_query.start_symbol_service(True)"
+  $GPT_PYTHON_BIN -c "import gpt_lib; gpt_lib.start_symbol_service(True)"
 }
 
 function patchgpttrace() {
