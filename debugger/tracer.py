@@ -54,6 +54,7 @@ class TraceConfig:
         capture_vars: List[str] = None,
         callback: Optional[callable] = None,
         report_name: str = "trace_report.html",
+        exclude_functions: List[str] = None,
     ):
         """
         初始化跟踪配置
@@ -63,13 +64,18 @@ class TraceConfig:
             line_ranges: 文件行号范围字典，key为文件名，value为 (start_line, end_line) 元组列表
             capture_vars: 要捕获的变量表达式列表
             callback: 变量捕获时的回调函数
+            exclude_functions: 要排除的函数名列表
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
         self.capture_vars = capture_vars or []
         self.callback = callback
+        self.exclude_functions = exclude_functions or []
         self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
-        self.report_name = report_name
+        if report_name:
+            self.report_name = report_name
+        else:
+            self.report_name = "tracer_report.html"
 
     @classmethod
     def from_yaml(cls, config_path: Union[str, Path]) -> "TraceConfig":
@@ -104,6 +110,7 @@ class TraceConfig:
             line_ranges=config_data.get("line_ranges", {}),
             capture_vars=config_data.get("capture_vars", []),
             callback=config_data.get("callback", None),
+            exclude_functions=config_data.get("exclude_functions", []),
         )
 
     @staticmethod
@@ -188,10 +195,16 @@ class TraceConfig:
 
     def match_filename(self, filename: str) -> bool:
         """检查文件路径是否匹配目标文件模式"""
+        if filename == __file__:
+            return False
         if not self.target_files:
             return True
         filename_posix = Path(filename).as_posix()
         return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
+
+    def is_excluded_function(self, func_name: str) -> bool:
+        """检查函数名是否在排除列表中"""
+        return func_name in self.exclude_functions
 
 
 def truncate_repr_value(value, keep_elements=10):
@@ -238,8 +251,8 @@ def truncate_repr_value(value, keep_elements=10):
                 preview = f"{type(value).__name__}(%s ...)" % s[:-1]
         else:
             preview = repr(value)
-    except (AttributeError, TypeError, ValueError):
-        pass
+    except (AttributeError, TypeError, ValueError) as e:
+        return f"capture error: {str(e)}"
 
     if len(preview) > _MAX_VALUE_LENGTH:
         preview = preview[:_MAX_VALUE_LENGTH] + "..."
@@ -266,7 +279,12 @@ class TraceDispatcher:
         self.config = config
         self.path_cache = {}
         self._logic = TraceLogic(config)
-        self._active_frames = set()
+        self.active_frames = set()
+        self.bad_frame = None
+
+    def add_target_frame(self, frame):
+        if self.is_target_frame(frame):
+            self.active_frames.add(frame)
 
     def is_target_frame(self, frame):
         """精确匹配目标模块路径"""
@@ -274,15 +292,15 @@ class TraceDispatcher:
             if not frame or not frame.f_code or not frame.f_code.co_filename:
                 frame.f_trace_lines = False
                 return False
-
-            result = self.path_cache.get(frame.f_code.co_filename, None)
+            filename = frame.f_code.co_filename
+            result = self.path_cache.get(filename, None)
             if result is not None:
                 if result is False:
                     frame.f_trace_lines = False
                 return result
-            frame_path = Path(frame.f_code.co_filename).resolve()
+            frame_path = Path(filename).resolve()
             matched = self.config.match_filename(str(frame_path))
-            self.path_cache[frame.f_code.co_filename] = matched
+            self.path_cache[filename] = matched
             if not matched:
                 frame.f_trace_lines = False
             return matched
@@ -304,33 +322,44 @@ class TraceDispatcher:
 
     def _handle_call_event(self, frame, arg=None):
         """处理函数调用事件"""
+        if frame.f_code.co_name in self.config.exclude_functions:
+            frame.f_trace_lines = False
+            self.bad_frame = frame
+            return None
         if self.is_target_frame(frame):
-            self._active_frames.add(frame)
+            self.active_frames.add(frame)
             self._logic.handle_call(frame)
         return self.trace_dispatch
 
     def _handle_return_event(self, frame, arg):
         """处理函数返回事件"""
-        if frame in self._active_frames:
+        if frame == self.bad_frame:
+            self.bad_frame = None
+        if frame in self.active_frames:
             self._logic.handle_return(frame, arg)
-            self._active_frames.discard(frame)
+            self.active_frames.discard(frame)
         return self.trace_dispatch
 
     def _handle_line_event(self, frame, arg=None):
         """处理行号事件"""
-        if frame in self._active_frames:
+        if self.bad_frame:
+            return self.trace_dispatch
+        if frame in self.active_frames:
             self._logic.handle_line(frame)
         return self.trace_dispatch
 
     def _handle_exception_event(self, frame, arg):
         """处理异常事件"""
-        if frame in self._active_frames:
+        if self.bad_frame:
+            return self.trace_dispatch
+        if frame in self.active_frames:
             exc_type, exc_value, exc_traceback = arg
             self._logic.handle_exception(exc_type, exc_value, exc_traceback)
         return self.trace_dispatch
 
     def start(self):
         """启动跟踪"""
+        self._logic.start_flush_thread()
         sys.settrace(self.trace_dispatch)
         self._logic.start()
 
@@ -338,6 +367,8 @@ class TraceDispatcher:
         """停止跟踪"""
         sys.settrace(None)
         self._logic.stop()
+        logging.info("⏹ DEBUG SESSION ENDED\n")
+        print(color_wrap(f"\n⏹ 调试会话结束", "return"))
 
 
 class CallTreeHtmlRender:
@@ -351,6 +382,7 @@ class CallTreeHtmlRender:
         self._source_files = {}  # 存储源代码文件内容
         self._stack_variables = {}  # 键改为元组(frame_id, filename, lineno)
         self._comments_data = defaultdict(lambda: defaultdict(list))
+        self.current_message_id = 0
         self._html_template = """<!DOCTYPE html>
 <html>
 <head>
@@ -465,18 +497,13 @@ class CallTreeHtmlRender:
         original_filename = data.get("original_filename")
         line_number = data.get("lineno")
         frame_id = data.get("frame_id")
-        comment = ""
-
-        if frame_id and original_filename and line_number is not None:
-            key = (frame_id, original_filename, line_number)
-            variables = self._stack_variables.get(key, [])
-            comment = self.format_stack_variables(variables)
-            if comment:
-                self._comments_data[original_filename][frame_id].append(comment)
-
-        comment_html = self._build_comment_html(comment) if comment else ""
+        comment_html = ""
+        idx = log_data.get("idx", None)
+        if self._stack_variables.get(idx):
+            comment = self.format_stack_variables(self._stack_variables[idx])
+            comment_id = f"comment_{idx}"
+            comment_html = self._build_comment_html(comment_id, comment) if comment else ""
         view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
-
         html_parts = []
         if msg_type == "call":
             html_parts.extend(
@@ -506,11 +533,10 @@ class CallTreeHtmlRender:
             )
         return "\n".join(html_parts) + "\n"
 
-    def _build_comment_html(self, comment):
+    def _build_comment_html(self, comment_id, comment):
         """构建评论HTML片段"""
         is_long = len(comment) > 64
         short_comment = comment[:64] + "..." if is_long else comment
-        comment_id = f"comment_{uuid.uuid4().hex}"
         short_comment_escaped = html.escape(short_comment)
         full_comment_escaped = html.escape(comment)
         return f'<span class="comment" id="{comment_id}" onclick="event.stopPropagation(); toggleCommentExpand(\'{comment_id}\', event)"><span class="comment-preview">{short_comment_escaped}</span><span class="comment-full">{full_comment_escaped}</span></span>'
@@ -538,13 +564,10 @@ class CallTreeHtmlRender:
         """添加消息到消息列表"""
         self._messages.append((message, msg_type, log_data))
 
-    def add_stack_variable_create(self, frame_id, filename, lineno, opcode, var_name, value):
-        if lineno is None:
-            return
-        key = (frame_id, filename, lineno)
-        if key not in self._stack_variables:
-            self._stack_variables[key] = []
-        self._stack_variables[key].append((opcode, var_name, value))
+    def add_stack_variable_create(self, idx, opcode, var_name, value):
+        if idx not in self._stack_variables:
+            self._stack_variables[idx] = []
+        self._stack_variables[idx].append((opcode, var_name, value))
 
     def add_raw_message(self, log_data, color_type):
         """添加原始日志数据并处理"""
@@ -562,7 +585,6 @@ class CallTreeHtmlRender:
             if original_filename and lineno:
                 self._executed_lines[original_filename][frame_id].add(lineno)
                 self._load_source_file(original_filename)
-
         self._messages.append((message, color_type, log_data))
 
     def generate_html(self):
@@ -570,7 +592,7 @@ class CallTreeHtmlRender:
         buffer = []
         error_count = 0
 
-        for message, msg_type, log_data in self._messages:
+        for idx, (message, msg_type, log_data) in enumerate(self._messages):
             buffer.append(self._message_to_html(message, msg_type, log_data))
             if msg_type == "error":
                 error_count += 1
@@ -603,12 +625,15 @@ class CallTreeHtmlRender:
             p.parent.mkdir(parents=True, exist_ok=True)
             html_content = self.generate_html()
             p.write_text(html_content, encoding="utf-8")
+            log_path = str(p)
         else:
             html_content = self.generate_html()
             log_dir = os.path.join(os.path.dirname(__file__), "logs")
             os.makedirs(log_dir, exist_ok=True)
-            with open(os.path.join(log_dir, filename), "w", encoding="utf-8") as f:
+            log_path = os.path.join(log_dir, filename)
+            with open(log_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
+        print(f"正在生成HTML报告 {log_path} ...")
 
 
 class TraceLogic:
@@ -631,7 +656,7 @@ class TraceLogic:
                 "file": parent._file_output,
                 "html": parent._html_output,
             }
-            self._active_outputs = set(["html"])
+            self._active_outputs = set(["html", "file"])
             self._log_file = None
 
     def __init__(self, config: TraceConfig):
@@ -647,7 +672,8 @@ class TraceLogic:
         self._exception_handler = None
         self._log_data_cache = {}
         self._html_render = CallTreeHtmlRender(self)
-
+        self._stack_variables = {}
+        self._message_id = 0
         # 分组属性
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
@@ -879,8 +905,10 @@ class TraceLogic:
         formatted_filename = self._get_formatted_filename(filename)
         frame_id = self._get_frame_id(frame)
         comment = self.get_locals_change(frame_id, frame)
+        self._message_id += 1
         self._add_to_buffer(
             {
+                "idx": self._message_id,
                 "template": "{indent}▷ {filename}:{lineno} {line}",
                 "data": {
                     "indent": _INDENT * self.stack_depth,
@@ -900,9 +928,7 @@ class TraceLogic:
             self._process_captured_vars(frame)
 
     def handle_opcode(self, frame, opcode, name, value):
-        self._html_render.add_stack_variable_create(
-            self._get_frame_id(frame), frame.f_code.co_filename, frame.f_lineno, opcode, name, value
-        )
+        self._html_render.add_stack_variable_create(self._message_id, opcode, name, value)
 
     def _process_trace_expression(self, frame, line, filename, lineno):
         """处理追踪表达式"""
@@ -1041,12 +1067,14 @@ class TraceLogic:
             logging.error("变量捕获失败: %s", str(e))
             return {}
 
-    def start(self):
-        """启动逻辑处理"""
-        self._running_flag = True
+    def start_flush_thread(self):
         self._timer_thread = threading.Thread(target=self._flush_scheduler)
         self._timer_thread.daemon = True
         self._timer_thread.start()
+
+    def start(self):
+        """启动逻辑处理"""
+        self._running_flag = True
 
     def stop(self):
         """停止逻辑处理"""
@@ -1060,7 +1088,6 @@ class TraceLogic:
             self._output._log_file.close()
             self._output._log_file = None
         if "html" in self._output._active_outputs:
-            print(f"正在生成HTML报告{self.config.report_name}...")
             self._html_render.save_to_file(self.config.report_name)
 
 
@@ -1081,6 +1108,15 @@ def get_tracer(module_path, config: TraceConfig):
     return None
 
 
+def start_line_trace(exclude: List[str] = None):
+    """
+    exclude: 排除的函数列表
+    """
+    return start_trace(
+        config=TraceConfig(target_files=[sys._getframe().f_back.f_code.co_filename], exclude_functions=exclude)
+    )
+
+
 def start_trace(module_path=None, config: TraceConfig = None):
     """启动调试跟踪会话
 
@@ -1088,13 +1124,20 @@ def start_trace(module_path=None, config: TraceConfig = None):
         module_path: 目标模块路径(可选)
         config: 跟踪配置实例(可选)
     """
+    if not config:
+        log_name = sys._getframe().f_back.f_code.co_name
+        config = TraceConfig(target_files=[sys._getframe().f_back.f_code.co_filename], report_name=log_name + ".html")
     tracer = None
     tracer = get_tracer(module_path, config)
     if not tracer:
         tracer = TraceDispatcher(str(module_path), config)
+    caller_frame = sys._getframe().f_back
+    tracer.add_target_frame(caller_frame)
     try:
         if tracer:
             tracer.start()
+        caller_frame.f_trace_lines = True
+        caller_frame.f_trace_opcodes = True
         return tracer
     except Exception as e:
         logging.error("💥 DEBUGGER INIT ERROR: %s\n%s", str(e), traceback.format_exc())
@@ -1102,40 +1145,54 @@ def start_trace(module_path=None, config: TraceConfig = None):
         raise
 
 
-def trace():
+class Counter:
+    counter = 0
+    lock = threading.Lock()
+
+    @classmethod
+    def increse(self):
+        with Counter.lock:
+            Counter.counter += 1
+            return Counter.counter
+
+
+def trace(target_files: List[str] = None, exclude: List[str] = None):
     """函数跟踪装饰器
 
     Args:
         config: 跟踪配置实例(可选)
     """
+    if not target_files:
+        target_files = [sys._getframe().f_back.f_code.co_filename]
 
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            print("start tracer")
-            config = TraceConfig(target_files=["*.py"], report_name=func.__name__ + ".html")
-            tracer = start_trace(config=config)
+            print(color_wrap("[start tracer]", "call"))
+            config = TraceConfig(
+                target_files=target_files,
+                report_name=f"{func.__name__}_{Counter.increse()}.html",
+                exclude_functions=exclude,
+            )
+            t = start_trace(config=config)
             try:
                 result = func(*args, **kwargs)
                 return result
             finally:
-                if tracer:
-                    print("stop tracer")
-                    stop_trace(tracer)
+                if t:
+                    print(color_wrap("[stop tracer]", "return"))
+                    t.stop()
 
         return wrapper
 
     return decorator
 
 
-def stop_trace(tracer=None):
+def stop_trace(tracer: TraceDispatcher = None):
     """停止调试跟踪并清理资源
 
     Args:
         tracer: 可选的跟踪器实例
     """
-    sys.settrace(None)
     if tracer:
         tracer.stop()
-    logging.info("⏹ DEBUG SESSION ENDED\n")
-    print(color_wrap(f"\n⏹ 调试会话结束", "return"))

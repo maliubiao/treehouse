@@ -33,13 +33,10 @@ file_path: "[输入文件路径]"
 content_summary: |
   [2-3句话概括文件核心内容]
 paragraphs:
-  - type: [段落类型]
-    line_range: [起始]-[结束]
-    line_count: [总行数]
-    description: "[功能摘要]"
-    content_attributes:
-      - [natural_language/code/mixed]
-      - [technical/documentation]
+  - [段落类型]
+    [起始]-[结束]
+    [总行数]
+    "[功能摘要]"
 
 核心段落类型:
 - section: 标题及其管辖区域
@@ -47,13 +44,6 @@ paragraphs:
 - text_paragraph: 自然语言段落
 - data_block: 结构化数据块
 - composite: 混合内容段落
-
-
-验证规则:
-1. 段落行范围必须连续且不重叠
-2. 最终行号覆盖率必须为100%
-3. 相邻段落行号必须衔接
-4. 每个段落至少包含2个有效行（代码块除外）
 
 示例输入:
 12 | # API文档
@@ -68,21 +58,20 @@ paragraphs:
 
 示例输出:
 paragraphs:
-  - type: section
-    line_range: 12-17
-    line_count: 6
-    description: "API文档及关联代码块"
-    content_attributes: [mixed, documentation]
-
-  - type: composite
-    line_range: 18-20
-    line_count: 3
-    description: "使用示例说明区块"
-    content_attributes: [mixed, documentation]
+  - 
+    - section
+    - "12-17"
+    - 6
+    - "API文档及关联代码块"
+  - 
+    - composite
+    - "18-20"
+    - 3
+    - "使用示例说明区块"
 
 优化策略:
-- 代码块保持原子性不分割
-- 自然语言段落最小长度3行
+- namespace, function, class, markdown code block, 保持原子性不分割
+- 自然语言段落最小长度10行
 - 合并相邻说明性注释
 - 保留技术文档的结构逻辑
 
@@ -90,8 +79,3 @@ paragraphs:
 - 未覆盖行生成composite段落
 - 保留原始行号顺序
 
-验证流程:
-- 检查line_range连续性
-- 验证总行数匹配
-- 确保段落类型合理性
-- 检查content_summary完整性

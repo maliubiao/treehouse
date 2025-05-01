@@ -544,7 +544,7 @@ def _process_and_save_response(
     返回:
         dict: 处理后的响应结果
     """
-    content, reasoning = _process_stream_response(stream, kwargs.get("console"))
+    content, reasoning = _process_stream_response(stream, **kwargs)
 
     # 将助理回复添加到历史
     history.append({"role": "assistant", "content": content})
@@ -563,7 +563,7 @@ def _process_and_save_response(
     return {"choices": [{"message": {"content": content}}]}
 
 
-def _process_stream_response(stream, console) -> tuple:
+def _process_stream_response(stream, **kwargs) -> tuple:
     """处理流式响应
 
     参数:
@@ -575,19 +575,22 @@ def _process_stream_response(stream, console) -> tuple:
     """
     content = ""
     reasoning = ""
-
+    console = kwargs.get("console")
+    verbose = kwargs.get("verbose", True)
     for chunk in stream:
         # 处理推理内容
         if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
-            _print_content(chunk.choices[0].delta.reasoning_content, console, style="#00ff00")
+            if verbose:
+                _print_content(chunk.choices[0].delta.reasoning_content, console, style="#00ff00")
             reasoning += chunk.choices[0].delta.reasoning_content
 
         # 处理正式回复内容
         if chunk.choices[0].delta.content:
-            _print_content(chunk.choices[0].delta.content, console)
+            if verbose:
+                _print_content(chunk.choices[0].delta.content, console)
             content += chunk.choices[0].delta.content
-
-    _print_newline(console)
+    if verbose:
+        _print_newline(console)
     return content, reasoning
 
 
@@ -1308,7 +1311,7 @@ def _process_single_file(file_path: str, line_range_match: re.Match, enable_line
         with open(file_path, "r", encoding="utf-8") as f:
             content = _read_file_content(f, line_range_match)
             if enable_line:
-                content = _format_with_line_numbers(content)
+                content = format_with_line_numbers(content)
     except UnicodeDecodeError:
         content = "二进制文件或无法解码"
     except (FileNotFoundError, PermissionError, IsADirectoryError, OSError) as e:
@@ -2805,7 +2808,7 @@ GPT_FLAGS = {
 GPT_VALUE_STORAGE = {GPT_SYMBOL_PATCH: {}}
 
 
-def _format_with_line_numbers(content: str) -> str:
+def format_with_line_numbers(content: str) -> str:
     """将代码内容格式化为带行号的显示格式"""
     lines = content.splitlines()
     if not lines:
