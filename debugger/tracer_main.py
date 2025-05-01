@@ -188,6 +188,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             config = TraceConfig(
                 target_files=target_patterns,
                 capture_vars=[],
+                enable_var_trace=True,
             )
             tracer = start_trace(target, config=config)
             execute_script(target, args["script_args"])

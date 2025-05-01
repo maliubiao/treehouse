@@ -55,6 +55,7 @@ class TraceConfig:
         callback: Optional[callable] = None,
         report_name: str = "trace_report.html",
         exclude_functions: List[str] = None,
+        enable_var_trace: bool = False,  # 新增配置项
     ):
         """
         初始化跟踪配置
@@ -65,12 +66,14 @@ class TraceConfig:
             capture_vars: 要捕获的变量表达式列表
             callback: 变量捕获时的回调函数
             exclude_functions: 要排除的函数名列表
+            enable_var_trace: 是否启用变量操作跟踪
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
         self.capture_vars = capture_vars or []
         self.callback = callback
         self.exclude_functions = exclude_functions or []
+        self.enable_var_trace = enable_var_trace  # 新增属性
         self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
         if report_name:
             self.report_name = report_name
@@ -642,12 +645,14 @@ class TraceLogic:
             self._file_name_cache = {}
             self._trace_expressions = {}
             self._ast_cache = {}
+            self._var_ops_cache = {}
 
     class _FrameData:
         def __init__(self):
             self._frame_id_map = {}
             self._frame_locals_map = {}
             self._current_frame_id = 0
+            self._code_var_ops = {}
 
     class _OutputHandlers:
         def __init__(self, parent):
@@ -897,6 +902,29 @@ class TraceLogic:
         """获取局部变量变化"""
         return ""
 
+    def _get_var_ops(self, code_obj):
+        """获取代码对象的变量操作分析结果"""
+        if code_obj in self._file_cache._var_ops_cache:
+            return self._file_cache._var_ops_cache[code_obj]
+
+        from .variable_trace import analyze_variable_ops  # 导入分析函数
+
+        analysis = analyze_variable_ops(code_obj)
+        self._file_cache._var_ops_cache[code_obj] = analysis
+        return analysis
+
+    def _get_line_vars(self, frame):
+        """获取当前行需要跟踪的变量"""
+        if not self.config.enable_var_trace:
+            return []
+
+        code_obj = frame.f_code
+        if code_obj not in self._frame_data._code_var_ops:
+            self._frame_data._code_var_ops[code_obj] = self._get_var_ops(code_obj)
+
+        line_ops = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno - 1, {})
+        return line_ops.get("loads", []) + line_ops.get("stores", [])
+
     def handle_line(self, frame):
         """基础行号跟踪"""
         lineno = frame.f_lineno
@@ -906,22 +934,42 @@ class TraceLogic:
         frame_id = self._get_frame_id(frame)
         comment = self.get_locals_change(frame_id, frame)
         self._message_id += 1
-        self._add_to_buffer(
-            {
-                "idx": self._message_id,
-                "template": "{indent}▷ {filename}:{lineno} {line}",
-                "data": {
-                    "indent": _INDENT * self.stack_depth,
-                    "filename": formatted_filename,
-                    "lineno": lineno,
-                    "line": line,
-                    "frame_id": frame_id,
-                    "comment": comment,
-                    "original_filename": filename,
-                },
+
+        # 新增变量跟踪逻辑
+        tracked_vars = {}
+        if self.config.enable_var_trace:
+            var_names = self._get_line_vars(frame)
+            if var_names:
+                locals_dict = frame.f_locals
+                globals_dict = frame.f_globals
+                for var in var_names:
+                    try:
+                        # 安全警告：eval使用是必要的调试功能
+                        value = eval(var, globals_dict, locals_dict)  # nosec
+                        tracked_vars[var] = truncate_repr_value(value)
+                    except Exception as e:
+                        tracked_vars[var] = f"<Error: {str(e)}>"
+
+        log_data = {
+            "idx": self._message_id,
+            "template": "{indent}▷ {filename}:{lineno} {line}",
+            "data": {
+                "indent": _INDENT * self.stack_depth,
+                "filename": formatted_filename,
+                "lineno": lineno,
+                "line": line,
+                "frame_id": frame_id,
+                "comment": comment,
+                "original_filename": filename,
+                "tracked_vars": tracked_vars,  # 新增跟踪变量数据
             },
-            "line",
-        )
+        }
+
+        if tracked_vars:
+            log_data["template"] += " # Debug: {vars}"
+            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in tracked_vars.items()])
+
+        self._add_to_buffer(log_data, "line")
 
         self._process_trace_expression(frame, line, filename, lineno)
         if self.config.capture_vars:
@@ -1117,7 +1165,7 @@ def start_line_trace(exclude: List[str] = None):
     )
 
 
-def start_trace(module_path=None, config: TraceConfig = None):
+def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
     """启动调试跟踪会话
 
     Args:
@@ -1126,7 +1174,9 @@ def start_trace(module_path=None, config: TraceConfig = None):
     """
     if not config:
         log_name = sys._getframe().f_back.f_code.co_name
-        config = TraceConfig(target_files=[sys._getframe().f_back.f_code.co_filename], report_name=log_name + ".html")
+        config = TraceConfig(
+            target_files=[sys._getframe().f_back.f_code.co_filename], report_name=log_name + ".html", **kwargs
+        )
     tracer = None
     tracer = get_tracer(module_path, config)
     if not tracer:
@@ -1156,7 +1206,7 @@ class Counter:
             return Counter.counter
 
 
-def trace(target_files: List[str] = None, exclude: List[str] = None):
+def trace(target_files: List[str] = None, **okwargs):
     """函数跟踪装饰器
 
     Args:
@@ -1170,9 +1220,8 @@ def trace(target_files: List[str] = None, exclude: List[str] = None):
         def wrapper(*args, **kwargs):
             print(color_wrap("[start tracer]", "call"))
             config = TraceConfig(
-                target_files=target_files,
                 report_name=f"{func.__name__}_{Counter.increse()}.html",
-                exclude_functions=exclude,
+                **okwargs,
             )
             t = start_trace(config=config)
             try:

@@ -272,7 +272,7 @@ class TranslationWorkflow:
             self._log(f"Error loading files: {e}", "ERROR")
             raise
 
-    @tracer.trace(exclude=["query", "_is_empty_content"])
+    @tracer.trace(exclude_functions=["query", "_is_empty_content"], enable_var_trace=True)
     def validate_paragraphs(self):
         """Validate paragraph definitions"""
         covered_lines = set()
@@ -318,7 +318,7 @@ class TranslationWorkflow:
 
         return not bool("".join(stripped))
 
-    @tracer.trace(exclude=["query", "_is_empty_content"])
+    @tracer.trace(exclude_functions=["query", "_is_empty_content"], enable_var_trace=True)
     def _translate_paragraph(self, paragraph: Dict, direction: str) -> Tuple[int, int, str]:
         """Translate a single paragraph using the specified direction"""
         start, end = map(int, paragraph["line_range"].split("-"))
