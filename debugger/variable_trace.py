@@ -79,16 +79,6 @@ def analyze_variable_ops(func_or_code):
     return dict(sorted(line_vars.items()))
 
 
-def analyze_variable_list(func_or_code):
-    """
-    分析函数或代码对象的字节码，返回按行号排序的变量访问列表
-    返回格式：[['var1','var2'], ['var3'], ...]
-    """
-    var_analysis = analyze_variable_ops(func_or_code)
-    return [var_analysis[line] for line in sorted(var_analysis.keys())]
-
-
-# 增强的示例用法
 if __name__ == "__main__":
     # 测试函数对象
     def test_func():
@@ -104,7 +94,6 @@ if __name__ == "__main__":
 
     for target in [test_func, code_obj]:
         var_analysis = analyze_variable_ops(target)
-        list_analysis = analyze_variable_list(target)
 
         if inspect.iscode(target):
             print(f"\nAnalysis for code object: {target.co_name}")
@@ -112,9 +101,4 @@ if __name__ == "__main__":
             print(f"\nFile: {test_func.__code__.co_filename}, Function: {test_func.__name__}")
 
         for line, variables in var_analysis.items():
-            print(f"Line {line}: {variables}")
-
-        print("\nList Analysis:")
-        for i, variables in enumerate(list_analysis):
-            line = sorted(var_analysis.keys())[i]
             print(f"Line {line}: {variables}")

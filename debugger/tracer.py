@@ -383,8 +383,8 @@ class TraceDispatcher:
         if self.bad_frame:
             return self.trace_dispatch
         if frame in self.active_frames:
-            exc_type, exc_value, exc_traceback = arg
-            self._logic.handle_exception(exc_type, exc_value, exc_traceback)
+            exc_type, exc_value, _ = arg
+            self._logic.handle_exception(exc_type, exc_value, frame)
         return self.trace_dispatch
 
     def start(self):
@@ -524,15 +524,14 @@ class SysMonitoringTraceDispatcher:
         """Handle RAISE event (exception raised)"""
         frame = sys._getframe(1)  # Get the frame where exception was raised
         if frame in self.active_frames:
-            self._logic.handle_exception(type(exc), exc, None)
+            self._logic.handle_exception(type(exc), exc, frame)
         return None
 
-    def _handle_exception_handled(self, _code, _offset, _exc):
+    def _handle_exception_handled(self, _code, _offset, exc):
         """Handle EXCEPTION_HANDLED event"""
         frame = sys._getframe(1)  # Get the frame where exception was handled
         if frame in self.active_frames:
-            # We could log that the exception was handled here
-            pass
+            self._logic.stack_depth += 1
         return None
 
     def is_target_frame(self, frame):
@@ -855,20 +854,19 @@ class TraceLogic:
             self._code_var_ops = {}
 
     class _OutputHandlers:
-        def __init__(self, parent):
+        def __init__(self, parent: "TraceLogic"):
             self._output_handlers = {
                 "console": parent._console_output,
                 "file": parent._file_output,
                 "html": parent._html_output,
             }
             self._active_outputs = set(["html", "file"])
-            self._log_file = None
+            self._log_file = open(_LOG_NAME, "w+")
 
     def __init__(self, config: TraceConfig):
         """初始化实例属性"""
         self.stack_depth = 0
         self.line_counter = {}
-        self._call_stack = []
         self.config = config
         self._log_queue = queue.Queue()
         self._flush_event = threading.Event()
@@ -925,9 +923,7 @@ class TraceLogic:
         """文件输出处理"""
         if self._output._log_file:
             message = self._format_log_message(log_data)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            self._output._log_file.write(f"[{timestamp}] {message}\n")
-            self._output._log_file.flush()
+            self._output._log_file.write(f"{message}\n")
 
     def _html_output(self, log_data, color_type):
         """HTML输出处理"""
@@ -1061,7 +1057,6 @@ class TraceLogic:
                 },
                 "call",
             )
-            self._call_stack.append((frame.f_code.co_name, frame_id))
             self.stack_depth += 1
         except (AttributeError, TypeError) as e:
             traceback.print_exc()
@@ -1074,7 +1069,6 @@ class TraceLogic:
             return_str = truncate_repr_value(return_value)
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
-            comment = self.get_locals_change(frame_id, frame)
             if frame_id in self._frame_data._frame_locals_map:
                 del self._frame_data._frame_locals_map[frame_id]
             self._add_to_buffer(
@@ -1085,21 +1079,14 @@ class TraceLogic:
                         "filename": filename,
                         "return_value": return_str,
                         "frame_id": frame_id,
-                        "comment": comment,
                         "original_filename": frame.f_code.co_filename,
                     },
                 },
                 "return",
             )
             self.stack_depth = max(0, self.stack_depth - 1)
-            if self._call_stack:
-                self._call_stack.pop()
         except KeyError:
             pass
-
-    def get_locals_change(self, _frame_id, _frame):
-        """获取局部变量变化"""
-        return ""
 
     def _get_var_ops(self, code_obj):
         """获取代码对象的变量操作分析结果"""
@@ -1131,7 +1118,6 @@ class TraceLogic:
         line = linecache.getline(filename, lineno).strip("\n")
         formatted_filename = self._get_formatted_filename(filename)
         frame_id = self._get_frame_id(frame)
-        comment = self.get_locals_change(frame_id, frame)
         self._message_id += 1
 
         # 新增变量跟踪逻辑
@@ -1158,7 +1144,6 @@ class TraceLogic:
                 "lineno": lineno,
                 "line": line,
                 "frame_id": frame_id,
-                "comment": comment,
                 "original_filename": filename,
                 "tracked_vars": tracked_vars,  # 新增跟踪变量数据
             },
@@ -1237,47 +1222,28 @@ class TraceLogic:
                 "var",
             )
 
-    def handle_exception(self, exc_type, exc_value, exc_traceback):
+    def handle_exception(self, exc_type, exc_value, frame):
         """记录异常信息"""
-        if exc_traceback:
-            frame = exc_traceback.tb_frame
-            filename = self._get_formatted_filename(frame.f_code.co_filename)
-            lineno = exc_traceback.tb_lineno
-            frame_id = self._get_frame_id(frame)
-            self._add_to_buffer(
-                {
-                    "template": "{indent}⚠ EXCEPTION {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
-                    "data": {
-                        "indent": _INDENT * self.stack_depth,
-                        "filename": filename,
-                        "lineno": lineno,
-                        "exc_type": exc_type.__name__,
-                        "exc_value": str(exc_value),
-                        "frame_id": frame_id,
-                        "original_filename": frame.f_code.co_filename,
-                    },
+        print(color_wrap("💥 发生异常", "error"))
+        filename = self._get_formatted_filename(frame.f_code.co_filename)
+        lineno = frame.f_lineno
+        frame_id = self._get_frame_id(frame)
+        self._add_to_buffer(
+            {
+                "template": "{indent}⚠ EXCEPTION {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
+                "data": {
+                    "indent": _INDENT * (self.stack_depth - 1),
+                    "filename": filename,
+                    "lineno": lineno,
+                    "exc_type": exc_type.__name__,
+                    "exc_value": str(exc_value),
+                    "frame_id": frame_id,
+                    "original_filename": frame.f_code.co_filename,
                 },
-                "error",
-            )
-
-            stack = traceback.extract_tb(exc_traceback)
-            for i, frame_info in enumerate(stack):
-                if i == 0:
-                    continue
-                filename = self._get_formatted_filename(frame_info.filename)
-                self._add_to_buffer(
-                    {
-                        "template": "{indent}↳ at {filename}:{lineno} in {func} [frame:{frame_id}]",
-                        "data": {
-                            "indent": _INDENT * (self.stack_depth + i),
-                            "filename": filename,
-                            "lineno": frame_info.lineno,
-                            "func": frame_info.name,
-                            "frame_id": frame_id,
-                        },
-                    },
-                    "error",
-                )
+            },
+            "error",
+        )
+        self.stack_depth -= 1
 
     def capture_variables(self, frame):
         """捕获并计算变量表达式"""
