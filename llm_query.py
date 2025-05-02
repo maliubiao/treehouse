@@ -434,7 +434,6 @@ def query_gpt_api(
 
         # 获取API响应
         response = _get_api_response(api_key, model, history, kwargs)
-
         # 处理并保存响应
         return _process_and_save_response(response, history, kwargs)
 
@@ -530,7 +529,7 @@ def _get_api_response(
 
 
 def _process_and_save_response(
-    stream,
+    stream_client,
     history: list,
     kwargs: dict,
 ) -> dict:
@@ -544,7 +543,7 @@ def _process_and_save_response(
     返回:
         dict: 处理后的响应结果
     """
-    content, reasoning = _process_stream_response(stream, **kwargs)
+    content, reasoning = _process_stream_response(stream_client, **kwargs)
 
     # 将助理回复添加到历史
     history.append({"role": "assistant", "content": content})
@@ -563,7 +562,7 @@ def _process_and_save_response(
     return {"choices": [{"message": {"content": content}}]}
 
 
-def _process_stream_response(stream, **kwargs) -> tuple:
+def _process_stream_response(stream_client, **kwargs) -> tuple:
     """处理流式响应
 
     参数:
@@ -577,7 +576,7 @@ def _process_stream_response(stream, **kwargs) -> tuple:
     reasoning = ""
     console = kwargs.get("console")
     verbose = kwargs.get("verbose", True)
-    for chunk in stream:
+    for chunk in stream_client:
         # 处理推理内容
         if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
             if verbose:
