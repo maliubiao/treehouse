@@ -74,7 +74,7 @@ class TraceConfig:
         callback: Optional[callable] = None,
         report_name: str = "trace_report.html",
         exclude_functions: List[str] = None,
-        enable_var_trace: bool = False,  # 新增配置项
+        enable_var_trace: bool = False,
     ):
         """
         初始化跟踪配置
@@ -217,8 +217,8 @@ class TraceConfig:
 
     def match_filename(self, filename: str) -> bool:
         """检查文件路径是否匹配目标文件模式"""
-        if filename == __file__:
-            return False
+        # if filename == __file__:
+        #     return False
         if not self.target_files:
             return True
         filename_posix = Path(filename).as_posix()
@@ -582,7 +582,7 @@ class CallTreeHtmlRender:
         self._executed_lines = defaultdict(lambda: defaultdict(set))  # 使用集合避免重复记录
         self._frame_executed_lines = defaultdict(lambda: defaultdict(set))
         self._source_files = {}  # 存储源代码文件内容
-        self._stack_variables = {}  # 键改为元组(frame_id, filename, lineno)
+        self._stack_variables = {}
         self._comments_data = defaultdict(lambda: defaultdict(list))
         self.current_message_id = 0
         self._html_template = """<!DOCTYPE html>
@@ -838,6 +838,93 @@ class CallTreeHtmlRender:
         print(f"正在生成HTML报告 {log_path} ...")
 
 
+class TraceLogExtractor:
+    """
+    日志提取器，用于从调试日志中查找特定文件和行号的日志信息
+    工作原理：
+    1. 读取日志索引文件(.index)查找匹配的行号和frame id
+    2. 根据索引定位到日志文件中的起始和结束位置
+    3. 提取该frame id对应的完整调用栈日志
+    """
+
+    def __init__(self, log_file: str = None):
+        """
+        初始化日志提取器
+
+        Args:
+            log_file: 日志文件路径，默认为debug.log
+        """
+        self.log_file = log_file or str(_LOG_NAME)
+        self.index_file = self.log_file + ".index"
+
+    def _parse_index_line(self, line: str) -> tuple:
+        """
+        解析索引行，返回(type, filename, lineno, frame_id, position)元组
+
+        Args:
+            line: 索引文件中的一行
+
+        Returns:
+            (type, filename, lineno, frame_id, position) 元组
+        """
+        parts = line.strip().split("\t")
+        if len(parts) != 4 or parts[0] not in ("call", "return"):
+            return None
+        file_lineno = parts[1].split(":")
+        if len(file_lineno) != 2:
+            return None
+        return (parts[0], file_lineno[0], int(file_lineno[1]), int(parts[2]), int(parts[3]))
+
+    def lookup(self, filename: str, lineno: int) -> list:
+        """
+        查找指定文件和行号的日志信息
+
+        Args:
+            filename: 文件名
+            lineno: 行号
+
+        Returns:
+            匹配的日志行列表
+        """
+        # 首先在索引文件中查找匹配的行号和frame id
+        target_frame_id = None
+        pair = []
+        start_position = None
+
+        with open(self.index_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+                parsed = self._parse_index_line(line)
+                if not parsed:
+                    continue
+                type_tag, file, line_no, frame_id, position = parsed
+                if file == filename and line_no == lineno and type_tag == "call":
+                    target_frame_id = frame_id
+                    start_position = position
+                    continue
+                if target_frame_id is not None and target_frame_id == frame_id and type_tag == "return":
+                    pair.append((start_position, position))
+                    start_position = None
+                    target_frame_id = None
+
+        if not pair:
+            return pair
+
+        logs = []
+        for start, end in pair:
+            with open(self.log_file, "r", encoding="utf-8") as f:
+                f.seek(start)
+                log_lines = []
+                while f.tell() <= end:
+                    line = f.readline()
+                    if line.startswith("#"):
+                        continue
+                    log_lines.append(line)
+                logs.append("".join(log_lines))
+        return logs
+
+
 class TraceLogic:
     class _FileCache:
         def __init__(self):
@@ -861,7 +948,6 @@ class TraceLogic:
                 "html": parent._html_output,
             }
             self._active_outputs = set(["html", "file"])
-            self._log_file = open(_LOG_NAME, "w+")
 
     def __init__(self, config: TraceConfig):
         """初始化实例属性"""
@@ -881,6 +967,7 @@ class TraceLogic:
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
+        self.enable_output("file", filename=_LOG_NAME)
 
     def _get_frame_id(self, frame):
         """获取当前帧ID"""
@@ -895,11 +982,11 @@ class TraceLogic:
         if output_type == "file" and "filename" in kwargs:
             try:
                 # 使用with语句确保文件正确关闭
-                self._output._log_file = open(kwargs["filename"], "a", encoding="utf-8")
+                self._output._log_file = open(kwargs["filename"], "w+", encoding="utf-8")
+                self._output._log_file_index = open(str(kwargs["filename"]) + ".index", "w+", encoding="utf-8")
             except (IOError, OSError, PermissionError) as e:
                 logging.error("无法打开日志文件: %s", str(e))
                 raise
-
         self._output._active_outputs.add(output_type)
 
     def disable_output(self, output_type: str):
@@ -907,6 +994,7 @@ class TraceLogic:
         if output_type == "file" and self._output._log_file:
             try:
                 self._output._log_file.close()
+                self._output._log_file_index.close()
             except (IOError, OSError) as e:
                 logging.error("关闭日志文件时出错: %s", str(e))
             finally:
@@ -919,11 +1007,23 @@ class TraceLogic:
         colored_msg = color_wrap(message, color_type)
         print(colored_msg)
 
-    def _file_output(self, log_data, _):
+    def _file_output(self, log_data, log_type):
         """文件输出处理"""
         if self._output._log_file:
             message = self._format_log_message(log_data)
+            trace_data = log_data["data"]
+            if log_type == "call":
+                # filename: lineno frame id  call -> return  start end
+                position = self._output._log_file.tell()
+                self._output._log_file_index.write(
+                    f"#{message}\n{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
+                )
             self._output._log_file.write(f"{message}\n")
+            if log_type == "return":
+                position = self._output._log_file.tell()
+                self._output._log_file_index.write(
+                    f"#{message}\n{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
+                )
 
     def _html_output(self, log_data, color_type):
         """HTML输出处理"""
@@ -1077,6 +1177,7 @@ class TraceLogic:
                     "data": {
                         "indent": _INDENT * (self.stack_depth - 1),
                         "filename": filename,
+                        "lineno": frame.f_lineno,
                         "return_value": return_str,
                         "frame_id": frame_id,
                         "original_filename": frame.f_code.co_filename,
@@ -1224,7 +1325,6 @@ class TraceLogic:
 
     def handle_exception(self, exc_type, exc_value, frame):
         """记录异常信息"""
-        print(color_wrap("💥 发生异常", "error"))
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self._get_frame_id(frame)
@@ -1297,9 +1397,7 @@ class TraceLogic:
         self._flush_buffer()
         while not self._log_queue.empty():
             self._log_queue.get_nowait()
-        if self._output._log_file:
-            self._output._log_file.close()
-            self._output._log_file = None
+        self.disable_output("file")
         if "html" in self._output._active_outputs:
             self._html_render.save_to_file(self.config.report_name)
 

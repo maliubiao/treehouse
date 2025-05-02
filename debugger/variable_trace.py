@@ -44,7 +44,8 @@ def analyze_variable_ops(func_or_code):
             # 处理 Python 3.11+ 的新操作码
             elif PYTHON_311_OR_LATER and instr.opname in ("STORE_FAST_LOAD_FAST", "STORE_FAST_STORE_FAST"):
                 var_name = instr.argval
-                line_vars[current_line].add(var_name)
+                line_vars[current_line].add(var_name[0])
+                line_vars[current_line].add(var_name[1])
                 continue
             # 处理 Python 3.13 的新操作码
             elif PYTHON_313_OR_LATER and instr.opname in (
@@ -53,7 +54,8 @@ def analyze_variable_ops(func_or_code):
                 "STORE_FAST_STORE_FAST",
             ):
                 var_name = instr.argval
-                line_vars[current_line].update([var_name])
+                line_vars[current_line].add(var_name[0])
+                line_vars[current_line].add(var_name[1])
                 continue
 
         elif "LOAD" in instr.opname:
@@ -69,7 +71,8 @@ def analyze_variable_ops(func_or_code):
                 "LOAD_FAST_CHECK",
             ):
                 var_name = instr.argval
-                line_vars[current_line].update([var_name])
+                line_vars[current_line].add(var_name[0])
+                line_vars[current_line].add(var_name[1])
                 continue
 
         if var_name:

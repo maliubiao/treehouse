@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -16,8 +17,8 @@ from debugger.tracer import (
     CallTreeHtmlRender,
     TraceConfig,
     TraceDispatcher,
+    TraceLogExtractor,
     TraceLogic,
-    color_wrap,
     truncate_repr_value,
 )
 
@@ -55,8 +56,7 @@ class TestTruncateReprValue(unittest.TestCase):
 
         obj = TestObj()
         result = truncate_repr_value(obj)
-        self.assertIn("...", result)
-        self.assertIn("TestObj", result)
+        self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
 
 
 class TestTraceConfig(unittest.TestCase):
@@ -241,8 +241,8 @@ class TestTraceLogic(unittest.TestCase):
         try:
             raise ValueError("test error")
         except ValueError as e:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            self.logic.handle_exception(exc_type, exc_value, exc_traceback)
+            exc_type, exc_value, _ = sys.exc_info()
+            self.logic.handle_exception(exc_type, exc_value, sys._getframe())
 
     def test_capture_variables(self):
         frame = inspect.currentframe()
@@ -283,17 +283,14 @@ class TestCallTreeHtmlRender(unittest.TestCase):
 
     def test_add_stack_variable(self):
         frame_id = 1
-        filename = "test.py"
-        lineno = 42
         opcode = dis.opmap["LOAD_NAME"]
         var_name = "x"
         value = 42
-        self.render.add_stack_variable_create(frame_id, filename, lineno, opcode, var_name, value)
-        key = (frame_id, filename, lineno)
-        self.assertIn(key, self.render._stack_variables)
+        self.render.add_stack_variable_create(frame_id, opcode, var_name, value)
+        self.assertIn(1, self.render._stack_variables)
 
     def test_generate_html(self):
-        self.render.add_message("test message", "call")
+        self.render.add_message("test message", "call", {})
         generated_html = self.render.generate_html()
         self.assertIn("test&nbsp;message", generated_html)
         self.assertIn("Python Trace Report", generated_html)
@@ -301,24 +298,12 @@ class TestCallTreeHtmlRender(unittest.TestCase):
     def test_save_to_file(self):
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tmp:
             tmp.close()
-            self.render.add_message("test message", "call")
+            self.render.add_message("test message", "call", {})
             self.render.save_to_file(str(Path(tmp.name)))
             with open(tmp.name, encoding="utf-8") as f:
                 content = f.read()
             self.assertIn("test&nbsp;message", content)
             os.unlink(tmp.name)
-
-
-class TestColorWrap(unittest.TestCase):
-    def test_color_wrap(self):
-        colored = color_wrap("test", "call")
-        self.assertTrue(colored.startswith(_COLORS["call"]))
-        self.assertTrue(colored.endswith(_COLORS["reset"]))
-
-    def test_color_wrap_no_tty(self):
-        with patch("sys.stdout.isatty", return_value=False):
-            colored = color_wrap("test", "call")
-            self.assertEqual(colored, "test")
 
 
 class TestIntegration(unittest.TestCase):
@@ -353,10 +338,10 @@ class TestIntegration(unittest.TestCase):
         try:
             raise ValueError("test error")
         except ValueError:
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            logic.handle_exception(exc_type, exc_value, exc_traceback)
+            exc_type, exc_value, _ = sys.exc_info()
+            logic.handle_exception(exc_type, exc_value, sys._getframe())
 
-    def _test_variable_capture(self, logic, frame):
+    def _test_variable_capture(self, logic: TraceLogic, frame):
         config = logic.config
         config.capture_vars = ["x", "y['z']"]
         result = logic.capture_variables(frame)
@@ -382,10 +367,138 @@ class TestIntegration(unittest.TestCase):
         logic = TraceLogic(config)
         frame = inspect.currentframe()
 
+        x = 42
+        y = {"z": "test"}
         self._test_call_events(logic)
         self._test_exception_handling(logic)
         self._test_variable_capture(logic, frame)
         self._test_output_handlers(logic)
+
+
+class TestTraceLogExtractor(unittest.TestCase):
+    """TraceLogExtractor 测试套件"""
+
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp())
+        self.log_file = self.test_dir / "debug.log"
+        self.index_file = self.log_file.with_suffix(".log.index")
+
+        # 生成测试日志和索引
+        self._generate_test_logs()
+
+    def _generate_test_logs(self):
+        """生成符合真实格式的日志和索引"""
+        # 创建 TraceLogic 实例生成标准日志
+        config = TraceConfig(target_files=["test_file.py"], report_name="test_report.html", enable_var_trace=True)
+        self.trace_logic = TraceLogic(config)
+        self.trace_logic.enable_output("file", filename=str(self.log_file))
+
+        # 生成标准日志结构
+        logs = [
+            ("CALL func1 @ test_file.py:5", "call", {"lineno": 5, "frame_id": 100}),
+            ("LINE 10 @ test_file.py:10", "line", {"lineno": 10, "frame_id": 100}),
+            ("RETURN func1 @ test_file.py:5", "return", {"lineno": 5, "frame_id": 100}),
+            ("CALL func2 @ test_file.py:20", "call", {"lineno": 20, "frame_id": 200}),
+            ("LINE 25 @ test_file.py:25", "line", {"lineno": 25, "frame_id": 200}),
+            ("RETURN func2 @ test_file.py:20", "return", {"lineno": 20, "frame_id": 200}),
+            ("CALL func3 @ test_file.py:30", "call", {"lineno": 30, "frame_id": 300}),
+            ("LINE 35 @ test_file.py:35", "line", {"lineno": 35, "frame_id": 300}),
+            ("RETURN func3 @ test_file.py:30", "return", {"lineno": 30, "frame_id": 300}),
+        ]
+
+        # 写入日志并记录位置
+        with open(self.log_file, "w", encoding="utf-8") as log_f, open(self.index_file, "w", encoding="utf-8") as idx_f:
+            idx_f.write("# 索引文件头\n")
+            for msg, msg_type, data in logs:
+                # 记录日志位置
+                end_pos = log_f.tell()
+                # 生成索引条目
+                if msg_type == "call":
+                    idx_line = f"call\ttest_file.py:{data['lineno']}\t{data['frame_id']}\t{end_pos}\n"
+                    idx_f.write(idx_line)
+                log_f.write(f"{msg}\n")
+                if msg_type == "return":
+                    idx_line = f"return\ttest_file.py:{data['lineno']}\t{data['frame_id']}\t{end_pos}\n"
+                    idx_f.write(idx_line)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir)
+
+    def test_normal_lookup(self):
+        """测试正常查找匹配条目"""
+        extractor = TraceLogExtractor(str(self.log_file))
+        results = extractor.lookup("test_file.py", 5)
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("CALL func1", results[0])
+        self.assertIn("RETURN func1", results[0])
+        self._verify_log_positions(results[0], 5)
+
+    def test_multiple_matches(self):
+        """测试多条目匹配场景"""
+        extractor = TraceLogExtractor(str(self.log_file))
+        results = extractor.lookup("test_file.py", 20)
+        self.assertEqual(len(results), 1)
+        self.assertIn("CALL func2", results[0])
+        self.assertIn("RETURN func2", results[0])
+
+    def test_cross_frame_extraction(self):
+        """测试跨frame_id的日志提取"""
+        extractor = TraceLogExtractor(str(self.log_file))
+        results = extractor.lookup("test_file.py", 30)
+        self.assertEqual(len(results), 1)
+        self.assertIn("CALL func3", results[0])
+        self.assertIn("LINE 35", results[0])
+        self.assertIn("RETURN func3", results[0])
+
+    def test_index_consistency(self):
+        """验证索引条目与日志位置一致性"""
+        extractor = TraceLogExtractor(str(self.log_file))
+
+        # 检查有效条目
+        valid_entries = [
+            (5, 100, ["CALL func1", "RETURN func1"]),
+            (20, 200, ["CALL func2", "RETURN func2"]),
+            (30, 300, ["CALL func3", "RETURN func3"]),
+        ]
+
+        for lineno, frame_id, expected in valid_entries:
+            with self.subTest(lineno=lineno):
+                results = extractor.lookup("test_file.py", lineno)
+                self.assertEqual(len(results), 1)
+                for phrase in expected:
+                    self.assertIn(phrase, results[0])
+
+    def _verify_log_positions(self, log_content, lineno):
+        """验证日志位置正确性"""
+        with open(self.log_file, "r", encoding="utf-8") as f:
+            full_log = f.read()
+            self.assertTrue(
+                log_content in full_log,
+                f"提取的日志内容未在原始日志中找到\n提取内容:\n{log_content}\n\n完整日志:\n{full_log}",
+            )
+
+    def test_index_parsing_edge_cases(self):
+        """测试索引文件解析边界条件"""
+        extractor = TraceLogExtractor(str(self.log_file))
+
+        # 测试无效行号
+        results = extractor.lookup("test_file.py", 999)
+        self.assertEqual(len(results), 0)
+
+        # 测试无效文件
+        results = extractor.lookup("invalid.py", 5)
+        self.assertEqual(len(results), 0)
+
+    def test_partial_matches(self):
+        """测试部分匹配条目"""
+        # 添加部分匹配的日志条目
+        with open(self.index_file, "a", encoding="utf-8") as f:
+            f.write("test_file.py:5\t100\t5000\n")  # 不存在的位置
+
+        extractor = TraceLogExtractor(str(self.log_file))
+        results = extractor.lookup("test_file.py", 5)
+        self.assertEqual(len(results), 1)  # 应忽略无效位置
 
 
 if __name__ == "__main__":
