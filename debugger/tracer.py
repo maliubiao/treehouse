@@ -16,15 +16,34 @@ import sys
 import threading
 import time
 import traceback
-import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import yaml
 from colorama import Fore, Style, just_fix_windows_console
 
 just_fix_windows_console()
+
+if TYPE_CHECKING:
+
+    class MonitoringEvents:
+        PY_START: int
+        PY_RETURN: int
+        LINE: int
+        RAISE: int
+        EXCEPTION_HANDLED: int
+        NO_EVENTS: int
+
+    class MonitoringModule:
+        events: MonitoringEvents
+
+        def get_tool(self, tool_id: int) -> Optional[str]: ...
+        def use_tool_id(self, tool_id: int, tool_name: str) -> None: ...
+        def set_events(self, tool_id: int, event_set: int) -> None: ...
+        def register_callback(self, tool_id: int, event: int, callback: Callable[..., Any]) -> None: ...
+        def free_tool_id(self, tool_id: int) -> None: ...
+
 
 _MAX_VALUE_LENGTH = 512
 _INDENT = "  "
@@ -210,48 +229,56 @@ class TraceConfig:
         return func_name in self.exclude_functions
 
 
+def _truncate_sequence(value, keep_elements):
+    if len(value) <= keep_elements:
+        return repr(value)
+    keep_list = []
+    for i in range(keep_elements):
+        keep_list.append(value[i])
+    return f"[{keep_list} ...]"
+
+
+def _truncate_dict(value, keep_elements):
+    if len(value) <= keep_elements:
+        return repr(value)
+    keep_dict = {}
+    i = keep_elements
+    it = iter(value)
+    while i > 0 and value:
+        key = next(it)
+        keep_dict[key] = value[key]
+        i -= 1
+    s = repr(keep_dict)
+    return "%s ...}" % s[:-1]
+
+
+def _truncate_object(value, keep_elements):
+    if len(value.__dict__) <= keep_elements:
+        return f"{type(value).__name__}.({repr(value.__dict__)})"
+    keep_attrs = {}
+    i = keep_elements
+    it = iter(value.__dict__)
+    while i > 0 and value.__dict__:
+        key = next(it)
+        keep_attrs[key] = value.__dict__[key]
+        i -= 1
+    s = repr(keep_attrs)
+    return f"{type(value).__name__}(%s ...)" % s[:-1]
+
+
 def truncate_repr_value(value, keep_elements=10):
     """智能截断保留关键类型信息"""
     preview = "..."
 
     try:
-        # Ignore function, module, and class types
         if inspect.isfunction(value) or inspect.ismodule(value) or inspect.isclass(value):
             preview = f"{type(value).__name__}(...)"
         elif isinstance(value, (list, tuple)):
-            if len(value) <= keep_elements:
-                preview = repr(value)
-            else:
-                keep_list = []
-                for i in range(value[:keep_elements]):
-                    keep_list.append(value[i])
-                preview = f"[{keep_list} ...]"
+            preview = _truncate_sequence(value, keep_elements)
         elif isinstance(value, dict):
-            if len(value) <= keep_elements:
-                preview = repr(value)
-            else:
-                keep_dict = {}
-                i = keep_elements
-                it = iter(value)
-                while i > 0 and value:
-                    key = next(it)
-                    keep_dict[key] = value[key]
-                    i -= 1
-                s = repr(keep_dict)
-                preview = "%s ...}" % s[:-1]
+            preview = _truncate_dict(value, keep_elements)
         elif hasattr(value, "__dict__"):
-            if len(value.__dict__) <= keep_elements:
-                preview = f"{type(value).__name__}.({repr(value.__dict__)})"
-            else:
-                keep_attrs = {}
-                i = keep_elements
-                it = iter(value.__dict__)
-                while i > 0 and value.__dict__:
-                    key = next(it)
-                    keep_attrs[key] = value.__dict__[key]
-                    i -= 1
-                s = repr(keep_attrs)
-                preview = f"{type(value).__name__}(%s ...)" % s[:-1]
+            preview = _truncate_object(value, keep_elements)
         else:
             preview = repr(value)
     except (AttributeError, TypeError, ValueError) as e:
@@ -369,6 +396,179 @@ class TraceDispatcher:
     def stop(self):
         """停止跟踪"""
         sys.settrace(None)
+        self._logic.stop()
+        logging.info("⏹ DEBUG SESSION ENDED\n")
+        print(color_wrap(f"\n⏹ 调试会话结束", "return"))
+
+
+class SysMonitoringTraceDispatcher:
+    """Python 3.12+ sys.monitoring based trace dispatcher"""
+
+    def __init__(self, target_path, config: TraceConfig):
+        self.target_path = target_path
+        self.config = config
+        self.path_cache = {}
+        self._logic = TraceLogic(config)
+        self.active_frames = set()
+        self.bad_frame = None
+        self._tool_id = None
+        self._registered = False
+        self.monitoring_module: MonitoringModule = sys.monitoring
+
+    def _register_tool(self):
+        """Register this tool with sys.monitoring"""
+        if self._registered:
+            return
+
+        try:
+            # Try to find an available tool ID
+            for tool_id in range(6):
+                if self.monitoring_module.get_tool(tool_id) is None:
+                    try:
+                        self.monitoring_module.use_tool_id(tool_id, "PythonDebugger")
+                        self._tool_id = tool_id
+                        self._registered = True
+                        break
+                    except ValueError:
+                        continue
+
+            if not self._registered:
+                raise RuntimeError("No available tool IDs in sys.monitoring")
+
+            # Register callbacks for the events we care about
+            events = (
+                self.monitoring_module.events.PY_START
+                | self.monitoring_module.events.PY_RETURN
+                | self.monitoring_module.events.LINE
+                | self.monitoring_module.events.RAISE
+                | self.monitoring_module.events.EXCEPTION_HANDLED
+            )
+
+            self.monitoring_module.set_events(self._tool_id, events)
+
+            # Register the callbacks
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.PY_START, self._handle_py_start
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.PY_RETURN, self._handle_py_return
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.LINE, self._handle_line
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.RAISE, self._handle_raise
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id,
+                self.monitoring_module.events.EXCEPTION_HANDLED,
+                self._handle_exception_handled,
+            )
+
+        except Exception as e:
+            logging.error("Failed to register monitoring tool: %s", str(e))
+            raise
+
+    def _unregister_tool(self):
+        """Unregister this tool from sys.monitoring"""
+        if not self._registered or self._tool_id is None:
+            return
+
+        try:
+            # Unregister all callbacks
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_START, None)
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_RETURN, None)
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.LINE, None)
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.RAISE, None)
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.EXCEPTION_HANDLED, None
+            )
+
+            # Disable all events
+            self.monitoring_module.set_events(self._tool_id, self.monitoring_module.events.NO_EVENTS)
+
+            # Free the tool ID
+            self.monitoring_module.free_tool_id(self._tool_id)
+            self._registered = False
+            self._tool_id = None
+
+        except Exception as e:
+            logging.error("Failed to unregister monitoring tool: %s", str(e))
+
+    def _handle_py_start(self, _code, _offset):
+        """Handle PY_START event (function entry)"""
+        frame = sys._getframe(1)  # Get the frame of the function being called
+        if not self.is_target_frame(frame):
+            return self.monitoring_module.DISABLE
+
+        self.active_frames.add(frame)
+        self._logic.handle_call(frame)
+        return None
+
+    def _handle_py_return(self, _code, _offset, retval):
+        """Handle PY_RETURN event (function return)"""
+        frame = sys._getframe(1)  # Get the frame of the function returning
+        if frame in self.active_frames:
+            self._logic.handle_return(frame, retval)
+            self.active_frames.discard(frame)
+        return None
+
+    def _handle_line(self, _code, _line_number):
+        """Handle LINE event"""
+        frame = sys._getframe(1)  # Get the current frame
+        if frame in self.active_frames:
+            self._logic.handle_line(frame)
+        return None
+
+    def _handle_raise(self, _code, _offset, exc):
+        """Handle RAISE event (exception raised)"""
+        frame = sys._getframe(1)  # Get the frame where exception was raised
+        if frame in self.active_frames:
+            self._logic.handle_exception(type(exc), exc, None)
+        return None
+
+    def _handle_exception_handled(self, _code, _offset, _exc):
+        """Handle EXCEPTION_HANDLED event"""
+        frame = sys._getframe(1)  # Get the frame where exception was handled
+        if frame in self.active_frames:
+            # We could log that the exception was handled here
+            pass
+        return None
+
+    def is_target_frame(self, frame):
+        """Check if frame matches target files"""
+        try:
+            if not frame or not frame.f_code or not frame.f_code.co_filename:
+                return False
+
+            filename = frame.f_code.co_filename
+            result = self.path_cache.get(filename, None)
+            if result is not None:
+                return result
+
+            frame_path = Path(filename).resolve()
+            matched = self.config.match_filename(str(frame_path))
+            self.path_cache[filename] = matched
+            return matched
+
+        except (AttributeError, ValueError, OSError) as e:
+            logging.debug("Frame check error: %s", str(e))
+            return False
+
+    def add_target_frame(self, frame):
+        """Add a frame to be monitored"""
+        if self.is_target_frame(frame):
+            self.active_frames.add(frame)
+
+    def start(self):
+        """Start monitoring"""
+        self._logic.start_flush_thread()
+        self._logic.start()
+        self._register_tool()
+
+    def stop(self):
+        """Stop monitoring"""
+        self._unregister_tool()
         self._logic.stop()
         logging.info("⏹ DEBUG SESSION ENDED\n")
         print(color_wrap(f"\n⏹ 调试会话结束", "return"))
@@ -829,7 +1029,6 @@ class TraceLogic:
                 "error",
             )
             return
-        frame.f_trace_opcodes = True
         try:
             args_info = []
             if frame.f_code.co_name == "<module>":
@@ -922,8 +1121,8 @@ class TraceLogic:
         if code_obj not in self._frame_data._code_var_ops:
             self._frame_data._code_var_ops[code_obj] = self._get_var_ops(code_obj)
 
-        line_ops = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno - 1, {})
-        return line_ops.get("loads", []) + line_ops.get("stores", [])
+        line_vars = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno - 1, set())
+        return line_vars
 
     def handle_line(self, frame):
         """基础行号跟踪"""
@@ -1180,7 +1379,10 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
     tracer = None
     tracer = get_tracer(module_path, config)
     if not tracer:
-        tracer = TraceDispatcher(str(module_path), config)
+        if sys.version_info >= (3, 11):
+            tracer = SysMonitoringTraceDispatcher(str(module_path), config)
+        else:
+            tracer = TraceDispatcher(str(module_path), config)
     caller_frame = sys._getframe().f_back
     tracer.add_target_frame(caller_frame)
     try:

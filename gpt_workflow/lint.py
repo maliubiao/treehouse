@@ -9,19 +9,13 @@ import re
 import subprocess
 import traceback
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional
 
-import requests
-from colorama import Fore
-from colorama import Style as ColorStyle
 from pydantic import BaseModel
 
 from llm_query import (
     GLOBAL_MODEL_CONFIG,
-    GPT_FLAGS,
-    GPT_VALUE_STORAGE,
     CmdNode,
     ModelSwitch,
     generate_patch_prompt,
@@ -105,7 +99,7 @@ class LintParser:
                     file_lines = cls._file_cache[file_path]
                     if 0 < line_num <= len(file_lines):
                         original_line = file_lines[line_num - 1].rstrip("\n")
-                except Exception as e:
+                except OSError as e:
                     print(f"Error reading {file_path}:{line_num} - {str(e)}")
 
                 results.append(
@@ -131,12 +125,10 @@ class LintReportFix:
         self._source_cache: dict[str, list[str]] = {}
 
     def _build_prompt(self, symbol, symbol_map):
-        group: list[LintResult] = symbol.get("own_errors", [])
         """构建合并后的提示词模板"""
-
+        group: list[LintResult] = symbol.get("own_errors", [])
         errors_desc = "\n\n".join(
-            f"错误代码: {res.code}\n" f"描述: {res.message}\n" f"原代码行: {res.original_line}"
-            for idx, res in enumerate(group)
+            f"错误代码: {res.code}\n" f"描述: {res.message}\n" f"原代码行: {res.original_line}" for res in group
         )
         base_prompt = generate_patch_prompt(
             CmdNode(command="symbol", args=[symbol["name"]]), symbol_map, patch_require=True
@@ -148,7 +140,7 @@ class LintReportFix:
         """生成批量修复建议"""
         prompt = self._build_prompt(symbol, symbol_map)
         print(prompt)
-        response = self.model_switch.query("default", prompt)
+        response = self.model_switch.query("coder", prompt)
         process_patch_response(
             response["choices"][0]["message"]["content"], symbol_map, auto_commit=False, auto_lint=False
         )
@@ -161,30 +153,44 @@ class PylintFixer:
         self,
         linter_log_path: str,
         auto_apply: bool = False,
-        shadowroot: Optional[Path] = None,
         root_dir: Optional[Path] = None,
-        use_git: bool = False,
+        git_hint: str = "",
     ):
         self.log_path = Path(linter_log_path)
         self.results: list[LintResult] = []
         self.file_groups: dict[str, list[LintResult]] = {}
         self.fixer = LintReportFix()
         self.auto_apply = auto_apply
-        self.target_file: Optional[Path] = None
         self.root_dir = root_dir if root_dir is not None else Path.cwd().resolve()
-        self.use_git = use_git
+        self.git_hint = git_hint
 
     def load_and_validate_log(self) -> None:
         """加载并验证日志文件或从git命令获取日志"""
-        if not self.log_path and not self.use_git:
-            self.use_git = True
+        files_result = None
+        if not self.log_path and not self.git_hint:
+            self.git_hint = "auto"
 
-        if self.use_git:
-            # 获取所有源代码文件列表
-            files_result = subprocess.run(
-                ["git", "ls-files", "*.py"], capture_output=True, text=True, cwd=self.root_dir
-            )
-            if files_result.returncode != 0:
+        if self.git_hint:
+            if self.git_hint == "auto":
+                # 获取所有源代码文件列表
+                files_result = subprocess.run(
+                    ["git", "ls-files", "*.py"],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.root_dir,
+                    check=True,
+                )
+            elif self.git_hint == "stage":
+                # 获取暂存区文件列表
+                files_result = subprocess.run(
+                    ["git", "diff", "--cached", "--name-only", "--", "*.py"],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.root_dir,
+                    check=True,
+                )
+
+            if files_result and files_result.returncode != 0:
                 raise RuntimeError(f"获取git文件列表失败: {files_result.stderr}")
 
             # 准备pylint参数
@@ -199,6 +205,7 @@ class PylintFixer:
                 capture_output=True,
                 text=True,
                 cwd=self.root_dir,
+                check=False,
             )
             log_content = result.stdout
             self.results = LintParser.parse(log_content)
@@ -210,7 +217,7 @@ class PylintFixer:
             try:
                 log_content = self.log_path.read_text(encoding="utf-8")
                 self.results = LintParser.parse(log_content)
-            except Exception as e:
+            except OSError as e:
                 raise RuntimeError(f"读取日志文件失败: {e}") from e
 
     def group_results_by_file(self) -> None:
@@ -243,15 +250,12 @@ class PylintFixer:
 
     def _get_symbol_locations(self, file_path: str) -> list[tuple[int, int]]:
         """获取符号定位信息"""
-
-        locations = [(line.line, line.column_range[0]) for line in self.file_groups[file_path]]
-        return locations
+        return [(line.line, line.column_range[0]) for line in self.file_groups[file_path]]
 
     def _associate_errors_with_symbols(
         self, file_path, parser_util: ParserUtil, code_map: dict, locations: list
     ) -> dict:
         """关联错误信息到符号"""
-
         symbol_map = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=1024 * 1024)
         new_symbol_map = {}
         for name, symbol in symbol_map.items():
@@ -286,10 +290,14 @@ class PylintFixer:
         return groups
 
     def update_symbol_map(self, file_path, new_symbol_map: dict):
+        """更新符号映射"""
         parser_loader = ParserLoader()
         parser_util = ParserUtil(parser_loader)
         _, code_map = parser_util.get_symbol_paths(file_path)
         for symbol in new_symbol_map.values():
+            if symbol.get("original_name", "") not in code_map:
+                print(f"警告: 符号 {symbol['original_name']} 在文件 {file_path} 中未找到")
+                continue
             updated_symbol = code_map[symbol["original_name"]]
             symbol["block_content"] = updated_symbol["code"].encode("utf8")
             symbol["file_path"] = file_path
@@ -322,12 +330,12 @@ class PylintFixer:
         print("\n修复流程完成")
 
 
-def pylint_fix(pylint_log, use_git: bool = False) -> None:
+def pylint_fix(pylint_log: str) -> None:
     """修复入口函数"""
-    if pylint_log == "auto":
-        fixer = PylintFixer("", auto_apply=True, use_git=True)
+    if pylint_log in ("auto", "stage"):
+        fixer = PylintFixer("", auto_apply=True, git_hint=pylint_log)
     else:
-        fixer = PylintFixer(str(pylint_log), use_git=use_git)
+        fixer = PylintFixer(str(pylint_log), auto_apply=True)
     fixer.execute()
 
 
