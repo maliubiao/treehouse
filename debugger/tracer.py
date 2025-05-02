@@ -75,6 +75,7 @@ class TraceConfig:
         report_name: str = "trace_report.html",
         exclude_functions: List[str] = None,
         enable_var_trace: bool = False,
+        ignore_self: bool = True,
     ):
         """
         初始化跟踪配置
@@ -98,6 +99,7 @@ class TraceConfig:
             self.report_name = report_name
         else:
             self.report_name = "tracer_report.html"
+        self.ignore_self = ignore_self
 
     @classmethod
     def from_yaml(cls, config_path: Union[str, Path]) -> "TraceConfig":
@@ -217,8 +219,8 @@ class TraceConfig:
 
     def match_filename(self, filename: str) -> bool:
         """检查文件路径是否匹配目标文件模式"""
-        # if filename == __file__:
-        #     return False
+        if self.ignore_self and filename == __file__:
+            return False
         if not self.target_files:
             return True
         filename_posix = Path(filename).as_posix()
@@ -531,6 +533,7 @@ class SysMonitoringTraceDispatcher:
         """Handle EXCEPTION_HANDLED event"""
         frame = sys._getframe(1)  # Get the frame where exception was handled
         if frame in self.active_frames:
+            self._logic.exception_chain.pop()
             self._logic.stack_depth += 1
         return None
 
@@ -722,6 +725,15 @@ class CallTreeHtmlRender:
                     "</div>",
                     f'<div class="return" style="padding-left:{indent}px">',
                     f"    {escaped_content}{comment_html}",
+                    "</div>",
+                ]
+            )
+        elif msg_type == "error":
+            html_parts.extend(
+                [
+                    "</div>",
+                    f'<div class="error" style="padding-left:{indent}px">',
+                    f"    {escaped_content}{view_source_html}{comment_html}",
                     "</div>",
                 ]
             )
@@ -952,17 +964,15 @@ class TraceLogic:
     def __init__(self, config: TraceConfig):
         """初始化实例属性"""
         self.stack_depth = 0
-        self.line_counter = {}
         self.config = config
         self._log_queue = queue.Queue()
         self._flush_event = threading.Event()
         self._timer_thread = None
         self._running_flag = False
-        self._exception_handler = None
-        self._log_data_cache = {}
         self._html_render = CallTreeHtmlRender(self)
         self._stack_variables = {}
         self._message_id = 0
+        self.exception_chain = []
         # 分组属性
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
@@ -1037,6 +1047,10 @@ class TraceLogic:
 
     def _add_to_buffer(self, log_data, color_type):
         """将日志数据添加到队列并立即处理"""
+        if color_type != "error":
+            for i in self.exception_chain:
+                self._log_queue.put(i)
+            self.exception_chain = []
         self._log_queue.put((log_data, color_type))
 
     def _flush_buffer(self):
@@ -1328,7 +1342,7 @@ class TraceLogic:
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self._get_frame_id(frame)
-        self._add_to_buffer(
+        msg = (
             {
                 "template": "{indent}⚠ EXCEPTION {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
                 "data": {
@@ -1343,6 +1357,7 @@ class TraceLogic:
             },
             "error",
         )
+        self.exception_chain.append(msg)
         self.stack_depth -= 1
 
     def capture_variables(self, frame):

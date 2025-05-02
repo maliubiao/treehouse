@@ -79,7 +79,7 @@ def analyze_variable_ops(func_or_code):
             line_vars[current_line].add(var_name)
 
     # 转换数据结构并排序
-    return dict(sorted(line_vars.items()))
+    return line_vars
 
 
 if __name__ == "__main__":
