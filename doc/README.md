@@ -60,3 +60,20 @@ python -m debugger.tracer_main tests/test_main.py --json --extract-errors
 ```
 进程顺利退出
 
+
+## 使用技巧TODO
+```python
+def MyClass:
+    """
+    TODO 任务1
+    """
+def MyClass:
+    """
+    TODO 任务2
+    """
+```
+```bash
+patchgpt ..TODO.. 完成这些todo 
+#用todo把事情串起来， ..TODO.. 用ripgrep搜索整个项目，找到这些目标符号
+#这对于控制代码相关性非常重要
+```

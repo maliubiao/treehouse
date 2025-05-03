@@ -118,7 +118,7 @@ class TraceConfig:
         report_name: str = _DEFAULT_REPORT_NAME,
         exclude_functions: List[str] = None,
         enable_var_trace: bool = False,
-        ignore_self: bool = True,
+        ignore_self: bool = False,
         ignore_system_paths: bool = True,
     ):
         """
@@ -950,6 +950,16 @@ class TraceLogExtractor:
     1. 读取日志索引文件(.index)查找匹配的行号和frame id
     2. 根据索引定位到日志文件中的起始和结束位置
     3. 提取该frame id对应的完整调用栈日志
+    日志格式为JSON，结构如下：
+    {
+        "type": "call|return|line|exception",
+        "timestamp": "ISO8601时间戳",
+        "filename": "文件名",
+        "lineno": 行号,
+        "frame_id": 帧ID,
+        "message": "日志消息",
+        "data": {} // 附加数据
+    }
     """
 
     def __init__(self, log_file: str = None):
@@ -972,13 +982,13 @@ class TraceLogExtractor:
         Returns:
             (type, filename, lineno, frame_id, position) 元组
         """
-        parts = line.strip().split("\t")
-        if len(parts) != 4 or parts[0] not in (TraceTypes.CALL, TraceTypes.RETURN):
+        try:
+            entry = json.loads(line.strip())
+            if not isinstance(entry, dict) or "type" not in entry:
+                return None
+            return (entry["type"], entry["filename"], entry["lineno"], entry["frame_id"], entry["position"])
+        except json.JSONDecodeError:
             return None
-        file_lineno = parts[1].split(":")
-        if len(file_lineno) != 2:
-            return None
-        return (parts[0], file_lineno[0], int(file_lineno[1]), int(parts[2]), int(parts[3]))
 
     def lookup(self, filename: str, lineno: int) -> list:
         """
@@ -989,9 +999,8 @@ class TraceLogExtractor:
             lineno: 行号
 
         Returns:
-            匹配的日志行列表
+            匹配的日志行列表(JSON格式)
         """
-        # 首先在索引文件中查找匹配的行号和frame id
         target_frame_id = None
         pair = []
         start_position = None
@@ -1018,7 +1027,7 @@ class TraceLogExtractor:
                     target_frame_id = None
 
         if not pair:
-            return pair
+            return []
 
         logs = []
         for start, end in pair:
@@ -1029,8 +1038,12 @@ class TraceLogExtractor:
                     line = f.readline()
                     if line.startswith("#"):
                         continue
-                    log_lines.append(line)
-                logs.append("".join(log_lines))
+                    try:
+                        log_data = json.loads(line)
+                        log_lines.append(log_data)
+                    except json.JSONDecodeError:
+                        continue
+                logs.append(log_lines)
         return logs
 
 
@@ -1117,21 +1130,27 @@ class TraceLogic:
     def _file_output(self, log_data, log_type):
         """文件输出处理"""
         if self._output._log_file:
-            message = self._format_log_message(log_data)
-            trace_data = log_data["data"]
+            timestamp = datetime.datetime.now().isoformat()
+            log_entry = {
+                "type": log_type,
+                "timestamp": timestamp,
+                "data": log_data["data"],
+                "message": self._format_log_message(log_data),
+            }
 
-            if log_type == TraceTypes.CALL:
-                # filename: lineno frame id  call -> return  start end
-                position = self._output._log_file.tell()
-                self._output._log_file_index.write(
-                    f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
-                )
-            self._output._log_file.write(f"{message}\n")
-            if log_type in (TraceTypes.RETURN, TraceTypes.EXCEPTION):
-                position = self._output._log_file.tell()
-                self._output._log_file_index.write(
-                    f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
-                )
+            position = self._output._log_file.tell()
+            json_line = json.dumps(log_entry) + "\n"
+            self._output._log_file.write(json_line)
+
+            if log_type in (TraceTypes.CALL, TraceTypes.RETURN, TraceTypes.EXCEPTION):
+                index_entry = {
+                    "type": log_type,
+                    "filename": log_data["data"]["original_filename"],
+                    "lineno": log_data["data"].get("lineno", 0),
+                    "frame_id": log_data["data"]["frame_id"],
+                    "position": position,
+                }
+                self._output._log_file_index.write(json.dumps(index_entry) + "\n")
 
     def _html_output(self, log_data, color_type):
         """HTML输出处理"""

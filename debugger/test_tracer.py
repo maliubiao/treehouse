@@ -395,31 +395,108 @@ class TestTraceLogExtractor(unittest.TestCase):
 
         # 生成标准日志结构
         logs = [
-            ("CALL func1 @ test_file.py:5", "call", {"lineno": 5, "frame_id": 100}),
-            ("LINE 10 @ test_file.py:10", "line", {"lineno": 10, "frame_id": 100}),
-            ("RETURN func1 @ test_file.py:5", "return", {"lineno": 5, "frame_id": 100}),
-            ("CALL func2 @ test_file.py:20", "call", {"lineno": 20, "frame_id": 200}),
-            ("LINE 25 @ test_file.py:25", "line", {"lineno": 25, "frame_id": 200}),
-            ("RETURN func2 @ test_file.py:20", "return", {"lineno": 20, "frame_id": 200}),
-            ("CALL func3 @ test_file.py:30", "call", {"lineno": 30, "frame_id": 300}),
-            ("LINE 35 @ test_file.py:35", "line", {"lineno": 35, "frame_id": 300}),
-            ("RETURN func3 @ test_file.py:30", "return", {"lineno": 30, "frame_id": 300}),
+            {
+                "type": "call",
+                "timestamp": "2023-01-01T00:00:00Z",
+                "filename": "test_file.py",
+                "lineno": 5,
+                "frame_id": 100,
+                "message": "CALL func1",
+                "data": {},
+            },
+            {
+                "type": "line",
+                "timestamp": "2023-01-01T00:00:01Z",
+                "filename": "test_file.py",
+                "lineno": 10,
+                "frame_id": 100,
+                "message": "LINE 10",
+                "data": {},
+            },
+            {
+                "type": "return",
+                "timestamp": "2023-01-01T00:00:02Z",
+                "filename": "test_file.py",
+                "lineno": 5,
+                "frame_id": 100,
+                "message": "RETURN func1",
+                "data": {},
+            },
+            {
+                "type": "call",
+                "timestamp": "2023-01-01T00:00:03Z",
+                "filename": "test_file.py",
+                "lineno": 20,
+                "frame_id": 200,
+                "message": "CALL func2",
+                "data": {},
+            },
+            {
+                "type": "line",
+                "timestamp": "2023-01-01T00:00:04Z",
+                "filename": "test_file.py",
+                "lineno": 25,
+                "frame_id": 200,
+                "message": "LINE 25",
+                "data": {},
+            },
+            {
+                "type": "return",
+                "timestamp": "2023-01-01T00:00:05Z",
+                "filename": "test_file.py",
+                "lineno": 20,
+                "frame_id": 200,
+                "message": "RETURN func2",
+                "data": {},
+            },
+            {
+                "type": "call",
+                "timestamp": "2023-01-01T00:00:06Z",
+                "filename": "test_file.py",
+                "lineno": 30,
+                "frame_id": 300,
+                "message": "CALL func3",
+                "data": {},
+            },
+            {
+                "type": "line",
+                "timestamp": "2023-01-01T00:00:07Z",
+                "filename": "test_file.py",
+                "lineno": 35,
+                "frame_id": 300,
+                "message": "LINE 35",
+                "data": {},
+            },
+            {
+                "type": "return",
+                "timestamp": "2023-01-01T00:00:08Z",
+                "filename": "test_file.py",
+                "lineno": 30,
+                "frame_id": 300,
+                "message": "RETURN func3",
+                "data": {},
+            },
         ]
 
         # 写入日志并记录位置
         with open(self.log_file, "w", encoding="utf-8") as log_f, open(self.index_file, "w", encoding="utf-8") as idx_f:
             idx_f.write("# 索引文件头\n")
-            for msg, msg_type, data in logs:
+            for log_entry in logs:
                 # 记录日志位置
                 end_pos = log_f.tell()
+                log_entry["position"] = end_pos
+                log_f.write(json.dumps(log_entry) + "\n")
+
                 # 生成索引条目
-                if msg_type == "call":
-                    idx_line = f"call\ttest_file.py:{data['lineno']}\t{data['frame_id']}\t{end_pos}\n"
-                    idx_f.write(idx_line)
-                log_f.write(f"{msg}\n")
-                if msg_type == "return":
-                    idx_line = f"return\ttest_file.py:{data['lineno']}\t{data['frame_id']}\t{end_pos}\n"
-                    idx_f.write(idx_line)
+                if log_entry["type"] in ("call", "return"):
+                    idx_entry = {
+                        "type": log_entry["type"],
+                        "filename": log_entry["filename"],
+                        "lineno": log_entry["lineno"],
+                        "frame_id": log_entry["frame_id"],
+                        "position": end_pos,
+                    }
+                    idx_f.write(json.dumps(idx_entry) + "\n")
 
     def tearDown(self):
         shutil.rmtree(self.test_dir)
@@ -430,8 +507,8 @@ class TestTraceLogExtractor(unittest.TestCase):
         results = extractor.lookup("test_file.py", 5)
 
         self.assertEqual(len(results), 1)
-        self.assertIn("CALL func1", results[0])
-        self.assertIn("RETURN func1", results[0])
+        self.assertEqual(results[0][0]["message"], "CALL func1")
+        self.assertEqual(results[0][-1]["message"], "RETURN func1")
         self._verify_log_positions(results[0], 5)
 
     def test_multiple_matches(self):
@@ -439,17 +516,17 @@ class TestTraceLogExtractor(unittest.TestCase):
         extractor = TraceLogExtractor(str(self.log_file))
         results = extractor.lookup("test_file.py", 20)
         self.assertEqual(len(results), 1)
-        self.assertIn("CALL func2", results[0])
-        self.assertIn("RETURN func2", results[0])
+        self.assertEqual(results[0][0]["message"], "CALL func2")
+        self.assertEqual(results[0][-1]["message"], "RETURN func2")
 
     def test_cross_frame_extraction(self):
         """测试跨frame_id的日志提取"""
         extractor = TraceLogExtractor(str(self.log_file))
         results = extractor.lookup("test_file.py", 30)
         self.assertEqual(len(results), 1)
-        self.assertIn("CALL func3", results[0])
-        self.assertIn("LINE 35", results[0])
-        self.assertIn("RETURN func3", results[0])
+        self.assertEqual(results[0][0]["message"], "CALL func3")
+        self.assertEqual(results[0][1]["message"], "LINE 35")
+        self.assertEqual(results[0][-1]["message"], "RETURN func3")
 
     def test_index_consistency(self):
         """验证索引条目与日志位置一致性"""
@@ -457,26 +534,24 @@ class TestTraceLogExtractor(unittest.TestCase):
 
         # 检查有效条目
         valid_entries = [
-            (5, 100, ["CALL func1", "RETURN func1"]),
-            (20, 200, ["CALL func2", "RETURN func2"]),
-            (30, 300, ["CALL func3", "RETURN func3"]),
+            (5, 100, "CALL func1", "RETURN func1"),
+            (20, 200, "CALL func2", "RETURN func2"),
+            (30, 300, "CALL func3", "RETURN func3"),
         ]
 
-        for lineno, frame_id, expected in valid_entries:
+        for lineno, frame_id, call_msg, return_msg in valid_entries:
             with self.subTest(lineno=lineno):
                 results = extractor.lookup("test_file.py", lineno)
                 self.assertEqual(len(results), 1)
-                for phrase in expected:
-                    self.assertIn(phrase, results[0])
+                self.assertEqual(results[0][0]["message"], call_msg)
+                self.assertEqual(results[0][-1]["message"], return_msg)
 
     def _verify_log_positions(self, log_content, lineno):
         """验证日志位置正确性"""
         with open(self.log_file, "r", encoding="utf-8") as f:
             full_log = f.read()
-            self.assertTrue(
-                log_content in full_log,
-                f"提取的日志内容未在原始日志中找到\n提取内容:\n{log_content}\n\n完整日志:\n{full_log}",
-            )
+            for entry in log_content:
+                self.assertIn(json.dumps(entry), full_log)
 
     def test_index_parsing_edge_cases(self):
         """测试索引文件解析边界条件"""
