@@ -5,6 +5,7 @@ import re
 import sys
 import unittest
 from collections import defaultdict
+import inspect
 
 from debugger import tracer
 
@@ -52,12 +53,10 @@ class JSONTestResult(unittest.TextTestResult):
         self.all_issues = []
 
     def addFailure(self, test, err):
-        super().addFailure(test, err)
         self._add_error_details(test, err, "failures")
         self.all_issues.append(("failure", test, err))
 
     def addError(self, test, err):
-        super().addError(test, err)
         self._add_error_details(test, err, "errors")
         self.all_issues.append(("error", test, err))
 
@@ -73,14 +72,23 @@ class JSONTestResult(unittest.TextTestResult):
         super().addUnexpectedSuccess(test)
         self.all_issues.append(("unexpected_success", test, None))
 
+    def _get_test_start_line(self, test):
+        """Get the first line number of the test method."""
+        try:
+            test_method = getattr(test, test._testMethodName)
+            lines, start_line = inspect.getsourcelines(test_method)
+            return start_line
+        except (AttributeError, TypeError, OSError):
+            return None
+
     def _add_error_details(self, test, err, category):
         test_id = test.id()
         tb = self._exc_info_to_string(err, test)
-        print("error", test_id, tb)
-        try:
-            file_path, line, func_name = self._parse_test_id(test_id, tb)
-        except FileNotFoundError:
-            return
+        file_path, line, func_name = self._parse_test_id(test_id, tb)
+        # Use test method start line if available
+        test_start_line = self._get_test_start_line(test)
+        if test_start_line:
+            line = test_start_line
         error_type = type(err[1]).__name__ if err[1] else "UnknownError"
         error_entry = {
             "test": str(test),
