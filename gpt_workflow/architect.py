@@ -16,9 +16,12 @@ class ArchitectMode:
     [team member {{成员ID}} job end]
     """
 
-    TASK_PATTERN = re.compile(r"\[task describe start\](.*?)\[task describe end\]", re.DOTALL)
+    TASK_PATTERN = re.compile(
+        r"\[task describe start\](.*?)\[task describe end\]", re.DOTALL
+    )
     JOB_BLOCK_PATTERN = re.compile(
-        r"\[team member(?P<member_id>\w+) job start\](.*?)\[team member\1 job end\]", re.DOTALL
+        r"\[team member(?P<member_id>\w+) job start\](.*?)\[team member\1 job end\]",
+        re.DOTALL,
     )
 
     @staticmethod

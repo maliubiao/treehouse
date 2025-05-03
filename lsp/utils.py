@@ -158,13 +158,17 @@ def _create_completion_table(items):
     table.add_column("详情")
     table.add_column("文档")
     for item in items:
-        table.add_row(item["label"], str(item["kind"]), item["detail"], item["documentation"])
+        table.add_row(
+            item["label"], str(item["kind"]), item["detail"], item["documentation"]
+        )
     return table
 
 
 def _create_symbol_table(symbols):
     """创建符号信息表格"""
-    table = Table(title="文档符号", show_header=True, header_style="bold yellow", expand=True)
+    table = Table(
+        title="文档符号", show_header=True, header_style="bold yellow", expand=True
+    )
     table.add_column("名称", style="cyan", no_wrap=True)
     table.add_column("类型", style="green", width=12)
     table.add_column("位置", width=20)
@@ -208,7 +212,7 @@ def _get_symbol_tags(sym):
 def _validate_args(console, parts, required_count):
     """验证参数数量"""
     if len(parts) != required_count:
-        console.print(f"[red]参数错误，需要{required_count-1}个参数[/red]")
+        console.print(f"[red]参数错误，需要{required_count - 1}个参数[/red]")
         return False
     return True
 
@@ -247,7 +251,9 @@ def _build_container_tree(symbols):
 
 def _create_json_table(data):
     """将JSON数据美化成表格"""
-    table = Table(title="JSON 数据", show_header=True, header_style="bold blue", expand=True)
+    table = Table(
+        title="JSON 数据", show_header=True, header_style="bold blue", expand=True
+    )
     table.add_column("Key", style="cyan", no_wrap=True)
     table.add_column("Value", style="green")
 

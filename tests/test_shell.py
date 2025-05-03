@@ -24,7 +24,9 @@ class TestShellCompletion(unittest.TestCase):
 
         # Setup complex test directory structure
         self.root = Path(self.test_dir.name)
-        self.root_posix = str(self.root).replace(os.sep, "/")  # 统一为Linux风格路径分隔符
+        self.root_posix = str(self.root).replace(
+            os.sep, "/"
+        )  # 统一为Linux风格路径分隔符
         (self.root / LLM_PROJECT_CONFIG).touch()  # 确保根目录包含配置文件
         self._create_structure(
             {
@@ -79,7 +81,10 @@ class TestShellCompletion(unittest.TestCase):
                     f"symbol_{self.root_posix}/lsp/special@file",
                 ],
             ),
-            (f"symbol_{self.root_posix}/lsp/subdir/", [f"symbol_{self.root_posix}/lsp/subdir/nested_file.md"]),
+            (
+                f"symbol_{self.root_posix}/lsp/subdir/",
+                [f"symbol_{self.root_posix}/lsp/subdir/nested_file.md"],
+            ),
         ]
 
         for prefix, expected in test_cases:
@@ -91,9 +96,15 @@ class TestShellCompletion(unittest.TestCase):
         test_cases = [
             (
                 f"symbol_{self.root_posix}/partial/mat",
-                [f"symbol_{self.root_posix}/partial/match_file", f"symbol_{self.root_posix}/partial/match_file2"],
+                [
+                    f"symbol_{self.root_posix}/partial/match_file",
+                    f"symbol_{self.root_posix}/partial/match_file2",
+                ],
             ),
-            (f"symbol_{self.root_posix}/lsp/file", [f"symbol_{self.root_posix}/lsp/file1.txt"]),
+            (
+                f"symbol_{self.root_posix}/lsp/file",
+                [f"symbol_{self.root_posix}/lsp/file1.txt"],
+            ),
         ]
 
         for prefix, expected in test_cases:
@@ -103,9 +114,18 @@ class TestShellCompletion(unittest.TestCase):
 
     def test_special_cases(self):
         test_cases = [
-            (f"symbol_{self.root_posix}/lsp/.hid", [f"symbol_{self.root_posix}/lsp/.hidden_file"]),
-            (f"symbol_{self.root_posix}/lsp/special@", [f"symbol_{self.root_posix}/lsp/special@file"]),
-            (f"symbol_{self.root_posix}/multi/slash/path/", [f"symbol_{self.root_posix}/multi/slash/path/test_file"]),
+            (
+                f"symbol_{self.root_posix}/lsp/.hid",
+                [f"symbol_{self.root_posix}/lsp/.hidden_file"],
+            ),
+            (
+                f"symbol_{self.root_posix}/lsp/special@",
+                [f"symbol_{self.root_posix}/lsp/special@file"],
+            ),
+            (
+                f"symbol_{self.root_posix}/multi/slash/path/",
+                [f"symbol_{self.root_posix}/multi/slash/path/test_file"],
+            ),
         ]
 
         for prefix, expected in test_cases:
@@ -121,7 +141,13 @@ class TestShellCompletion(unittest.TestCase):
             mock_get.return_value = mock_response
 
             result = self._capture_completion("symbol_existent/path/api")
-            self.assertEqual(["symbol_existent/path/api_result1", "symbol_existent/path/api_result2"], result)
+            self.assertEqual(
+                [
+                    "symbol_existent/path/api_result1",
+                    "symbol_existent/path/api_result2",
+                ],
+                result,
+            )
 
     def test_error_handling(self):
         test_cases = [
@@ -137,7 +163,10 @@ class TestShellCompletion(unittest.TestCase):
 
     def test_api_error_logging(self):
         with self.assertLogs(level="ERROR") as cm:
-            with patch("requests.get", side_effect=requests.exceptions.ConnectionError("Connection error")):
+            with patch(
+                "requests.get",
+                side_effect=requests.exceptions.ConnectionError("Connection error"),
+            ):
                 self._capture_completion("symbol_broken/path")
                 self.assertTrue(any("API request failed" in log for log in cm.output))
 

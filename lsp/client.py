@@ -28,19 +28,29 @@ class Capabilities:
         self.type_definition_provider = capabilities_dict.get("typeDefinitionProvider")
         self.implementation_provider = capabilities_dict.get("implementationProvider")
         self.references_provider = capabilities_dict.get("referencesProvider")
-        self.document_highlight_provider = capabilities_dict.get("documentHighlightProvider")
+        self.document_highlight_provider = capabilities_dict.get(
+            "documentHighlightProvider"
+        )
         self.document_symbol_provider = capabilities_dict.get("documentSymbolProvider")
         self.code_action_provider = capabilities_dict.get("codeActionProvider")
         self.code_lens_provider = capabilities_dict.get("codeLensProvider")
         self.document_link_provider = capabilities_dict.get("documentLinkProvider")
-        self.document_formatting_provider = capabilities_dict.get("documentFormattingProvider")
-        self.document_range_formatting_provider = capabilities_dict.get("documentRangeFormattingProvider")
-        self.document_on_type_formatting_provider = capabilities_dict.get("documentOnTypeFormattingProvider")
+        self.document_formatting_provider = capabilities_dict.get(
+            "documentFormattingProvider"
+        )
+        self.document_range_formatting_provider = capabilities_dict.get(
+            "documentRangeFormattingProvider"
+        )
+        self.document_on_type_formatting_provider = capabilities_dict.get(
+            "documentOnTypeFormattingProvider"
+        )
         self.rename_provider = capabilities_dict.get("renameProvider")
         self.folding_range_provider = capabilities_dict.get("foldingRangeProvider")
         self.execute_command_provider = capabilities_dict.get("executeCommandProvider")
         self.selection_range_provider = capabilities_dict.get("selectionRangeProvider")
-        self.linked_editing_range_provider = capabilities_dict.get("linkedEditingRangeProvider")
+        self.linked_editing_range_provider = capabilities_dict.get(
+            "linkedEditingRangeProvider"
+        )
         self.call_hierarchy_provider = capabilities_dict.get("callHierarchyProvider")
         self.semantic_tokens_provider = capabilities_dict.get("semanticTokensProvider")
         self.moniker_provider = capabilities_dict.get("monikerProvider")
@@ -48,7 +58,9 @@ class Capabilities:
         self.inline_value_provider = capabilities_dict.get("inlineValueProvider")
         self.inlay_hint_provider = capabilities_dict.get("inlayHintProvider")
         self.diagnostic_provider = capabilities_dict.get("diagnosticProvider")
-        self.workspace_symbol_provider = capabilities_dict.get("workspaceSymbolProvider")
+        self.workspace_symbol_provider = capabilities_dict.get(
+            "workspaceSymbolProvider"
+        )
         self.workspace = capabilities_dict.get("workspace", {})
         self.workspace_workspace_folders = self.workspace.get("workspaceFolders", {})
         self.experimental = capabilities_dict.get("experimental")
@@ -67,7 +79,9 @@ class Capabilities:
             "implementation": self.implementation_provider,
             "rename": self.rename_provider,
             "codeAction": self.code_action_provider,
-            "workspaceFolders": self.workspace_workspace_folders.get("supported", False),
+            "workspaceFolders": self.workspace_workspace_folders.get(
+                "supported", False
+            ),
             "workspaceSymbol": self.workspace_symbol_provider,
             "textDocumentSync": self._get_text_sync_kind(),
         }
@@ -145,7 +159,11 @@ class GenericLSPClient:
                 "documentSymbol": {
                     "hierarchicalDocumentSymbolSupport": True,
                     "symbolKind": {
-                        "valueSet": [v for k, v in vars(SymbolKind).items() if k.isupper() and isinstance(v, int)]
+                        "valueSet": [
+                            v
+                            for k, v in vars(SymbolKind).items()
+                            if k.isupper() and isinstance(v, int)
+                        ]
                     },
                 },
                 "completion": {
@@ -161,20 +179,39 @@ class GenericLSPClient:
             },
             "workspace": {
                 "workspaceFolders": True,
-                "fileOperations": {"didCreateFiles": True, "didDeleteFiles": True, "didRenameFiles": True},
+                "fileOperations": {
+                    "didCreateFiles": True,
+                    "didDeleteFiles": True,
+                    "didRenameFiles": True,
+                },
                 "symbol": {
                     "dynamicRegistration": True,
                     "symbolKind": {
-                        "valueSet": [v for k, v in vars(SymbolKind).items() if k.isupper() and isinstance(v, int)]
+                        "valueSet": [
+                            v
+                            for k, v in vars(SymbolKind).items()
+                            if k.isupper() and isinstance(v, int)
+                        ]
                     },
-                    "resolveSupport": {"properties": ["location.range", "location.uri", "containerName"]},
+                    "resolveSupport": {
+                        "properties": [
+                            "location.range",
+                            "location.uri",
+                            "containerName",
+                        ]
+                    },
                 },
             },
         }
 
         workspace_folders = self.init_params.get(
             "workspaceFolders",
-            [{"uri": f"file://{self.workspace_path}", "name": os.path.basename(self.workspace_path.rstrip(os.sep))}],
+            [
+                {
+                    "uri": f"file://{self.workspace_path}",
+                    "name": os.path.basename(self.workspace_path.rstrip(os.sep)),
+                }
+            ],
         )
 
         init_params = {
@@ -197,7 +234,9 @@ class GenericLSPClient:
             result = future.result()
             self.capabilities = Capabilities(result.get("capabilities", {}))
             self.initialized_event.set()
-            logger.debug("Server capabilities initialized: %s", self.capabilities.__dict__)
+            logger.debug(
+                "Server capabilities initialized: %s", self.capabilities.__dict__
+            )
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Initialize failed: %s", str(e))
             self._cleanup()
@@ -219,7 +258,12 @@ class GenericLSPClient:
         with self._lock:
             self.response_futures[request_id] = future
 
-        request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        request = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params,
+        }
 
         self._send_message(request)
         return future
@@ -313,7 +357,11 @@ class GenericLSPClient:
                 self.process.stdout.close()
                 self.process.stdin.close()
 
-        for pipe in [self.stdin, self.stdout, self.process.stderr if self.process else None]:
+        for pipe in [
+            self.stdin,
+            self.stdout,
+            self.process.stderr if self.process else None,
+        ]:
             try:
                 if pipe:
                     pipe.close()
@@ -339,12 +387,22 @@ class GenericLSPClient:
         language_id = LanguageId.get_language_id(file_path)
         self.send_notification(
             "textDocument/didOpen",
-            {"textDocument": {"uri": f"file://{file_path}", "languageId": language_id, "version": 1, "text": text}},
+            {
+                "textDocument": {
+                    "uri": f"file://{file_path}",
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text,
+                }
+            },
         )
 
         try:
             return await asyncio.wrap_future(
-                self.send_request("textDocument/documentSymbol", {"textDocument": {"uri": f"file://{file_path}"}})
+                self.send_request(
+                    "textDocument/documentSymbol",
+                    {"textDocument": {"uri": f"file://{file_path}"}},
+                )
             )
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get document symbols: %s", str(e))
@@ -356,7 +414,9 @@ class GenericLSPClient:
         sync_kind = self.capabilities._get_text_sync_kind()
 
         if sync_kind != 1:  # 1表示Full同步模式
-            raise LSPFeatureError(f"textDocumentSync Full (current sync kind: {sync_kind})")
+            raise LSPFeatureError(
+                f"textDocumentSync Full (current sync kind: {sync_kind})"
+            )
 
         # 更新文档版本号
         version = self._document_versions.get(file_path, 1) + 1
@@ -367,13 +427,17 @@ class GenericLSPClient:
             "contentChanges": [{"text": content}],
         }
         self.send_notification("textDocument/didChange", params)
-        logger.debug("Sent didChange notification for %s (version %d)", file_path, version)
+        logger.debug(
+            "Sent didChange notification for %s (version %d)", file_path, version
+        )
 
     async def get_workspace_symbols(self, query):
         """获取工作区符号"""
         self._check_feature_support("workspaceSymbol")
         try:
-            return await asyncio.wrap_future(self.send_request("workspace/symbol", {"query": query}))
+            return await asyncio.wrap_future(
+                self.send_request("workspace/symbol", {"query": query})
+            )
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get workspace symbols: %s", str(e))
             return None
@@ -451,7 +515,9 @@ class GenericLSPClient:
         """获取传入调用"""
         self._check_feature_support("callHierarchy")
         try:
-            return await asyncio.wrap_future(self.send_request("callHierarchy/incomingCalls", {"item": item}))
+            return await asyncio.wrap_future(
+                self.send_request("callHierarchy/incomingCalls", {"item": item})
+            )
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get incoming calls: %s", str(e))
             return None
@@ -460,7 +526,9 @@ class GenericLSPClient:
         """获取传出调用"""
         self._check_feature_support("callHierarchy")
         try:
-            return await asyncio.wrap_future(self.send_request("callHierarchy/outgoingCalls", {"item": item}))
+            return await asyncio.wrap_future(
+                self.send_request("callHierarchy/outgoingCalls", {"item": item})
+            )
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get outgoing calls: %s", str(e))
             return None
@@ -486,7 +554,9 @@ class GenericLSPClient:
         """获取超类型"""
         self._check_feature_support("typeHierarchy")
         try:
-            return await asyncio.wrap_future(self.send_request("typeHierarchy/supertypes", {"item": item}))
+            return await asyncio.wrap_future(
+                self.send_request("typeHierarchy/supertypes", {"item": item})
+            )
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get supertypes: %s", str(e))
             return None
@@ -495,7 +565,9 @@ class GenericLSPClient:
         """获取子类型"""
         self._check_feature_support("typeHierarchy")
         try:
-            return await asyncio.wrap_future(self.send_request("typeHierarchy/subtypes", {"item": item}))
+            return await asyncio.wrap_future(
+                self.send_request("typeHierarchy/subtypes", {"item": item})
+            )
         except (OSError, RuntimeError) as e:
             logger.error("Failed to get subtypes: %s", str(e))
             return None

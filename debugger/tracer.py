@@ -41,7 +41,9 @@ if TYPE_CHECKING:
         def get_tool(self, tool_id: int) -> Optional[str]: ...
         def use_tool_id(self, tool_id: int, tool_name: str) -> None: ...
         def set_events(self, tool_id: int, event_set: int) -> None: ...
-        def register_callback(self, tool_id: int, event: int, callback: Callable[..., Any]) -> None: ...
+        def register_callback(
+            self, tool_id: int, event: int, callback: Callable[..., Any]
+        ) -> None: ...
         def free_tool_id(self, tool_id: int) -> None: ...
 
 
@@ -142,7 +144,9 @@ class TraceConfig:
         self.enable_var_trace = enable_var_trace
         self.ignore_self = ignore_self
         self.ignore_system_paths = ignore_system_paths
-        self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
+        self._compiled_patterns = [
+            fnmatch.translate(pattern) for pattern in self.target_files
+        ]
         self._system_paths = self._get_system_paths() if ignore_system_paths else set()
         self.report_name = report_name if report_name else _DEFAULT_REPORT_NAME
 
@@ -154,7 +158,8 @@ class TraceConfig:
             try:
                 resolved = str(Path(path).resolve())
                 if any(
-                    part.startswith(("site-packages", "dist-packages", "python")) or "lib/python" in resolved.lower()
+                    part.startswith(("site-packages", "dist-packages", "python"))
+                    or "lib/python" in resolved.lower()
                     for part in Path(resolved).parts
                 ):
                     system_paths.add(resolved)
@@ -173,7 +178,9 @@ class TraceConfig:
         if self.ignore_system_paths:
             try:
                 resolved = str(Path(filename).resolve())
-                if any(resolved.startswith(sys_path) for sys_path in self._system_paths):
+                if any(
+                    resolved.startswith(sys_path) for sys_path in self._system_paths
+                ):
                     return False
             except (ValueError, OSError):
                 pass
@@ -182,7 +189,9 @@ class TraceConfig:
             return True
 
         filename_posix = Path(filename).as_posix()
-        return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
+        return any(
+            fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files
+        )
 
     @classmethod
     def from_yaml(cls, config_path: Union[str, Path]) -> "TraceConfig":
@@ -246,13 +255,19 @@ class TraceConfig:
                     if isinstance(range_tuple, (tuple, list)) and len(range_tuple) == 2:
                         start, end = range_tuple
                         if start > end:
-                            raise ValueError(f"行号范围错误：起始行号 {start} 大于结束行号 {end}")
+                            raise ValueError(
+                                f"行号范围错误：起始行号 {start} 大于结束行号 {end}"
+                            )
                         line_set.update(range(start, end + 1))
                     else:
-                        raise ValueError(f"行号格式错误：{range_tuple} 应为 (start, end) 元组")
+                        raise ValueError(
+                            f"行号格式错误：{range_tuple} 应为 (start, end) 元组"
+                        )
                 parsed[abs_path] = line_set
             except Exception as e:
-                raise ValueError(f"文件路径解析失败: {file_path}, 错误: {str(e)}") from e
+                raise ValueError(
+                    f"文件路径解析失败: {file_path}, 错误: {str(e)}"
+                ) from e
         return parsed
 
     @staticmethod
@@ -347,7 +362,11 @@ def truncate_repr_value(value, keep_elements=10):
     """智能截断保留关键类型信息"""
     preview = "..."
     try:
-        if inspect.isfunction(value) or inspect.ismodule(value) or inspect.isclass(value):
+        if (
+            inspect.isfunction(value)
+            or inspect.ismodule(value)
+            or inspect.isclass(value)
+        ):
             preview = f"{type(value).__name__}(...)"
         elif isinstance(value, (list, tuple)):
             preview = _truncate_sequence(value, keep_elements)
@@ -524,10 +543,14 @@ class SysMonitoringTraceDispatcher:
 
             # Register the callbacks
             self.monitoring_module.register_callback(
-                self._tool_id, self.monitoring_module.events.PY_START, self._handle_py_start
+                self._tool_id,
+                self.monitoring_module.events.PY_START,
+                self._handle_py_start,
             )
             self.monitoring_module.register_callback(
-                self._tool_id, self.monitoring_module.events.PY_RETURN, self._handle_py_return
+                self._tool_id,
+                self.monitoring_module.events.PY_RETURN,
+                self._handle_py_return,
             )
             self.monitoring_module.register_callback(
                 self._tool_id, self.monitoring_module.events.LINE, self._handle_line
@@ -552,16 +575,26 @@ class SysMonitoringTraceDispatcher:
 
         try:
             # Unregister all callbacks
-            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_START, None)
-            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_RETURN, None)
-            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.LINE, None)
-            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.RAISE, None)
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.PY_START, None
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.PY_RETURN, None
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.LINE, None
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id, self.monitoring_module.events.RAISE, None
+            )
             self.monitoring_module.register_callback(
                 self._tool_id, self.monitoring_module.events.EXCEPTION_HANDLED, None
             )
 
             # Disable all events
-            self.monitoring_module.set_events(self._tool_id, self.monitoring_module.events.NO_EVENTS)
+            self.monitoring_module.set_events(
+                self._tool_id, self.monitoring_module.events.NO_EVENTS
+            )
 
             # Free the tool ID
             self.monitoring_module.free_tool_id(self._tool_id)
@@ -657,7 +690,9 @@ class CallTreeHtmlRender:
     def __init__(self, trace_logic: "TraceLogic"):
         self.trace_logic = trace_logic
         self._messages = []  # 存储(message, msg_type, log_data)三元组
-        self._executed_lines = defaultdict(lambda: defaultdict(set))  # 使用集合避免重复记录
+        self._executed_lines = defaultdict(
+            lambda: defaultdict(set)
+        )  # 使用集合避免重复记录
         self._frame_executed_lines = defaultdict(lambda: defaultdict(set))
         self._source_files = {}  # 存储源代码文件内容
         self._stack_variables = {}
@@ -722,7 +757,11 @@ class CallTreeHtmlRender:
     def _get_nested_dict_value(self, data_dict, filename, frame_id=None):
         """获取嵌套字典中的值"""
         try:
-            return data_dict[filename] if frame_id is None else data_dict[filename][frame_id]
+            return (
+                data_dict[filename]
+                if frame_id is None
+                else data_dict[filename][frame_id]
+            )
         except KeyError:
             return None
 
@@ -786,8 +825,12 @@ class CallTreeHtmlRender:
         if self._stack_variables.get(idx):
             comment = self.format_stack_variables(self._stack_variables[idx])
             comment_id = f"comment_{idx}"
-            comment_html = self._build_comment_html(comment_id, comment) if comment else ""
-        view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
+            comment_html = (
+                self._build_comment_html(comment_id, comment) if comment else ""
+            )
+        view_source_html = self._build_view_source_html(
+            original_filename, line_number, frame_id
+        )
         html_parts = []
         if msg_type == TraceTypes.CALL:
             html_parts.extend(
@@ -883,7 +926,11 @@ class CallTreeHtmlRender:
             # 预缓存格式化结果避免重复格式化
             message = log_data["template"].format(**log_data["data"])
 
-        if color_type == TraceTypes.COLOR_LINE and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
+        if (
+            color_type == TraceTypes.COLOR_LINE
+            and isinstance(log_data, dict)
+            and "lineno" in log_data.get("data", {})
+        ):
             data = log_data["data"]
             original_filename = data.get("original_filename")
             lineno = data["lineno"]
@@ -1026,9 +1073,20 @@ class TraceLogExtractor:
                     TraceTypes.RETURN,
                     TraceTypes.EXCEPTION,
                 ):
-                    references.append({"filename": file, "lineno": line_no, "func": func, "type": type_tag})
+                    references.append(
+                        {
+                            "filename": file,
+                            "lineno": line_no,
+                            "func": func,
+                            "type": type_tag,
+                        }
+                    )
 
-                if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
+                if (
+                    file == filename
+                    and line_no == lineno
+                    and type_tag == TraceTypes.CALL
+                ):
                     target_frame_id = frame_id
                     start_position = position
                     continue
@@ -1109,7 +1167,9 @@ class TraceLogic:
         frame_key = id(frame)
         if frame_key not in self._frame_data._frame_id_map:
             self._frame_data._current_frame_id += 1
-            self._frame_data._frame_id_map[frame_key] = self._frame_data._current_frame_id
+            self._frame_data._frame_id_map[frame_key] = (
+                self._frame_data._current_frame_id
+            )
         return self._frame_data._frame_id_map[frame_key]
 
     def enable_output(self, output_type: str, **kwargs):
@@ -1117,8 +1177,12 @@ class TraceLogic:
         if output_type == "file" and "filename" in kwargs:
             try:
                 # 使用with语句确保文件正确关闭
-                self._output._log_file = open(kwargs["filename"], "w+", encoding="utf-8")
-                self._output._log_file_index = open(str(kwargs["filename"]) + ".index", "w+", encoding="utf-8")
+                self._output._log_file = open(
+                    kwargs["filename"], "w+", encoding="utf-8"
+                )
+                self._output._log_file_index = open(
+                    str(kwargs["filename"]) + ".index", "w+", encoding="utf-8"
+                )
             except (IOError, OSError, PermissionError) as e:
                 logging.error("无法打开日志文件: %s", str(e))
                 raise
@@ -1266,10 +1330,16 @@ class TraceLogic:
             else:
                 try:
                     args, _, _, values = inspect.getargvalues(frame)
-                    args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args]
+                    args_info = [
+                        f"{arg}={truncate_repr_value(values[arg])}" for arg in args
+                    ]
                 except (AttributeError, TypeError) as e:
                     self._add_to_buffer(
-                        {"template": "参数解析失败: {error}", "data": {"error": str(e)}}, TraceTypes.ERROR
+                        {
+                            "template": "参数解析失败: {error}",
+                            "data": {"error": str(e)},
+                        },
+                        TraceTypes.ERROR,
                     )
                     args_info.append("<参数解析错误>")
                 log_prefix = TraceTypes.PREFIX_CALL
@@ -1297,7 +1367,10 @@ class TraceLogic:
         except (AttributeError, TypeError) as e:
             traceback.print_exc()
             logging.error("Call logging error: %s", str(e))
-            self._add_to_buffer({"template": "⚠ 记录调用时出错: {error}", "data": {"error": str(e)}}, TraceTypes.ERROR)
+            self._add_to_buffer(
+                {"template": "⚠ 记录调用时出错: {error}", "data": {"error": str(e)}},
+                TraceTypes.ERROR,
+            )
 
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
@@ -1346,7 +1419,9 @@ class TraceLogic:
         if code_obj not in self._frame_data._code_var_ops:
             self._frame_data._code_var_ops[code_obj] = self._get_var_ops(code_obj)
 
-        line_vars = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno - 1, set())
+        line_vars = self._frame_data._code_var_ops[code_obj].get(
+            frame.f_lineno - 1, set()
+        )
         return line_vars
 
     def cache_eval(self, frame, expr):
@@ -1394,7 +1469,9 @@ class TraceLogic:
 
         if tracked_vars:
             log_data["template"] += " # Debug: {vars}"
-            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in tracked_vars.items()])
+            log_data["data"]["vars"] = ", ".join(
+                [f"{k}={v}" for k, v in tracked_vars.items()]
+            )
 
         self._add_to_buffer(log_data, TraceTypes.COLOR_LINE)
 
@@ -1403,7 +1480,9 @@ class TraceLogic:
             self._process_captured_vars(frame)
 
     def handle_opcode(self, frame, opcode, name, value):
-        self._html_render.add_stack_variable_create(self._message_id, opcode, name, value)
+        self._html_render.add_stack_variable_create(
+            self._message_id, opcode, name, value
+        )
 
     def _process_trace_expression(self, frame, line, filename, lineno):
         """处理追踪表达式"""
@@ -1490,7 +1569,10 @@ class TraceLogic:
                     results[expr] = formatted
                 except (NameError, SyntaxError, TypeError, AttributeError) as e:
                     self._add_to_buffer(
-                        {"template": "表达式求值失败: {expr}, 错误: {error}", "data": {"expr": expr, "error": str(e)}},
+                        {
+                            "template": "表达式求值失败: {expr}, 错误: {error}",
+                            "data": {"expr": expr, "error": str(e)},
+                        },
                         TraceTypes.ERROR,
                     )
                     results[expr] = f"<求值错误: {str(e)}>"
@@ -1537,14 +1619,23 @@ def get_tracer(module_path, config: TraceConfig):
     tracer_core_path = os.path.join(os.path.dirname(__file__), tracer_core_name)
     if os.path.exists(tracer_core_path):
         try:
-            spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)
+            spec = importlib.util.spec_from_file_location(
+                "tracer_core", tracer_core_path
+            )
             tracer_core = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(tracer_core)
             trace_dispatcher = tracer_core.TraceDispatcher
             return trace_dispatcher(str(module_path), TraceLogic(config), config)
         except Exception as e:
-            logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
-            print(color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", TraceTypes.COLOR_ERROR))
+            logging.error(
+                "💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc()
+            )
+            print(
+                color_wrap(
+                    f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}",
+                    TraceTypes.COLOR_ERROR,
+                )
+            )
             raise
     return None
 
@@ -1554,7 +1645,10 @@ def start_line_trace(exclude: List[str] = None):
     exclude: 排除的函数列表
     """
     return start_trace(
-        config=TraceConfig(target_files=[sys._getframe().f_back.f_code.co_filename], exclude_functions=exclude)
+        config=TraceConfig(
+            target_files=[sys._getframe().f_back.f_code.co_filename],
+            exclude_functions=exclude,
+        )
     )
 
 
@@ -1568,7 +1662,9 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
     if not config:
         log_name = sys._getframe().f_back.f_code.co_name
         config = TraceConfig(
-            target_files=[sys._getframe().f_back.f_code.co_filename], report_name=log_name + ".html", **kwargs
+            target_files=[sys._getframe().f_back.f_code.co_filename],
+            report_name=log_name + ".html",
+            **kwargs,
         )
     tracer = None
     tracer = get_tracer(module_path, config)
@@ -1587,7 +1683,12 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
         return tracer
     except Exception as e:
         logging.error("💥 DEBUGGER INIT ERROR: %s\n%s", str(e), traceback.format_exc())
-        print(color_wrap(f"❌ 调试器初始化错误: {str(e)}\n{traceback.format_exc()}", TraceTypes.COLOR_ERROR))
+        print(
+            color_wrap(
+                f"❌ 调试器初始化错误: {str(e)}\n{traceback.format_exc()}",
+                TraceTypes.COLOR_ERROR,
+            )
+        )
         raise
 
 

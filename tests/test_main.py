@@ -10,7 +10,9 @@ from debugger import tracer
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run unit tests with flexible selection")
+    parser = argparse.ArgumentParser(
+        description="Run unit tests with flexible selection"
+    )
     parser.add_argument(
         "-v",
         "--verbosity",
@@ -20,11 +22,18 @@ def parse_args():
         help="Output verbosity (0=quiet, 1=default, 2=verbose)",
     )
     parser.add_argument(
-        "test_name", nargs="?", default=None, help="Optional test case to run (format: TestCase.test_method)"
+        "test_name",
+        nargs="?",
+        default=None,
+        help="Optional test case to run (format: TestCase.test_method)",
     )
-    parser.add_argument("--json", action="store_true", help="Output test results in JSON format")
     parser.add_argument(
-        "--extract-errors", action="store_true", help="Extract error details in machine-readable format"
+        "--json", action="store_true", help="Output test results in JSON format"
+    )
+    parser.add_argument(
+        "--extract-errors",
+        action="store_true",
+        help="Extract error details in machine-readable format",
     )
     return parser.parse_args()
 
@@ -130,7 +139,11 @@ class JSONTestResult(unittest.TextTestResult):
             "unexpected_successes": len(self.unexpectedSuccesses),
             "results": dict(self.results),
             "all_issues": [
-                {"type": issue[0], "test": str(issue[1]), "details": str(issue[2]) if issue[2] else None}
+                {
+                    "type": issue[0],
+                    "test": str(issue[1]),
+                    "details": str(issue[2]) if issue[2] else None,
+                }
                 for issue in self.all_issues
             ],
         }
@@ -163,7 +176,9 @@ def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=Fal
             suite.addTests(discovered)
 
         if json_output:
-            runner = unittest.TextTestRunner(verbosity=verbosity, resultclass=JSONTestResult)
+            runner = unittest.TextTestRunner(
+                verbosity=verbosity, resultclass=JSONTestResult
+            )
             result = runner.run(suite)
             if extract_errors:
                 return result.get_error_details()
@@ -175,7 +190,9 @@ def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=Fal
 
     except (ImportError, AttributeError) as e:
         sys.stderr.write(f"\nERROR: {str(e)}\n")
-        sys.stderr.write("Make sure test modules follow naming convention 'test_*.py'\n")
+        sys.stderr.write(
+            "Make sure test modules follow naming convention 'test_*.py'\n"
+        )
         raise
     except Exception as e:
         sys.stderr.write(f"\nCRITICAL ERROR: {str(e)}\n")
@@ -198,7 +215,9 @@ def main():
             print("capture error_details:")
             print(json.dumps(result, indent=2))
 
-        sys.exit(not result.wasSuccessful() if isinstance(result, unittest.TestResult) else 0)
+        sys.exit(
+            not result.wasSuccessful() if isinstance(result, unittest.TestResult) else 0
+        )
     except Exception:
         sys.exit(2)
 

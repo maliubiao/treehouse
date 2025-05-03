@@ -16,7 +16,9 @@ class LoadPlugin(LSPCommandPlugin):
     description = "加载源代码文件到LSP服务器"
 
     @staticmethod
-    async def handle_command(console: Console, lsp_client: GenericLSPClient, parts: list):
+    async def handle_command(
+        console: Console, lsp_client: GenericLSPClient, parts: list
+    ):
         if not _validate_args(console, parts, 2):
             return
 
@@ -35,12 +37,20 @@ class LoadPlugin(LSPCommandPlugin):
             # 发送textDocument/didOpen通知
             lsp_client.send_notification(
                 "textDocument/didOpen",
-                {"textDocument": {"uri": uri, "languageId": "python", "version": 1, "text": text}},
+                {
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "python",
+                        "version": 1,
+                        "text": text,
+                    }
+                },
             )
 
             # 发送textDocument/didChange通知（全量更新）
             lsp_client.send_notification(
-                "textDocument/didChange", {"textDocument": {"uri": uri}, "contentChanges": [{"text": text}]}
+                "textDocument/didChange",
+                {"textDocument": {"uri": uri}, "contentChanges": [{"text": text}]},
             )
 
             console.print(f"[green]成功加载文件: {file_path}[/green]")

@@ -56,7 +56,9 @@ class TestTruncateReprValue(unittest.TestCase):
 
         obj = TestObj()
         result = truncate_repr_value(obj)
-        self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
+        self.assertIn(
+            "TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result
+        )
 
 
 class TestTraceConfig(unittest.TestCase):
@@ -389,7 +391,11 @@ class TestTraceLogExtractor(unittest.TestCase):
     def _generate_test_logs(self):
         """生成符合真实格式的日志和索引"""
         # 创建 TraceLogic 实例生成标准日志
-        config = TraceConfig(target_files=["test_file.py"], report_name="test_report.html", enable_var_trace=True)
+        config = TraceConfig(
+            target_files=["test_file.py"],
+            report_name="test_report.html",
+            enable_var_trace=True,
+        )
         self.trace_logic = TraceLogic(config)
         self.trace_logic.enable_output("file", filename=str(self.log_file))
 
@@ -512,7 +518,10 @@ class TestTraceLogExtractor(unittest.TestCase):
         ]
 
         # 写入日志并记录位置
-        with open(self.log_file, "w", encoding="utf-8") as log_f, open(self.index_file, "w", encoding="utf-8") as idx_f:
+        with (
+            open(self.log_file, "w", encoding="utf-8") as log_f,
+            open(self.index_file, "w", encoding="utf-8") as idx_f,
+        ):
             idx_f.write("# 索引文件头\n")
             for log_entry in logs:
                 # 记录日志位置

@@ -5,6 +5,7 @@ Pylint错误自动修复工具
 该模块提供解析Pylint输出、关联错误到代码符号、自动生成修复补丁的功能
 包含结构化错误表示、智能分组、模型交互等功能
 """
+
 import re
 import subprocess
 import traceback
@@ -128,10 +129,13 @@ class LintReportFix:
         """构建合并后的提示词模板"""
         group: list[LintResult] = symbol.get("own_errors", [])
         errors_desc = "\n\n".join(
-            f"错误代码: {res.code}\n" f"描述: {res.message}\n" f"原代码行: {res.original_line}" for res in group
+            f"错误代码: {res.code}\n描述: {res.message}\n原代码行: {res.original_line}"
+            for res in group
         )
         base_prompt = generate_patch_prompt(
-            CmdNode(command="symbol", args=[symbol["name"]]), symbol_map, patch_require=True
+            CmdNode(command="symbol", args=[symbol["name"]]),
+            symbol_map,
+            patch_require=True,
         )
 
         return f"{base_prompt}\n{errors_desc}\n不破坏编程接口，避免无法通过测试\n"
@@ -142,7 +146,10 @@ class LintReportFix:
         print(prompt)
         response = self.model_switch.query("coder", prompt)
         process_patch_response(
-            response["choices"][0]["message"]["content"], symbol_map, auto_commit=False, auto_lint=False
+            response["choices"][0]["message"]["content"],
+            symbol_map,
+            auto_commit=False,
+            auto_lint=False,
         )
 
 
@@ -234,7 +241,9 @@ class PylintFixer:
 
         print(f"\n当前错误组信息（共 {len(group)} 个错误）:")
         for idx, result in enumerate(group, 1):
-            print(f"错误 {idx}: {result.file_path} 第 {result.line} 行 : {result.message}")
+            print(
+                f"错误 {idx}: {result.file_path} 第 {result.line} 行 : {result.message}"
+            )
 
         if not self.auto_apply:
             response = input("是否修复这组错误？(y/n): ").strip().lower()
@@ -250,13 +259,17 @@ class PylintFixer:
 
     def _get_symbol_locations(self, file_path: str) -> list[tuple[int, int]]:
         """获取符号定位信息"""
-        return [(line.line, line.column_range[0]) for line in self.file_groups[file_path]]
+        return [
+            (line.line, line.column_range[0]) for line in self.file_groups[file_path]
+        ]
 
     def _associate_errors_with_symbols(
         self, file_path, parser_util: ParserUtil, code_map: dict, locations: list
     ) -> dict:
         """关联错误信息到符号"""
-        symbol_map = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=1024 * 1024)
+        symbol_map = parser_util.find_symbols_for_locations(
+            code_map, locations, max_context_size=1024 * 1024
+        )
         new_symbol_map = {}
         for name, symbol in symbol_map.items():
             symbol["original_name"] = name
@@ -296,7 +309,9 @@ class PylintFixer:
         _, code_map = parser_util.get_symbol_paths(file_path)
         for symbol in new_symbol_map.values():
             if symbol.get("original_name", "") not in code_map:
-                print(f"警告: 符号 {symbol['original_name']} 在文件 {file_path} 中未找到")
+                print(
+                    f"警告: 符号 {symbol['original_name']} 在文件 {file_path} 中未找到"
+                )
                 continue
             updated_symbol = code_map[symbol["original_name"]]
             symbol["block_content"] = updated_symbol["code"].encode("utf8")
@@ -308,7 +323,9 @@ class PylintFixer:
         """处理单个文件的所有符号"""
         parser_util, code_map = self.update_symbol_map(file_path, {})
         locations = self._get_symbol_locations(file_path)
-        symbol_map = self._associate_errors_with_symbols(file_path, parser_util, code_map, locations)
+        symbol_map = self._associate_errors_with_symbols(
+            file_path, parser_util, code_map, locations
+        )
         symbol_groups = self._group_symbols_by_token_limit(symbol_map)
         for group in symbol_groups:
             for symbol in group:
@@ -351,5 +368,8 @@ def lint_to_search_protocol(lint_results: list[LintResult]) -> FileSearchResults
             )
         )
     return FileSearchResults(
-        results=[FileSearchResult(file_path=file_path, matches=matches) for file_path, matches in file_groups.items()]
+        results=[
+            FileSearchResult(file_path=file_path, matches=matches)
+            for file_path, matches in file_groups.items()
+        ]
     )

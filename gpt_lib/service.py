@@ -27,7 +27,13 @@ class SymbolService:
     DEFAULT_PORT = 9050
     DEFAULT_LSP = "pylsp"
 
-    def __init__(self, project_root: str = None, port: int = None, lsp: str = None, force_restart: bool = False):
+    def __init__(
+        self,
+        project_root: str = None,
+        port: int = None,
+        lsp: str = None,
+        force_restart: bool = False,
+    ):
         self.project_root = Path(project_root or Path.cwd()).resolve()
         self.port = port or self._find_available_port()
         self.lsp = lsp or self.DEFAULT_LSP
@@ -161,9 +167,13 @@ class SymbolService:
         if os.name == "nt":
             # Windows下不重定向日志，直接显示在终端
             creationflags = (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NO_WINDOW
             )
-            process = subprocess.Popen(cmd, creationflags=creationflags, close_fds=True, cwd=str(package_path))
+            process = subprocess.Popen(
+                cmd, creationflags=creationflags, close_fds=True, cwd=str(package_path)
+            )
         else:
             # Unix-like系统仍然重定向输出到日志文件
             # preexec_fn=os.setsid,
@@ -188,7 +198,10 @@ class SymbolService:
                         log_content = f.read()
                 except IOError:
                     log_content = "无法读取日志文件"
-                raise RuntimeError(f"符号服务启动失败，端口 {self.port} 不可用\n" f"日志内容:\n{log_content}")
+                raise RuntimeError(
+                    f"符号服务启动失败，端口 {self.port} 不可用\n"
+                    f"日志内容:\n{log_content}"
+                )
             else:
                 raise RuntimeError(f"符号服务启动失败，端口 {self.port} 不可用")
 
@@ -209,7 +222,9 @@ def start_symbol_service(force=False):
     try:
         # 从配置中读取LSP设置，默认为pylsp
         lsp_config = getattr(GLOBAL_PROJECT_CONFIG, "lsp", {})
-        default_lsp = lsp_config.get("default", "py") if isinstance(lsp_config, dict) else "py"
+        default_lsp = (
+            lsp_config.get("default", "py") if isinstance(lsp_config, dict) else "py"
+        )
 
         # 尝试从配置中获取symbol_service端口
         port = 0
@@ -222,17 +237,24 @@ def start_symbol_service(force=False):
                 pass
 
         service = SymbolService(
-            project_root=GLOBAL_PROJECT_CONFIG.project_root_dir, port=port, lsp=default_lsp, force_restart=force
+            project_root=GLOBAL_PROJECT_CONFIG.project_root_dir,
+            port=port,
+            lsp=default_lsp,
+            force_restart=force,
         )
 
         # 如果使用了随机端口，更新global config
         if port is None or port != service.port:
-            GLOBAL_PROJECT_CONFIG.update_symbol_service_url(f"http://127.0.0.1:{service.port}")
+            GLOBAL_PROJECT_CONFIG.update_symbol_service_url(
+                f"http://127.0.0.1:{service.port}"
+            )
 
         api_url = service.start()
         print(f"符号服务已启动: {api_url}")
         print(f"环境变量已写入: {service.rc_file}")
-        print(f"使用命令加载环境变量: {'source' if os.name != 'nt' else '.'} {service.rc_file}")
+        print(
+            f"使用命令加载环境变量: {'source' if os.name != 'nt' else '.'} {service.rc_file}"
+        )
         return api_url
     except Exception as e:
         print(f"启动符号服务失败: {str(e)}")

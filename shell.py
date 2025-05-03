@@ -28,7 +28,11 @@ def format_conversation_menu():
             continue
 
         idx, date_time, uuid, preview = parts[0], parts[1], parts[2], parts[3]
-        preview = preview.replace("\n", " ").strip()[:32].rstrip() + "..." if len(preview) > 32 else preview
+        preview = (
+            preview.replace("\n", " ").strip()[:32].rstrip() + "..."
+            if len(preview) > 32
+            else preview
+        )
 
         print(
             f"{Fore.WHITE}{Style.BRIGHT}{idx:>2}){Style.RESET_ALL} "
@@ -162,7 +166,9 @@ def _complete_local_directory(local_path: str):
         clean_path = local_path.rstrip("/")
         dir_path = Path(clean_path)
         if not dir_path.is_dir():
-            logging.warning("Directory path does not exist or is not a directory: %s", clean_path)
+            logging.warning(
+                "Directory path does not exist or is not a directory: %s", clean_path
+            )
             return
 
         for item in dir_path.iterdir():
@@ -234,7 +240,14 @@ def _request_api_completion(api_server: str, prefix: str):
     }
     try:
         # 彻底清除代理环境变量
-        for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
+        for proxy_var in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ]:
             os.environ.pop(proxy_var, None)
 
         new_prefix = make_path_relative_to_root_dir(prefix)
@@ -277,7 +290,9 @@ def scan_conversation_files(conversation_dir: str, limit: int):
                 uuid = "-".join(time_uuid.split("-")[3:])
                 time_str = ":".join(time_uuid.split("-")[:3])
                 preview = get_preview(path)
-                files.append((Path(path).stat().st_mtime, date_str + time_str, uuid, preview))
+                files.append(
+                    (Path(path).stat().st_mtime, date_str + time_str, uuid, preview)
+                )
             except (OSError, json.JSONDecodeError):
                 continue
 
@@ -335,7 +350,11 @@ def read_model_config(model_name: str, config_file: str):
                 default = (
                     64 * 1024
                     if k == "max_context_size"
-                    else 8 * 1024 if k == "max_tokens" else 0.0 if k == "temperature" else ""
+                    else 8 * 1024
+                    if k == "max_tokens"
+                    else 0.0
+                    if k == "temperature"
+                    else ""
                 )
                 output.append(str(default))
         print(" ".join(output))
@@ -371,7 +390,9 @@ def main():
         "conversations": lambda: _handle_conversations(args.limit),
         "list-models": lambda: list_models(args.config_file),
         "list-model-names": lambda: list_model_names(args.config_file),
-        "read-model-config": lambda: read_model_config(args.model_name, args.config_file),
+        "read-model-config": lambda: read_model_config(
+            args.model_name, args.config_file
+        ),
         "format-conversation-menu": format_conversation_menu,
     }
 

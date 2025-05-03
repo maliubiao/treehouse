@@ -71,7 +71,9 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_single_command_processing(self):
         """测试单个命令处理"""
         text = "@clipboard"
-        with patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}):
+        with patch.dict(
+            self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}
+        ):
             result = self.processor.process_text(text)
             self.assertIn("剪贴板内容", result)
 
@@ -84,7 +86,9 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_mixed_escaped_and_commands(self):
         """测试混合转义符号和命令"""
         text = "开始\\@test 中间 @clipboard 结束"
-        with patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}):
+        with patch.dict(
+            self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}
+        ):
             result = self.processor.process_text(text)
             self.assertEqual(result, "开始@test 中间 剪贴板内容 结束")
 
@@ -92,7 +96,8 @@ class TestGPTContextProcessor(unittest.TestCase):
         """测试多个命令处理"""
         text = "开始 @clipboard 中间 @last 结束"
         with patch.dict(
-            self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容", "last": lambda x: "上次查询"}
+            self.processor.cmd_handlers,
+            {"clipboard": lambda x: "剪贴板内容", "last": lambda x: "上次查询"},
         ):
             result = self.processor.process_text(text)
             self.assertIn("剪贴板内容", result)
@@ -145,15 +150,21 @@ class TestGPTContextProcessor(unittest.TestCase):
             self.assertIn("URL1结果", result)
             self.assertIn("URL2结果", result)
             self.assertEqual(mock_handle_url.call_count, 2)
-            mock_handle_url.assert_any_call(CmdNode(command="https://example.com", command_type=None, args=None))
-            mock_handle_url.assert_any_call(CmdNode(command="https://another.com", command_type=None, args=None))
+            mock_handle_url.assert_any_call(
+                CmdNode(command="https://example.com", command_type=None, args=None)
+            )
+            mock_handle_url.assert_any_call(
+                CmdNode(command="https://another.com", command_type=None, args=None)
+            )
 
     def test_mixed_url_and_commands(self):
         """测试混合URL和命令处理"""
         text = "开始 @https://example.com 中间 @clipboard 结束"
         with (
             patch("llm_query._handle_url") as mock_handle_url,
-            patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}),
+            patch.dict(
+                self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}
+            ),
         ):
             mock_handle_url.return_value = "URL处理结果"
             result = self.processor.process_text(text)
@@ -166,19 +177,27 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_single_symbol_processing(self):
         """测试单个符号节点处理"""
         text = "..test_symbol.."
-        with patch.object(self.processor, "generate_symbol_patch_prompt") as mock_process:
+        with patch.object(
+            self.processor, "generate_symbol_patch_prompt"
+        ) as mock_process:
             mock_process.return_value = "符号处理结果"
             result = self.processor.process_text(text)
-            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["test_symbol"])])
+            mock_process.assert_called_once_with(
+                [SearchSymbolNode(symbols=["test_symbol"])]
+            )
             self.assertEqual(result, "符号处理结果test_symbol")
 
     def test_multiple_symbols_processing(self):
         """测试多个符号节点处理"""
         text = "..symbol1.. ..symbol2.."
-        with patch.object(self.processor, "generate_symbol_patch_prompt") as mock_process:
+        with patch.object(
+            self.processor, "generate_symbol_patch_prompt"
+        ) as mock_process:
             mock_process.return_value = "多符号处理结果"
             result = self.processor.process_text(text)
-            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
+            mock_process.assert_called_once_with(
+                [SearchSymbolNode(symbols=["symbol1", "symbol2"])]
+            )
             self.assertEqual(result, "多符号处理结果symbol1 symbol2")
 
     def test_mixed_symbols_and_content(self):
@@ -186,12 +205,18 @@ class TestGPTContextProcessor(unittest.TestCase):
         text = "前置内容..symbol1..中间@clipboard ..symbol2..结尾"
         with (
             patch.object(self.processor, "generate_symbol_patch_prompt") as mock_symbol,
-            patch.dict(self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}),
+            patch.dict(
+                self.processor.cmd_handlers, {"clipboard": lambda x: "剪贴板内容"}
+            ),
         ):
             mock_symbol.return_value = "符号处理结果"
             result = self.processor.process_text(text)
-            mock_symbol.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
-            self.assertEqual(result, "符号处理结果前置内容symbol1中间剪贴板内容 symbol2结尾")
+            mock_symbol.assert_called_once_with(
+                [SearchSymbolNode(symbols=["symbol1", "symbol2"])]
+            )
+            self.assertEqual(
+                result, "符号处理结果前置内容symbol1中间剪贴板内容 symbol2结尾"
+            )
 
     def test_project_command_processing(self):
         """测试项目配置文件处理"""
@@ -211,7 +236,9 @@ class TestGPTContextProcessor(unittest.TestCase):
 
             # 写入配置文件，使用绝对路径
             with open(yml_path, "w", encoding="utf-8") as f:
-                yaml.dump({"files": [tmpdir + "/" + "*.py"], "dirs": [docs_dir]}, f)  # 使用绝对路径
+                yaml.dump(
+                    {"files": [tmpdir + "/" + "*.py"], "dirs": [docs_dir]}, f
+                )  # 使用绝对路径
 
             # Mock路径检测和目录处理
             with (
@@ -281,7 +308,9 @@ class TestGPTContextProcessor(unittest.TestCase):
             with patch("llm_query.PatchPromptBuilder") as mock_builder:
                 mock_instance = mock_builder.return_value
                 mock_instance.build.return_value = "multi symbol prompt"
-                result = self.processor.generate_symbol_patch_prompt(["symbol1", "symbol2"])
+                result = self.processor.generate_symbol_patch_prompt(
+                    ["symbol1", "symbol2"]
+                )
                 self.assertEqual(result, "multi symbol prompt")
                 mock_builder.assert_called_once_with(False, ["symbol1", "symbol2"])
                 mock_instance.build.assert_called_once()
@@ -292,7 +321,13 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_request.return_value = [
                 {
                     "content": "test content",
-                    "location": {"start_line": 1, "start_col": 0, "end_line": 10, "end_col": 0, "block_range": "1-10"},
+                    "location": {
+                        "start_line": 1,
+                        "start_col": 0,
+                        "end_line": 10,
+                        "end_col": 0,
+                        "block_range": "1-10",
+                    },
                     "file_path": "test.py",
                 }
             ]
@@ -304,7 +339,11 @@ class TestGPTContextProcessor(unittest.TestCase):
     def test_fetch_symbol_data(self):
         """测试获取符号上下文数据"""
         with patch("llm_query.send_http_request") as mock_request:
-            mock_request.return_value = {"symbol_name": "test", "definitions": [], "references": []}
+            mock_request.return_value = {
+                "symbol_name": "test",
+                "definitions": [],
+                "references": [],
+            }
             result = _fetch_symbol_data("test_symbol")
             self.assertEqual(result["symbol_name"], "test")
             self.assertIsInstance(result["definitions"], list)
@@ -332,7 +371,13 @@ class TestSymbolLocation(unittest.TestCase):
     def _setup_mock_api(self):
         self.symbol_data = {
             "content": self.original_content[self.block_range[0] : self.block_range[1]],
-            "location": {"block_range": self.block_range, "start_line": 1, "start_col": 0, "end_line": 2, "end_col": 4},
+            "location": {
+                "block_range": self.block_range,
+                "start_line": 1,
+                "start_col": 0,
+                "end_line": 2,
+                "end_col": 4,
+            },
             "file_path": self.file_path,
         }
         self.original_send_http_request = llm_query.send_http_request
@@ -352,7 +397,10 @@ class TestSymbolLocation(unittest.TestCase):
         self.assertEqual(result[0]["code_range"], self.code_range)
         self.assertEqual(result[0]["block_range"], self.block_range)
         self.assertEqual(
-            result[0]["block_content"], self.original_content[self.block_range[0] : self.block_range[1]].encode("utf-8")
+            result[0]["block_content"],
+            self.original_content[self.block_range[0] : self.block_range[1]].encode(
+                "utf-8"
+            ),
         )
 
     def test_multiline_symbol(self):
@@ -479,12 +527,17 @@ code3
         parser = BlockPatchResponse()
         result = parser.extract_symbol_paths(response)
 
-        expected = {"path/to/file1.py": ["symbol1", "symbol3"], "path/to/file2.py": ["symbol2"]}
+        expected = {
+            "path/to/file1.py": ["symbol1", "symbol3"],
+            "path/to/file2.py": ["symbol2"],
+        }
         self.assertEqual(result, expected)
 
     def test_add_symbol_details(self):
         """测试add_symbol_details函数"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".py", delete=False, encoding="utf8"
+        ) as tmp:
             tmp.write(
                 dedent(
                     '''
@@ -517,9 +570,7 @@ code3
             def method1(self):
                 return "modified"
         [source code end]
-        '''.format(
-                tmp_path, tmp_path
-            )
+        '''.format(tmp_path, tmp_path)
         )
         try:
             symbol_detail = {}
@@ -550,7 +601,9 @@ code3
 
     def test_interactive_symbol_location(self):
         """测试交互式符号位置选择器"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".py", delete=False, encoding="utf8"
+        ) as tmp:
             tmp.write(
                 dedent(
                     '''
@@ -574,12 +627,19 @@ code3
             with open(tmp_path, "rb") as f:
                 content = f.read()
 
-            parent_info = {"start_line": 1, "block_range": [0, len(content)], "block_content": content}
+            parent_info = {
+                "start_line": 1,
+                "block_range": [0, len(content)],
+                "block_content": content,
+            }
 
             # 模拟用户输入(选择第7行，即method2的位置)
             with unittest.mock.patch("builtins.input", side_effect=["8"]):
                 result = interactive_symbol_location(
-                    file=tmp_path, path="test_path", parent_symbol="ExistingClass", parent_symbol_info=parent_info
+                    file=tmp_path,
+                    path="test_path",
+                    parent_symbol="ExistingClass",
+                    parent_symbol_info=parent_info,
                 )
 
             # 验证返回结果
@@ -593,7 +653,9 @@ code3
                 file_paths=[tmp_path],
                 patch_ranges=[result["block_range"]],
                 block_contents=[result["block_content"]],
-                update_contents=[b"    def new_method(self):\n        return 'patched'"],
+                update_contents=[
+                    b"    def new_method(self):\n        return 'patched'"
+                ],
             )
 
             diff = patch.generate_diff()
@@ -609,7 +671,9 @@ code3
 
     def test_add_symbol_details_with_interactive(self):
         """测试add_symbol_details与交互式位置选择的集成"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".py", delete=False, encoding="utf8"
+        ) as tmp:
             tmp.write(
                 dedent(
                     """
@@ -632,9 +696,7 @@ code3
             [source code start]
             new_code = 42
             [source code end]
-            """.format(
-                    tmp_path
-                )
+            """.format(tmp_path)
             )
 
             # 模拟用户输入(选择第2行，即target_func的位置)
@@ -645,7 +707,9 @@ code3
             # 验证结果
             self.assertEqual(len(symbol_detail), 1)
             self.assertIn(f"{tmp_path}/new_symbol", symbol_detail)
-            self.assertTrue(symbol_detail[f"{tmp_path}/new_symbol"][NewSymbolFlag])  # 新增验证NewSymbolFlag
+            self.assertTrue(
+                symbol_detail[f"{tmp_path}/new_symbol"][NewSymbolFlag]
+            )  # 新增验证NewSymbolFlag
 
             # 测试与BlockPatch的联动
             symbol_info = symbol_detail[f"{tmp_path}/new_symbol"]
@@ -810,7 +874,9 @@ echo 'verify'
 
                 verify_script = Path(tmpdir) / "user_verify.sh"
                 self.assertTrue(verify_script.exists())
-                self.assertEqual(verify_script.read_text(), "#!/bin/bash\necho 'verify'")
+                self.assertEqual(
+                    verify_script.read_text(), "#!/bin/bash\necho 'verify'"
+                )
                 self.assertTrue(os.access(verify_script, os.X_OK))
 
 
@@ -818,21 +884,29 @@ class TestDisplayAndApplyDiff(unittest.TestCase):
     @patch("builtins.input", return_value="y")
     @patch("subprocess.run")
     def test_apply_diff_accepted(self, mock_run, _):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf8") as tmp_file:
+        with tempfile.NamedTemporaryFile(
+            mode="w", delete=False, encoding="utf8"
+        ) as tmp_file:
             test_file_path = tmp_file.name
 
         llm_query.display_and_apply_diff(Path(test_file_path))
         if os.name == "nt":  # Windows系统
-            mock_run.assert_called_once_with([find_patch(), "--binary", "-p0", "-i", test_file_path], check=True)
+            mock_run.assert_called_once_with(
+                [find_patch(), "--binary", "-p0", "-i", test_file_path], check=True
+            )
         else:
-            mock_run.assert_called_once_with([find_patch(), "-p0", "-i", test_file_path], check=True)
+            mock_run.assert_called_once_with(
+                [find_patch(), "-p0", "-i", test_file_path], check=True
+            )
 
         os.remove(test_file_path)
 
     @patch("builtins.input", return_value="n")
     @patch("subprocess.run")
     def test_apply_diff_rejected(self, mock_run, _):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf8") as tmp_file:
+        with tempfile.NamedTemporaryFile(
+            mode="w", delete=False, encoding="utf8"
+        ) as tmp_file:
             test_file_path = tmp_file.name
 
         llm_query.display_and_apply_diff(Path(test_file_path))
@@ -918,10 +992,14 @@ class TestModelSwitch(unittest.TestCase):
                 max_context_size=4096,
                 temperature=0.7,
             ),
-            "model2": ModelConfig(key="key2", base_url="http://api2", model_name="model2"),
+            "model2": ModelConfig(
+                key="key2", base_url="http://api2", model_name="model2"
+            ),
         }
         # 使用内存中的配置文件
-        self.test_config_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8")
+        self.test_config_file = tempfile.NamedTemporaryFile(
+            mode="w+", delete=False, encoding="utf8"
+        )
         self._write_test_config(self.valid_config)
         self.test_config_file.seek(0)  # 重置文件指针
 
@@ -972,7 +1050,10 @@ class TestModelSwitch(unittest.TestCase):
         original_url = GLOBAL_MODEL_CONFIG.base_url
 
         temp_config = ModelConfig(
-            key="temp_key", base_url="http://temp-api/v2", model_name="temp-model", temperature=1.0
+            key="temp_key",
+            base_url="http://temp-api/v2",
+            model_name="temp-model",
+            temperature=1.0,
         )
 
         self.assertEqual(temp_config.model_name, "temp-model")
@@ -984,7 +1065,8 @@ class TestModelSwitch(unittest.TestCase):
         """测试正常加载配置文件"""
         switch = ModelSwitch()
         switch._load_config = lambda _: {
-            name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()
+            name: ModelConfig(**config.__dict__)
+            for name, config in self.valid_config.items()
         }
 
         config = switch._load_config(self.test_config_file.name)
@@ -1004,7 +1086,9 @@ class TestModelSwitch(unittest.TestCase):
 
     def test_load_invalid_json(self) -> None:
         """测试JSON格式错误异常"""
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8") as invalid_file:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", delete=False, encoding="utf8"
+        ) as invalid_file:
             invalid_file.write("invalid json")
             invalid_file.flush()
 
@@ -1017,7 +1101,10 @@ class TestModelSwitch(unittest.TestCase):
     def test_get_valid_model_config(self) -> None:
         """测试获取存在的模型配置"""
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+        switch.config = {
+            name: ModelConfig(**config.__dict__)
+            for name, config in self.valid_config.items()
+        }
 
         config = switch._get_model_config("model1")
         self.assertEqual(config.key, "key1")
@@ -1026,7 +1113,10 @@ class TestModelSwitch(unittest.TestCase):
     def test_get_nonexistent_model(self) -> None:
         """测试获取不存在的模型配置"""
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+        switch.config = {
+            name: ModelConfig(**config.__dict__)
+            for name, config in self.valid_config.items()
+        }
 
         with self.assertRaises(ValueError) as context:
             switch._get_model_config("nonexistent")
@@ -1035,8 +1125,12 @@ class TestModelSwitch(unittest.TestCase):
     def test_validate_required_fields(self) -> None:
         """测试配置字段验证"""
         # 写入缺少base_url的配置
-        invalid_config = {"invalid_model": {"model_name": "invalid_model", "temperature": 0.5}}
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8") as invalid_file:
+        invalid_config = {
+            "invalid_model": {"model_name": "invalid_model", "temperature": 0.5}
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w+", delete=False, encoding="utf8"
+        ) as invalid_file:
             invalid_file.write(json.dumps(invalid_config))
             invalid_file.flush()
             with self.assertRaises(ValueError) as context:
@@ -1049,10 +1143,17 @@ class TestModelSwitch(unittest.TestCase):
     def test_api_query_with_retry(self, mock_query):
         """测试API调用重试机制"""
         time.sleep = lambda x: 0  # Mock sleep function
-        mock_query.side_effect = [Exception("First fail"), Exception("Second fail"), {"success": True}]
+        mock_query.side_effect = [
+            Exception("First fail"),
+            Exception("Second fail"),
+            {"success": True},
+        ]
 
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+        switch.config = {
+            name: ModelConfig(**config.__dict__)
+            for name, config in self.valid_config.items()
+        }
 
         result = switch.query("model1", "test prompt")
         self.assertEqual(result, {"success": True})
@@ -1064,7 +1165,10 @@ class TestModelSwitch(unittest.TestCase):
         mock_query.return_value = {"success": True}
 
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+        switch.config = {
+            name: ModelConfig(**config.__dict__)
+            for name, config in self.valid_config.items()
+        }
 
         switch.query("model1", "test prompt")
 
@@ -1084,7 +1188,10 @@ class TestModelSwitch(unittest.TestCase):
                         "content": json.dumps(
                             {
                                 "task": "test task",
-                                "jobs": [{"content": "job1", "priority": 1}, {"content": "job2", "priority": 2}],
+                                "jobs": [
+                                    {"content": "job1", "priority": 1},
+                                    {"content": "job2", "priority": 2},
+                                ],
                             }
                         )
                     }
@@ -1101,7 +1208,10 @@ class TestModelSwitch(unittest.TestCase):
         mock_query.side_effect = [architect_response] + coder_responses
         mock_parse.return_value = {
             "task": "parsed task",
-            "jobs": [{"content": "parsed job1", "priority": 1}, {"content": "parsed job2", "priority": 2}],
+            "jobs": [
+                {"content": "parsed job1", "priority": 1},
+                {"content": "parsed job2", "priority": 2},
+            ],
         }
 
         # 3. 执行测试
@@ -1113,14 +1223,18 @@ class TestModelSwitch(unittest.TestCase):
 
         # 模拟用户输入n不重试
         with patch("builtins.input", return_value="n"):
-            results = switch.execute_workflow(architect_model="architect", coder_model="coder", prompt="test prompt")
+            results = switch.execute_workflow(
+                architect_model="architect", coder_model="coder", prompt="test prompt"
+            )
 
         # 4. 验证结果
         self.assertEqual(len(results), 2)
         self.assertEqual(results, ["patch1", "patch2"])
 
         # 验证parse_response调用
-        mock_parse.assert_called_once_with(architect_response["choices"][0]["message"]["content"])
+        mock_parse.assert_called_once_with(
+            architect_response["choices"][0]["message"]["content"]
+        )
 
         # 验证process_patch_response调用次数
         self.assertEqual(mock_process.call_count, 2)
@@ -1166,7 +1280,10 @@ class TestModelSwitch(unittest.TestCase):
         # 模拟用户输入y重试
         mock_input.side_effect = ["y", "y", "n"]
         results = switch.execute_workflow(
-            architect_model="architect", coder_model="coder", prompt="test prompt", architect_only=True
+            architect_model="architect",
+            coder_model="coder",
+            prompt="test prompt",
+            architect_only=True,
         )
 
         self.assertEqual(len(results), 0)
@@ -1177,10 +1294,14 @@ class TestModelSwitch(unittest.TestCase):
     def test_execute_workflow_invalid_json(self, mock_parse, mock_query):
         """测试非标准JSON输入的容错处理"""
         # 模拟非标准JSON响应
-        mock_query.return_value = {"choices": [{"message": {"content": "invalid{json"}}]}
+        mock_query.return_value = {
+            "choices": [{"message": {"content": "invalid{json"}}]
+        }
 
         # parse_response应该能处理这种异常
-        mock_parse.side_effect = json.JSONDecodeError("Expecting value", doc="invalid{json", pos=0)
+        mock_parse.side_effect = json.JSONDecodeError(
+            "Expecting value", doc="invalid{json", pos=0
+        )
 
         switch = ModelSwitch()
         switch.config = {
@@ -1189,7 +1310,9 @@ class TestModelSwitch(unittest.TestCase):
         }
 
         with self.assertRaises(json.JSONDecodeError):
-            switch.execute_workflow(architect_model="architect", coder_model="coder", prompt="test prompt")
+            switch.execute_workflow(
+                architect_model="architect", coder_model="coder", prompt="test prompt"
+            )
 
     def test_config_mapping_correctness(self):
         """测试JSON配置到ModelConfig的映射正确性"""
@@ -1218,7 +1341,11 @@ class TestModelSwitch(unittest.TestCase):
 
     def test_optional_parameter_defaults(self):
         """测试可选参数的默认值继承逻辑"""
-        minimal_config = {"minimal_model": ModelConfig(key="min_key", base_url="http://min", model_name="min")}
+        minimal_config = {
+            "minimal_model": ModelConfig(
+                key="min_key", base_url="http://min", model_name="min"
+            )
+        }
         switch = ModelSwitch()
         switch.config = minimal_config
         model_config = switch._get_model_config("minimal_model")
@@ -1230,7 +1357,6 @@ class TestModelSwitch(unittest.TestCase):
 
 
 class TestChatbotUI(unittest.TestCase):
-
     def setUp(self):
         self.mock_gpt = MagicMock(spec=GPTContextProcessor)
         self.mock_console = MagicMock()
@@ -1257,7 +1383,12 @@ class TestChatbotUI(unittest.TestCase):
         self.mock_console.print.assert_called_with("[red]未知命令: unknown[/]")
 
     @parameterized.expand(
-        [("temperature", "0.6"), ("temperature 0", "0.0"), ("temperature 1", "1.0"), ("temperature 0.5", "0.5")]
+        [
+            ("temperature", "0.6"),
+            ("temperature 0", "0.0"),
+            ("temperature 1", "1.0"),
+            ("temperature 0.5", "0.5"),
+        ]
     )
     def test_valid_temperature(self, cmd, expected):
         self.chatbot.handle_command(cmd)
@@ -1301,7 +1432,9 @@ class TestChatbotUI(unittest.TestCase):
     def test_keybindings_setup(self):
         from prompt_toolkit.keys import Keys
 
-        keys = [key for binding in self.chatbot.bindings.bindings for key in binding.keys]
+        keys = [
+            key for binding in self.chatbot.bindings.bindings for key in binding.keys
+        ]
         self.assertIn(Keys.Escape, keys)
         self.assertIn(Keys.ControlC, keys)
         self.assertIn(Keys.ControlL, keys)
@@ -1399,17 +1532,20 @@ class TestArchitectMode(unittest.TestCase):
         self.assertEqual(result["task"], "开发分布式任务调度系统")
         self.assertEqual(len(result["jobs"]), 2)
         self.assertDictEqual(
-            result["jobs"][0], {"member": "1", "content": "实现工作节点注册机制\n使用Consul进行服务发现"}
+            result["jobs"][0],
+            {"member": "1", "content": "实现工作节点注册机制\n使用Consul进行服务发现"},
         )
         self.assertDictEqual(
-            result["jobs"][1], {"member": "2", "content": "设计任务监控仪表盘\n使用React+ECharts可视化"}
+            result["jobs"][1],
+            {"member": "2", "content": "设计任务监控仪表盘\n使用React+ECharts可视化"},
         )
 
     def test_should_reject_empty_task_content(self):
         """拒绝空任务描述内容"""
         with self.assertRaisesRegex(ValueError, "任务描述内容不能为空"):
             ArchitectMode.parse_response(
-                "[task describe start][task describe end]\n" "[team member1 job start]content[team member1 job end]"
+                "[task describe start][task describe end]\n"
+                "[team member1 job start]content[team member1 job end]"
             )
 
     def test_should_validate_job_member_format(self):
@@ -1420,7 +1556,9 @@ class TestArchitectMode(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "解析后的任务描述不完整或过短"):
             ArchitectMode.parse_response(invalid_response)
 
-    @parameterized.expand(BAD_RESPONSES, name_func=lambda func, num, p: f"test_should_reject_{p[0]}")
+    @parameterized.expand(
+        BAD_RESPONSES, name_func=lambda func, num, p: f"test_should_reject_{p[0]}"
+    )
     def test_error_scenarios(self, _, invalid_response, expected_error):
         """参数化测试各种异常场景"""
         with self.assertRaises((ValueError, RuntimeError)):
@@ -1450,23 +1588,32 @@ class TestAutoGitCommit(unittest.TestCase):
 
     @patch.object(AutoGitCommit, "_execute_git_commands")
     def test_commit_flow(self, mock_execute):
-        instance = AutoGitCommit("[git commit message start]test commit[git commit message end]", auto_commit=True)
+        instance = AutoGitCommit(
+            "[git commit message start]test commit[git commit message end]",
+            auto_commit=True,
+        )
         instance.do_commit()
         mock_execute.assert_called_once()
 
     @patch("subprocess.run")
     def test_git_commands_execution(self, mock_run):
-        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
+        instance = AutoGitCommit(
+            "[git commit message start]test[git commit message end]"
+        )
         instance.commit_message = "test"
         instance._execute_git_commands()
         mock_run.assert_has_calls(
-            [call(["git", "add", "."], check=True), call(["git", "commit", "-m", "test"], check=True)]
+            [
+                call(["git", "add", "."], check=True),
+                call(["git", "commit", "-m", "test"], check=True),
+            ]
         )
 
     @patch("subprocess.run")
     def test_specified_files_add(self, mock_run):
         instance = AutoGitCommit(
-            "[git commit message start]test[git commit message end]", files_to_add=["src/main.py", "src/utils.py"]
+            "[git commit message start]test[git commit message end]",
+            files_to_add=["src/main.py", "src/utils.py"],
         )
         instance.commit_message = "test"
         instance._execute_git_commands()
@@ -1481,14 +1628,18 @@ class TestAutoGitCommit(unittest.TestCase):
     @patch("builtins.input")
     def test_confirm_message(self, mock_input):
         mock_input.return_value = "y"
-        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
+        instance = AutoGitCommit(
+            "[git commit message start]test[git commit message end]"
+        )
         self.assertTrue(instance._confirm_message())
 
         mock_input.return_value = "n"
         self.assertFalse(instance._confirm_message())
 
         mock_input.side_effect = ["edit", "new message", "y"]
-        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
+        instance = AutoGitCommit(
+            "[git commit message start]test[git commit message end]"
+        )
         self.assertTrue(instance._confirm_message())
         self.assertEqual(instance.commit_message, "new message")
 
@@ -1504,7 +1655,9 @@ class TestFormatAndLint(unittest.TestCase):
                 os.remove(f)
 
     def _create_temp_file(self, ext: str, content: str = "", mode: str = "w+") -> str:
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False, encoding="utf-8", mode=mode) as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=ext, delete=False, encoding="utf-8", mode=mode
+        ) as f:
             f.write(content)
             self.test_files.append(f.name)
             return f.name
@@ -1587,11 +1740,17 @@ class TestFormatAndLint(unittest.TestCase):
         mock_result.returncode = 0
         mock_run.return_value = mock_result
 
-        files = [self._create_temp_file(".py"), self._create_temp_file(".js"), self._create_temp_file(".sh")]
+        files = [
+            self._create_temp_file(".py"),
+            self._create_temp_file(".js"),
+            self._create_temp_file(".sh"),
+        ]
 
         results = self.formatter.run_checks(files)
         self.assertEqual(len(results), 0)
-        self.assertEqual(mock_run.call_count, 4, "Should process 3 files with total 4 commands")
+        self.assertEqual(
+            mock_run.call_count, 4, "Should process 3 files with total 4 commands"
+        )
 
     @patch("subprocess.run")
     def test_partial_failure_handling(self, mock_run):
@@ -1675,7 +1834,9 @@ class TestContentParse(unittest.TestCase):
         [source code end]
         """
         )
-        modified, remaining = process_file_change(response, valid_symbols=["other/path.py"])
+        modified, remaining = process_file_change(
+            response, valid_symbols=["other/path.py"]
+        )
         self.assertIn("[modified file]", modified)
         self.assertIn("valid/path.py", modified)
         self.assertEqual(remaining.strip(), "")
@@ -1707,7 +1868,9 @@ class TestContentParse(unittest.TestCase):
         """
         )
 
-        modified, remaining = process_file_change(response, valid_symbols=["valid/path.py"])
+        modified, remaining = process_file_change(
+            response, valid_symbols=["valid/path.py"]
+        )
         self.assertEqual(modified.strip(), "")
         self.assertIn("valid/path.py", remaining)
 
@@ -1800,20 +1963,36 @@ class TestDiffBlockFilter(unittest.TestCase):
     生成一个diff有多个block需要让用户确认的情况，这必须要使diff tool不合并它们才行
     """
 
-    def _create_temp_files(self, content1: str, content2: str, mode: str = "w+") -> tuple[str, str]:
-        with tempfile.NamedTemporaryFile(mode=mode, delete=False, encoding="utf-8") as f1:
+    def _create_temp_files(
+        self, content1: str, content2: str, mode: str = "w+"
+    ) -> tuple[str, str]:
+        with tempfile.NamedTemporaryFile(
+            mode=mode, delete=False, encoding="utf-8"
+        ) as f1:
             f1.write(content1)
-        with tempfile.NamedTemporaryFile(mode=mode, delete=False, encoding="utf-8") as f2:
+        with tempfile.NamedTemporaryFile(
+            mode=mode, delete=False, encoding="utf-8"
+        ) as f2:
             f2.write(content2)
         return f1.name, f2.name
 
-    def _verify_patch(self, original_file: str, patch_content: str, expected_content: str) -> None:
+    def _verify_patch(
+        self, original_file: str, patch_content: str, expected_content: str
+    ) -> None:
         with tempfile.NamedTemporaryFile(mode="w+") as patched_file:
             with tempfile.NamedTemporaryFile(mode="w+", encoding="utf8") as patch_file:
                 patch_file.write(patch_content)
                 patch_file.flush()
                 subprocess.run(
-                    [find_patch(), "-p0", "-i", patch_file.name, original_file, "-o", patched_file.name],
+                    [
+                        find_patch(),
+                        "-p0",
+                        "-i",
+                        patch_file.name,
+                        original_file,
+                        "-o",
+                        patched_file.name,
+                    ],
                     check=True,
                     stderr=subprocess.PIPE,
                     stdout=subprocess.PIPE,
@@ -1849,7 +2028,9 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "x\ny2\nz\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output(
+                [find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT
+            )
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -1866,7 +2047,9 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "1\n2\n3\n4\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output(
+                [find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT
+            )
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -1886,12 +2069,16 @@ class TestDiffBlockFilter(unittest.TestCase):
         f1, f2 = self._create_temp_files(file1, file2)
         f3, f4 = self._create_temp_files(file3, file4)
         try:
-            diff1 = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff1 = subprocess.check_output(
+                [find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT
+            )
         except subprocess.CalledProcessError as e:
             diff1 = e.output
             self.assertEqual(e.returncode, 1)
         try:
-            diff2 = subprocess.check_output([find_diff(), "-u", f3, f4], text=True, stderr=subprocess.STDOUT)
+            diff2 = subprocess.check_output(
+                [find_diff(), "-u", f3, f4], text=True, stderr=subprocess.STDOUT
+            )
         except subprocess.CalledProcessError as e:
             diff2 = e.output
             self.assertEqual(e.returncode, 1)
@@ -1913,7 +2100,9 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "1\n2\n3\n4\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output(
+                [find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT
+            )
         except subprocess.CalledProcessError as e:
             diff = e.output
             self.assertEqual(e.returncode, 1)
@@ -1929,7 +2118,9 @@ class TestDiffBlockFilter(unittest.TestCase):
         file2 = "identical\ncontent\n"
         f1, f2 = self._create_temp_files(file1, file2)
         try:
-            diff = subprocess.check_output([find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT)
+            diff = subprocess.check_output(
+                [find_diff(), "-u", f1, f2], text=True, stderr=subprocess.STDOUT
+            )
         except subprocess.CalledProcessError as e:
             self.fail(f"diff should return 0 for identical files, got {e.returncode}")
 
@@ -2076,7 +2267,11 @@ class TestChangelogMarkdown(unittest.TestCase):
 
     def test_multiple_entries(self):
         """Test handling multiple entries."""
-        entries = [("First change", "diff1"), ("Second change", "diff2"), ("Third change", "diff3")]
+        entries = [
+            ("First change", "diff1"),
+            ("Second change", "diff2"),
+            ("Third change", "diff3"),
+        ]
 
         for desc, diff in entries:
             self.changelog.add_entry(desc, diff)
@@ -2101,7 +2296,9 @@ class TestChangelogMarkdown(unittest.TestCase):
     def test_empty_file_handling(self):
         """Test handling of empty/non-existent files."""
         empty_changelog = ChangelogMarkdown("nonexistent.md")
-        self.assertEqual(empty_changelog.get_recent(), "[change log start]\n\n[change log end]")
+        self.assertEqual(
+            empty_changelog.get_recent(), "[change log start]\n\n[change log end]"
+        )
 
     def test_markdown_formatting(self):
         """Test the generated markdown format is valid."""
@@ -2168,7 +2365,8 @@ class TestClipboard(unittest.TestCase):
         pasteboard.clearContents()
         pasteboard.declareTypes_owner_([AppKit.NSPasteboardTypePNG], None)
         pasteboard.setData_forType_(
-            AppKit.NSData.dataWithBytes_length_(image_data, len(image_data)), AppKit.NSPasteboardTypePNG
+            AppKit.NSData.dataWithBytes_length_(image_data, len(image_data)),
+            AppKit.NSPasteboardTypePNG,
         )
 
         # 测试剪贴板处理
@@ -2239,7 +2437,17 @@ class TestClipboard(unittest.TestCase):
             self.assertTrue(os.path.exists(test_image_path), "测试图像不存在")
 
             # 将图像放入剪贴板
-            subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", test_image_path], check=True)
+            subprocess.run(
+                [
+                    "xclip",
+                    "-selection",
+                    "clipboard",
+                    "-t",
+                    "image/png",
+                    test_image_path,
+                ],
+                check=True,
+            )
 
             # 测试剪贴板处理
             result = _handle_linux_clipboard()
@@ -2291,7 +2499,11 @@ class TestClipboard(unittest.TestCase):
             test_text = "Linux剪贴板测试文本"
 
             # 将文本放入剪贴板
-            subprocess.run(["xclip", "-selection", "clipboard"], input=test_text.encode(), check=True)
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=test_text.encode(),
+                check=True,
+            )
 
             # 测试剪贴板处理
             result = _handle_linux_clipboard()

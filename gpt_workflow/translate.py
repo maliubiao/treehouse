@@ -23,6 +23,7 @@
      }
 }
 """
+
 import concurrent.futures
 import json
 import os
@@ -40,11 +41,16 @@ from llm_query import GPTContextProcessor, ModelSwitch, format_with_line_numbers
 
 
 class TranslationWorkflow:
-
-    def __init__(self, source_file: str, yaml_file: Optional[str] = None, output_file: str = None):
+    def __init__(
+        self, source_file: str, yaml_file: Optional[str] = None, output_file: str = None
+    ):
         self.source_file = Path(source_file)
         self.yaml_file = Path(yaml_file) if yaml_file else None
-        self.output_file = Path(output_file) if output_file else self.source_file.with_suffix(".translated")
+        self.output_file = (
+            Path(output_file)
+            if output_file
+            else self.source_file.with_suffix(".translated")
+        )
         self.source_lines = []
         self.paragraphs = []
         self.translation_cache = {}
@@ -86,7 +92,11 @@ class TranslationWorkflow:
             self.source_lines = case["original"].splitlines(keepends=True)
 
             # Create a test paragraph covering all lines
-            para = {"line_range": f"1-{len(self.source_lines)}", "type": "code", "summary": case["description"]}
+            para = {
+                "line_range": f"1-{len(self.source_lines)}",
+                "type": "code",
+                "summary": case["description"],
+            }
 
             # Perform actual translation
             start, end, translated = self._translate_paragraph(para, "zh-en")
@@ -96,9 +106,7 @@ class TranslationWorkflow:
             output_text = "".join(output_lines)
 
             if output_text != case["expected"]:
-                error_msg = (
-                    f"Test failed for {case['description']}:\nExpected:\n{case['expected']}\nGot:\n{output_text}"
-                )
+                error_msg = f"Test failed for {case['description']}:\nExpected:\n{case['expected']}\nGot:\n{output_text}"
                 self._log(error_msg, "ERROR")
                 raise AssertionError(error_msg)
             else:
@@ -115,7 +123,9 @@ class TranslationWorkflow:
         self.log_buffer.append(log_entry)
         print(log_entry)
 
-    def _split_large_file(self, content: str, chunk_size: int = 25 * 1024) -> List[Tuple[str, str]]:
+    def _split_large_file(
+        self, content: str, chunk_size: int = 25 * 1024
+    ) -> List[Tuple[str, str]]:
         """Split large file content into chunks of approximately chunk_size bytes while preserving complete lines
         Returns a list of tuples (numbered_content, original_content, line_range)"""
         chunks = []
@@ -132,7 +142,13 @@ class TranslationWorkflow:
             # If adding this line would exceed chunk size and we already have content,
             # finalize the current chunk and start a new one
             if current_size + line_size > chunk_size and current_chunk:
-                chunks.append(("".join(current_numbered_chunk), "".join(current_chunk), line_number - 1))
+                chunks.append(
+                    (
+                        "".join(current_numbered_chunk),
+                        "".join(current_chunk),
+                        line_number - 1,
+                    )
+                )
                 current_chunk = [line]
                 current_numbered_chunk = [numbered_line]
                 current_size = line_size
@@ -146,7 +162,13 @@ class TranslationWorkflow:
 
         # Add the last chunk if it has content
         if current_chunk:
-            chunks.append(("".join(current_numbered_chunk), "".join(current_chunk), line_number - 1))
+            chunks.append(
+                (
+                    "".join(current_numbered_chunk),
+                    "".join(current_chunk),
+                    line_number - 1,
+                )
+            )
 
         return chunks
 
@@ -163,7 +185,9 @@ class TranslationWorkflow:
         current_chunk = previous_chunk_tail + original_chunk
         current_numbered_chunk = previous_numbered_tail + numbered_chunk
 
-        chunk_file = self.source_file.with_name(f"{self.source_file.stem}_chunk_{chunk_index}{self.source_file.suffix}")
+        chunk_file = self.source_file.with_name(
+            f"{self.source_file.stem}_chunk_{chunk_index}{self.source_file.suffix}"
+        )
         numbered_chunk_file = self.source_file.with_name(
             f"{self.source_file.stem}_numbered_chunk_{chunk_index}{self.source_file.suffix}"
         )
@@ -174,7 +198,9 @@ class TranslationWorkflow:
             f.write(current_numbered_chunk)
 
         try:
-            self._log(f"Generating paragraph configuration for chunk {chunk_index} from {numbered_chunk_file}...")
+            self._log(
+                f"Generating paragraph configuration for chunk {chunk_index} from {numbered_chunk_file}..."
+            )
             config = self._get_chunk_config(chunk_index, numbered_chunk_file)
             chunk_paragraphs = self._parse_chunk_config(config)
 
@@ -188,7 +214,9 @@ class TranslationWorkflow:
                 previous_chunk_tail = "".join(self.source_lines[start - 1 : endline])
                 previous_numbered_tail = "".join(
                     f"{line_num:4d} | {line}"
-                    for line_num, line in enumerate(self.source_lines[start - 1 : endline], start=start)
+                    for line_num, line in enumerate(
+                        self.source_lines[start - 1 : endline], start=start
+                    )
                 )
 
             return chunk_paragraphs, previous_chunk_tail, previous_numbered_tail
@@ -217,12 +245,21 @@ class TranslationWorkflow:
 
         for i, (numbered_chunk, original_chunk, endline) in enumerate(chunks, 1):
             processed_chunk = self._process_single_chunk(
-                i, numbered_chunk, original_chunk, endline, previous_chunk_tail, previous_numbered_tail
+                i,
+                numbered_chunk,
+                original_chunk,
+                endline,
+                previous_chunk_tail,
+                previous_numbered_tail,
             )
             if processed_chunk:
-                chunk_paragraphs, previous_chunk_tail, previous_numbered_tail = processed_chunk
+                chunk_paragraphs, previous_chunk_tail, previous_numbered_tail = (
+                    processed_chunk
+                )
                 if i < len(chunks):
-                    all_paragraphs.extend(chunk_paragraphs[:-1] if len(chunk_paragraphs) > 1 else [])
+                    all_paragraphs.extend(
+                        chunk_paragraphs[:-1] if len(chunk_paragraphs) > 1 else []
+                    )
                 else:
                     all_paragraphs.extend(chunk_paragraphs)
 
@@ -247,7 +284,9 @@ class TranslationWorkflow:
             with open(self.source_file, "r", encoding="utf-8") as f:
                 self.source_lines = f.readlines()
 
-                self._log(f"Loaded source file: {self.source_file} with {len(self.source_lines)} lines")
+                self._log(
+                    f"Loaded source file: {self.source_file} with {len(self.source_lines)} lines"
+                )
 
             if self.yaml_file:
                 with open(self.yaml_file, "r", encoding="utf-8") as f:
@@ -264,7 +303,9 @@ class TranslationWorkflow:
                             self.paragraphs.append(para_dict)
                         elif isinstance(para, dict):
                             self.paragraphs.append(para)
-                    self._log(f"Loaded YAML config: {self.yaml_file} with {len(self.paragraphs)} paragraphs")
+                    self._log(
+                        f"Loaded YAML config: {self.yaml_file} with {len(self.paragraphs)} paragraphs"
+                    )
             else:
                 self._generate_paragraph_config()
 
@@ -272,7 +313,9 @@ class TranslationWorkflow:
             self._log(f"Error loading files: {e}", "ERROR")
             raise
 
-    @tracer.trace(exclude_functions=["query", "_is_empty_content"], enable_var_trace=True)
+    @tracer.trace(
+        exclude_functions=["query", "_is_empty_content"], enable_var_trace=True
+    )
     def validate_paragraphs(self):
         """Validate paragraph definitions"""
         covered_lines = set()
@@ -285,11 +328,16 @@ class TranslationWorkflow:
                 if line in covered_lines:
                     raise ValueError(f"Duplicate line coverage: {line}")
                 covered_lines.add(line)
-        self._log(f"Validated {len(self.paragraphs)} paragraphs covering {len(covered_lines)} lines")
+        self._log(
+            f"Validated {len(self.paragraphs)} paragraphs covering {len(covered_lines)} lines"
+        )
 
     def _get_translation_prompt(self, paragraph_text: str, direction: str) -> str:
         """Get the appropriate translation prompt based on direction"""
-        prompt_file = {"zh-en": "prompts/translate-zh-eng", "any-zh": "prompts/translate-any-zh"}.get(direction)
+        prompt_file = {
+            "zh-en": "prompts/translate-zh-eng",
+            "any-zh": "prompts/translate-any-zh",
+        }.get(direction)
 
         if not prompt_file:
             raise ValueError(f"Unsupported translation direction: {direction}")
@@ -318,15 +366,21 @@ class TranslationWorkflow:
 
         return not bool("".join(stripped))
 
-    @tracer.trace(exclude_functions=["query", "_is_empty_content"], enable_var_trace=True)
-    def _translate_paragraph(self, paragraph: Dict, direction: str) -> Tuple[int, int, str]:
+    @tracer.trace(
+        exclude_functions=["query", "_is_empty_content"], enable_var_trace=True
+    )
+    def _translate_paragraph(
+        self, paragraph: Dict, direction: str
+    ) -> Tuple[int, int, str]:
         """Translate a single paragraph using the specified direction"""
         start, end = map(int, paragraph["line_range"].split("-"))
         paragraph_text = "".join(self.source_lines[start - 1 : end])
 
         # Skip translation if content is empty or only whitespace/punctuation
         if self._is_empty_content(paragraph_text):
-            self._log(f"Skipping translation for empty/whitespace-only lines {start}-{end}")
+            self._log(
+                f"Skipping translation for empty/whitespace-only lines {start}-{end}"
+            )
             return start, end, paragraph_text
 
         # Check cache first
@@ -384,7 +438,10 @@ class TranslationWorkflow:
         """Translate paragraphs in parallel"""
         self._log(f"Starting parallel translation with {max_workers} workers")
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self._translate_paragraph, para, direction) for para in self.paragraphs]
+            futures = [
+                executor.submit(self._translate_paragraph, para, direction)
+                for para in self.paragraphs
+            ]
 
             for future in concurrent.futures.as_completed(futures):
                 start, end, _ = future.result()
@@ -396,7 +453,9 @@ class TranslationWorkflow:
 
     def _find_gaps(self) -> List[Dict]:
         """Find gaps between paragraphs and create new paragraphs for non-blank content"""
-        sorted_paragraphs = sorted(self.paragraphs, key=lambda p: int(p["line_range"].split("-")[0]))
+        sorted_paragraphs = sorted(
+            self.paragraphs, key=lambda p: int(p["line_range"].split("-")[0])
+        )
         gaps = []
         prev_end = 0
 
@@ -414,7 +473,7 @@ class TranslationWorkflow:
                     gap_content = "".join(gap_lines)
                     gaps.append(
                         {
-                            "line_range": f"{prev_end+1}-{start-1}",
+                            "line_range": f"{prev_end + 1}-{start - 1}",
                             "content": gap_content,
                             "original_indents": original_indents,
                         }
@@ -434,7 +493,7 @@ class TranslationWorkflow:
                 gap_content = "".join(gap_lines)
                 gaps.append(
                     {
-                        "line_range": f"{prev_end+1}-{len(self.source_lines)}",
+                        "line_range": f"{prev_end + 1}-{len(self.source_lines)}",
                         "content": gap_content,
                         "original_indents": original_indents,
                     }
@@ -454,11 +513,15 @@ class TranslationWorkflow:
             for gap in gap_paragraphs:
                 start, end = map(int, gap["line_range"].split("-"))
                 self._log(f"Translating gap lines {start}-{end}")
-                _, _, translated_text = self._translate_paragraph({"line_range": f"{start}-{end}"}, "zh-en")
+                _, _, translated_text = self._translate_paragraph(
+                    {"line_range": f"{start}-{end}"}, "zh-en"
+                )
                 self.translation_cache[(start, end)] = translated_text
 
         # Sort translations by start line
-        sorted_translations = sorted(self.translation_cache.items(), key=lambda x: x[0][0])
+        sorted_translations = sorted(
+            self.translation_cache.items(), key=lambda x: x[0][0]
+        )
 
         for (start, end), translated_text in sorted_translations:
             # Add any untranslated lines before this segment
@@ -523,7 +586,12 @@ class TranslationWorkflow:
         chunk_paragraphs = []
         for para in config.get("paragraphs", []):
             if isinstance(para, list) and len(para) >= 4:
-                para_dict = {"type": para[0], "line_range": para[1], "line_count": para[2], "summary": para[3]}
+                para_dict = {
+                    "type": para[0],
+                    "line_range": para[1],
+                    "line_count": para[2],
+                    "summary": para[3],
+                }
                 chunk_paragraphs.append(para_dict)
             elif isinstance(para, dict):
                 chunk_paragraphs.append(para)
@@ -547,14 +615,33 @@ class TranslationWorkflow:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Parallel document translation workflow")
-    parser.add_argument("source_file", help="Source file to translate")
-    parser.add_argument("yaml_file", nargs="?", default=None, help="Optional YAML file with paragraph definitions")
-    parser.add_argument("-o", "--output", help="Output file path (default: <source>.translated)")
-    parser.add_argument(
-        "-d", "--direction", default="zh-en", choices=["zh-en", "any-zh"], help="Translation direction (default: zh-en)"
+    parser = argparse.ArgumentParser(
+        description="Parallel document translation workflow"
     )
-    parser.add_argument("-w", "--workers", type=int, default=5, help="Maximum parallel workers (default: 5)")
+    parser.add_argument("source_file", help="Source file to translate")
+    parser.add_argument(
+        "yaml_file",
+        nargs="?",
+        default=None,
+        help="Optional YAML file with paragraph definitions",
+    )
+    parser.add_argument(
+        "-o", "--output", help="Output file path (default: <source>.translated)"
+    )
+    parser.add_argument(
+        "-d",
+        "--direction",
+        default="zh-en",
+        choices=["zh-en", "any-zh"],
+        help="Translation direction (default: zh-en)",
+    )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=5,
+        help="Maximum parallel workers (default: 5)",
+    )
 
     args = parser.parse_args()
 

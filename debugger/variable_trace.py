@@ -39,10 +39,18 @@ def analyze_variable_ops(func_or_code):
 
         # 处理变量操作
         if "STORE" in instr.opname:
-            if instr.opname in ("STORE_FAST", "STORE_DEREF", "STORE_GLOBAL", "STORE_NAME"):
+            if instr.opname in (
+                "STORE_FAST",
+                "STORE_DEREF",
+                "STORE_GLOBAL",
+                "STORE_NAME",
+            ):
                 var_name = instr.argval
             # 处理 Python 3.11+ 的新操作码
-            elif PYTHON_311_OR_LATER and instr.opname in ("STORE_FAST_LOAD_FAST", "STORE_FAST_STORE_FAST"):
+            elif PYTHON_311_OR_LATER and instr.opname in (
+                "STORE_FAST_LOAD_FAST",
+                "STORE_FAST_STORE_FAST",
+            ):
                 var_name = instr.argval
                 line_vars[current_line].add(var_name[0])
                 line_vars[current_line].add(var_name[1])
@@ -59,10 +67,19 @@ def analyze_variable_ops(func_or_code):
                 continue
 
         elif "LOAD" in instr.opname:
-            if instr.opname in ("LOAD_FAST", "LOAD_DEREF", "LOAD_CLOSURE", "LOAD_GLOBAL", "LOAD_NAME"):
+            if instr.opname in (
+                "LOAD_FAST",
+                "LOAD_DEREF",
+                "LOAD_CLOSURE",
+                "LOAD_GLOBAL",
+                "LOAD_NAME",
+            ):
                 var_name = instr.argval
             # 处理 Python 3.11+ 的新操作码
-            elif PYTHON_311_OR_LATER and instr.opname in ("LOAD_FAST_AND_CLEAR", "LOAD_FAST_CHECK"):
+            elif PYTHON_311_OR_LATER and instr.opname in (
+                "LOAD_FAST_AND_CLEAR",
+                "LOAD_FAST_CHECK",
+            ):
                 var_name = instr.argval
             # 处理 Python 3.13 的新操作码
             elif PYTHON_313_OR_LATER and instr.opname in (
@@ -101,7 +118,9 @@ if __name__ == "__main__":
         if inspect.iscode(target):
             print(f"\nAnalysis for code object: {target.co_name}")
         else:
-            print(f"\nFile: {test_func.__code__.co_filename}, Function: {test_func.__name__}")
+            print(
+                f"\nFile: {test_func.__code__.co_filename}, Function: {test_func.__name__}"
+            )
 
         for line, variables in var_analysis.items():
             print(f"Line {line}: {variables}")

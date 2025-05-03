@@ -26,17 +26,32 @@ class CallHierarchyPlugin(LSPCommandPlugin):
 
         abs_file_path = os.path.abspath(file_path)
         # 准备调用层次结构
-        prepare_result = await lsp_client.prepare_call_hierarchy(abs_file_path, line, char)
+        prepare_result = await lsp_client.prepare_call_hierarchy(
+            abs_file_path, line, char
+        )
         if not prepare_result:
-            console.print(Panel("🕳️ 没有找到调用层次结构", title="空结果", border_style="blue"))
+            console.print(
+                Panel("🕳️ 没有找到调用层次结构", title="空结果", border_style="blue")
+            )
             return
 
         # 处理调用层次结构结果
         if isinstance(prepare_result, list):
-            tree = build_hierarchy_tree("📂 调用层次结构", prepare_result, _build_call_hierarchy_tree, lsp_client)
-            console.print(Panel(tree, title="🌳 调用层次结构", border_style="green", padding=(1, 2)))
+            tree = build_hierarchy_tree(
+                "📂 调用层次结构",
+                prepare_result,
+                _build_call_hierarchy_tree,
+                lsp_client,
+            )
+            console.print(
+                Panel(
+                    tree, title="🌳 调用层次结构", border_style="green", padding=(1, 2)
+                )
+            )
         else:
-            console.print(Panel("⚠️ 收到非预期的响应格式", title="解析错误", border_style="red"))
+            console.print(
+                Panel("⚠️ 收到非预期的响应格式", title="解析错误", border_style="red")
+            )
 
     def __str__(self):
         return f"{self.command_name}: {self.description}"

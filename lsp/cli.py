@@ -11,7 +11,9 @@ def main():
     parser.add_argument("--workspace", default=".", help="工作区路径（默认当前目录）")
     args = parser.parse_args()
 
-    lsp_client = GenericLSPClient(lsp_command=args.lsp.split(), workspace_path=args.workspace)
+    lsp_client = GenericLSPClient(
+        lsp_command=args.lsp.split(), workspace_path=args.workspace
+    )
     lsp_client.start()
 
     loop = asyncio.new_event_loop()

@@ -9,7 +9,9 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description="RSYNC同步脚本")
 parser.add_argument("--remote", required=True, help="远程地址，例如 user@host:/path")
 parser.add_argument("--local", required=True, help="本地路径")
-parser.add_argument("--interval", type=int, default=0, help="同步间隔秒数（0表示单次执行）")
+parser.add_argument(
+    "--interval", type=int, default=0, help="同步间隔秒数（0表示单次执行）"
+)
 parser.add_argument("--dry-run", action="store_true", help="模拟运行并显示差异")
 args = parser.parse_args()
 
@@ -27,7 +29,9 @@ def run_rsync(source, target, exclude=None, dry_run=False):
     print(cmd)
     try:
         # 处理中文路径，设置编码为utf-8
-        result = subprocess.run(cmd, check=True, text=True, encoding="utf-8", errors="ignore")
+        result = subprocess.run(
+            cmd, check=True, text=True, encoding="utf-8", errors="ignore"
+        )
         if args.dry_run:
             print(f"[DRY-RUN] RSYNC操作预览:\n{result.stdout}")
     except subprocess.CalledProcessError as e:
@@ -117,8 +121,12 @@ def full_sync():
     # 第一步：同步普通文件
     if not args.dry_run:
         print("同步普通文件...")
-        run_rsync(args.remote, args.local, exclude=f"*{INDEX_SUFFIX}", dry_run=args.dry_run)
-        run_rsync(args.local, args.remote, exclude=f"*{INDEX_SUFFIX}", dry_run=args.dry_run)
+        run_rsync(
+            args.remote, args.local, exclude=f"*{INDEX_SUFFIX}", dry_run=args.dry_run
+        )
+        run_rsync(
+            args.local, args.remote, exclude=f"*{INDEX_SUFFIX}", dry_run=args.dry_run
+        )
     else:
         print("\n普通文件同步预览：")
         run_rsync(args.remote, args.local, exclude=f"*{INDEX_SUFFIX}", dry_run=True)
@@ -137,7 +145,11 @@ def full_sync():
     if changed and not args.dry_run:
         print("\n回传合并后的索引文件...")
         # 直接使用本地的索引文件覆盖远程的索引文件
-        run_rsync(f"{args.local.rstrip('/')}/*{INDEX_SUFFIX}", args.remote, dry_run=args.dry_run)
+        run_rsync(
+            f"{args.local.rstrip('/')}/*{INDEX_SUFFIX}",
+            args.remote,
+            dry_run=args.dry_run,
+        )
 
 
 if __name__ == "__main__":

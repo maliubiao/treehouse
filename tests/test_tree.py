@@ -46,7 +46,9 @@ class TestSourceFrameworkParser(unittest.TestCase):
         self.parser = SourceSkeleton(self.parser_loader)
 
     def create_temp_file(self, code: str, mode: str = "w+", suffix=".py") -> str:
-        with tempfile.NamedTemporaryFile(mode=mode, delete=False, suffix=suffix, encoding="utf-8", newline="\n") as f:
+        with tempfile.NamedTemporaryFile(
+            mode=mode, delete=False, suffix=suffix, encoding="utf-8", newline="\n"
+        ) as f:
             f.write(code)
             return f.name
 
@@ -126,7 +128,9 @@ class TestBlockPatch(unittest.TestCase):
                 os.unlink(file)
 
     def create_temp_file(self, code: str, mode: str = "w+", suffix=".py") -> str:
-        with tempfile.NamedTemporaryFile(mode=mode, delete=False, suffix=suffix, encoding="utf-8", newline="\n") as f:
+        with tempfile.NamedTemporaryFile(
+            mode=mode, delete=False, suffix=suffix, encoding="utf-8", newline="\n"
+        ) as f:
             f.write(code)
             self.temp_files.append(f.name)
             return f.name
@@ -230,7 +234,10 @@ class TestBlockPatch(unittest.TestCase):
 
         overlap_patch = BlockPatch(
             file_paths=[file_path, file_path],
-            patch_ranges=[(patch_range[0], patch_range[1] - 2), (patch_range[0] + 2, patch_range[1])],
+            patch_ranges=[
+                (patch_range[0], patch_range[1] - 2),
+                (patch_range[0] + 2, patch_range[1]),
+            ],
             block_contents=[b"return 1", b"return 1"],
             update_contents=[b"return 10", b"return 10"],
         )
@@ -360,7 +367,9 @@ class TestParserUtil(unittest.TestCase):
         pass
 
     def create_temp_file(self, code: str, suffix=".py", mode: str = "w+") -> str:
-        with tempfile.NamedTemporaryFile(mode=mode, delete=False, suffix=suffix, encoding="utf-8", newline="\n") as f:
+        with tempfile.NamedTemporaryFile(
+            mode=mode, delete=False, suffix=suffix, encoding="utf-8", newline="\n"
+        ) as f:
             f.write(code)
             return f.name
 
@@ -409,7 +418,10 @@ class TestSymbolPaths(TestParserUtil):
         self.assertIn("__main__", paths)
         self.assertIn("__main__", code_map)
         self.assertIn("code", code_map["__main__"])
-        self.assertEqual(code_map["__main__"]["code"].strip(), 'if __name__ == "__main__":\n    print("Hello World")')
+        self.assertEqual(
+            code_map["__main__"]["code"].strip(),
+            'if __name__ == "__main__":\n    print("Hello World")',
+        )
 
 
 class TestCppSymbolPaths(TestParserUtil):
@@ -492,9 +504,16 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("Derived.display", paths)
         self.assertIn("Derived.get_name", paths)
 
-        self.assertIn("virtual void display() const", code_map["BaseClass.display"]["code"])
-        self.assertIn("void display() const override", code_map["Derived.display"]["code"])
-        self.assertIn("auto get_name() const -> const std::string&", code_map["Derived.get_name"]["code"])
+        self.assertIn(
+            "virtual void display() const", code_map["BaseClass.display"]["code"]
+        )
+        self.assertIn(
+            "void display() const override", code_map["Derived.display"]["code"]
+        )
+        self.assertIn(
+            "auto get_name() const -> const std::string&",
+            code_map["Derived.get_name"]["code"],
+        )
 
     def test_static_members(self):
         """验证静态成员变量路径"""
@@ -513,7 +532,10 @@ class TestCppSymbolPaths(TestParserUtil):
         os.unlink(path)
 
         self.assertIn("Derived.instance_count", paths)
-        self.assertEqual(code_map["Derived.instance_count"]["code"].strip(), "int Derived::instance_count = 0;")
+        self.assertEqual(
+            code_map["Derived.instance_count"]["code"].strip(),
+            "int Derived::instance_count = 0;",
+        )
 
     def test_global_symbols(self):
         """验证全局函数和变量路径"""
@@ -533,7 +555,9 @@ class TestCppSymbolPaths(TestParserUtil):
 
         self.assertIn("global_counter", paths)
         self.assertIn("square", paths)
-        self.assertEqual(code_map["global_counter"]["code"].strip(), "int global_counter = 0;")
+        self.assertEqual(
+            code_map["global_counter"]["code"].strip(), "int global_counter = 0;"
+        )
         self.assertIn("template<>\n", code_map["square"]["code"])
         self.assertIn("float square(float value) {", code_map["square"]["code"])
 
@@ -561,8 +585,13 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("Derived.Derived", paths)
         self.assertIn("TestClass.operator=", paths)
 
-        self.assertIn("Derived(Derived&& other) noexcept", code_map["Derived.Derived"]["code"])
-        self.assertIn("TestClass& operator=(TestClass&& other) noexcept", code_map["TestClass.operator="]["code"])
+        self.assertIn(
+            "Derived(Derived&& other) noexcept", code_map["Derived.Derived"]["code"]
+        )
+        self.assertIn(
+            "TestClass& operator=(TestClass&& other) noexcept",
+            code_map["TestClass.operator="]["code"],
+        )
 
     def test_operator_overloads(self):
         """验证运算符重载路径"""
@@ -580,7 +609,10 @@ class TestCppSymbolPaths(TestParserUtil):
         os.unlink(path)
 
         self.assertIn("Point.operator+", paths)
-        self.assertIn("Point operator+(const Point& other) const", code_map["Point.operator+"]["code"])
+        self.assertIn(
+            "Point operator+(const Point& other) const",
+            code_map["Point.operator+"]["code"],
+        )
 
     def test_friend_functions(self):
         """验证友元函数路径"""
@@ -598,7 +630,9 @@ class TestCppSymbolPaths(TestParserUtil):
         os.unlink(path)
 
         self.assertIn("friend_function", paths)
-        self.assertIn("void friend_function(BaseClass& obj)", code_map["friend_function"]["code"])
+        self.assertIn(
+            "void friend_function(BaseClass& obj)", code_map["friend_function"]["code"]
+        )
 
     def test_function_attributes(self):
         """验证函数属性路径"""
@@ -627,9 +661,17 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("Derived.unsafe_operation", paths)
         self.assertIn("TestClass.final_method", paths)
 
-        self.assertIn("[[nodiscard]] int must_use_function()", code_map["must_use_function"]["code"])
-        self.assertIn("void unsafe_operation() noexcept", code_map["Derived.unsafe_operation"]["code"])
-        self.assertIn("void final_method() final", code_map["TestClass.final_method"]["code"])
+        self.assertIn(
+            "[[nodiscard]] int must_use_function()",
+            code_map["must_use_function"]["code"],
+        )
+        self.assertIn(
+            "void unsafe_operation() noexcept",
+            code_map["Derived.unsafe_operation"]["code"],
+        )
+        self.assertIn(
+            "void final_method() final", code_map["TestClass.final_method"]["code"]
+        )
 
     def test_exception_specifications(self):
         """验证异常说明路径"""
@@ -655,8 +697,14 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("risky_function", paths)
         self.assertIn("TestClass.TestClass", paths)
 
-        self.assertIn("void risky_function() throw(std::bad_alloc)", code_map["risky_function"]["code"])
-        self.assertIn("TestClass() try : m_value(new int(5))", code_map["TestClass.TestClass"]["code"])
+        self.assertIn(
+            "void risky_function() throw(std::bad_alloc)",
+            code_map["risky_function"]["code"],
+        )
+        self.assertIn(
+            "TestClass() try : m_value(new int(5))",
+            code_map["TestClass.TestClass"]["code"],
+        )
 
     def test_template_class_methods(self):
         """验证模板类方法路径"""
@@ -681,7 +729,10 @@ class TestCppSymbolPaths(TestParserUtil):
         self.assertIn("TemplateScope.template_method", paths)
         self.assertIn("TemplateScope.Inner.template_inner_method", paths)
 
-        self.assertIn("static void template_method()", code_map["TemplateScope.template_method"]["code"])
+        self.assertIn(
+            "static void template_method()",
+            code_map["TemplateScope.template_method"]["code"],
+        )
         self.assertIn(
             "static void template_inner_method()",
             code_map["TemplateScope.Inner.template_inner_method"]["code"],
@@ -743,11 +794,15 @@ class TestCppSymbolPaths(TestParserUtil):
 
         # 验证全局数组
         self.assertIn("global_array", paths)
-        self.assertEqual(code_map["global_array"]["code"].strip(), "int global_array[] = {1, 2, 3};")
+        self.assertEqual(
+            code_map["global_array"]["code"].strip(), "int global_array[] = {1, 2, 3};"
+        )
 
         # 验证类静态数组成员
         self.assertIn("Container.buffer", paths)
-        self.assertIn("char Container::buffer[1024] = {0};", code_map["Container.buffer"]["code"])
+        self.assertIn(
+            "char Container::buffer[1024] = {0};", code_map["Container.buffer"]["code"]
+        )
 
         # 验证成员数组（根据解析器实现决定是否提取）
         # self.assertIn("Container.member_array", paths)
@@ -785,8 +840,13 @@ class TestCppSymbolPaths(TestParserUtil):
 
         self.assertIn("void process(int value)", code_map["process"]["code"])
         self.assertIn("void process(double value)", code_map["process_5"]["code"])
-        self.assertIn("int compute(int a, int b)", code_map["Calculator.compute"]["code"])
-        self.assertIn("double compute(double a, double b)", code_map["Calculator.compute_12"]["code"])
+        self.assertIn(
+            "int compute(int a, int b)", code_map["Calculator.compute"]["code"]
+        )
+        self.assertIn(
+            "double compute(double a, double b)",
+            code_map["Calculator.compute_12"]["code"],
+        )
 
     def test_namespace_member_function(self):
         """验证命名空间中直接定义的成员函数路径"""
@@ -834,8 +894,16 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         print(paths)
-        expected_symbols = ["myFunction", "myArrowFunction", "MyClass.myMethod", "MyClass"]
-        self.assertCountEqual([s for s in paths if s.startswith("my") or s.startswith("MyClass")], expected_symbols)
+        expected_symbols = [
+            "myFunction",
+            "myArrowFunction",
+            "MyClass.myMethod",
+            "MyClass",
+        ]
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("my") or s.startswith("MyClass")],
+            expected_symbols,
+        )
 
     def test_javascript_class_extraction(self):
         """测试JavaScript类及其方法符号提取"""
@@ -863,8 +931,17 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         print(paths)
-        expected_symbols = ["Calculator", "Calculator.constructor", "Calculator.add", "Calculator.create", "__import__"]
-        self.assertCountEqual([s for s in paths if s.startswith("Calculator") or s == "__import__"], expected_symbols)
+        expected_symbols = [
+            "Calculator",
+            "Calculator.constructor",
+            "Calculator.add",
+            "Calculator.create",
+            "__import__",
+        ]
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("Calculator") or s == "__import__"],
+            expected_symbols,
+        )
 
     def test_javascript_object_methods(self):
         """测试JavaScript对象方法符号提取"""
@@ -883,8 +960,14 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         path = self.create_temp_file(code, suffix=".js")
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
-        expected_symbols = ["mathOperations", "mathOperations.sum", "mathOperations.factorial"]
-        self.assertCountEqual([s for s in paths if s.startswith("mathOperations")], expected_symbols)
+        expected_symbols = [
+            "mathOperations",
+            "mathOperations.sum",
+            "mathOperations.factorial",
+        ]
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("mathOperations")], expected_symbols
+        )
 
     def test_javascript_async_functions(self):
         """测试JavaScript异步函数符号提取"""
@@ -904,7 +987,9 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["fetchData", "asyncArrow"]
-        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s in expected_symbols], expected_symbols
+        )
 
     def test_javascript_generator_functions(self):
         """测试JavaScript生成器函数符号提取"""
@@ -928,7 +1013,9 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         os.unlink(path)
         print(paths)
         expected_symbols = ["numberGenerator", "objectWithGenerator.generatorMethod"]
-        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s in expected_symbols], expected_symbols
+        )
 
     def test_javascript_imports_block(self):
         """测试JavaScript导入块符号提取"""
@@ -989,7 +1076,9 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             "Calculator.create",
             "Calculator.value",
         ]
-        self.assertCountEqual([s for s in paths if s.startswith("Calculator")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("Calculator")], expected_symbols
+        )
 
     def test_typescript_abstract_class(self):
         """测试TypeScript抽象类符号提取"""
@@ -1009,7 +1098,9 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         print(paths)
         os.unlink(path)
         expected_symbols = ["Animal", "Animal.makeSound", "Animal.move"]
-        self.assertCountEqual([s for s in paths if s.startswith("Animal")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("Animal")], expected_symbols
+        )
 
     def test_typescript_interface(self):
         """测试TypeScript接口符号提取"""
@@ -1054,7 +1145,9 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["User", "User.name", "User.age", "User.id"]
-        self.assertCountEqual([s for s in paths if s.startswith("User")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("User")], expected_symbols
+        )
 
     def test_typescript_function_extraction(self):
         """测试TypeScript函数符号提取"""
@@ -1084,7 +1177,9 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["identity", "arrowFunctionWithParams", "greet"]
-        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s in expected_symbols], expected_symbols
+        )
 
     def test_typescript_generic_functions(self):
         """测试TypeScript泛型函数符号提取"""
@@ -1109,8 +1204,15 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         path = self.create_temp_file(code, suffix=".ts")
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
-        expected_symbols = ["identity", "merge", "GenericClass", "GenericClass.setValue"]
-        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+        expected_symbols = [
+            "identity",
+            "merge",
+            "GenericClass",
+            "GenericClass.setValue",
+        ]
+        self.assertCountEqual(
+            [s for s in paths if s in expected_symbols], expected_symbols
+        )
 
     def test_typescript_function_overloads(self):
         """测试TypeScript函数重载符号提取"""
@@ -1150,7 +1252,9 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["sealed", "Greeter", "Greeter.constructor"]
-        self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s in expected_symbols], expected_symbols
+        )
 
     def test_typescript_namespaces(self):
         """测试TypeScript命名空间符号提取"""
@@ -1172,8 +1276,15 @@ class TestJavascriptSymbolPaths(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         self.assertIn("export interface Point", code_map["Geometry.Point"]["code"])
-        expected_symbols = ["Geometry", "Geometry.Point", "Geometry.Circle", "Geometry.Circle.constructor"]
-        self.assertCountEqual([s for s in paths if s.startswith("Geometry")], expected_symbols)
+        expected_symbols = [
+            "Geometry",
+            "Geometry.Point",
+            "Geometry.Circle",
+            "Geometry.Circle.constructor",
+        ]
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("Geometry")], expected_symbols
+        )
 
     def test_typescript_imports_block(self):
         """测试TypeScript导入块符号提取"""
@@ -1213,7 +1324,9 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
             "main.MyStruct.Method3",
             "main.MyStruct.Method4",
         ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.MyStruct")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("main.MyStruct")], expected_symbols
+        )
 
     def test_go_function_extraction(self):
         """测试Go函数符号提取"""
@@ -1232,7 +1345,9 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
             "main.Function2",
             "main.Function3",
         ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.Function")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("main.Function")], expected_symbols
+        )
 
     def test_go_nested_receiver_extraction(self):
         """测试嵌套接收器方法符号提取"""
@@ -1256,7 +1371,9 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
             "main.OuterStruct.Method1",
             "main.OuterStruct.InnerStruct.Method2",
         ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.OuterStruct")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("main.OuterStruct")], expected_symbols
+        )
 
     def test_go_anonymous_function_extraction(self):
         """测试匿名函数符号提取"""
@@ -1304,7 +1421,9 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
             "main.MyInt",
             "main.MyStruct",
         ]
-        self.assertCountEqual([s for s in paths if s.startswith("main.My")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("main.My")], expected_symbols
+        )
 
     def test_go_import_declaration_extraction(self):
         """测试Go导入声明符号提取"""
@@ -1352,7 +1471,8 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
         self.assertIn("main.MyStruct", paths)
         self.assertIn("main.MyStruct", code_map)
         self.assertEqual(
-            code_map["main.MyStruct"]["code"].strip(), "type MyStruct struct {\n    Field1 string\n    Field2 int\n}"
+            code_map["main.MyStruct"]["code"].strip(),
+            "type MyStruct struct {\n    Field1 string\n    Field2 int\n}",
         )
 
     def test_go_commented_function_extraction(self):
@@ -1379,17 +1499,25 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
 
         # 验证符号提取
         expected_symbols = ["main.Function1", "main.Function2", "main.Function3"]
-        self.assertCountEqual([s for s in paths if s.startswith("main.Function")], expected_symbols)
+        self.assertCountEqual(
+            [s for s in paths if s.startswith("main.Function")], expected_symbols
+        )
 
         # 验证注释包含在代码块中
         self.assertIn("// Function1的注释", code_map["main.Function1"]["code"])
-        self.assertIn("/* \nFunction2的多行注释 \n*/", code_map["main.Function2"]["code"])
+        self.assertIn(
+            "/* \nFunction2的多行注释 \n*/", code_map["main.Function2"]["code"]
+        )
         self.assertIn("// 带参数的函数注释", code_map["main.Function3"]["code"])
 
         # 验证函数体完整性
         self.assertIn("func Function1() {}", code_map["main.Function1"]["code"])
-        self.assertIn("func Function2() int { return 0 }", code_map["main.Function2"]["code"])
-        self.assertIn("func Function3(param string) {}", code_map["main.Function3"]["code"])
+        self.assertIn(
+            "func Function2() int { return 0 }", code_map["main.Function2"]["code"]
+        )
+        self.assertIn(
+            "func Function3(param string) {}", code_map["main.Function3"]["code"]
+        )
 
 
 class TestImportBlocks(TestParserUtil):
@@ -1408,7 +1536,10 @@ class TestImportBlocks(TestParserUtil):
         self.assertIn("__import__", paths)
         self.assertIn("__import__", code_map)
         self.assertIn("code", code_map["__import__"])
-        self.assertEqual(code_map["__import__"]["code"].strip(), "# This is a comment\nimport os\nimport sys")
+        self.assertEqual(
+            code_map["__import__"]["code"].strip(),
+            "# This is a comment\nimport os\nimport sys",
+        )
 
     def test_import_block_with_strings_and_from_import(self):
         code = dedent(
@@ -1466,14 +1597,24 @@ class TestCallAnalysis(TestParserUtil):
             return (0, 0)
         return (start, start + len(substring.encode("utf8")))
 
-    def _convert_bytes_to_points(self, code_bytes: bytes, start_byte: int, end_byte: int) -> tuple:
+    def _convert_bytes_to_points(
+        self, code_bytes: bytes, start_byte: int, end_byte: int
+    ) -> tuple:
         before_start = code_bytes[:start_byte]
         start_line = before_start.count(b"\n")
-        start_col = start_byte - (before_start.rfind(b"\n") + 1) if b"\n" in before_start else start_byte
+        start_col = (
+            start_byte - (before_start.rfind(b"\n") + 1)
+            if b"\n" in before_start
+            else start_byte
+        )
 
         before_end = code_bytes[:end_byte]
         end_line = before_end.count(b"\n")
-        end_col = end_byte - (before_end.rfind(b"\n") + 1) if b"\n" in before_end else end_byte
+        end_col = (
+            end_byte - (before_end.rfind(b"\n") + 1)
+            if b"\n" in before_end
+            else end_byte
+        )
 
         return (start_line, start_col, end_line, end_col)
 
@@ -1506,13 +1647,27 @@ class TestCallAnalysis(TestParserUtil):
         paths, code_map = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
 
-        expected_paths = ["A", "A.B", "A.B.f", "MyClass", "MyClass.other_method", "MyClass.my_method", "some_function"]
+        expected_paths = [
+            "A",
+            "A.B",
+            "A.B.f",
+            "MyClass",
+            "MyClass.other_method",
+            "MyClass.my_method",
+            "some_function",
+        ]
         method_entry = code_map["MyClass.my_method"]
 
         self.assertEqual(sorted(paths), sorted(expected_paths))
 
         actual_calls = method_entry["calls"]
-        expected_call_names = {"A.B", "A.B.f", "self.other_method", "some_function", "self.attr"}
+        expected_call_names = {
+            "A.B",
+            "A.B.f",
+            "self.other_method",
+            "some_function",
+            "self.attr",
+        }
         actual_call_names = {call["name"] for call in actual_calls}
         self.assertEqual(actual_call_names, expected_call_names)
 
@@ -1523,22 +1678,36 @@ class TestCallAnalysis(TestParserUtil):
         try:
             self.lsp_client.send_notification(
                 "textDocument/didOpen",
-                {"textDocument": {"uri": f"file://{temp_path}", "languageId": "python", "version": 1, "text": code}},
+                {
+                    "textDocument": {
+                        "uri": f"file://{temp_path}",
+                        "languageId": "python",
+                        "version": 1,
+                        "text": code,
+                    }
+                },
             )
 
             for call in actual_calls:
                 line = call["start_point"][0] + 1
                 char = call["start_point"][1] + 1
 
-                definition = asyncio.run(self.lsp_client.get_definition(temp_path, line, char))
+                definition = asyncio.run(
+                    self.lsp_client.get_definition(temp_path, line, char)
+                )
                 self.assertTrue(definition is not None, f"未找到 {call['name']} 的定义")
 
-                definitions = definition if isinstance(definition, list) else [definition]
+                definitions = (
+                    definition if isinstance(definition, list) else [definition]
+                )
                 found_valid = any(
-                    d.get("uri", "").startswith("file://") and os.path.exists(unquote(urlparse(d.get("uri", "")).path))
+                    d.get("uri", "").startswith("file://")
+                    and os.path.exists(unquote(urlparse(d.get("uri", "")).path))
                     for d in definitions
                 )
-                self.assertTrue(found_valid, f"未找到有效的文件路径定义: {call['name']}")
+                self.assertTrue(
+                    found_valid, f"未找到有效的文件路径定义: {call['name']}"
+                )
         finally:
             os.unlink(temp_path)
             if self.lsp_client.running:
@@ -1600,14 +1769,22 @@ class TestCallAnalysis(TestParserUtil):
 
         def test_symbol_position(symbol_path):
             info = code_map[symbol_path]
-            symbols = self.parser_util.find_symbols_by_location(code_map, info["start_line"], info["start_col"])
+            symbols = self.parser_util.find_symbols_by_location(
+                code_map, info["start_line"], info["start_col"]
+            )
             found_symbols = [s["symbol"] for s in symbols]
-            self.assertIn(symbol_path, found_symbols, f"在起始位置未找到符号 {symbol_path}")
+            self.assertIn(
+                symbol_path, found_symbols, f"在起始位置未找到符号 {symbol_path}"
+            )
             mid_line = (info["start_line"] + info["end_line"]) // 2
             mid_col = (info["start_col"] + info["end_col"]) // 2
-            symbols = self.parser_util.find_symbols_by_location(code_map, mid_line, mid_col)
+            symbols = self.parser_util.find_symbols_by_location(
+                code_map, mid_line, mid_col
+            )
             found_symbols = [s["symbol"] for s in symbols]
-            self.assertIn(symbol_path, found_symbols, f"在中间位置未找到符号 {symbol_path}")
+            self.assertIn(
+                symbol_path, found_symbols, f"在中间位置未找到符号 {symbol_path}"
+            )
 
         test_symbol_position("Outer")
         test_symbol_position("Outer.Inner")
@@ -1656,7 +1833,11 @@ class TestCallAnalysis(TestParserUtil):
             [[click_line, 0]],
         )
         self.assertTrue(len(symbols) > 0, "应该返回附近符号")
-        self.assertIn("Anonymous callback", symbols["near_2"]["code"], "匿名回调应该返回最近的父级符号")
+        self.assertIn(
+            "Anonymous callback",
+            symbols["near_2"]["code"],
+            "匿名回调应该返回最近的父级符号",
+        )
 
         os.unlink(js_path)
 
@@ -1678,7 +1859,9 @@ class TestCallAnalysis(TestParserUtil):
 
         # 测试lambda位置
         lambda_line = 8  # lambda_func 行
-        symbols = self.parser_util.find_symbols_for_locations(code_map, [[lambda_line, 0]])
+        symbols = self.parser_util.find_symbols_for_locations(
+            code_map, [[lambda_line, 0]]
+        )
         self.assertIn("x+1", symbols["near_8"]["code"], "lambda 应该返回最近的父级符号")
 
         os.unlink(py_path)
@@ -1714,7 +1897,9 @@ class TestCallAnalysis(TestParserUtil):
             *[get_position_info("def method_a(self):")[:2] for _ in range(2)],
             *[get_position_info("class Beta:")[:2] for _ in range(2)],
             *[get_position_info("def method_b(self):")[:2] for _ in range(2)],
-            *[get_position_info("lambda: None")[:2] for _ in range(2)],  # 测试匿名函数位置
+            *[
+                get_position_info("lambda: None")[:2] for _ in range(2)
+            ],  # 测试匿名函数位置
         ]
 
         symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations)
@@ -1820,8 +2005,13 @@ class TestRipGrepSearch(unittest.TestCase):
 """.strip()
         from subprocess import CompletedProcess
 
-        with patch("subprocess.run") as mock_run, patch("pathlib.Path.exists", return_value=True) as mock_exists:
-            mock_run.return_value = CompletedProcess(args=[], returncode=0, stdout=mock_output, stderr="")
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("pathlib.Path.exists", return_value=True) as mock_exists,
+        ):
+            mock_run.return_value = CompletedProcess(
+                args=[], returncode=0, stdout=mock_output, stderr=""
+            )
             results = self.searcher.search(["test"], self.test_dir / "src")
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0].file_path.name, "main.py")
@@ -1833,7 +2023,9 @@ class TestRipGrepSearch(unittest.TestCase):
         from subprocess import CompletedProcess
 
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            mock_run.return_value = CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
 
             expected = [
                 "rg",
@@ -1870,7 +2062,9 @@ class TestRipGrepSearch(unittest.TestCase):
         from subprocess import CompletedProcess
 
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = CompletedProcess(args=[], returncode=2, stdout="", stderr="invalid pattern")
+            mock_run.return_value = CompletedProcess(
+                args=[], returncode=2, stdout="", stderr="invalid pattern"
+            )
             with self.assertRaisesRegex(RuntimeError, "invalid pattern"):
                 self.searcher.search(["[invalid-regex"], self.test_dir)
 
@@ -1882,10 +2076,17 @@ class TestRipGrepSearch(unittest.TestCase):
 """.strip()
         from subprocess import CompletedProcess
 
-        with patch("subprocess.run") as mock_run, patch("pathlib.Path.exists", return_value=True) as mock_exists:
-            mock_run.return_value = CompletedProcess(args=[], returncode=0, stdout=mock_output, stderr="")
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("pathlib.Path.exists", return_value=True) as mock_exists,
+        ):
+            mock_run.return_value = CompletedProcess(
+                args=[], returncode=0, stdout=mock_output, stderr=""
+            )
 
-            results = self.searcher.search(["ParserUtil", "Validator"], self.test_dir / "src")
+            results = self.searcher.search(
+                ["ParserUtil", "Validator"], self.test_dir / "src"
+            )
             self.assertEqual(len(results), 1)
             self.assertIn("--regexp ParserUtil", " ".join(mock_run.call_args[0][0]))
             self.assertIn("--regexp Validator", " ".join(mock_run.call_args[0][0]))
@@ -1920,8 +2121,12 @@ class TestSymbolsComplete(unittest.TestCase):
                 f"symbol:{tmp.name}/debug": [(tmp.name, "debug()", "debug_hash")],
                 f"symbol:{tmp.name}/main": [(tmp.name, "main()", "main_hash")],
                 f"symbol:{tmp.name}/print": [(tmp.name, "print()", "print_hash")],
-                f"symbol:{tmp.name}/symbol_a": [(tmp.name, "symbol_a", "symbol_b_hash")],
-                f"symbol:{tmp.name}/symbol_b": [(tmp.name, "symbol_b", "symbol_b_hash")],
+                f"symbol:{tmp.name}/symbol_a": [
+                    (tmp.name, "symbol_a", "symbol_b_hash")
+                ],
+                f"symbol:{tmp.name}/symbol_b": [
+                    (tmp.name, "symbol_b", "symbol_b_hash")
+                ],
             }
 
         app.state.file_symbol_trie = SymbolTrie.from_symbols(symbols_dict)
@@ -2015,7 +2220,9 @@ class TestSymbolsComplete(unittest.TestCase):
             )
 
             test_client = TestClient(app)
-            response = test_client.get(f"/symbol_content?symbol_path=symbol:{tmp.name}/main,debug")
+            response = test_client.get(
+                f"/symbol_content?symbol_path=symbol:{tmp.name}/main,debug"
+            )
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.text.count("\n\n"), 1)
             self.assertIn("void main()", response.text)
@@ -2043,7 +2250,9 @@ class TestSymbolsComplete(unittest.TestCase):
             )
 
             test_client = TestClient(app)
-            response = test_client.get(f"/symbol_content?symbol_path={symbol_path}&json_format=true")
+            response = test_client.get(
+                f"/symbol_content?symbol_path={symbol_path}&json_format=true"
+            )
             self.assertEqual(response.status_code, 200)
             json_data = response.json()
             self.assertEqual(json_data[0]["location"]["start_line"], 0)
@@ -2057,7 +2266,9 @@ class TestSymbolsComplete(unittest.TestCase):
 
     def test_extract_multiline_js_event_handler(self):
         """测试提取多行JavaScript事件处理程序"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".js", delete=False, encoding="utf8") as tmp:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".js", delete=False, encoding="utf8"
+        ) as tmp:
             js_content = dedent(
                 """
 document.addEventListener('click', function() {
@@ -2100,7 +2311,11 @@ function another_function() {
                 symbol_path,
                 {
                     "file_path": tmp.name,
-                    "location": ((start_line, 0), (end_line, 0), (start_byte, end_byte)),
+                    "location": (
+                        (start_line, 0),
+                        (end_line, 0),
+                        (start_byte, end_byte),
+                    ),
                 },
             )
 
@@ -2192,7 +2407,9 @@ class TestSymbolsAPI(unittest.TestCase):
     def tearDown(self):
         """清理测试环境"""
         self.loop.close()
-        self.conn.execute("DELETE FROM symbols WHERE file_path = ?", ("file",))  # 同步修改清理路径
+        self.conn.execute(
+            "DELETE FROM symbols WHERE file_path = ?", ("file",)
+        )  # 同步修改清理路径
         self.conn.commit()
         self.conn.close()
 
@@ -2213,7 +2430,9 @@ class TestSymbolsAPI(unittest.TestCase):
         """测试获取符号上下文"""
 
         async def run_tests():
-            response = await get_symbol_context_api("main_function", "file")  # 同步修改路径参数
+            response = await get_symbol_context_api(
+                "main_function", "file"
+            )  # 同步修改路径参数
             self.assertEqual(response["symbol_name"], "main_function")
             self.assertGreaterEqual(len(response["definitions"]), 2)
 
@@ -2277,11 +2496,15 @@ class TestExtractIdentifiablePath(unittest.TestCase):
 
     def test_absolute_outside_current_dir(self):
         abs_path = "/tmp/another_project/main.py"
-        self.assertEqual(tree.extract_identifiable_path(abs_path), abs_path.replace("\\", "/"))
+        self.assertEqual(
+            tree.extract_identifiable_path(abs_path), abs_path.replace("\\", "/")
+        )
 
     def test_init_py_normal_handling(self):
         rel_path = "package/__init__.py"
-        self.assertEqual(tree.extract_identifiable_path(rel_path), rel_path.replace("\\", "/"))
+        self.assertEqual(
+            tree.extract_identifiable_path(rel_path), rel_path.replace("\\", "/")
+        )
 
 
 class TestLSPIntegration(unittest.TestCase):
@@ -2331,7 +2554,11 @@ class TestLSPIntegration(unittest.TestCase):
         )
 
         response = self.client.post(
-            "/lsp/didChange", data={"file_path": tmp.name, "content": "def test(): pass\nprint('updated')"}
+            "/lsp/didChange",
+            data={
+                "file_path": tmp.name,
+                "content": "def test(): pass\nprint('updated')",
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn("success", response.json()["status"])
@@ -2349,7 +2576,9 @@ class TestLSPIntegration(unittest.TestCase):
     def test_client_not_initialized(self):
         """测试客户端未初始化场景"""
         app.state.LSP_CLIENT = None
-        response = self.client.post("/lsp/didChange", data={"file_path": "test.py", "content": "content"})
+        response = self.client.post(
+            "/lsp/didChange", data={"file_path": "test.py", "content": "content"}
+        )
         self.assertEqual(response.status_code, 501)
         self.assertIn("not initialized", response.json()["message"])
 
@@ -2362,7 +2591,9 @@ class TestLSPIntegration(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
             self.temp_files.append(tmp)
 
-        response = self.client.post("/lsp/didChange", data={"file_path": tmp.name, "content": "content"})
+        response = self.client.post(
+            "/lsp/didChange", data={"file_path": tmp.name, "content": "content"}
+        )
         self.assertEqual(response.status_code, 400)
         self.assertIn("textDocumentSync Full", response.json()["message"])
 
@@ -2371,8 +2602,12 @@ class TestLSPIntegration(unittest.TestCase):
 
     def test_server_error_handling(self):
         """测试服务端异常处理"""
-        with patch.object(GenericLSPClient, "did_change", side_effect=Exception("mock error")):
-            response = self.client.post("/lsp/didChange", data={"file_path": "test.py", "content": "content"})
+        with patch.object(
+            GenericLSPClient, "did_change", side_effect=Exception("mock error")
+        ):
+            response = self.client.post(
+                "/lsp/didChange", data={"file_path": "test.py", "content": "content"}
+            )
             self.assertEqual(response.status_code, 500)
             self.assertIn("Internal server error", response.json()["message"])
 
@@ -2381,7 +2616,9 @@ class TestSentenceSegments:
     client = TestClient(app)
 
     def test_should_extract_identifiers(self):
-        response = self.client.get("/extract_identifier?text=我们试试看ParserUtil Python TestCase")
+        response = self.client.get(
+            "/extract_identifier?text=我们试试看ParserUtil Python TestCase"
+        )
         assert sorted(response.json()) == ["ParserUtil", "Python", "TestCase"]
 
     def test_should_handle_empty_input(self):
@@ -2393,7 +2630,9 @@ class TestSentenceSegments:
         assert response.json() == []
 
     def test_should_ignore_spaces_and_symbols(self):
-        response = self.client.get("/extract_identifier?text=hello_world x123 _temp var-2")
+        response = self.client.get(
+            "/extract_identifier?text=hello_world x123 _temp var-2"
+        )
         assert response.json() == ["hello_world", "x123", "_temp"]
 
 
@@ -2482,7 +2721,9 @@ class TestLSPStart(unittest.TestCase):
 class TestSplitAndPatch(unittest.TestCase):
     def setUp(self):
         # 创建临时文件并写入测试代码
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False, encoding="utf8") as tmp_file:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".c", delete=False, encoding="utf8"
+        ) as tmp_file:
             self.code = """// Sample code
 #include <stdio.h>
 
@@ -2521,7 +2762,9 @@ int main() {
         # 使用split_source提取代码
         start_row, start_col = return_node.start_point
         end_row, end_col = return_node.end_point
-        before, selected, after = split_source(self.code, start_row, start_col, end_row, end_col)
+        before, selected, after = split_source(
+            self.code, start_row, start_col, end_row, end_col
+        )
         # 验证提取结果
         self.assertEqual(selected, "return 0;", "提取的return语句不匹配")
         self.assertEqual(
@@ -2538,7 +2781,9 @@ int main() {
 
         # 测试代码补丁功能
         parsed_tree = parse_code_file(self.tmp_file_path, self.lang_parser)
-        captures = self.query.matches(parsed_tree.root_node)  # trace dump_tree(tree.root_node)
+        captures = self.query.matches(
+            parsed_tree.root_node
+        )  # trace dump_tree(tree.root_node)
 
         _, capture = captures[0]
         return_node = capture["return"][0]
@@ -2559,7 +2804,9 @@ int main() {
 
         # 应用补丁
         file_map = code_patch.apply_patch()
-        self.assertIn(b"return 1;", list(file_map.values())[0], "修改后的代码中缺少更新内容")
+        self.assertIn(
+            b"return 1;", list(file_map.values())[0], "修改后的代码中缺少更新内容"
+        )
 
     def test_symbol_parsing(self):
         """测试符号解析功能"""
@@ -2577,7 +2824,10 @@ int main() {
         # 测试前缀搜索
         prefix_results = symbol_trie.search_prefix("main")
         self.assertGreater(len(prefix_results), 0, "前缀搜索未找到结果")
-        self.assertTrue(any(result["name"] == "main" for result in prefix_results), "未找到main函数符号")
+        self.assertTrue(
+            any(result["name"] == "main" for result in prefix_results),
+            "未找到main函数符号",
+        )
 
 
 if __name__ == "__main__":

@@ -25,7 +25,10 @@ def convert_to_utf8_bom(input_file, output_file=None):
         # For in-place conversion, use a temporary file
         if output_file is None:
             with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8-sig", dir=os.path.dirname(input_file), delete=False
+                mode="w",
+                encoding="utf-8-sig",
+                dir=os.path.dirname(input_file),
+                delete=False,
             ) as tmp_file:
                 tmp_path = tmp_file.name
                 tmp_file.write(text)
@@ -39,7 +42,9 @@ def convert_to_utf8_bom(input_file, output_file=None):
         else:
             with open(output_file, "w", encoding="utf-8-sig") as f:
                 f.write(text)
-            print(f"Successfully converted {input_file} to UTF-8 with BOM (output to {output_file})")
+            print(
+                f"Successfully converted {input_file} to UTF-8 with BOM (output to {output_file})"
+            )
 
         return True
     except (IOError, OSError, UnicodeError) as e:

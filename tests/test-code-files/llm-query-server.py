@@ -108,7 +108,9 @@ class MockLLMServer:
                     "choices": [
                         {
                             "delta": {
-                                "content": (str(word) + " ") if i < len(words) - 1 else str(word),
+                                "content": (str(word) + " ")
+                                if i < len(words) - 1
+                                else str(word),
                                 "role": "assistant",
                             },
                             "index": 0,

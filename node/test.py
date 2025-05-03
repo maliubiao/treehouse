@@ -22,7 +22,9 @@ def main():
     # 发送请求
     try:
         response = requests.post(
-            url="http://localhost:3000/html_reader", headers={"Content-Type": "application/json"}, json=payload
+            url="http://localhost:3000/html_reader",
+            headers={"Content-Type": "application/json"},
+            json=payload,
         )
         response.raise_for_status()  # 检查HTTP错误
     except requests.exceptions.RequestException as e:

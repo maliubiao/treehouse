@@ -20,7 +20,11 @@ class LSPCompleter(Completer):
             for cmd, meta in commands_meta.items():
                 if cmd.startswith(current_word):
                     display_meta = f"{meta['desc']} 参数: {' '.join(meta['params'])}"
-                    yield Completion(cmd, start_position=-len(current_word), display_meta=display_meta)
+                    yield Completion(
+                        cmd,
+                        start_position=-len(current_word),
+                        display_meta=display_meta,
+                    )
             return
 
         cmd = text[0].lower()
@@ -59,4 +63,6 @@ class LSPCompleter(Completer):
                 if entry_name.startswith(prefix):
                     start_pos = -len(prefix) if prefix else 0
                     display_type = "目录" if entry.is_dir() else "文件"
-                    yield Completion(entry_name, start_position=start_pos, display_meta=display_type)
+                    yield Completion(
+                        entry_name, start_position=start_pos, display_meta=display_type
+                    )

@@ -93,7 +93,8 @@ class BreakpointHandler(tornado.web.RequestHandler):
                 bp_id = int(result.split(" ")[1])
                 debugger.breakpoints[bp_id] = {
                     "file": filename,
-                    "line": line or debugger.get_breaks(filename, function_name)[0].lineno,
+                    "line": line
+                    or debugger.get_breaks(filename, function_name)[0].lineno,
                     "condition": condition,
                     "variables": variables,
                     "function": function_name,
@@ -117,7 +118,13 @@ class BreakpointHandler(tornado.web.RequestHandler):
     async def get(self):
         debugger = self.application.settings["debugger"]
         breakpoints = [
-            {"id": bp.number, "file": bp.file, "line": bp.line, "function": bp.funcname, "condition": bp.cond}
+            {
+                "id": bp.number,
+                "file": bp.file,
+                "line": bp.line,
+                "function": bp.funcname,
+                "condition": bp.cond,
+            }
             for bp in debugger.get_all_breaks()
             if bp
         ]
@@ -182,7 +189,11 @@ class FileAutocompleteHandler(tornado.web.RequestHandler):
 
                 is_dir = os.path.isdir(full_path)
                 items.append(
-                    {"name": entry, "is_dir": is_dir, "full_path": full_path.replace(base_dir, "", 1).lstrip("/")}
+                    {
+                        "name": entry,
+                        "is_dir": is_dir,
+                        "full_path": full_path.replace(base_dir, "", 1).lstrip("/"),
+                    }
                 )
 
             # 排序：目录在前，字母顺序
@@ -198,7 +209,12 @@ class DebuggerWebUI(Pdb):
     def __init__(self, port=5555, start_loop=True):
         super().__init__()
         self._web_state = {"port": port, "server": None, "ioloop": None}
-        self._debug_data = {"breakpoints": {}, "var_watch_list": set(), "watched_files": set(), "last_msg": ""}
+        self._debug_data = {
+            "breakpoints": {},
+            "var_watch_list": set(),
+            "watched_files": set(),
+            "last_msg": "",
+        }
         self.botframe = None
         self.curframe = sys._getframe()  # 初始化curframe属性
         self._setup_tornado(start_loop)
@@ -224,7 +240,9 @@ class DebuggerWebUI(Pdb):
         if start_loop:
             self._web_state["server"] = self.app.listen(self._web_state["port"])
             self._web_state["ioloop"] = tornado.ioloop.IOLoop.current()
-            threading.Thread(target=self._web_state["ioloop"].start, daemon=True).start()
+            threading.Thread(
+                target=self._web_state["ioloop"].start, daemon=True
+            ).start()
             logger.info("调试器Web UI已启动，端口为 %s", self._web_state["port"])
 
     def close(self):
@@ -263,7 +281,11 @@ class DebuggerWebUI(Pdb):
             var_data[var] = self._safe_serialize(evaluated)
 
         DebugWebSocket.broadcast(
-            {"type": "variables", "data": var_data, "location": f"{frame.f_code.co_filename}:{frame.f_lineno}"}
+            {
+                "type": "variables",
+                "data": var_data,
+                "location": f"{frame.f_code.co_filename}:{frame.f_lineno}",
+            }
         )
         logger.info("收集并发送的变量数据: %s", var_data)
 
@@ -301,7 +323,10 @@ class DebuggerWebUI(Pdb):
         for bp in breaks:
             if not bp:
                 continue
-            if os.path.abspath(bp.file) == frame.f_code.co_filename and bp.line == frame.f_lineno:
+            if (
+                os.path.abspath(bp.file) == frame.f_code.co_filename
+                and bp.line == frame.f_lineno
+            ):
                 target_bp = self._debug_data["breakpoints"][bp.number]
                 break
         logger.info("在 %s:%s 处触发断点", frame.f_code.co_filename, frame.f_lineno)
@@ -318,7 +343,11 @@ class DebuggerWebUI(Pdb):
         stack = []
         while frame:
             stack.append(
-                {"filename": frame.f_code.co_filename, "lineno": frame.f_lineno, "function": frame.f_code.co_name}
+                {
+                    "filename": frame.f_code.co_filename,
+                    "lineno": frame.f_lineno,
+                    "function": frame.f_code.co_name,
+                }
             )
             frame = frame.f_back
         return stack
@@ -332,7 +361,11 @@ class DebuggerWebUI(Pdb):
             except (TypeError, ValueError) as e:
                 logger.error("序列化值失败: %s，使用repr处理", e)
                 serialized_value = repr(obj["value"])
-            return {"value": serialized_value, "type": original_type, "complex": complex_flag}
+            return {
+                "value": serialized_value,
+                "type": original_type,
+                "complex": complex_flag,
+            }
         except (KeyError, TypeError) as e:
             logger.error("序列化对象时出错: %s", e)
             return {"value": f"序列化错误: {str(e)}", "type": "error", "complex": False}
