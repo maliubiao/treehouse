@@ -18,7 +18,7 @@ import time
 import traceback
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import yaml
 from colorama import Fore, Style, just_fix_windows_console
@@ -76,6 +76,7 @@ class TraceConfig:
         exclude_functions: List[str] = None,
         enable_var_trace: bool = False,
         ignore_self: bool = True,
+        ignore_system_paths: bool = True,
     ):
         """
         初始化跟踪配置
@@ -87,19 +88,57 @@ class TraceConfig:
             callback: 变量捕获时的回调函数
             exclude_functions: 要排除的函数名列表
             enable_var_trace: 是否启用变量操作跟踪
+            ignore_system_paths: 是否忽略系统路径和第三方包路径
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
         self.capture_vars = capture_vars or []
         self.callback = callback
         self.exclude_functions = exclude_functions or []
-        self.enable_var_trace = enable_var_trace  # 新增属性
-        self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
-        if report_name:
-            self.report_name = report_name
-        else:
-            self.report_name = "tracer_report.html"
+        self.enable_var_trace = enable_var_trace
         self.ignore_self = ignore_self
+        self.ignore_system_paths = ignore_system_paths
+        self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
+        self._system_paths = self._get_system_paths() if ignore_system_paths else set()
+        self.report_name = report_name if report_name else "tracer_report.html"
+
+    @staticmethod
+    def _get_system_paths() -> Set[str]:
+        """获取系统路径和第三方包路径"""
+        system_paths = set()
+        for path in sys.path:
+            try:
+                resolved = str(Path(path).resolve())
+                if any(
+                    part.startswith(("site-packages", "dist-packages", "python")) or "lib/python" in resolved.lower()
+                    for part in Path(resolved).parts
+                ):
+                    system_paths.add(resolved)
+            except (ValueError, OSError):
+                continue
+        return system_paths
+
+    def match_filename(self, filename: str) -> bool:
+        """检查文件路径是否匹配目标文件模式"""
+        if self.ignore_self and filename == __file__:
+            return False
+        # 过滤<frozen posixpath>这类特殊文件名
+        if filename.endswith(">"):
+            return False
+
+        if self.ignore_system_paths:
+            try:
+                resolved = str(Path(filename).resolve())
+                if any(resolved.startswith(sys_path) for sys_path in self._system_paths):
+                    return False
+            except (ValueError, OSError):
+                pass
+
+        if not self.target_files:
+            return True
+
+        filename_posix = Path(filename).as_posix()
+        return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
 
     @classmethod
     def from_yaml(cls, config_path: Union[str, Path]) -> "TraceConfig":
@@ -135,6 +174,7 @@ class TraceConfig:
             capture_vars=config_data.get("capture_vars", []),
             callback=config_data.get("callback", None),
             exclude_functions=config_data.get("exclude_functions", []),
+            ignore_system_paths=config_data.get("ignore_system_paths", True),
         )
 
     @staticmethod
@@ -217,15 +257,6 @@ class TraceConfig:
                 is_valid = False
         return is_valid
 
-    def match_filename(self, filename: str) -> bool:
-        """检查文件路径是否匹配目标文件模式"""
-        if self.ignore_self and filename == __file__:
-            return False
-        if not self.target_files:
-            return True
-        filename_posix = Path(filename).as_posix()
-        return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
-
     def is_excluded_function(self, func_name: str) -> bool:
         """检查函数名是否在排除列表中"""
         return func_name in self.exclude_functions
@@ -271,7 +302,6 @@ def _truncate_object(value, keep_elements):
 def truncate_repr_value(value, keep_elements=10):
     """智能截断保留关键类型信息"""
     preview = "..."
-
     try:
         if inspect.isfunction(value) or inspect.ismodule(value) or inspect.isclass(value):
             preview = f"{type(value).__name__}(...)"
@@ -533,7 +563,8 @@ class SysMonitoringTraceDispatcher:
         """Handle EXCEPTION_HANDLED event"""
         frame = sys._getframe(1)  # Get the frame where exception was handled
         if frame in self.active_frames:
-            self._logic.exception_chain.pop()
+            if len(self._logic.exception_chain) > 0:
+                self._logic.exception_chain.pop()
             self._logic.stack_depth += 1
         return None
 
@@ -588,6 +619,9 @@ class CallTreeHtmlRender:
         self._stack_variables = {}
         self._comments_data = defaultdict(lambda: defaultdict(list))
         self.current_message_id = 0
+        self._size_limit = 10 * 1024 * 1024  # 10MB大小限制
+        self._current_size = 0
+        self._size_exceeded = False
         self._html_template = """<!DOCTYPE html>
 <html>
 <head>
@@ -694,6 +728,7 @@ class CallTreeHtmlRender:
 
     def _message_to_html(self, message, msg_type, log_data):
         """将消息转换为HTML片段"""
+
         stripped_message = message.lstrip()
         indent = len(message) - len(stripped_message)
         escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
@@ -745,7 +780,13 @@ class CallTreeHtmlRender:
                     "</div>",
                 ]
             )
-        return "\n".join(html_parts) + "\n"
+        html_content = "\n".join(html_parts) + "\n"
+        self._current_size += len(html_content)
+        if self._current_size > self._size_limit and not self._size_exceeded:
+            self._size_exceeded = True
+            size_limit_mb = self._size_limit / (1024 * 1024)
+            return f'<div class="error">⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略</div>\n'
+        return html_content
 
     def _build_comment_html(self, comment_id, comment):
         """构建评论HTML片段"""
@@ -776,15 +817,22 @@ class CallTreeHtmlRender:
 
     def add_message(self, message, msg_type, log_data=None):
         """添加消息到消息列表"""
+        if self._size_exceeded:
+            return
         self._messages.append((message, msg_type, log_data))
 
     def add_stack_variable_create(self, idx, opcode, var_name, value):
+        if self._size_exceeded:
+            return
         if idx not in self._stack_variables:
             self._stack_variables[idx] = []
         self._stack_variables[idx].append((opcode, var_name, value))
 
     def add_raw_message(self, log_data, color_type):
         """添加原始日志数据并处理"""
+        if self._size_exceeded:
+            return
+
         if isinstance(log_data, str):
             message = log_data
         else:
@@ -807,6 +855,8 @@ class CallTreeHtmlRender:
         error_count = 0
 
         for idx, (message, msg_type, log_data) in enumerate(self._messages):
+            if self._size_exceeded:
+                continue
             buffer.append(self._message_to_html(message, msg_type, log_data))
             if msg_type == "error":
                 error_count += 1
@@ -915,7 +965,7 @@ class TraceLogExtractor:
                     target_frame_id = frame_id
                     start_position = position
                     continue
-                if target_frame_id is not None and target_frame_id == frame_id and type_tag == "return":
+                if target_frame_id is not None and target_frame_id == frame_id and type_tag in ("return", "error"):
                     pair.append((start_position, position))
                     start_position = None
                     target_frame_id = None
@@ -1026,13 +1076,13 @@ class TraceLogic:
                 # filename: lineno frame id  call -> return  start end
                 position = self._output._log_file.tell()
                 self._output._log_file_index.write(
-                    f"#{message}\n{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
+                    f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
                 )
             self._output._log_file.write(f"{message}\n")
-            if log_type == "return":
+            if log_type in ("return", "error"):
                 position = self._output._log_file.tell()
                 self._output._log_file_index.write(
-                    f"#{message}\n{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
+                    f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
                 )
 
     def _html_output(self, log_data, color_type):
@@ -1234,8 +1284,6 @@ class TraceLogic:
         formatted_filename = self._get_formatted_filename(filename)
         frame_id = self._get_frame_id(frame)
         self._message_id += 1
-
-        # 新增变量跟踪逻辑
         tracked_vars = {}
         if self.config.enable_var_trace:
             var_names = self._get_line_vars(frame)
@@ -1409,6 +1457,10 @@ class TraceLogic:
         self._running_flag = False
         if self._timer_thread:
             self._timer_thread.join(timeout=1)
+        if self.exception_chain:
+            for i in self.exception_chain:
+                self._log_queue.put(i)
+            self.exception_chain = []
         self._flush_buffer()
         while not self._log_queue.empty():
             self._log_queue.get_nowait()
