@@ -119,7 +119,7 @@ class TraceConfig:
         report_name: str = _DEFAULT_REPORT_NAME,
         exclude_functions: List[str] = None,
         enable_var_trace: bool = False,
-        ignore_self: bool = False,
+        ignore_self: bool = True,
         ignore_system_paths: bool = True,
     ):
         """
@@ -1010,8 +1010,8 @@ class TraceLogExtractor:
         target_frame_id = None
         pair = []
         start_position = None
-        reference = []
-
+        references_group = []
+        references = []
         with open(self.index_file, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("#"):
@@ -1020,10 +1020,13 @@ class TraceLogExtractor:
                 if not parsed:
                     continue
                 type_tag, file, line_no, frame_id, position, func = parsed
-
                 # 收集调用链参考信息
-                if target_frame_id is not None and type_tag == TraceTypes.CALL:
-                    reference.append({"filename": file, "lineno": line_no, "func": func})
+                if target_frame_id is not None and type_tag in (
+                    TraceTypes.CALL,
+                    TraceTypes.RETURN,
+                    TraceTypes.EXCEPTION,
+                ):
+                    references.append({"filename": file, "lineno": line_no, "func": func, "type": type_tag})
 
                 if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
                     target_frame_id = frame_id
@@ -1036,6 +1039,9 @@ class TraceLogExtractor:
                     and type_tag in (TraceTypes.RETURN, TraceTypes.EXCEPTION)
                 ):
                     pair.append((start_position, position))
+                    if references:
+                        references_group.append(references)
+                    references = []
                     start_position = None
                     target_frame_id = None
 
@@ -1051,13 +1057,9 @@ class TraceLogExtractor:
                     line = f.readline()
                     if line.startswith("#"):
                         continue
-                    try:
-                        log_data = json.loads(line)
-                        log_lines.append(log_data)
-                    except json.JSONDecodeError:
-                        continue
-                logs.append(log_lines)
-        return logs, reference
+                    log_lines.append(line)
+                logs.append("".join(log_lines))
+        return logs, references_group
 
 
 class TraceLogic:

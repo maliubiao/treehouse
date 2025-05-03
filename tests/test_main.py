@@ -40,72 +40,74 @@ class JSONTestResult(unittest.TextTestResult):
     def __init__(self, stream, descriptions, verbosity):
         super().__init__(stream, descriptions, verbosity)
         self.results = defaultdict(list)
+        self.all_issues = []
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
-        test_id = test.id()
-        tb = self._exc_info_to_string(err, test)
-        file_path, line, func_name = self._parse_test_id(test_id, tb)
-        error_type = type(err[1]).__name__
-        self.results["failures"].append(
-            {
-                "test": str(test),
-                "error_type": error_type,
-                "error_message": str(err[1]),
-                "traceback": tb,
-                "file_path": file_path,
-                "line": line,
-                "function": func_name,
-            }
-        )
+        self._add_error_details(test, err, "failures")
+        self.all_issues.append(("failure", test, err))
 
     def addError(self, test, err):
         super().addError(test, err)
+        self._add_error_details(test, err, "errors")
+        self.all_issues.append(("error", test, err))
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        self.all_issues.append(("skip", test, reason))
+
+    def addExpectedFailure(self, test, err):
+        super().addExpectedFailure(test, err)
+        self.all_issues.append(("expected_failure", test, err))
+
+    def addUnexpectedSuccess(self, test):
+        super().addUnexpectedSuccess(test)
+        self.all_issues.append(("unexpected_success", test, None))
+
+    def _add_error_details(self, test, err, category):
         test_id = test.id()
         tb = self._exc_info_to_string(err, test)
+        print("error", test_id, tb)
         try:
             file_path, line, func_name = self._parse_test_id(test_id, tb)
         except FileNotFoundError:
             return
         error_type = type(err[1]).__name__ if err[1] else "UnknownError"
-        self.results["errors"].append(
-            {
-                "test": str(test),
-                "error_type": error_type,
-                "error_message": str(err[1]) if err[1] else "Unknown error occurred",
-                "traceback": tb,
-                "file_path": file_path,
-                "line": line,
-                "function": func_name,
-            }
-        )
+        error_entry = {
+            "test": str(test),
+            "error_type": error_type,
+            "error_message": str(err[1]) if err[1] else "Unknown error occurred",
+            "traceback": tb,
+            "file_path": file_path,
+            "line": line,
+            "function": func_name,
+        }
+        self.results[category].append(error_entry)
+        if category == "failures":
+            self.failures.append((test, self._exc_info_to_string(err, test)))
+        elif category == "errors":
+            self.errors.append((test, self._exc_info_to_string(err, test)))
 
     def _parse_test_id(self, test_id, tb=None):
         parts = test_id.split(".")
         base_module = parts[0]
 
-        # Handle test modules in tests directory
         if base_module.startswith("test_"):
             module_path = os.path.join("tests", f"{base_module}.py")
         else:
             module_path = base_module.replace(".", "/") + ".py"
-
-        # Search in project directory first
-        file_path = None
 
         project_root = os.getcwd()
         full_path = os.path.join(project_root, module_path)
         if os.path.exists(full_path):
             file_path = full_path
         else:
-            # Fallback to sys.path search
             for path in sys.path:
                 full_path = os.path.join(path, module_path)
                 if os.path.exists(full_path):
                     file_path = full_path
                     break
 
-        # Extract line number using regex
         line = None
         if tb:
             for entry in tb.splitlines():
@@ -123,58 +125,81 @@ class JSONTestResult(unittest.TextTestResult):
             "success": self.testsRun - len(self.failures) - len(self.errors),
             "failures": len(self.failures),
             "errors": len(self.errors),
+            "skipped": len(self.skipped),
+            "expected_failures": len(self.expectedFailures),
+            "unexpected_successes": len(self.unexpectedSuccesses),
             "results": dict(self.results),
+            "all_issues": [
+                {"type": issue[0], "test": str(issue[1]), "details": str(issue[2]) if issue[2] else None}
+                for issue in self.all_issues
+            ],
         }
 
     def get_error_details(self):
         error_details = []
-        for error in self.results.get("errors", []):
-            error_details.append(
-                {
-                    "file_path": error["file_path"],
-                    "line": error["line"],
-                    "function": error["function"],
-                    "error_type": error["error_type"],
-                    "error_message": error["error_message"],
-                }
-            )
+        for category in ["errors", "failures"]:
+            for error in self.results.get(category, []):
+                error_details.append(
+                    {
+                        "file_path": error["file_path"],
+                        "line": error["line"],
+                        "function": error["function"],
+                        "error_type": error["error_type"],
+                        "error_message": error["error_message"],
+                    }
+                )
         return error_details
+
+
+def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=False):
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+
+    try:
+        if test_name:
+            suite.addTests(loader.loadTestsFromName(test_name))
+        else:
+            discovered = loader.discover(start_dir="tests", pattern="test*.py")
+            suite.addTests(discovered)
+
+        if json_output:
+            runner = unittest.TextTestRunner(verbosity=verbosity, resultclass=JSONTestResult)
+            result = runner.run(suite)
+            if extract_errors:
+                return result.get_error_details()
+            return result.get_json_results()
+        else:
+            runner = unittest.TextTestRunner(verbosity=verbosity)
+            result = runner.run(suite)
+            return result
+
+    except (ImportError, AttributeError) as e:
+        sys.stderr.write(f"\nERROR: {str(e)}\n")
+        sys.stderr.write("Make sure test modules follow naming convention 'test_*.py'\n")
+        raise
+    except Exception as e:
+        sys.stderr.write(f"\nCRITICAL ERROR: {str(e)}\n")
+        raise
 
 
 def main():
     add_gpt_path_to_syspath()
     args = parse_args()
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
 
     try:
-        if args.test_name:
-            suite.addTests(loader.loadTestsFromName(args.test_name))
-        else:
-            # Auto-discover tests in 'tests' directory
-            discovered = loader.discover(start_dir="tests", pattern="test*.py")
-            suite.addTests(discovered)
+        result = run_tests(
+            test_name=args.test_name,
+            verbosity=args.verbosity,
+            json_output=args.json,
+            extract_errors=args.extract_errors,
+        )
 
         if args.json:
-            runner = unittest.TextTestRunner(verbosity=args.verbosity, resultclass=JSONTestResult)
-            result = runner.run(suite)
             print("capture error_details:")
-            if args.extract_errors:
-                print(json.dumps(result.get_error_details(), indent=2))
-            else:
-                print(json.dumps(result.get_json_results(), indent=2))
-        else:
-            runner = unittest.TextTestRunner(verbosity=args.verbosity)
-            result = runner.run(suite)
+            print(json.dumps(result, indent=2))
 
-        sys.exit(not result.wasSuccessful())
-
-    except (ImportError, AttributeError) as e:
-        sys.stderr.write(f"\nERROR: {str(e)}\n")
-        sys.stderr.write("Make sure test modules follow naming convention 'test_*.py'\n")
-        sys.exit(1)
-    except Exception as e:
-        sys.stderr.write(f"\nCRITICAL ERROR: {str(e)}\n")
+        sys.exit(not result.wasSuccessful() if isinstance(result, unittest.TestResult) else 0)
+    except Exception:
         sys.exit(2)
 
 

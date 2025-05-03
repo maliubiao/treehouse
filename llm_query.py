@@ -2630,6 +2630,8 @@ class GPTContextProcessor:
                     nodes.append(SearchSymbolNode(symbols=[item[2:-2]]))
                 elif item.startswith("symbol_"):
                     nodes.append(CmdNode(command="symbol", args=[item[len("symbol_") :]]))
+                elif os.path.exists(item) or item in self.cmd_handlers or is_prompt_file(item):
+                    nodes.append(CmdNode(command=item))
             return nodes
         except Exception as e:
             handle_processing_error(config_path, e)
