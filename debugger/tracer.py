@@ -1127,30 +1127,28 @@ class TraceLogic:
         colored_msg = color_wrap(message, color_type)
         print(colored_msg)
 
+    def write_log_index(self, log_type, log_data, position):
+        """写入日志索引"""
+        index_entry = {
+            "type": log_type,
+            "filename": log_data["data"]["original_filename"],
+            "lineno": log_data["data"].get("lineno", 0),
+            "frame_id": log_data["data"]["frame_id"],
+            "position": position,
+            "func": log_data["data"].get("func", ""),
+        }
+        self._output._log_file_index.write(json.dumps(index_entry) + "\n")
+
     def _file_output(self, log_data, log_type):
         """文件输出处理"""
         if self._output._log_file:
-            timestamp = datetime.datetime.now().isoformat()
-            log_entry = {
-                "type": log_type,
-                "timestamp": timestamp,
-                "data": log_data["data"],
-                "message": self._format_log_message(log_data),
-            }
-
+            msg = self._format_log_message(log_data)
             position = self._output._log_file.tell()
-            json_line = json.dumps(log_entry) + "\n"
-            self._output._log_file.write(json_line)
-
-            if log_type in (TraceTypes.CALL, TraceTypes.RETURN, TraceTypes.EXCEPTION):
-                index_entry = {
-                    "type": log_type,
-                    "filename": log_data["data"]["original_filename"],
-                    "lineno": log_data["data"].get("lineno", 0),
-                    "frame_id": log_data["data"]["frame_id"],
-                    "position": position,
-                }
-                self._output._log_file_index.write(json.dumps(index_entry) + "\n")
+            if log_type == TraceTypes.CALL:
+                self.write_log_index(log_type, log_data, position)
+            self._output._log_file.write(msg + "\n")
+            if log_type in (TraceTypes.RETURN, TraceTypes.EXCEPTION):
+                self.write_log_index(log_type, log_data, position)
 
     def _html_output(self, log_data, color_type):
         """HTML输出处理"""
@@ -1303,6 +1301,7 @@ class TraceLogic:
                         "lineno": frame.f_lineno,
                         "return_value": return_str,
                         "frame_id": frame_id,
+                        "func": frame.f_code.co_name,
                         "original_filename": frame.f_code.co_filename,
                     },
                 },
@@ -1448,6 +1447,7 @@ class TraceLogic:
                     "exc_type": exc_type.__name__,
                     "exc_value": str(exc_value),
                     "frame_id": frame_id,
+                    "func": frame.f_code.co_name,
                     "original_filename": frame.f_code.co_filename,
                 },
             },
