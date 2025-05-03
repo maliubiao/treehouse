@@ -45,12 +45,55 @@ if TYPE_CHECKING:
         def free_tool_id(self, tool_id: int) -> None: ...
 
 
+# Constants
 _MAX_VALUE_LENGTH = 512
 _INDENT = "  "
 _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_NAME = _LOG_DIR / "debug.log"
 _MAX_CALL_DEPTH = 20
+_DEFAULT_REPORT_NAME = "trace_report.html"
+
+
+# Trace types
+class TraceTypes:
+    """Trace event and message type constants"""
+
+    # Event types
+    CALL = "call"
+    RETURN = "return"
+    LINE = "line"
+    EXCEPTION = "exception"
+    MODULE = "module"
+
+    # Message types
+    ERROR = "error"
+    TRACE = "trace"
+    VAR = "var"
+
+    # Color types
+    COLOR_CALL = "call"
+    COLOR_RETURN = "return"
+    COLOR_VAR = "var"
+    COLOR_LINE = "line"
+    COLOR_ERROR = "error"
+    COLOR_TRACE = "trace"
+    COLOR_RESET = "reset"
+
+    # Log prefixes
+    PREFIX_CALL = "CALL"
+    PREFIX_RETURN = "RETURN"
+    PREFIX_MODULE = "MODULE"
+    PREFIX_EXCEPTION = "EXCEPTION"
+
+    # HTML classes
+    HTML_CALL = "call"
+    HTML_RETURN = "return"
+    HTML_ERROR = "error"
+    HTML_LINE = "line"
+    HTML_TRACE = "trace"
+    HTML_VAR = "var"
+
 
 # 该字典已被colorama替代
 
@@ -72,7 +115,7 @@ class TraceConfig:
         line_ranges: Dict[str, List[Tuple[int, int]]] = None,
         capture_vars: List[str] = None,
         callback: Optional[callable] = None,
-        report_name: str = "trace_report.html",
+        report_name: str = _DEFAULT_REPORT_NAME,
         exclude_functions: List[str] = None,
         enable_var_trace: bool = False,
         ignore_self: bool = True,
@@ -100,7 +143,7 @@ class TraceConfig:
         self.ignore_system_paths = ignore_system_paths
         self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
         self._system_paths = self._get_system_paths() if ignore_system_paths else set()
-        self.report_name = report_name if report_name else "tracer_report.html"
+        self.report_name = report_name if report_name else _DEFAULT_REPORT_NAME
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -324,13 +367,13 @@ def truncate_repr_value(value, keep_elements=10):
 def color_wrap(text, color_type):
     """包装颜色但不影响日志文件"""
     color_mapping = {
-        "call": Fore.GREEN,
-        "return": Fore.BLUE,
-        "var": Fore.YELLOW,
-        "line": Style.RESET_ALL,
-        "error": Fore.RED,
-        "trace": Fore.MAGENTA,
-        "reset": Style.RESET_ALL,
+        TraceTypes.COLOR_CALL: Fore.GREEN,
+        TraceTypes.COLOR_RETURN: Fore.BLUE,
+        TraceTypes.COLOR_VAR: Fore.YELLOW,
+        TraceTypes.COLOR_LINE: Style.RESET_ALL,
+        TraceTypes.COLOR_ERROR: Fore.RED,
+        TraceTypes.COLOR_TRACE: Fore.MAGENTA,
+        TraceTypes.COLOR_RESET: Style.RESET_ALL,
     }
     return f"{color_mapping.get(color_type, '')}{text}{Style.RESET_ALL}"
 
@@ -372,13 +415,13 @@ class TraceDispatcher:
 
     def trace_dispatch(self, frame, event, arg):
         """事件分发器"""
-        if event == "call":
+        if event == TraceTypes.CALL:
             return self._handle_call_event(frame)
-        if event == "return":
+        if event == TraceTypes.RETURN:
             return self._handle_return_event(frame, arg)
-        if event == "line":
+        if event == TraceTypes.LINE:
             return self._handle_line_event(frame)
-        if event == "exception":
+        if event == TraceTypes.EXCEPTION:
             return self._handle_exception_event(frame, arg)
         return None
 
@@ -430,7 +473,7 @@ class TraceDispatcher:
         sys.settrace(None)
         self._logic.stop()
         logging.info("⏹ DEBUG SESSION ENDED\n")
-        print(color_wrap(f"\n⏹ 调试会话结束", "return"))
+        print(color_wrap(f"\n⏹ 调试会话结束", TraceTypes.COLOR_RETURN))
 
 
 class SysMonitoringTraceDispatcher:
@@ -604,7 +647,7 @@ class SysMonitoringTraceDispatcher:
         self._unregister_tool()
         self._logic.stop()
         logging.info("⏹ DEBUG SESSION ENDED\n")
-        print(color_wrap(f"\n⏹ 调试会话结束", "return"))
+        print(color_wrap(f"\n⏹ 调试会话结束", TraceTypes.COLOR_RETURN))
 
 
 class CallTreeHtmlRender:
@@ -745,29 +788,29 @@ class CallTreeHtmlRender:
             comment_html = self._build_comment_html(comment_id, comment) if comment else ""
         view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
         html_parts = []
-        if msg_type == "call":
+        if msg_type == TraceTypes.CALL:
             html_parts.extend(
                 [
-                    f'<div class="foldable call" style="padding-left:{indent}px">',
+                    f'<div class="foldable {TraceTypes.HTML_CALL}" style="padding-left:{indent}px">',
                     f"    {escaped_content}{view_source_html}{comment_html}",
                     "</div>",
                     '<div class="call-group">',
                 ]
             )
-        elif msg_type == "return":
+        elif msg_type == TraceTypes.RETURN:
             html_parts.extend(
                 [
                     "</div>",
-                    f'<div class="return" style="padding-left:{indent}px">',
+                    f'<div class="{TraceTypes.HTML_RETURN}" style="padding-left:{indent}px">',
                     f"    {escaped_content}{comment_html}",
                     "</div>",
                 ]
             )
-        elif msg_type in ("exception", "error"):
+        elif msg_type in (TraceTypes.EXCEPTION, TraceTypes.ERROR):
             html_parts.extend(
                 [
                     "</div>",
-                    f'<div class="error" style="padding-left:{indent}px">',
+                    f'<div class="{TraceTypes.HTML_ERROR}" style="padding-left:{indent}px">',
                     f"    {escaped_content}{view_source_html}{comment_html}",
                     "</div>",
                 ]
@@ -785,7 +828,7 @@ class CallTreeHtmlRender:
         if self._current_size > self._size_limit and not self._size_exceeded:
             self._size_exceeded = True
             size_limit_mb = self._size_limit / (1024 * 1024)
-            return f'<div class="error">⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略</div>\n'
+            return f'<div class="{TraceTypes.HTML_ERROR}">⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略</div>\n'
         return html_content
 
     def _build_comment_html(self, comment_id, comment):
@@ -839,7 +882,7 @@ class CallTreeHtmlRender:
             # 预缓存格式化结果避免重复格式化
             message = log_data["template"].format(**log_data["data"])
 
-        if color_type == "line" and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
+        if color_type == TraceTypes.COLOR_LINE and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
             data = log_data["data"]
             original_filename = data.get("original_filename")
             lineno = data["lineno"]
@@ -858,7 +901,7 @@ class CallTreeHtmlRender:
             if self._size_exceeded:
                 continue
             buffer.append(self._message_to_html(message, msg_type, log_data))
-            if msg_type in ("error", "exception"):
+            if msg_type in (TraceTypes.ERROR, TraceTypes.EXCEPTION):
                 error_count += 1
 
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -930,7 +973,7 @@ class TraceLogExtractor:
             (type, filename, lineno, frame_id, position) 元组
         """
         parts = line.strip().split("\t")
-        if len(parts) != 4 or parts[0] not in ("call", "return"):
+        if len(parts) != 4 or parts[0] not in (TraceTypes.CALL, TraceTypes.RETURN):
             return None
         file_lineno = parts[1].split(":")
         if len(file_lineno) != 2:
@@ -961,11 +1004,15 @@ class TraceLogExtractor:
                 if not parsed:
                     continue
                 type_tag, file, line_no, frame_id, position = parsed
-                if file == filename and line_no == lineno and type_tag == "call":
+                if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
                     target_frame_id = frame_id
                     start_position = position
                     continue
-                if target_frame_id is not None and target_frame_id == frame_id and type_tag in ("return", "exception"):
+                if (
+                    target_frame_id is not None
+                    and target_frame_id == frame_id
+                    and type_tag in (TraceTypes.RETURN, TraceTypes.EXCEPTION)
+                ):
                     pair.append((start_position, position))
                     start_position = None
                     target_frame_id = None
@@ -1073,14 +1120,14 @@ class TraceLogic:
             message = self._format_log_message(log_data)
             trace_data = log_data["data"]
 
-            if log_type == "call":
+            if log_type == TraceTypes.CALL:
                 # filename: lineno frame id  call -> return  start end
                 position = self._output._log_file.tell()
                 self._output._log_file_index.write(
                     f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
                 )
             self._output._log_file.write(f"{message}\n")
-            if log_type in ("return", "exception"):
+            if log_type in (TraceTypes.RETURN, TraceTypes.EXCEPTION):
                 position = self._output._log_file.tell()
                 self._output._log_file_index.write(
                     f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
@@ -1098,7 +1145,7 @@ class TraceLogic:
 
     def _add_to_buffer(self, log_data, color_type):
         """将日志数据添加到队列并立即处理"""
-        if color_type != "exception":
+        if color_type != TraceTypes.EXCEPTION:
             for i in self.exception_chain:
                 self._log_queue.put(i)
             self.exception_chain = []
@@ -1183,15 +1230,17 @@ class TraceLogic:
         try:
             args_info = []
             if frame.f_code.co_name == "<module>":
-                log_prefix = "MODULE"
+                log_prefix = TraceTypes.PREFIX_MODULE
             else:
                 try:
                     args, _, _, values = inspect.getargvalues(frame)
                     args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args]
                 except (AttributeError, TypeError) as e:
-                    self._add_to_buffer({"template": "参数解析失败: {error}", "data": {"error": str(e)}}, "error")
+                    self._add_to_buffer(
+                        {"template": "参数解析失败: {error}", "data": {"error": str(e)}}, TraceTypes.ERROR
+                    )
                     args_info.append("<参数解析错误>")
-                log_prefix = "CALL"
+                log_prefix = TraceTypes.PREFIX_CALL
 
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
@@ -1210,13 +1259,13 @@ class TraceLogic:
                         "frame_id": frame_id,
                     },
                 },
-                "call",
+                TraceTypes.COLOR_CALL,
             )
             self.stack_depth += 1
         except (AttributeError, TypeError) as e:
             traceback.print_exc()
             logging.error("Call logging error: %s", str(e))
-            self._add_to_buffer({"template": "⚠ 记录调用时出错: {error}", "data": {"error": str(e)}}, "error")
+            self._add_to_buffer({"template": "⚠ 记录调用时出错: {error}", "data": {"error": str(e)}}, TraceTypes.ERROR)
 
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
@@ -1238,7 +1287,7 @@ class TraceLogic:
                         "original_filename": frame.f_code.co_filename,
                     },
                 },
-                "return",
+                TraceTypes.COLOR_RETURN,
             )
             self.stack_depth = max(0, self.stack_depth - 1)
         except KeyError:
@@ -1314,7 +1363,7 @@ class TraceLogic:
             log_data["template"] += " # Debug: {vars}"
             log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in tracked_vars.items()])
 
-        self._add_to_buffer(log_data, "line")
+        self._add_to_buffer(log_data, TraceTypes.COLOR_LINE)
 
         self._process_trace_expression(frame, line, filename, lineno)
         if self.config.capture_vars:
@@ -1346,7 +1395,7 @@ class TraceLogic:
                     "frame_id": self._get_frame_id(frame),
                 },
             },
-            "trace",
+            TraceTypes.COLOR_TRACE,
         )
 
     def _process_captured_vars(self, frame):
@@ -1362,7 +1411,7 @@ class TraceLogic:
                         "frame_id": self._get_frame_id(frame),
                     },
                 },
-                "var",
+                TraceTypes.COLOR_VAR,
             )
 
     def handle_exception(self, exc_type, exc_value, frame):
@@ -1383,7 +1432,7 @@ class TraceLogic:
                     "original_filename": frame.f_code.co_filename,
                 },
             },
-            "exception",
+            TraceTypes.EXCEPTION,
         )
         self.exception_chain.append(msg)
         self.stack_depth -= 1
@@ -1408,7 +1457,7 @@ class TraceLogic:
                 except (NameError, SyntaxError, TypeError, AttributeError) as e:
                     self._add_to_buffer(
                         {"template": "表达式求值失败: {expr}, 错误: {error}", "data": {"expr": expr, "error": str(e)}},
-                        "error",
+                        TraceTypes.ERROR,
                     )
                     results[expr] = f"<求值错误: {str(e)}>"
 
@@ -1461,7 +1510,7 @@ def get_tracer(module_path, config: TraceConfig):
             return trace_dispatcher(str(module_path), TraceLogic(config), config)
         except Exception as e:
             logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
-            print(color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", "error"))
+            print(color_wrap(f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}", TraceTypes.COLOR_ERROR))
             raise
     return None
 
@@ -1504,7 +1553,7 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
         return tracer
     except Exception as e:
         logging.error("💥 DEBUGGER INIT ERROR: %s\n%s", str(e), traceback.format_exc())
-        print(color_wrap(f"❌ 调试器初始化错误: {str(e)}\n{traceback.format_exc()}", "error"))
+        print(color_wrap(f"❌ 调试器初始化错误: {str(e)}\n{traceback.format_exc()}", TraceTypes.COLOR_ERROR))
         raise
 
 
@@ -1531,7 +1580,7 @@ def trace(target_files: List[str] = None, **okwargs):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            print(color_wrap("[start tracer]", "call"))
+            print(color_wrap("[start tracer]", TraceTypes.COLOR_CALL))
             config = TraceConfig(
                 report_name=f"{func.__name__}_{Counter.increse()}.html",
                 **okwargs,
@@ -1542,7 +1591,7 @@ def trace(target_files: List[str] = None, **okwargs):
                 return result
             finally:
                 if t:
-                    print(color_wrap("[stop tracer]", "return"))
+                    print(color_wrap("[stop tracer]", TraceTypes.COLOR_RETURN))
                     t.stop()
 
         return wrapper
