@@ -1,5 +1,4 @@
 # pylint: skip-file
-import inspect
 
 f = 1
 

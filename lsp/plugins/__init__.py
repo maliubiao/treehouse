@@ -1,7 +1,6 @@
 # 包初始化文件
 import os
 from typing import Callable, Dict, List, Optional, Type
-from urllib.parse import unquote, urlparse
 
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -59,10 +58,7 @@ class PluginManager:
     def get_commands_meta(self) -> Dict[str, dict]:
         """获取所有命令元数据"""
         self._ensure_plugins_loaded()
-        return {
-            cmd: {"params": cls.command_params, "desc": cls.description}
-            for cmd, cls in self._command_map.items()
-        }
+        return {cmd: {"params": cls.command_params, "desc": cls.description} for cmd, cls in self._command_map.items()}
 
     def get_command_handler(self, command: str) -> Optional[Callable]:
         """获取命令处理函数"""
@@ -86,9 +82,7 @@ def parse_position_args(console, parts):
         return None, None, None
 
 
-def format_response_panel(
-    response, title, border_style="blue", syntax="json", line_numbers=False
-):
+def format_response_panel(response, title, border_style="blue", syntax="json", line_numbers=False):
     """格式化响应面板"""
     return Panel(
         Syntax(

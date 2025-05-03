@@ -11,10 +11,7 @@
 import os
 import sys
 import traceback
-from typing import Dict, List, Tuple
 
-from colorama import Fore
-from colorama import Style as ColorStyle
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
@@ -174,9 +171,7 @@ class ChatbotUI:
         table.add_column("示例", style="dim #4CAF50")
 
         for cmd, desc, example in self._COMMAND_LIST:
-            table.add_row(
-                Text(cmd, style="#4CAF50 bold"), desc, Text(example, style="#81C784")
-            )
+            table.add_row(Text(cmd, style="#4CAF50 bold"), desc, Text(example, style="#81C784"))
 
         self.console.print("\n[bold #4CAF50]可用命令列表:[/]")
         self.console.print(table)
@@ -192,9 +187,7 @@ class ChatbotUI:
 
         self.console.print("\n[bold #4CAF50]符号功能说明:[/]")
         self.console.print(symbol_table)
-        self.console.print(
-            "\n[dim #4CAF50]提示: 输入时使用Tab键触发自动补全，按Ctrl+L清屏，Esc键退出程序[/]"
-        )
+        self.console.print("\n[dim #4CAF50]提示: 输入时使用Tab键触发自动补全，按Ctrl+L清屏，Esc键退出程序[/]")
 
     def handle_temperature_command(self, cmd: str):
         """处理温度设置命令
@@ -212,9 +205,7 @@ class ChatbotUI:
                 raise ValueError("temperature必须在0到1之间")
 
             self.temperature = temp
-            self.console.print(
-                f"temperature已设置为: {self.temperature}", style="#4CAF50"
-            )
+            self.console.print(f"temperature已设置为: {self.temperature}", style="#4CAF50")
 
         except (ValueError, IndexError) as e:
             self.console.print(f"[red]参数错误: {str(e)}[/]")
@@ -222,11 +213,7 @@ class ChatbotUI:
     def get_completer(self) -> WordCompleter:
         """获取自动补全器，支持@和/两种补全模式"""
         prompt_files = self._get_prompt_files()
-        all_items = (
-            [s[0] for s in self._SYMBOL_DESCRIPTIONS]
-            + prompt_files
-            + [c[0] for c in self._COMMAND_LIST]
-        )
+        all_items = [s[0] for s in self._SYMBOL_DESCRIPTIONS] + prompt_files + [c[0] for c in self._COMMAND_LIST]
 
         meta_dict = {
             **{s[0]: s[1] for s in self._SYMBOL_DESCRIPTIONS},
@@ -281,8 +268,7 @@ class ChatbotUI:
                     completer=self.get_completer(),
                     complete_while_typing=True,
                     bottom_toolbar=lambda: (
-                        f"状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令] | "
-                        f"temperature: {self.temperature}"
+                        f"状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令] | temperature: {self.temperature}"
                     ),
                     lexer=PygmentsLexer(MarkdownLexer),
                 )

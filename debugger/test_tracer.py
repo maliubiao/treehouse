@@ -5,7 +5,6 @@ import os
 import shutil
 import sys
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -56,9 +55,7 @@ class TestTruncateReprValue(unittest.TestCase):
 
         obj = TestObj()
         result = truncate_repr_value(obj)
-        self.assertIn(
-            "TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result
-        )
+        self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
 
 
 class TestTraceConfig(unittest.TestCase):
@@ -242,7 +239,7 @@ class TestTraceLogic(unittest.TestCase):
     def test_handle_exception(self):
         try:
             raise ValueError("test error")
-        except ValueError as e:
+        except ValueError:
             exc_type, exc_value, _ = sys.exc_info()
             self.logic.handle_exception(exc_type, exc_value, sys._getframe())
 

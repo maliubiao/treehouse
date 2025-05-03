@@ -27,7 +27,7 @@ import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -232,9 +232,7 @@ def parse_arguments():
     )
     parser.add_argument(
         "--obsidian-doc",
-        default=os.environ.get(
-            "GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")
-        ),
+        default=os.environ.get("GPT_DOC", os.path.join(os.path.dirname(__file__), "obsidian")),
         help="Obsidian文档备份目录路径",
     )
     parser.add_argument("--trace", action="store_true", help="启用详细的执行跟踪")
@@ -496,9 +494,7 @@ def get_conversation_file(file):
         except FileNotFoundError:
             conversation_file = new_conversation(cid)
     else:
-        conversation_file = os.path.join(
-            os.path.dirname(__file__), "conversation_history.json"
-        )
+        conversation_file = os.path.join(os.path.dirname(__file__), "conversation_history.json")
     return conversation_file
 
 
@@ -572,9 +568,7 @@ def _process_and_save_response(
 
     # 保存更新后的对话历史
     if not kwargs.get("disable_conversation_history"):
-        save_conversation_history(
-            get_conversation_file(kwargs.get("conversation_file")), history
-        )
+        save_conversation_history(get_conversation_file(kwargs.get("conversation_file")), history)
 
     # 处理think标签
     content, reasoning = _handle_think_tags(content, reasoning)
@@ -602,14 +596,9 @@ def _process_stream_response(stream_client, **kwargs) -> tuple:
     verbose = kwargs.get("verbose", True)
     for chunk in stream_client:
         # 处理推理内容
-        if (
-            hasattr(chunk.choices[0].delta, "reasoning_content")
-            and chunk.choices[0].delta.reasoning_content
-        ):
+        if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
             if verbose:
-                _print_content(
-                    chunk.choices[0].delta.reasoning_content, console, style="#00ff00"
-                )
+                _print_content(chunk.choices[0].delta.reasoning_content, console, style="#00ff00")
             reasoning += chunk.choices[0].delta.reasoning_content
 
         # 处理正式回复内容
@@ -635,9 +624,7 @@ def _handle_think_tags(content: str, reasoning: str) -> tuple:
     thinking_end_tag = "</think>\n\n"
     thinking_start_tag = "<think>"
 
-    if content and (
-        content.find(thinking_end_tag) != -1 or content.find(thinking_start_tag) != -1
-    ):
+    if content and (content.find(thinking_end_tag) != -1 or content.find(thinking_start_tag) != -1):
         if content.find(thinking_start_tag) != -1:
             pos_start = content.find(thinking_start_tag)
             pos_end = content.find(thinking_end_tag)
@@ -706,16 +693,13 @@ def _check_tool_installed(
         return False
 
     if install_commands and (
-        not isinstance(install_commands, list)
-        or any(not isinstance(cmd, str) for cmd in install_commands)
+        not isinstance(install_commands, list) or any(not isinstance(cmd, str) for cmd in install_commands)
     ):
         print("参数校验失败: install_commands需要字符串列表")
         return False
 
     try:
-        check_cmd = (
-            ["where", tool_name] if sys.platform == "win32" else ["which", tool_name]
-        )
+        check_cmd = ["where", tool_name] if sys.platform == "win32" else ["which", tool_name]
         subprocess.run(
             check_cmd,
             stdout=subprocess.PIPE,
@@ -827,9 +811,7 @@ def get_directory_context(max_depth=1):
         if sys.platform == "win32":
             if max_depth == 1:
                 # 当max_depth为1时使用dir命令
-                dir_result = subprocess.run(
-                    ["dir"], stdout=subprocess.PIPE, text=True, shell=True, check=True
-                )
+                dir_result = subprocess.run(["dir"], stdout=subprocess.PIPE, text=True, shell=True, check=True)
                 msg = dir_result.stdout or "无法获取目录信息"
                 return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
             # 其他情况使用tree命令
@@ -859,15 +841,11 @@ def get_directory_context(max_depth=1):
             # 当tree命令失败时使用替代命令
             if sys.platform == "win32":
                 # Windows使用dir命令
-                dir_result = subprocess.run(
-                    ["dir"], stdout=subprocess.PIPE, check=True, text=True, shell=True
-                )
+                dir_result = subprocess.run(["dir"], stdout=subprocess.PIPE, check=True, text=True, shell=True)
                 msg = dir_result.stdout or "无法获取目录信息"
             else:
                 # 非Windows使用ls命令
-                ls_result = subprocess.run(
-                    ["ls", "-l"], stdout=subprocess.PIPE, text=True, check=True
-                )
+                ls_result = subprocess.run(["ls", "-l"], stdout=subprocess.PIPE, text=True, check=True)
                 msg = ls_result.stdout or "无法获取目录信息"
 
             return f"\n当前工作目录: {current_dir}\n\n目录结构:\n{msg}"
@@ -970,9 +948,7 @@ class ClipboardMonitor:
             if self.collected_contents:
                 contents = []
                 for content in self.collected_contents:
-                    contents.append(
-                        f"\n[clipboard content start]\n{content}\n[clipboard content end]\n"
-                    )
+                    contents.append(f"\n[clipboard content start]\n{content}\n[clipboard content end]\n")
                 self._debug_print(f"返回 {len(self.collected_contents)} 段内容")
                 return "".join(contents)
             self._debug_print("未捕获到任何内容")
@@ -1035,10 +1011,7 @@ def _handle_windows_clipboard():
     try:
         available_formats = _get_available_clipboard_formats(win32clipboard)
 
-        if (
-            win32clipboard.CF_TEXT in available_formats
-            or win32clipboard.CF_UNICODETEXT in available_formats
-        ):
+        if win32clipboard.CF_TEXT in available_formats or win32clipboard.CF_UNICODETEXT in available_formats:
             return _get_windows_text_content(win32clipboard)
 
         if win32clipboard.CF_DIB in available_formats:
@@ -1065,7 +1038,7 @@ def _get_windows_text_content(win32clipboard):
     """获取Windows剪贴板中的文本内容"""
     try:
         return win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
-    except:
+    except Exception:
         return win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
 
 
@@ -1174,7 +1147,7 @@ def _handle_linux_image():
             check=True,
         )
         return format_image_path_prompt(image_path)
-    except:
+    except Exception:
         return "[clipboard contains non-text data]"
 
 
@@ -1219,11 +1192,7 @@ def _handle_any_script(file_path: str) -> str:
         return f"Failed to read script file: {e}"
 
     # 如果不是Python脚本且在Windows上，报错
-    if (
-        is_windows
-        and first_line.startswith("#!")
-        and "python" not in first_line.lower()
-    ):
+    if is_windows and first_line.startswith("#!") and "python" not in first_line.lower():
         return f"Non-Python scripts are not supported on Windows: {first_line}"
 
     if not is_windows:
@@ -1316,9 +1285,7 @@ def _handle_project(yml_path: str) -> str:
                         content = f.read()
                         replacement += _format_file_content(file_path, content)
                 except (UnicodeDecodeError, OSError, IOError) as e:
-                    replacement += (
-                        f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
-                    )
+                    replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
         except Exception as e:
             replacement += f"[glob error]: 通配符模式处理失败 {pattern}: {str(e)}\n\n"
 
@@ -1339,9 +1306,9 @@ def _handle_project(yml_path: str) -> str:
 def under_projects_dir(path: str, projects_dir="projects") -> bool:
     """检查路径是否在项目目录下且以.yml结尾"""
     projects_dir = os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, projects_dir)
-    return (path.endswith(".yml") or path.endswith(".yaml")) and os.path.abspath(
-        path
-    ).startswith(os.path.abspath(projects_dir))
+    return (path.endswith(".yml") or path.endswith(".yaml")) and os.path.abspath(path).startswith(
+        os.path.abspath(projects_dir)
+    )
 
 
 def _handle_local_file(match: CmdNode, enable_line: bool = False) -> str:
@@ -1363,16 +1330,12 @@ def _expand_file_path(command: str) -> tuple:
     """展开文件路径并解析行号范围"""
     line_range_match = re.search(r":(\d+)?-(\d+)?$", command)
     expanded_path = os.path.abspath(
-        os.path.expanduser(
-            command[: line_range_match.start()] if line_range_match else command
-        )
+        os.path.expanduser(command[: line_range_match.start()] if line_range_match else command)
     )
     return expanded_path, line_range_match
 
 
-def _process_single_file(
-    file_path: str, line_range_match: re.Match, enable_line: bool = False
-) -> str:
+def _process_single_file(file_path: str, line_range_match: re.Match, enable_line: bool = False) -> str:
     """处理单个文件内容"""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -1425,7 +1388,9 @@ def _process_directory(dir_path: str) -> str:
                     content = f.read()
                     replacement += _format_file_content(file_path, content)
             except UnicodeDecodeError:
-                replacement += f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
+                replacement += (
+                    f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
+                )
             except (OSError, IOError) as e:
                 replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
     replacement += f"[directory end]: {dir_path}\n\n"
@@ -1490,7 +1455,9 @@ def _process_glob_pattern(pattern: str) -> str:
                     content = f.read()
                     replacement += _format_file_content(file_path, content)
             except UnicodeDecodeError:
-                replacement += f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
+                replacement += (
+                    f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
+                )
             except (OSError, IOError) as e:
                 replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
     except Exception as e:
@@ -1658,9 +1625,7 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
     return prompt
 
 
-def generate_patch_prompt(
-    symbol_name, symbol_map, patch_require=False, file_ranges=None
-):
+def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ranges=None):
     """生成多符号补丁提示词字符串
 
     参数:
@@ -1679,9 +1644,7 @@ def generate_patch_prompt(
     if patch_require:
         text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
         patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
-        prompt += PATCH_PROMPT_HEADER.format(
-            patch_rule=patch_text, symbol_path_rule_content=text
-        )
+        prompt += PATCH_PROMPT_HEADER.format(patch_rule=patch_text, symbol_path_rule_content=text)
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
     # 添加符号信息
@@ -1757,9 +1720,7 @@ class FormatAndLint:
             return filename[filename.rindex(".") :]
         return ""
 
-    def _run_command(
-        self, base_cmd: List[str], files: List[str], mode_args: List[str]
-    ) -> int:
+    def _run_command(self, base_cmd: List[str], files: List[str], mode_args: List[str]) -> int:
         full_cmd = base_cmd + mode_args + files
         try:
             start_time = time.time()
@@ -1791,9 +1752,7 @@ class FormatAndLint:
             elapsed_time = time.time() - start_time
             if self.verbose:
                 self.logger.info("Timeout executing: %s", " ".join(full_cmd))
-                self.logger.info(
-                    "Command execution time: %.2f seconds (timeout)", elapsed_time
-                )
+                self.logger.info("Command execution time: %.2f seconds (timeout)", elapsed_time)
             self.logger.error("Timeout expired for command: %s", " ".join(full_cmd))
             return -1
 
@@ -1810,9 +1769,7 @@ class FormatAndLint:
                 return_code = self._run_command(base_cmd, [file], mode_args)
 
                 if return_code not in (0, None):
-                    errors.append(
-                        f"{' '.join(base_cmd)} exited with code {return_code}"
-                    )
+                    errors.append(f"{' '.join(base_cmd)} exited with code {return_code}")
 
             if errors:
                 results[file] = errors
@@ -1829,11 +1786,7 @@ class AutoGitCommit:
         auto_commit=False,
     ):
         self.gpt_response = gpt_response
-        self.commit_message = (
-            commit_message
-            if commit_message is not None
-            else self._extract_commit_message()
-        )
+        self.commit_message = commit_message if commit_message is not None else self._extract_commit_message()
         self.files_to_add = files_to_add or []
         self.auto_commit = auto_commit
 
@@ -1905,19 +1858,12 @@ class BlockPatchResponse:
 
             if section_type == "symbol":
                 # 处理未注册符号的暂存逻辑
-                if (
-                    self.symbol_names is not None
-                    and identifier not in self.symbol_names
-                ):
+                if self.symbol_names is not None and identifier not in self.symbol_names:
                     pending_code.append(source_code)
                     continue
 
                 # 合并暂存代码到当前合法符号
-                combined_source = (
-                    "\n".join(pending_code + [source_code])
-                    if pending_code
-                    else source_code
-                )
+                combined_source = "\n".join(pending_code + [source_code]) if pending_code else source_code
                 pending_code = []
                 results.append((identifier, combined_source))
             else:
@@ -1925,13 +1871,8 @@ class BlockPatchResponse:
                 results.append((identifier, source_code))
 
         # 兼容旧格式校验
-        if not results and (
-            "[source code start]" in response_text
-            or "[source code end]" in response_text
-        ):
-            raise ValueError(
-                "响应包含代码块标签但格式不正确，请使用[modified symbol/block]:标签"
-            )
+        if not results and ("[source code start]" in response_text or "[source code end]" in response_text):
+            raise ValueError("响应包含代码块标签但格式不正确，请使用[modified symbol/block]:标签")
 
         return results
 
@@ -1955,9 +1896,7 @@ class BlockPatchResponse:
         返回格式: {"file": [symbol_path1, symbol_path2, ...]}
         """
         symbol_paths = {}
-        pattern = re.compile(
-            r"\[modified symbol\]:\s*([^\n]+)\s*\n\[source code start\]", re.DOTALL
-        )
+        pattern = re.compile(r"\[modified symbol\]:\s*([^\n]+)\s*\n\[source code start\]", re.DOTALL)
 
         for match in pattern.finditer(response_text):
             whole_path = match.group(1).strip()
@@ -2053,9 +1992,7 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     print(f"File: {file}")
     print(f"Location: lines {start_line}-{start_line + len(lines) - 1}\n")
 
-    highlighted_content = SyntaxHighlight.highlight_if_terminal(
-        block_content, file_path=file
-    )
+    highlighted_content = SyntaxHighlight.highlight_if_terminal(block_content, file_path=file)
     highlighted_lines = highlighted_content.splitlines()
 
     for i, line in enumerate(highlighted_lines):
@@ -2063,9 +2000,7 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     print(f"{Fore.YELLOW}{start_line + i + 1:4d}{ColorStyle.RESET_ALL} |")
     while True:
         try:
-            selected_line = int(
-                input("\nEnter insert line number for new symbol location: ")
-            )
+            selected_line = int(input("\nEnter insert line number for new symbol location: "))
             if start_line <= selected_line <= start_line + len(lines):
                 break
             print(
@@ -2081,9 +2016,7 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
         offset += len(line)
         line_offsets.append(offset)
 
-    selected_offset = (
-        parent_symbol_info["block_range"][0] + line_offsets[selected_line - start_line]
-    )
+    selected_offset = parent_symbol_info["block_range"][0] + line_offsets[selected_line - start_line]
     return {
         "file_path": file,
         "block_range": [selected_offset, selected_offset],
@@ -2109,9 +2042,7 @@ def add_symbol_details(remaining, symbol_detail):
 
         # Update symbol info map with new symbols
         for path, (parent_symbol, parent_symbol_info) in new_symbol_map.items():
-            symbol_info_map[path] = interactive_symbol_location(
-                file, path, parent_symbol, parent_symbol_info
-            )
+            symbol_info_map[path] = interactive_symbol_location(file, path, parent_symbol, parent_symbol_info)
 
         # Update symbol details
         for symbol, symbol_info in symbol_info_map.items():
@@ -2153,10 +2084,9 @@ def process_patch_response(
     # 准备补丁数据
     patch_items = []
     for symbol_name, source_code in results:
-        symbol_path = (
-            GLOBAL_PROJECT_CONFIG.project_root_dir
-            / symbol_detail[symbol_name]["file_path"]
-        ).relative_to(Path.cwd())
+        symbol_path = (GLOBAL_PROJECT_CONFIG.project_root_dir / symbol_detail[symbol_name]["file_path"]).relative_to(
+            Path.cwd()
+        )
         if symbol_detail[symbol_name].get(NewSymbolFlag):
             source_code = f"\n{source_code}\n"
         patch_items.append(
@@ -2177,9 +2107,7 @@ def process_patch_response(
 
     # 处理差异和应用补丁
     diff = patch.generate_diff()
-    highlighted_diff = highlight(
-        "\n".join(diff.values()), DiffLexer(), TerminalFormatter()
-    )
+    highlighted_diff = highlight("\n".join(diff.values()), DiffLexer(), TerminalFormatter())
     print("\n高亮显示的diff内容：")
     print(highlighted_diff)
 
@@ -2220,9 +2148,7 @@ def process_patch_response(
     if auto_lint:
         FormatAndLint(verbose=True).run_checks(modified_files, fix=True)
     if auto_commit:
-        AutoGitCommit(
-            gpt_response=remaining, files_to_add=modified_files, auto_commit=False
-        ).do_commit()
+        AutoGitCommit(gpt_response=remaining, files_to_add=modified_files, auto_commit=False).do_commit()
     if change_log:
         find_changelog().use_diff(response_text, "\n".join(diff_per_file.values()))
     return modified_files
@@ -2292,9 +2218,7 @@ class DiffBlockFilter:
 
                 repeat_times = 3
                 while repeat_times > 0:
-                    highlighted_block = SyntaxHighlight.highlight_if_terminal(
-                        block, lang_type="diff"
-                    )
+                    highlighted_block = SyntaxHighlight.highlight_if_terminal(block, lang_type="diff")
                     print(f"\nBlock {i}:\n{highlighted_block}\n")
                     choice = input("接受修改? (y/n/ya/na/q): ").lower().strip()
 
@@ -2318,11 +2242,7 @@ class DiffBlockFilter:
                     break
 
             if file_result and not quit_early:
-                result[file_path] = (
-                    f"{header}\n" + "\n".join(file_result)
-                    if header
-                    else "\n".join(file_result)
-                )
+                result[file_path] = f"{header}\n" + "\n".join(file_result) if header else "\n".join(file_result)
 
         return result
 
@@ -2336,9 +2256,7 @@ def test_patch_response():
     process_patch_response(*args)
 
 
-def find_nearest_newline(
-    position: int, content: str, direction: str = "forward"
-) -> int:
+def find_nearest_newline(position: int, content: str, direction: str = "forward") -> int:
     """查找指定位置向前/向后的第一个换行符位置
 
     参数:
@@ -2441,14 +2359,8 @@ def get_symbol_detail(symbol_names: str) -> list:
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
     batch_response = send_http_request(_build_api_url(api_url, symbol_names))
     if GPT_FLAGS.get(GPT_FLAG_CONTEXT):
-        return [
-            _process_symbol_data(symbol_data, "")
-            for _, symbol_data in enumerate(batch_response)
-        ]
-    return [
-        _process_symbol_data(symbol_data, symbol_list[idx])
-        for idx, symbol_data in enumerate(batch_response)
-    ]
+        return [_process_symbol_data(symbol_data, "") for _, symbol_data in enumerate(batch_response)]
+    return [_process_symbol_data(symbol_data, symbol_list[idx]) for idx, symbol_data in enumerate(batch_response)]
 
 
 def _parse_symbol_names(symbol_names: str) -> list:
@@ -2463,10 +2375,7 @@ def _parse_symbol_names(symbol_names: str) -> list:
         pos = symbol_names.rfind("/")
         if pos < 0:
             raise ValueError(f"Invalid symbol format: {symbol_names}")
-        return [
-            f"{symbol_names[: pos + 1]}{symbol}"
-            for symbol in symbol_names[pos + 1 :].split(",")
-        ]
+        return [f"{symbol_names[: pos + 1]}{symbol}" for symbol in symbol_names[pos + 1 :].split(",")]
     return [symbol_names]
 
 
@@ -2506,9 +2415,7 @@ def _fetch_symbol_data(symbol_name, file_path=None):
     """获取符号数据"""
     # 从环境变量获取API地址
     api_url = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050")
-    url = f"{api_url}/symbols/{symbol_name}/context?max_depth=2" + (
-        f"&file_path={file_path}" if file_path else ""
-    )
+    url = f"{api_url}/symbols/{symbol_name}/context?max_depth=2" + (f"&file_path={file_path}" if file_path else "")
 
     # 使用公共函数发送请求
     return send_http_request(url)
@@ -2545,9 +2452,7 @@ def query_symbol(symbol_name):
         # 查找当前符号的定义
         if data["definitions"]:
             # 查找匹配的定义
-            matching_definitions = [
-                d for d in data["definitions"] if d["name"] == symbol_name
-            ]
+            matching_definitions = [d for d in data["definitions"] if d["name"] == symbol_name]
             if matching_definitions:
                 # 将匹配的定义移到最前面
                 main_definition = matching_definitions[0]
@@ -2565,9 +2470,7 @@ def query_symbol(symbol_name):
             context += "[main definition end]\n"
 
         # 计算剩余可用长度
-        remaining_length = (
-            GLOBAL_MODEL_CONFIG.max_context_size - len(context) - 1024
-        )  # 保留1024字符余量
+        remaining_length = GLOBAL_MODEL_CONFIG.max_context_size - len(context) - 1024  # 保留1024字符余量
 
         # 添加其他定义，直到达到长度限制
         if len(data["definitions"]) > 1 and remaining_length > 0:
@@ -2670,9 +2573,7 @@ class GPTContextProcessor:
         GPT_FLAGS[cmd.command] = True
         return ""
 
-    def parse_text_into_nodes(
-        self, text: str
-    ) -> List[Union[TextNode, CmdNode, SearchSymbolNode]]:
+    def parse_text_into_nodes(self, text: str) -> List[Union[TextNode, CmdNode, SearchSymbolNode]]:
         """将输入文本解析为结构化节点"""
         result = []
         cmd_groups = defaultdict(list)
@@ -2709,9 +2610,7 @@ class GPTContextProcessor:
 
         return result
 
-    def process_text(
-        self, text: str, ignore_text: bool = False, tokens_left: int = None
-    ) -> str:
+    def process_text(self, text: str, ignore_text: bool = False, tokens_left: int = None) -> str:
         """处理文本并生成上下文提示"""
         if not tokens_left:
             tokens_left = GLOBAL_MODEL_CONFIG.max_context_size
@@ -2751,9 +2650,7 @@ class GPTContextProcessor:
             symbol_prompt = self.generate_symbol_patch_prompt(symbol_nodes)
             tokens_left -= len(symbol_prompt)
 
-        return symbol_prompt + self._finalize_output(
-            "".join(processed_parts), tokens_left
-        )
+        return symbol_prompt + self._finalize_output("".join(processed_parts), tokens_left)
 
     def generate_symbol_patch_prompt(self, symbol_nodes):
         """生成符号补丁提示"""
@@ -2785,9 +2682,7 @@ class GPTContextProcessor:
             f.write(text)
         return text
 
-    def read_context_config(
-        self, config_path: str
-    ) -> List[Union[CmdNode, SearchSymbolNode]]:
+    def read_context_config(self, config_path: str) -> List[Union[CmdNode, SearchSymbolNode]]:
         """读取上下文配置文件"""
         try:
             config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
@@ -2799,14 +2694,8 @@ class GPTContextProcessor:
                 if re.match(r"^\.\..*\.\.$", item):
                     nodes.append(SearchSymbolNode(symbols=[item[2:-2]]))
                 elif item.startswith("symbol_"):
-                    nodes.append(
-                        CmdNode(command="symbol", args=[item[len("symbol_") :]])
-                    )
-                elif (
-                    os.path.exists(item)
-                    or item in self.cmd_handlers
-                    or is_prompt_file(item)
-                ):
+                    nodes.append(CmdNode(command="symbol", args=[item[len("symbol_") :]]))
+                elif os.path.exists(item) or item in self.cmd_handlers or is_prompt_file(item):
                     nodes.append(CmdNode(command=item))
             return nodes
         except Exception as e:
@@ -2815,9 +2704,7 @@ class GPTContextProcessor:
 
 
 class PatchPromptBuilder:
-    def __init__(
-        self, use_patch: bool, symbols: List[Union[SearchSymbolNode, CmdNode]]
-    ):
+    def __init__(self, use_patch: bool, symbols: List[Union[SearchSymbolNode, CmdNode]]):
         self.use_patch = use_patch
         self.symbols = symbols
         self.symbol_map = {}
@@ -2839,9 +2726,7 @@ class PatchPromptBuilder:
             if isinstance(symbol_node, SearchSymbolNode):
                 symbols = perform_search(
                     symbol_node.symbols,
-                    os.path.join(
-                        GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG
-                    ),
+                    os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG),
                     max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
                     file_list=None,
                 )
@@ -2957,15 +2842,9 @@ class PatchPromptBuilder:
 
         prompt = ""
         if self.use_patch:
-            text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text(
-                "utf8"
-            )
-            patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text(
-                "utf8"
-            )
-            prompt += PATCH_PROMPT_HEADER.format(
-                patch_rule=patch_text, symbol_path_rule_content=text
-            )
+            text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
+            patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
+            prompt += PATCH_PROMPT_HEADER.format(patch_rule=patch_text, symbol_path_rule_content=text)
 
         prompt += self._build_symbol_prompt()
         prompt += self._build_file_range_prompt()
@@ -3021,9 +2900,7 @@ def is_prompt_file(match):
     """判断是否为prompt文件"""
     if os.path.isabs(match):
         # If it's an absolute path, check if it's inside PROMPT_DIR
-        return os.path.exists(match) and os.path.abspath(match).startswith(
-            os.path.abspath(PROMPT_DIR)
-        )
+        return os.path.exists(match) and os.path.abspath(match).startswith(os.path.abspath(PROMPT_DIR))
     else:
         # For relative paths, check in PROMPT_DIR
         return os.path.exists(os.path.join(PROMPT_DIR, match))
@@ -3108,9 +2985,7 @@ def _save_file_to_shadowroot(shadow_file_path, file_content):
     print(f"已保存文件到: {shadow_file_path}")
 
 
-def _generate_unified_diff(
-    old_file_path, shadow_file_path, original_content, file_content
-):
+def _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content):
     """生成unified diff"""
     diff_cmd = find_diff()
     try:
@@ -3237,9 +3112,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         original_content = ""
         with open(str(old_file_path), "r", encoding="utf8") as f:
             original_content = f.read()
-        diff = _generate_unified_diff(
-            old_file_path, shadow_file_path, original_content, file_content
-        )
+        diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
         diff_content += diff + "\n\n"
 
     diff_file = _save_diff_content(diff_content)
@@ -3247,9 +3120,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         display_and_apply_diff(diff_file, auto_apply=auto_apply)
 
 
-def process_response(
-    prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None
-):
+def process_response(prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
     """处理API响应并保存结果"""
     if not response_data["choices"]:
         raise ValueError("API返回空响应")
@@ -3261,14 +3132,10 @@ def process_response(
     if save and file_path:
         with open(file_path, "w+", encoding="utf8") as f:
             # 删除<think>...</think>内容
-            cleaned_content = re.sub(
-                r"<think>\n?.*?\n?</think>\n*", "", content, flags=re.DOTALL
-            )
+            cleaned_content = re.sub(r"<think>\n?.*?\n?</think>\n*", "", content, flags=re.DOTALL)
             f.write(cleaned_content)
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", encoding="utf-8", delete=False
-    ) as tmp_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", encoding="utf-8", delete=False) as tmp_file:
         tmp_file.write(content)
         save_path = tmp_file.name
 
@@ -3298,9 +3165,7 @@ def process_response(
 
         # 添加提示词
         if prompt:
-            formatted_content = (
-                f"### 问题\n\n```\n{prompt}\n```\n\n### 回答\n{formatted_content}"
-            )
+            formatted_content = f"### 问题\n\n```\n{prompt}\n```\n\n### 回答\n{formatted_content}"
 
         # 写入响应内容
         with open(obsidian_file, "w", encoding="utf-8") as f:
@@ -3335,9 +3200,7 @@ def process_response(
 
 def validate_files(program_args):
     """验证输入文件是否存在"""
-    if not (
-        program_args.ask or program_args.chatbot or program_args.project_search
-    ):  # 仅在需要检查文件时执行
+    if not (program_args.ask or program_args.chatbot or program_args.project_search):  # 仅在需要检查文件时执行
         if not os.path.isfile(program_args.file):
             print(f"错误：源代码文件不存在 {program_args.file}")
             sys.exit(1)
@@ -3365,9 +3228,7 @@ def handle_ask_mode(program_args, proxies):
     context_processor = GPTContextProcessor()
     text = context_processor.process_text(program_args.ask)
     print(text)
-    response_data = model_switch.query(
-        os.environ["GPT_MODEL_KEY"], text, proxies=proxies
-    )
+    response_data = model_switch.query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
     process_response(
         text,
         response_data,
@@ -3425,9 +3286,7 @@ def perform_search(
 ):
     """执行代码搜索并返回强类型结果"""
 
-    if not words or any(
-        not isinstance(word, str) or len(word.strip()) == 0 for word in words
-    ):
+    if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
         raise ValueError("需要至少一个有效搜索关键词")
     config = ConfigLoader(Path(config_path)).load_search_config()
     searcher = RipgrepSearcher(config, debug=True, file_list=file_list)
@@ -3574,16 +3433,11 @@ class ModelSwitch:
 
     def _load_config(self, default_path: str = "model.json") -> dict[str, ModelConfig]:
         """加载模型配置文件并转换为ModelConfig字典"""
-        config_path = self._config_path or os.path.join(
-            os.path.dirname(__file__), default_path
-        )
+        config_path = self._config_path or os.path.join(os.path.dirname(__file__), default_path)
         try:
             with open(config_path, "r") as f:
                 raw_config = json.load(f)
-                return {
-                    name: self._parse_config_dict(config)
-                    for name, config in raw_config.items()
-                }
+                return {name: self._parse_config_dict(config) for name, config in raw_config.items()}
         except FileNotFoundError:
             error_code = "CONFIG_001"
             error_msg = f"[{error_code}] 模型配置文件未找到: {config_path}"
@@ -3652,27 +3506,21 @@ class ModelSwitch:
         context_processor = GPTContextProcessor()
         self.select(architect_model)
         config = self._get_model_config(architect_model)
-        text = context_processor.process_text(
-            prompt, tokens_left=config.max_context_size or 32 * 1024
+        text = context_processor.process_text(prompt, tokens_left=config.max_context_size or 32 * 1024)
+        architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
+            encoding="utf-8"
         )
-        architect_prompt = Path(
-            os.path.join(os.path.dirname(__file__), "prompts/architect")
-        ).read_text(encoding="utf-8")
         architect_prompt += f"\n{text}"
         print(architect_prompt)
         architect_response = self.query(
             model_name=architect_model,
             prompt=architect_prompt,
         )
-        parsed = self.workflow.ArchitectMode.parse_response(
-            architect_response["choices"][0]["message"]["content"]
-        )
+        parsed = self.workflow.ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
         print(parsed["task"])
         config = self._get_model_config(coder_model)
         results = []
-        coder_prompt = Path(
-            os.path.join(os.path.dirname(__file__), "prompts/coder")
-        ).read_text(encoding="utf-8")
+        coder_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/coder")).read_text(encoding="utf-8")
         for job in parsed["jobs"]:
             if architect_only:
                 continue
@@ -3684,9 +3532,7 @@ class ModelSwitch:
                 context = context_processor.process_text(
                     prompt,
                     ignore_text=True,
-                    tokens_left=(config.max_context_size or 32 * 1024)
-                    - len(part_a)
-                    - len(part_b),
+                    tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
                 )
                 coder_prompt_combine = f"{part_b}{context}{part_a}"
                 coder_prompt_combine = coder_prompt_combine.replace(USER_DEMAND, "")
@@ -3777,9 +3623,7 @@ class ModelSwitch:
 
 def handle_workflow(program_args):
     program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
-    ModelSwitch().execute_workflow(
-        program_args.architect, program_args.coder, program_args.ask
-    )
+    ModelSwitch().execute_workflow(program_args.architect, program_args.coder, program_args.ask)
 
 
 def import_relative(module):

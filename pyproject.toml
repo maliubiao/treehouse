@@ -1,5 +1,5 @@
 [project]
-name = "terminal-llm"
+name = "treehouse"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -53,3 +53,24 @@ line-length = 120
 
 [tool.isort]
 profile = "black"
+
+[tool.ruff]
+exclude = [
+    "tests/test-code-files/**",
+    ".*/*",
+    "debugger/*"
+]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+ignore = [
+    "D1",    # Missing docstring
+    "D4",    # Missing docstring
+    "D100",  # Missing module docstring
+    "D101",  # Missing class docstring
+    "D102",  # Missing function docstring
+    "D103",  # Missing public function docstring
+    "D105",  # Missing magic method docstring
+    "D107",  # Missing __init__ docstring
+]

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import functools
 import logging
 import os
 import sys
@@ -11,7 +10,7 @@ from types import ModuleType
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from debugger.tracer import TraceConfig, color_wrap, start_trace, stop_trace, trace
+from debugger.tracer import TraceConfig, color_wrap, start_trace
 
 
 def execute_script(target: Path, args: List[str]) -> None:
@@ -28,9 +27,7 @@ def execute_script(target: Path, args: List[str]) -> None:
 
     # 准备执行环境
     globals_dict = main_module.__dict__
-    globals_dict.update(
-        {"__name__": "__main__", "__file__": str(target), "__package__": None}
-    )
+    globals_dict.update({"__name__": "__main__", "__file__": str(target), "__package__": None})
     sys.path.append(os.path.dirname(str(target)))
     try:
         compiled_code = compile(code, str(target), "exec")
@@ -170,20 +167,14 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
 
         print(color_wrap(f"\n🔍 启动调试会话 - 目标: {target}", "call"))
         if args["watch_files"]:
-            print(
-                color_wrap(f"📝 监控文件模式: {', '.join(args['watch_files'])}", "var")
-            )
+            print(color_wrap(f"📝 监控文件模式: {', '.join(args['watch_files'])}", "var"))
 
         print(color_wrap("\n📝 调试功能:", "line"))
         print(color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
         print(color_wrap("  ✓ 自动跳过标准库和第三方库", "call"))
         print(color_wrap("  ✓ 变量变化检测", "var"))
         print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
-        print(
-            color_wrap(
-                f"\n📂 调试日志路径: {Path(__file__).parent / 'logs/debug.log'}", "line"
-            )
-        )
+        print(color_wrap(f"\n📂 调试日志路径: {Path(__file__).parent / 'logs/debug.log'}", "line"))
         print(
             color_wrap(
                 f"📂 报告文件路径: {Path(__file__).parent / 'logs/trace_report.html'}\n",
@@ -237,11 +228,7 @@ def print_debug_summary() -> None:
     print(color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
     print(color_wrap("\n调试功能说明:", "line"))
     print(color_wrap(f"{Path(__file__).parent}/logs/debug.log 查看日志", "line"))
-    print(
-        color_wrap(
-            f"{Path(__file__).parent}/logs/trace_report.html 查看网页报告", "line"
-        )
-    )
+    print(color_wrap(f"{Path(__file__).parent}/logs/trace_report.html 查看网页报告", "line"))
 
 
 if __name__ == "__main__":

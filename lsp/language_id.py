@@ -77,7 +77,6 @@ class LanguageId:
         ".swift": "swift",
         ".ts": "typescript",
         ".tsx": "typescriptreact",
-        ".tex": "tex",
         ".vb": "vb",
         ".xml": "xml",
         ".xsl": "xsl",

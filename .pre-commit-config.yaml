@@ -1,11 +1,11 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.3
+  - repo: local
     hooks:
-      - id: ruff
+      - id: ruff-format
         name: ruff (formatter)
-        entry: ruff format
+        entry: uvx ruff format
         args: []
+        language: system
         types: [python]
         require_serial: true
 

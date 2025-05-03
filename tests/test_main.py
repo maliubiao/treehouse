@@ -7,13 +7,9 @@ import unittest
 from collections import defaultdict
 import inspect
 
-from debugger import tracer
-
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Run unit tests with flexible selection"
-    )
+    parser = argparse.ArgumentParser(description="Run unit tests with flexible selection")
     parser.add_argument(
         "-v",
         "--verbosity",
@@ -28,9 +24,7 @@ def parse_args():
         default=None,
         help="Optional test case to run (format: TestCase.test_method)",
     )
-    parser.add_argument(
-        "--json", action="store_true", help="Output test results in JSON format"
-    )
+    parser.add_argument("--json", action="store_true", help="Output test results in JSON format")
     parser.add_argument(
         "--extract-errors",
         action="store_true",
@@ -184,9 +178,7 @@ def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=Fal
             suite.addTests(discovered)
 
         if json_output:
-            runner = unittest.TextTestRunner(
-                verbosity=verbosity, resultclass=JSONTestResult
-            )
+            runner = unittest.TextTestRunner(verbosity=verbosity, resultclass=JSONTestResult)
             result = runner.run(suite)
             if extract_errors:
                 return result.get_error_details()
@@ -198,9 +190,7 @@ def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=Fal
 
     except (ImportError, AttributeError) as e:
         sys.stderr.write(f"\nERROR: {str(e)}\n")
-        sys.stderr.write(
-            "Make sure test modules follow naming convention 'test_*.py'\n"
-        )
+        sys.stderr.write("Make sure test modules follow naming convention 'test_*.py'\n")
         raise
     except Exception as e:
         sys.stderr.write(f"\nCRITICAL ERROR: {str(e)}\n")
@@ -223,9 +213,7 @@ def main():
             print("capture error_details:")
             print(json.dumps(result, indent=2))
 
-        sys.exit(
-            not result.wasSuccessful() if isinstance(result, unittest.TestResult) else 0
-        )
+        sys.exit(not result.wasSuccessful() if isinstance(result, unittest.TestResult) else 0)
     except Exception:
         sys.exit(2)
 

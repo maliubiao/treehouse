@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
@@ -21,9 +20,7 @@ class DefinitionPlugin(LSPCommandPlugin):
             return
         _, file_path, line, char = parts
 
-        validation_result = DefinitionPlugin._validate_and_parse_arguments(
-            console, line, char
-        )
+        validation_result = DefinitionPlugin._validate_and_parse_arguments(console, line, char)
         if not validation_result:
             return
         line_num, char_num = validation_result
@@ -34,9 +31,7 @@ class DefinitionPlugin(LSPCommandPlugin):
         DefinitionPlugin._handle_definition_result(console, lsp_client, result)
 
     @staticmethod
-    def _validate_and_parse_arguments(
-        console, line: str, char: str
-    ) -> Optional[Tuple[int, int]]:
+    def _validate_and_parse_arguments(console, line: str, char: str) -> Optional[Tuple[int, int]]:
         try:
             line_num = int(line)
             char_num = int(char)
@@ -44,9 +39,7 @@ class DefinitionPlugin(LSPCommandPlugin):
                 raise ValueError("Negative value")
             return line_num, char_num
         except ValueError:
-            console.print(
-                f"[red]无效的位置参数: 行号({line}) 列号({char}) 必须是自然数[/red]"
-            )
+            console.print(f"[red]无效的位置参数: 行号({line}) 列号({char}) 必须是自然数[/red]")
             return None
 
     @staticmethod
@@ -64,11 +57,7 @@ class DefinitionPlugin(LSPCommandPlugin):
             )
             console.print(tree)
         else:
-            console.print(
-                format_response_panel(
-                    result, "定义位置", "green", syntax="json", line_numbers=True
-                )
-            )
+            console.print(format_response_panel(result, "定义位置", "green", syntax="json", line_numbers=True))
 
     @staticmethod
     def _build_definition_node(tree, definition: Dict, lsp_client: GenericLSPClient):
@@ -78,9 +67,7 @@ class DefinitionPlugin(LSPCommandPlugin):
         try:
             code_snippet = DefinitionPlugin._read_code_snippet(path, range_info)
             symbol = DefinitionPlugin._extract_symbol(path, range_info)
-            location = DefinitionPlugin._build_location_info(
-                path, range_info, code_snippet, symbol
-            )
+            location = DefinitionPlugin._build_location_info(path, range_info, code_snippet, symbol)
             tree.add(
                 Syntax(
                     location,
@@ -108,9 +95,7 @@ class DefinitionPlugin(LSPCommandPlugin):
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
                 start_line = max(0, range_info.get("start", {}).get("line", 0))
-                end_line = min(
-                    len(lines) - 1, range_info.get("end", {}).get("line", start_line)
-                )
+                end_line = min(len(lines) - 1, range_info.get("end", {}).get("line", start_line))
                 return "".join(lines[start_line : end_line + 1])
         except Exception as e:
             raise RuntimeError(f"读取代码片段失败: {str(e)}") from e
@@ -135,8 +120,7 @@ class DefinitionPlugin(LSPCommandPlugin):
                 # 扩展符号识别逻辑
                 start_pos = char_num
                 while start_pos > 0 and (
-                    line_content[start_pos - 1].isidentifier()
-                    or line_content[start_pos - 1] == "_"
+                    line_content[start_pos - 1].isidentifier() or line_content[start_pos - 1] == "_"
                 ):
                     start_pos -= 1
 
@@ -151,9 +135,7 @@ class DefinitionPlugin(LSPCommandPlugin):
             return f"[符号提取失败: {str(e)}]"
 
     @staticmethod
-    def _build_location_info(
-        path: str, range_info: Dict, code_snippet: str, symbol: str
-    ) -> str:
+    def _build_location_info(path: str, range_info: Dict, code_snippet: str, symbol: str) -> str:
         """构建格式化的位置信息"""
         start = range_info.get("start", {})
         end = range_info.get("end", {})

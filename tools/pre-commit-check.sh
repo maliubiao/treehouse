@@ -22,6 +22,7 @@ if git diff --exit-code >/dev/null; then
   exit 0
 fi
 
+uvx ruff check --fix
 # Stage changes
 git add -u
 

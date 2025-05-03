@@ -6,8 +6,6 @@ bbb
 
 import os
 import sys
-import sys as sys1
-from os import path
 
 print(os.listdir("."))
 

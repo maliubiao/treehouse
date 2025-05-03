@@ -1,6 +1,5 @@
 import os
 
-from rich.syntax import Syntax
 
 from .. import GenericLSPClient
 from ..utils import (
