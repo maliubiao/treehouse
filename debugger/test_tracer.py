@@ -402,7 +402,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 5,
                 "frame_id": 100,
                 "message": "CALL func1",
-                "data": {},
             },
             {
                 "type": "line",
@@ -411,7 +410,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 10,
                 "frame_id": 100,
                 "message": "LINE 10",
-                "data": {},
             },
             {
                 "type": "return",
@@ -420,7 +418,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 5,
                 "frame_id": 100,
                 "message": "RETURN func1",
-                "data": {},
             },
             {
                 "type": "call",
@@ -429,7 +426,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 20,
                 "frame_id": 200,
                 "message": "CALL func2",
-                "data": {},
             },
             {
                 "type": "line",
@@ -438,7 +434,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 25,
                 "frame_id": 200,
                 "message": "LINE 25",
-                "data": {},
             },
             {
                 "type": "return",
@@ -447,7 +442,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 20,
                 "frame_id": 200,
                 "message": "RETURN func2",
-                "data": {},
             },
             {
                 "type": "call",
@@ -456,7 +450,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 30,
                 "frame_id": 300,
                 "message": "CALL func3",
-                "data": {},
             },
             {
                 "type": "line",
@@ -465,7 +458,6 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 35,
                 "frame_id": 300,
                 "message": "LINE 35",
-                "data": {},
             },
             {
                 "type": "return",
@@ -474,7 +466,48 @@ class TestTraceLogExtractor(unittest.TestCase):
                 "lineno": 30,
                 "frame_id": 300,
                 "message": "RETURN func3",
-                "data": {},
+            },
+            {
+                "type": "call",
+                "timestamp": "2023-01-01T00:00:09Z",
+                "filename": "test_file.py",
+                "lineno": 40,
+                "frame_id": 400,
+                "message": "CALL func4",
+            },
+            {
+                "type": "line",
+                "timestamp": "2023-01-01T00:00:10Z",
+                "filename": "test_file.py",
+                "lineno": 45,
+                "frame_id": 400,
+                "message": "LINE 45",
+            },
+            {
+                "type": "call",
+                "timestamp": "2023-01-01T00:00:10Z",
+                "filename": "test_file.py",
+                "lineno": 46,
+                "frame_id": 400,
+                "message": "LINE 45",
+                "func": "abc",
+            },
+            {
+                "type": "call",
+                "timestamp": "2023-01-01T00:00:10Z",
+                "filename": "test_file.py",
+                "lineno": 47,
+                "frame_id": 400,
+                "message": "LINE 45",
+                "func": "efg",
+            },
+            {
+                "type": "return",
+                "timestamp": "2023-01-01T00:00:11Z",
+                "filename": "test_file.py",
+                "lineno": 40,
+                "frame_id": 400,
+                "message": "RETURN func4",
             },
         ]
 
@@ -504,7 +537,7 @@ class TestTraceLogExtractor(unittest.TestCase):
     def test_normal_lookup(self):
         """测试正常查找匹配条目"""
         extractor = TraceLogExtractor(str(self.log_file))
-        results = extractor.lookup("test_file.py", 5)
+        results, _ = extractor.lookup("test_file.py", 5)
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][0]["message"], "CALL func1")
@@ -514,7 +547,7 @@ class TestTraceLogExtractor(unittest.TestCase):
     def test_multiple_matches(self):
         """测试多条目匹配场景"""
         extractor = TraceLogExtractor(str(self.log_file))
-        results = extractor.lookup("test_file.py", 20)
+        results, _ = extractor.lookup("test_file.py", 20)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][0]["message"], "CALL func2")
         self.assertEqual(results[0][-1]["message"], "RETURN func2")
@@ -522,7 +555,7 @@ class TestTraceLogExtractor(unittest.TestCase):
     def test_cross_frame_extraction(self):
         """测试跨frame_id的日志提取"""
         extractor = TraceLogExtractor(str(self.log_file))
-        results = extractor.lookup("test_file.py", 30)
+        results, _ = extractor.lookup("test_file.py", 30)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][0]["message"], "CALL func3")
         self.assertEqual(results[0][1]["message"], "LINE 35")
@@ -541,7 +574,7 @@ class TestTraceLogExtractor(unittest.TestCase):
 
         for lineno, frame_id, call_msg, return_msg in valid_entries:
             with self.subTest(lineno=lineno):
-                results = extractor.lookup("test_file.py", lineno)
+                results, _ = extractor.lookup("test_file.py", lineno)
                 self.assertEqual(len(results), 1)
                 self.assertEqual(results[0][0]["message"], call_msg)
                 self.assertEqual(results[0][-1]["message"], return_msg)
@@ -558,12 +591,27 @@ class TestTraceLogExtractor(unittest.TestCase):
         extractor = TraceLogExtractor(str(self.log_file))
 
         # 测试无效行号
-        results = extractor.lookup("test_file.py", 999)
+        results, _ = extractor.lookup("test_file.py", 999)
         self.assertEqual(len(results), 0)
 
         # 测试无效文件
-        results = extractor.lookup("invalid.py", 5)
-        self.assertEqual(len(results), 0)
+        results, _ = extractor.lookup("invalid.py", 5)
+        self.assertEqual(len(results), 0)  # 修改断言为检查结果列表长度
+
+    def test_reference_not_empty(self):
+        """测试lookup返回的reference不为空的情况"""
+        extractor = TraceLogExtractor(str(self.log_file))
+        results, references = extractor.lookup("test_file.py", 40)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0]["message"], "CALL func4")
+        self.assertEqual(results[0][-1]["message"], "RETURN func4")
+        # 验证reference包含其他相关调用链
+        self.assertGreater(len(references), 0, "reference列表不应为空")
+        for ref in references:
+            self.assertIn("func", ref, "应包含函数信息")
+            self.assertIn("lineno", ref, "应包含行号信息")
+            self.assertEqual(ref["filename"], "test_file.py", "应匹配目标文件名")
 
     def test_partial_matches(self):
         """测试部分匹配条目"""
@@ -572,8 +620,11 @@ class TestTraceLogExtractor(unittest.TestCase):
             f.write("test_file.py:5\t100\t5000\n")  # 不存在的位置
 
         extractor = TraceLogExtractor(str(self.log_file))
-        results = extractor.lookup("test_file.py", 5)
-        self.assertEqual(len(results), 1)  # 应忽略无效位置
+        results, _ = extractor.lookup("test_file.py", 5)
+        # 修改断言：应返回有效的调用链，同时忽略无效位置
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0]["message"], "CALL func1")
+        self.assertEqual(results[0][-1]["message"], "RETURN func1")
 
 
 if __name__ == "__main__":

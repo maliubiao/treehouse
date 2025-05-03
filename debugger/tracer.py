@@ -50,7 +50,8 @@ _MAX_VALUE_LENGTH = 512
 _INDENT = "  "
 _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
-_LOG_NAME = _LOG_DIR / "debug.log"
+TRACE_LOG_NAME = _LOG_DIR / "trace.log"
+LOG_NAME = _LOG_DIR / "debug.log"
 _MAX_CALL_DEPTH = 20
 _DEFAULT_REPORT_NAME = "trace_report.html"
 
@@ -98,7 +99,7 @@ class TraceTypes:
 # 该字典已被colorama替代
 
 logging.basicConfig(
-    filename=str(_LOG_NAME),
+    filename=str(LOG_NAME),
     level=logging.DEBUG,
     format="%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s",
     datefmt="%H:%M:%S",
@@ -953,12 +954,10 @@ class TraceLogExtractor:
     日志格式为JSON，结构如下：
     {
         "type": "call|return|line|exception",
-        "timestamp": "ISO8601时间戳",
         "filename": "文件名",
         "lineno": 行号,
         "frame_id": 帧ID,
-        "message": "日志消息",
-        "data": {} // 附加数据
+        "func": "my_func",
     }
     """
 
@@ -967,9 +966,9 @@ class TraceLogExtractor:
         初始化日志提取器
 
         Args:
-            log_file: 日志文件路径，默认为debug.log
+            log_file: 日志文件路径，默认为trace.log
         """
-        self.log_file = log_file or str(_LOG_NAME)
+        self.log_file = log_file or str(TRACE_LOG_NAME)
         self.index_file = self.log_file + ".index"
 
     def _parse_index_line(self, line: str) -> tuple:
@@ -980,13 +979,20 @@ class TraceLogExtractor:
             line: 索引文件中的一行
 
         Returns:
-            (type, filename, lineno, frame_id, position) 元组
+            (type, filename, lineno, frame_id, position, func) 元组
         """
         try:
             entry = json.loads(line.strip())
             if not isinstance(entry, dict) or "type" not in entry:
                 return None
-            return (entry["type"], entry["filename"], entry["lineno"], entry["frame_id"], entry["position"])
+            return (
+                entry["type"],
+                entry["filename"],
+                entry["lineno"],
+                entry["frame_id"],
+                entry["position"],
+                entry.get("func", ""),  # 新增func字段返回
+            )
         except json.JSONDecodeError:
             return None
 
@@ -999,11 +1005,12 @@ class TraceLogExtractor:
             lineno: 行号
 
         Returns:
-            匹配的日志行列表(JSON格式)
+            匹配的日志行列表(JSON格式)和调用链参考信息
         """
         target_frame_id = None
         pair = []
         start_position = None
+        reference = []
 
         with open(self.index_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -1012,11 +1019,17 @@ class TraceLogExtractor:
                 parsed = self._parse_index_line(line)
                 if not parsed:
                     continue
-                type_tag, file, line_no, frame_id, position = parsed
+                type_tag, file, line_no, frame_id, position, func = parsed
+
+                # 收集调用链参考信息
+                if target_frame_id is not None and type_tag == TraceTypes.CALL:
+                    reference.append({"filename": file, "lineno": line_no, "func": func})
+
                 if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
                     target_frame_id = frame_id
                     start_position = position
                     continue
+
                 if (
                     target_frame_id is not None
                     and target_frame_id == frame_id
@@ -1027,7 +1040,7 @@ class TraceLogExtractor:
                     target_frame_id = None
 
         if not pair:
-            return []
+            return [], []
 
         logs = []
         for start, end in pair:
@@ -1044,7 +1057,7 @@ class TraceLogExtractor:
                     except json.JSONDecodeError:
                         continue
                 logs.append(log_lines)
-        return logs
+        return logs, reference
 
 
 class TraceLogic:
@@ -1087,7 +1100,7 @@ class TraceLogic:
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
-        self.enable_output("file", filename=_LOG_NAME)
+        self.enable_output("file", filename=TRACE_LOG_NAME)
 
     def _get_frame_id(self, frame):
         """获取当前帧ID"""
