@@ -63,7 +63,10 @@ class JSONTestResult(unittest.TextTestResult):
         super().addError(test, err)
         test_id = test.id()
         tb = self._exc_info_to_string(err, test)
-        file_path, line, func_name = self._parse_test_id(test_id, tb)
+        try:
+            file_path, line, func_name = self._parse_test_id(test_id, tb)
+        except FileNotFoundError:
+            return
         error_type = type(err[1]).__name__ if err[1] else "UnknownError"
         self.results["errors"].append(
             {
@@ -89,6 +92,7 @@ class JSONTestResult(unittest.TextTestResult):
 
         # Search in project directory first
         file_path = None
+
         project_root = os.getcwd()
         full_path = os.path.join(project_root, module_path)
         if os.path.exists(full_path):

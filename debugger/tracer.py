@@ -763,7 +763,7 @@ class CallTreeHtmlRender:
                     "</div>",
                 ]
             )
-        elif msg_type == "error":
+        elif msg_type in ("exception", "error"):
             html_parts.extend(
                 [
                     "</div>",
@@ -858,7 +858,7 @@ class CallTreeHtmlRender:
             if self._size_exceeded:
                 continue
             buffer.append(self._message_to_html(message, msg_type, log_data))
-            if msg_type == "error":
+            if msg_type in ("error", "exception"):
                 error_count += 1
 
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -965,7 +965,7 @@ class TraceLogExtractor:
                     target_frame_id = frame_id
                     start_position = position
                     continue
-                if target_frame_id is not None and target_frame_id == frame_id and type_tag in ("return", "error"):
+                if target_frame_id is not None and target_frame_id == frame_id and type_tag in ("return", "exception"):
                     pair.append((start_position, position))
                     start_position = None
                     target_frame_id = None
@@ -991,7 +991,7 @@ class TraceLogic:
     class _FileCache:
         def __init__(self):
             self._file_name_cache = {}
-            self._trace_expressions = {}
+            self._trace_expressions = defaultdict(dict)
             self._ast_cache = {}
             self._var_ops_cache = {}
 
@@ -1072,6 +1072,7 @@ class TraceLogic:
         if self._output._log_file:
             message = self._format_log_message(log_data)
             trace_data = log_data["data"]
+
             if log_type == "call":
                 # filename: lineno frame id  call -> return  start end
                 position = self._output._log_file.tell()
@@ -1079,7 +1080,7 @@ class TraceLogic:
                     f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
                 )
             self._output._log_file.write(f"{message}\n")
-            if log_type in ("return", "error"):
+            if log_type in ("return", "exception"):
                 position = self._output._log_file.tell()
                 self._output._log_file_index.write(
                     f"#{message}\n{log_type}\t{trace_data["original_filename"]}:{trace_data.get("lineno", 0)}\t{trace_data['frame_id']}\t{position}\n"
@@ -1097,7 +1098,7 @@ class TraceLogic:
 
     def _add_to_buffer(self, log_data, color_type):
         """将日志数据添加到队列并立即处理"""
-        if color_type != "error":
+        if color_type != "exception":
             for i in self.exception_chain:
                 self._log_queue.put(i)
             self.exception_chain = []
@@ -1169,25 +1170,15 @@ class TraceLogic:
         """编译表达式并缓存结果"""
         if expr in self._file_cache._ast_cache:
             return self._file_cache._ast_cache[expr]
-
-        try:
-            node = ast.parse(expr, mode="eval")
-            compiled = compile(node, "<string>", "eval")
-            self._file_cache._ast_cache[expr] = (node, compiled)
-            return node, compiled
-        except (SyntaxError, ValueError) as e:
-            self._add_to_buffer(
-                {"template": "表达式解析失败: {expr}, 错误: {error}", "data": {"expr": expr, "error": str(e)}}, "error"
-            )
-            raise
+        node = ast.parse(expr, mode="eval")
+        compiled = compile(node, "<string>", "eval")
+        self._file_cache._ast_cache[expr] = (node, compiled)
+        return node, compiled
 
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
         if self.stack_depth >= _MAX_CALL_DEPTH:
-            self._add_to_buffer(
-                {"template": "{indent}⚠ MAX CALL DEPTH REACHED", "data": {"indent": _INDENT * self.stack_depth}},
-                "error",
-            )
+            logging.warning("超过最大调用深度已达到，无法记录更多调用 %s", str(frame))
             return
         try:
             args_info = []
@@ -1276,6 +1267,10 @@ class TraceLogic:
         line_vars = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno - 1, set())
         return line_vars
 
+    def cache_eval(self, frame, expr):
+        _, compiled = self._compile_expr(expr)
+        return eval(compiled, frame.f_globals, frame.f_locals)  # nosec
+
     def handle_line(self, frame):
         """基础行号跟踪"""
         lineno = frame.f_lineno
@@ -1291,13 +1286,16 @@ class TraceLogic:
                 locals_dict = frame.f_locals
                 globals_dict = frame.f_globals
                 for var in var_names:
-                    try:
-                        # 安全警告：eval使用是必要的调试功能
-                        value = eval(var, globals_dict, locals_dict)  # nosec
-                        tracked_vars[var] = truncate_repr_value(value)
-                    except Exception as e:
-                        tracked_vars[var] = f"<Error: {str(e)}>"
-
+                    if var in locals_dict:
+                        value = locals_dict[var]
+                    elif var in globals_dict:
+                        value = globals_dict[var]
+                    else:
+                        try:
+                            value = self.cache_eval(frame, var)  # nosec
+                        except NameError:
+                            value = f"<NameError: {var}>"
+                    tracked_vars[var] = truncate_repr_value(value)
         log_data = {
             "idx": self._message_id,
             "template": "{indent}▷ {filename}:{lineno} {line}",
@@ -1327,47 +1325,29 @@ class TraceLogic:
 
     def _process_trace_expression(self, frame, line, filename, lineno):
         """处理追踪表达式"""
-        expr = self._parse_trace_comment(line)
         cached_expr = self._get_trace_expression(filename, lineno)
-        active_expr = expr if expr is not None else cached_expr
-
-        if not active_expr:
+        if not cached_expr:
+            cached_expr = self._parse_trace_comment(line)
+            self._file_cache._trace_expressions[filename][lineno] = cached_expr
+        if not cached_expr:
             return
-
         try:
-            locals_dict = frame.f_locals
-            globals_dict = frame.f_globals
-            _, compiled = self._compile_expr(active_expr)
-            # 安全警告：eval使用是必要的调试功能
-            value = eval(compiled, globals_dict, locals_dict)  # nosec
-            formatted = truncate_repr_value(value)
-            self._add_to_buffer(
-                {
-                    "template": "{indent}↳ TRACE 表达式 {expr} -> {value} [frame:{frame_id}]",
-                    "data": {
-                        "indent": _INDENT * (self.stack_depth + 1),
-                        "expr": active_expr,
-                        "value": formatted,
-                        "frame_id": self._get_frame_id(frame),
-                    },
+            value = self.cache_eval(frame, cached_expr)  # 预编译表达式
+        except NameError as e:
+            value = f"<NameError: {str(e)}>"
+        formatted = truncate_repr_value(value)
+        self._add_to_buffer(
+            {
+                "template": "{indent}↳ Debug Statement {expr}={value} [frame:{frame_id}]",
+                "data": {
+                    "indent": _INDENT * (self.stack_depth),
+                    "expr": cached_expr,
+                    "value": formatted,
+                    "frame_id": self._get_frame_id(frame),
                 },
-                "trace",
-            )
-            if expr and expr != cached_expr:
-                self._cache_trace_expression(filename, lineno, expr)
-        except (NameError, SyntaxError, TypeError, AttributeError) as e:
-            self._add_to_buffer(
-                {
-                    "template": "{indent}↳ TRACE ERROR: {expr} → {error} [frame:{frame_id}]",
-                    "data": {
-                        "indent": _INDENT * (self.stack_depth + 1),
-                        "expr": active_expr,
-                        "error": str(e),
-                        "frame_id": self._get_frame_id(frame),
-                    },
-                },
-                "error",
-            )
+            },
+            "trace",
+        )
 
     def _process_captured_vars(self, frame):
         """处理捕获的变量"""
@@ -1403,7 +1383,7 @@ class TraceLogic:
                     "original_filename": frame.f_code.co_filename,
                 },
             },
-            "error",
+            "exception",
         )
         self.exception_chain.append(msg)
         self.stack_depth -= 1
