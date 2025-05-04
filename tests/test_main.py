@@ -1,11 +1,9 @@
 import argparse
 import json
 import os
-import re
 import sys
 import unittest
 from collections import defaultdict
-from pathlib import Path
 import inspect
 
 
@@ -30,6 +28,11 @@ def parse_args():
         "--extract-errors",
         action="store_true",
         help="Extract error details in machine-readable format",
+    )
+    parser.add_argument(
+        "--list-tests",
+        action="store_true",
+        help="List all available test cases without running them",
     )
     return parser.parse_args()
 
@@ -78,13 +81,20 @@ class JSONTestResult(unittest.TextTestResult):
 
     def _add_error_details(self, test, err, category):
         test_id = test.id()
+        if test_id.count(".") == 2:
+            module, class_name, method_name = test_id.split(".")
+            method = getattr(getattr(sys.modules[module], class_name), method_name)
+        elif test_id.count(".") > 2:
+            module, class_name, method_name = test_id.rsplit(".", 2)
+            method = getattr(getattr(sys.modules[module], class_name), method_name)
+        else:
+            module, method_name = test_id.split(".")
+            method = getattr(sys.modules[module], method_name)
+        file_path = method.__code__.co_filename
+        line = method.__code__.co_firstlineno
+        func_name = method.__name__
         tb = self._exc_info_to_string(err, test)
-        print("test_id", test_id)
-        file_path, line, func_name = self._parse_test_id(test_id, tb)
         # Use test method start line if available
-        test_start_line = self._get_test_start_line(test)
-        if test_start_line:
-            line = test_start_line
         error_type = type(err[1]).__name__ if err[1] else "UnknownError"
         error_entry = {
             "test": str(test),
@@ -101,7 +111,10 @@ class JSONTestResult(unittest.TextTestResult):
         elif category == "errors":
             self.errors.append((test, self._exc_info_to_string(err, test)))
 
-    def _parse_test_id(self, test_id, tb=None):
+    def _parse_test_id(self, test_id, err=None):
+        import pdb
+
+        pdb.set_trace()
         parts = test_id.split(".")
         base_module = parts[0]
 
@@ -109,28 +122,10 @@ class JSONTestResult(unittest.TextTestResult):
             module_path = os.path.join("tests", f"{base_module}.py")
         else:
             module_path = base_module.replace(".", "/") + ".py"
-
-        project_root = str(Path(__file__).parent)
-        full_path = os.path.join(project_root, module_path)
-        if os.path.exists(full_path):
-            file_path = full_path
-        else:
-            for path in sys.path:
-                full_path = os.path.join(path, module_path)
-                if os.path.exists(full_path):
-                    file_path = full_path
-                    break
-
-        line = None
-        if tb:
-            for entry in tb.splitlines():
-                if 'File "' in entry and os.path.basename(module_path) in entry:
-                    match = re.search(r"line (\d+)", entry)
-                    if match:
-                        line = int(match.group(1))
-                        break
-
-        return file_path, line, parts[-1]
+            if os.path.exists(os.path.join("tests", module_path)):
+                file_path = os.path.join("tests", module_path)
+                return file_path
+        return err[-1].tb_frame.f_code.co_filename, err[-1].tb_frame.f_lineno, err[-1].tb_frame.f_code.co_name
 
     def get_json_results(self):
         return {
@@ -168,16 +163,33 @@ class JSONTestResult(unittest.TextTestResult):
         return error_details
 
 
-def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=False):
+def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=False, list_mode=False):
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
-
     try:
         if test_name:
             suite.addTests(loader.loadTestsFromName(test_name))
         else:
             discovered = loader.discover(start_dir="tests", pattern="test*.py")
             suite.addTests(discovered)
+
+        if list_mode:
+            # 只收集测试用例名称不运行
+            test_cases = []
+
+            def collect_test_ids(test_suite):
+                """递归收集所有测试用例ID"""
+                for test in test_suite:
+                    if isinstance(test, unittest.TestCase):
+                        test_cases.append(test.id())
+                    elif isinstance(test, unittest.TestSuite):
+                        collect_test_ids(test)
+
+            collect_test_ids(suite)
+            # 按名称排序后输出
+            for test_id in sorted(test_cases):
+                print(test_id)
+            return {"test_cases": test_cases}
 
         if json_output:
             runner = unittest.TextTestRunner(verbosity=verbosity, resultclass=JSONTestResult)
@@ -209,6 +221,7 @@ def main():
             verbosity=args.verbosity,
             json_output=args.json,
             extract_errors=args.extract_errors,
+            list_mode=args.list_tests,
         )
 
         if args.json:

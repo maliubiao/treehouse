@@ -1,5 +1,4 @@
 import argparse
-import os
 import sys
 from typing import Dict, List, Optional, Tuple
 
@@ -239,29 +238,52 @@ def main():
             sys.exit(1)
     else:
         test_results = TestAutoFix.run_tests(args.testcase)
-        auto_fix = TestAutoFix(test_results, args.user_requirement)
-
+        auto_fix = TestAutoFix(test_results)
         auto_fix.display_errors()
         if not auto_fix.uniq_references:
             print(Fore.GREEN + "\nNo references found for the test issues.")
             return
         symbol_result = auto_fix.get_symbol_info_for_references([], list(auto_fix.uniq_references))
+
+        # 用户交互界面
+        print(Fore.YELLOW + "\n是否继续生成修复建议？")
+        print(Fore.CYAN + "1. 解释问题的原因")
+        print(Fore.CYAN + "2. 放弃并退出")
+        choice = input(Fore.GREEN + "请选择 (1/2): ").strip()
+        if choice == "2":
+            print(Fore.RED + "退出程序")
+            return
+        elif choice != "1":
+            print(Fore.RED + "无效的选择，退出程序")
+            return
+        print(Fore.YELLOW + "正在生成修复建议...")
+        user_requirement = (Path(__file__).parent.parent / "prompts/tracer").read_text(encoding="utf-8")
+        user_requirement += f"""
+请根据以下tracer的报告, 解释问题的原因, 请以中文回复
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+"""
+        p = PatchPromptBuilder(use_patch=False, symbols=[])
+        p.process_search_results(symbol_result)
+        prompt = p.build(user_requirement=user_requirement)
+        print(prompt)
+        ModelSwitch().query_for_text("coder", prompt, stream=True)
+        user_requirement = input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ").strip()
+        if not user_requirement:
+            user_requirement = "自行提取"
         GPT_FLAGS[GPT_FLAG_PATCH] = True
         p = PatchPromptBuilder(use_patch=True, symbols=[])
         p.process_search_results(symbol_result)
-        user_note = ""
-        if args.user_requirement:
-            user_note = f"用户的需求是: {args.user_requirement}"
-        f = dedent(
-            f"""
-请根据以下tracer的报告, 修复testcase, 请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据
-{user_note}
+        prompt_content = f"""
+请根据以下tracer的报告, 修复testcase相关问题, 请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据
+测试的目的是: {user_requirement}
 [trace log start]
 {auto_fix.trace_log}
 [trace log end]
         """
-        )
-        prompt = p.build(user_requirement=f)
+
+        prompt = p.build(user_requirement=prompt_content)
         print(prompt)
         text = ModelSwitch().query_for_text("qwen3", prompt, stream=True)
         process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])

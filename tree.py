@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
-from debugger.tracer import TraceConfig, start_trace
 import yaml
 
 # Windows控制台颜色修复
