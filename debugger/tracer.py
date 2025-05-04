@@ -30,9 +30,15 @@ if TYPE_CHECKING:
     class MonitoringEvents:
         PY_START: int
         PY_RETURN: int
+        PY_YIELD: int
         LINE: int
         RAISE: int
+        RERAISE: int
         EXCEPTION_HANDLED: int
+        PY_UNWIND: int
+        PY_RESUME: int
+        PY_THROW: int
+        STOP_ITERATION: int
         NO_EVENTS: int
 
     class MonitoringModule:
@@ -515,9 +521,14 @@ class SysMonitoringTraceDispatcher:
             events = (
                 self.monitoring_module.events.PY_START
                 | self.monitoring_module.events.PY_RETURN
+                | self.monitoring_module.events.PY_YIELD
                 | self.monitoring_module.events.LINE
                 | self.monitoring_module.events.RAISE
+                | self.monitoring_module.events.RERAISE
                 | self.monitoring_module.events.EXCEPTION_HANDLED
+                | self.monitoring_module.events.PY_UNWIND
+                | self.monitoring_module.events.PY_RESUME
+                | self.monitoring_module.events.PY_THROW
             )
 
             self.monitoring_module.set_events(self._tool_id, events)
@@ -544,6 +555,32 @@ class SysMonitoringTraceDispatcher:
                 self.monitoring_module.events.EXCEPTION_HANDLED,
                 self._handle_exception_handled,
             )
+            # Add handlers for previously unhandled events
+            self.monitoring_module.register_callback(
+                self._tool_id,
+                self.monitoring_module.events.PY_YIELD,
+                self._handle_py_yield,
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id,
+                self.monitoring_module.events.PY_UNWIND,
+                self._handle_py_unwind,
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id,
+                self.monitoring_module.events.PY_THROW,
+                self._handle_py_throw,
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id,
+                self.monitoring_module.events.RERAISE,
+                self._handle_reraise,
+            )
+            self.monitoring_module.register_callback(
+                self._tool_id,
+                self.monitoring_module.events.PY_RESUME,
+                self._handle_py_resume,
+            )
 
         except Exception as e:
             logging.error("Failed to register monitoring tool: %s", str(e))
@@ -563,6 +600,10 @@ class SysMonitoringTraceDispatcher:
             self.monitoring_module.register_callback(
                 self._tool_id, self.monitoring_module.events.EXCEPTION_HANDLED, None
             )
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_YIELD, None)
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_UNWIND, None)
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_THROW, None)
+            self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.RERAISE, None)
 
             # Disable all events
             self.monitoring_module.set_events(self._tool_id, self.monitoring_module.events.NO_EVENTS)
@@ -580,14 +621,20 @@ class SysMonitoringTraceDispatcher:
         frame = sys._getframe(1)  # Get the frame of the function being called
         if not self.is_target_frame(frame):
             return self.monitoring_module.DISABLE
-
         self.active_frames.add(frame)
         self._logic.handle_call(frame)
         return None
 
+    def _handle_py_resume(self, _code, _offset):
+        """Handle PY_RESUME event (function resume)"""
+        # frame = sys._getframe(1)
+        # if frame in self.active_frames:
+        #     print(" resume in active frame: %s", frame)
+        return None
+
     def _handle_py_return(self, _code, _offset, retval):
         """Handle PY_RETURN event (function return)"""
-        frame = sys._getframe(1)  # Get the frame of the function returning
+        frame = sys._getframe(1)
         if frame in self.active_frames:
             self._logic.handle_return(frame, retval)
             self.active_frames.discard(frame)
@@ -614,6 +661,36 @@ class SysMonitoringTraceDispatcher:
             if len(self._logic.exception_chain) > 0:
                 self._logic.exception_chain.pop()
             self._logic.stack_depth += 1
+        return None
+
+    def _handle_py_yield(self, _code, _offset, value):
+        """Handle PY_YIELD event (generator yield)"""
+        # frame = sys._getframe(1)
+        # if frame in self.active_frames:
+        #     func_name = frame.f_code.co_name
+        #     pass
+        return None
+
+    def _handle_py_throw(self, _code, _offset, exc):
+        """Handle PY_THROW event (generator throw)"""
+        frame = sys._getframe(1)
+        if frame in self.active_frames:
+            self._logic.handle_exception(type(exc), exc, frame)
+        return None
+
+    def _handle_py_unwind(self, *args):
+        """Handle PY_UNWIND event (stack unwinding)"""
+        frame = sys._getframe(1)
+        if frame in self.active_frames:
+            self._logic.flush_exception()
+            self.active_frames.discard(frame)
+        return None
+
+    def _handle_reraise(self, _code, _offset, exc):
+        """Handle RERAISE event (exception re-raised)"""
+        frame = sys._getframe(1)
+        if frame in self.active_frames:
+            self._logic.handle_exception(type(exc), exc, frame)
         return None
 
     def is_target_frame(self, frame):
@@ -1040,6 +1117,7 @@ class TraceLogExtractor:
                     )
 
                 if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
+                    print(f"找到匹配的调用: {file}:{line_no} {func}")
                     target_frame_id = frame_id
                     start_position = position
                     continue
@@ -1049,6 +1127,7 @@ class TraceLogExtractor:
                     and target_frame_id == frame_id
                     and type_tag in (TraceTypes.RETURN, TraceTypes.EXCEPTION)
                 ):
+                    print("找到匹配的返回/异常")
                     pair.append((start_position, position))
                     if references:
                         references_group.append(references)
@@ -1188,10 +1267,7 @@ class TraceLogic:
 
     def _add_to_buffer(self, log_data, color_type):
         """将日志数据添加到队列并立即处理"""
-        if color_type != TraceTypes.EXCEPTION:
-            for i in self.exception_chain:
-                self._log_queue.put(i)
-            self.exception_chain = []
+
         self._log_queue.put((log_data, color_type))
 
     def _flush_buffer(self):
@@ -1319,30 +1395,28 @@ class TraceLogic:
 
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
-        try:
-            return_str = truncate_repr_value(return_value)
-            filename = self._get_formatted_filename(frame.f_code.co_filename)
-            frame_id = self._get_frame_id(frame)
-            if frame_id in self._frame_data._frame_locals_map:
-                del self._frame_data._frame_locals_map[frame_id]
-            self._add_to_buffer(
-                {
-                    "template": "{indent}↗ RETURN {filename}() → {return_value} [frame:{frame_id}]",
-                    "data": {
-                        "indent": _INDENT * (self.stack_depth - 1),
-                        "filename": filename,
-                        "lineno": frame.f_lineno,
-                        "return_value": return_str,
-                        "frame_id": frame_id,
-                        "func": frame.f_code.co_name,
-                        "original_filename": frame.f_code.co_filename,
-                    },
+
+        return_str = truncate_repr_value(return_value)
+        filename = self._get_formatted_filename(frame.f_code.co_filename)
+        frame_id = self._get_frame_id(frame)
+        if frame_id in self._frame_data._frame_locals_map:
+            del self._frame_data._frame_locals_map[frame_id]
+        self._add_to_buffer(
+            {
+                "template": "{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]",
+                "data": {
+                    "indent": _INDENT * (self.stack_depth - 1),
+                    "filename": filename,
+                    "lineno": frame.f_lineno,
+                    "return_value": return_str,
+                    "frame_id": frame_id,
+                    "func": frame.f_code.co_name,
+                    "original_filename": frame.f_code.co_filename,
                 },
-                TraceTypes.COLOR_RETURN,
-            )
-            self.stack_depth = max(0, self.stack_depth - 1)
-        except KeyError:
-            pass
+            },
+            TraceTypes.COLOR_RETURN,
+        )
+        self.stack_depth = max(0, self.stack_depth - 1)
 
     def _get_var_ops(self, code_obj):
         """获取代码对象的变量操作分析结果"""
@@ -1465,6 +1539,11 @@ class TraceLogic:
                 TraceTypes.COLOR_VAR,
             )
 
+    def flush_exception(self):
+        for i in self.exception_chain:
+            self._log_queue.put(i)
+        self.exception_chain = []
+
     def handle_exception(self, exc_type, exc_value, frame):
         """记录异常信息"""
         filename = self._get_formatted_filename(frame.f_code.co_filename)
@@ -1472,7 +1551,7 @@ class TraceLogic:
         frame_id = self._get_frame_id(frame)
         msg = (
             {
-                "template": "{indent}⚠ EXCEPTION {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
+                "template": "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
                 "data": {
                     "indent": _INDENT * (self.stack_depth - 1),
                     "filename": filename,

@@ -3283,9 +3283,8 @@ def perform_search(
     config_path: str = LLM_PROJECT_CONFIG,
     max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
     file_list: List[str] = None,
-):
+) -> dict:
     """执行代码搜索并返回强类型结果"""
-
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
         raise ValueError("需要至少一个有效搜索关键词")
     config = ConfigLoader(Path(config_path)).load_search_config()
@@ -3307,6 +3306,11 @@ def perform_search(
             for result in rg_results
         ]
     )
+    return query_symbol_service(results, max_context_size)
+
+
+def query_symbol_service(results: FileSearchResults, max_context_size: int) -> dict:
+    """独立的API请求处理函数"""
     api_server = os.getenv("GPT_SYMBOL_API_URL", "http://127.0.0.1:9050/")
     if api_server.endswith("/"):
         api_server = api_server[:-1]
@@ -3320,7 +3324,6 @@ def perform_search(
                 headers={"Content-Type": "application/json"},
                 timeout=10,
             )
-            # response.raise_for_status()
             return response.json()["results"]
     except requests.exceptions.RequestException as e:
         print(f"API请求失败: {str(e)}")
@@ -3328,7 +3331,6 @@ def perform_search(
         print("API返回无效的JSON响应")
     except (ValueError, KeyError) as e:
         print(f"处理API响应时发生数据解析错误: {str(e)}")
-
     return None
 
 
