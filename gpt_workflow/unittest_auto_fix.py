@@ -12,13 +12,25 @@ from llm_query import MatchResult, FileSearchResult, FileSearchResults
 from llm_query import query_symbol_service, GLOBAL_MODEL_CONFIG
 from collections import defaultdict
 from pathlib import Path
+from llm_query import (
+    PatchPromptBuilder,
+    GPT_FLAGS,
+    GPT_FLAG_PATCH,
+    ModelSwitch,
+    process_patch_response,
+    GPT_VALUE_STORAGE,
+    GPT_SYMBOL_PATCH,
+)
+from textwrap import dedent
 
 
 class TestAutoFix:
-    def __init__(self, test_results: Dict):
+    def __init__(self, test_results: Dict, user_requirement: str = None):
         self.test_results = test_results
+        self.user_requirement = user_requirement
         self.error_details = self._extract_error_details()
         self.uniq_references = set()
+        self.trace_log = ""
 
     def _extract_error_details(self) -> List[Dict]:
         """Extract error details from test results in a structured format."""
@@ -28,9 +40,11 @@ class TestAutoFix:
             for category in ["errors", "failures"]:
                 for error in self.test_results.get("results", {}).get(category, []):
                     if isinstance(error, dict):
+                        # 添加文件存在性检查
+                        file_path = error.get("file_path", "unknown")
                         error_details.append(
                             {
-                                "file_path": self._get_absolute_path(error.get("file_path", "unknown")),
+                                "file_path": file_path,
                                 "line": error.get("line"),
                                 "function": error.get("function", "unknown"),
                                 "error_type": error.get("error_type", "UnknownError"),
@@ -41,15 +55,6 @@ class TestAutoFix:
                         )
 
         return error_details
-
-    def _get_absolute_path(self, file_path: str) -> str:
-        """Convert relative path to absolute path."""
-        if not file_path or file_path == "unknown":
-            return file_path
-
-        if os.path.isabs(file_path):
-            return file_path
-        return os.path.join(os.getcwd(), file_path)
 
     def _print_stats(self) -> None:
         """Print colored test statistics summary."""
@@ -104,9 +109,8 @@ class TestAutoFix:
 
     def lookup_reference(self, file_path: str, lineno: int) -> None:
         """Display reference information for a specific file and line."""
-        abs_path = self._get_absolute_path(file_path)
-        print(Fore.CYAN + f"\nLooking up reference for: {abs_path}:{lineno}")
-        self._display_tracer_logs(abs_path, lineno)
+
+        self._display_tracer_logs(file_path, lineno)
 
     def _display_tracer_logs(self, file_path: str, line: int) -> None:
         """Display relevant tracer logs for the error location."""
@@ -114,6 +118,7 @@ class TestAutoFix:
         try:
             logs, references_group = log_extractor.lookup(file_path, line)
             if logs:
+                self.trace_log = logs[0]
                 print(Fore.BLUE + "\nTracer Logs:")
                 print(Fore.BLUE + "-" * 30)
                 print(Fore.BLUE + f"{logs[0]}" + Style.RESET_ALL)
@@ -144,6 +149,7 @@ class TestAutoFix:
         except Exception as e:
             print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
 
+    @tracer.trace(target_files=["*.py"], enable_var_trace=True, report_name="get_symbol_info_for_references.html")
     def get_symbol_info_for_references(self, ref_files: list, references: list) -> dict:
         """获取符号信息用于参考展示"""
         # 按filename分组建立映射
@@ -184,11 +190,8 @@ class TestAutoFix:
 
     def get_error_context(self, file_path: str, line: int, context_lines: int = 5) -> Optional[List[str]]:
         """Get context around the error line from source file."""
-        abs_path = self._get_absolute_path(file_path)
-        if not os.path.exists(abs_path):
-            return None
 
-        with open(abs_path, "r") as f:
+        with open(file_path, "r") as f:
             lines = f.readlines()
 
         start = max(0, line - context_lines - 1)
@@ -217,6 +220,7 @@ def parse_args():
         metavar=("FILE", "LINE"),
         help="Lookup reference information for specific file and line number",
     )
+    parser.add_argument("--user-requirement", help="User's specific requirements to be added to the prompt", default="")
     return parser.parse_args()
 
 
@@ -235,10 +239,32 @@ def main():
             sys.exit(1)
     else:
         test_results = TestAutoFix.run_tests(args.testcase)
-        auto_fix = TestAutoFix(test_results)
+        auto_fix = TestAutoFix(test_results, args.user_requirement)
 
         auto_fix.display_errors()
-        auto_fix.get_symbol_info_for_references([], list(auto_fix.uniq_references))
+        if not auto_fix.uniq_references:
+            print(Fore.GREEN + "\nNo references found for the test issues.")
+            return
+        symbol_result = auto_fix.get_symbol_info_for_references([], list(auto_fix.uniq_references))
+        GPT_FLAGS[GPT_FLAG_PATCH] = True
+        p = PatchPromptBuilder(use_patch=True, symbols=[])
+        p.process_search_results(symbol_result)
+        user_note = ""
+        if args.user_requirement:
+            user_note = f"用户的需求是: {args.user_requirement}"
+        f = dedent(
+            f"""
+请根据以下tracer的报告, 修复testcase, 请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据
+{user_note}
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+        """
+        )
+        prompt = p.build(user_requirement=f)
+        print(prompt)
+        text = ModelSwitch().query_for_text("qwen3", prompt, stream=True)
+        process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
 if __name__ == "__main__":

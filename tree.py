@@ -1315,6 +1315,7 @@ class CodeMapBuilder:
             "type": "block",
             "start_line": node_info["start_point"][0],
             "end_line": node_info["end_point"][0],
+            "block_range": (node_info["start_byte"], node_info["end_byte"]),
             "location": (
                 (node_info["start_point"][0], node_info["start_point"][1]),
                 (node_info["end_point"][0], node_info["end_point"][1]),

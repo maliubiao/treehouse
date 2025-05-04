@@ -2070,7 +2070,7 @@ def process_patch_response(
         response_text,
         flags=re.DOTALL,
     ).strip()
-
+    os.chdir(GLOBAL_PROJECT_CONFIG.project_root_dir)
     add_symbol_details(filtered_response, symbol_detail)
     file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
 
@@ -2710,6 +2710,20 @@ class PatchPromptBuilder:
         self.symbol_map = {}
         self.file_ranges = None
 
+    def process_search_results(self, search_results: dict) -> None:
+        """处理perform_search返回的结果并更新symbol_map"""
+        for symbol in search_results.values():
+            self.symbol_map[symbol["name"]] = {
+                "symbol_name": symbol["name"],
+                "file_path": symbol["file_path"],
+                "block_content": symbol["code"].encode("utf8"),
+                "code_range": (
+                    (symbol["start_line"], symbol.get("start_col", 0)),
+                    (symbol["end_line"], symbol.get("end_col", 0)),
+                ),
+                "block_range": symbol["block_range"],
+            }
+
     def _collect_symbols(self) -> None:
         """收集所有符号信息"""
         symbol_search_set = set()
@@ -2724,23 +2738,13 @@ class PatchPromptBuilder:
             left.append(SearchSymbolNode(symbols=list(symbol_search_set)))
         for symbol_node in left:
             if isinstance(symbol_node, SearchSymbolNode):
-                symbols = perform_search(
+                search_results = perform_search(
                     symbol_node.symbols,
                     os.path.join(GLOBAL_PROJECT_CONFIG.project_root_dir, LLM_PROJECT_CONFIG),
                     max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
                     file_list=None,
                 )
-                for symbol in symbols.values():
-                    self.symbol_map[symbol["name"]] = {
-                        "symbol_name": symbol["name"],
-                        "file_path": symbol["file_path"],
-                        "block_content": symbol["code"].encode("utf8"),
-                        "code_range": (
-                            (symbol["start_line"], symbol["start_col"]),
-                            (symbol["end_line"], symbol["end_col"]),
-                        ),
-                        "block_range": symbol["block_range"],
-                    }
+                self.process_search_results(search_results)
             elif isinstance(symbol_node, CmdNode) and symbol_node.command == "symbol":
                 for symbol_name in symbol_node.args:
                     symbol_result = get_symbol_detail(symbol_name)
@@ -2756,9 +2760,8 @@ class PatchPromptBuilder:
         modified_type = "symbol" if self.use_patch else "block"
         tag = "source code"
         prompt = ""
-        if self.use_patch and DUMB_EXAMPLE_A and not GLOBAL_MODEL_CONFIG.is_thinking:
-            prompt += DUMB_EXAMPLE_A
-        if not DUMB_EXAMPLE_A and self.use_patch:
+        # 优先使用文件范围提示而非示例（根据用户需求移除file_ranges支持）
+        if self.use_patch and self.file_ranges:  # 禁用file_ranges逻辑
             prompt += (
                 f"""
 # 响应格式
@@ -2792,6 +2795,8 @@ class PatchPromptBuilder:
 
 """
             )
+        elif DUMB_EXAMPLE_A and not GLOBAL_MODEL_CONFIG.is_thinking:
+            prompt += DUMB_EXAMPLE_A
         return prompt
 
     def _build_symbol_prompt(self) -> str:
@@ -2819,8 +2824,8 @@ class PatchPromptBuilder:
         prompt = ""
         if self.use_patch and self.file_ranges:
             prompt += """\
-8. 可以修改任意块，一个或者多个，但必须返回块的完整路径，做为区分
-9. 只输出你修改的那个块
+- 可以修改任意块，一个或者多个，但必须返回块的完整路径，做为区分
+- 只输出你修改的那个块
 """
             for file_path, range_info in self.file_ranges.items():
                 prompt += f"""
@@ -2835,7 +2840,7 @@ class PatchPromptBuilder:
 """
         return prompt
 
-    def build(self) -> str:
+    def build(self, user_requirement: str = None) -> str:
         """构建完整的prompt"""
         self._collect_symbols()
         GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH].update(self.symbol_map)
@@ -2850,8 +2855,13 @@ class PatchPromptBuilder:
         prompt += self._build_file_range_prompt()
         prompt += f"""
 {get_patch_prompt_output(self.use_patch, self.file_ranges, dumb_prompt=DUMB_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
-{USER_DEMAND}
 """
+
+        # 添加用户需求
+        if user_requirement:
+            prompt += f"\n# 用户需求:\n {user_requirement}\n"
+        else:
+            prompt += f"\n{USER_DEMAND}\n"
         return prompt
 
 
@@ -3571,6 +3581,9 @@ class ModelSwitch:
 
         self.current_config = self._get_model_config(model_name)
         globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
+
+    def query_for_text(self, model_name: str, prompt: str, **kwargs) -> dict:
+        return self.query(model_name, prompt, **kwargs)["choices"][0]["message"]["content"]
 
     def query(self, model_name: str, prompt: str, **kwargs) -> dict:
         """
