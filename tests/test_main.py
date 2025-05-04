@@ -5,6 +5,7 @@ import re
 import sys
 import unittest
 from collections import defaultdict
+from pathlib import Path
 import inspect
 
 
@@ -78,6 +79,7 @@ class JSONTestResult(unittest.TextTestResult):
     def _add_error_details(self, test, err, category):
         test_id = test.id()
         tb = self._exc_info_to_string(err, test)
+        print("test_id", test_id)
         file_path, line, func_name = self._parse_test_id(test_id, tb)
         # Use test method start line if available
         test_start_line = self._get_test_start_line(test)
@@ -108,7 +110,7 @@ class JSONTestResult(unittest.TextTestResult):
         else:
             module_path = base_module.replace(".", "/") + ".py"
 
-        project_root = os.getcwd()
+        project_root = str(Path(__file__).parent)
         full_path = os.path.join(project_root, module_path)
         if os.path.exists(full_path):
             file_path = full_path

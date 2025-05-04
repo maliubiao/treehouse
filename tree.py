@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+from debugger.tracer import TraceConfig, start_trace
 import yaml
 
 # Windows控制台颜色修复
@@ -1312,6 +1313,8 @@ class CodeMapBuilder:
             "signature": "",
             "full_definition_hash": "",
             "type": "block",
+            "start_line": node_info["start_point"][0],
+            "end_line": node_info["end_point"][0],
             "location": (
                 (node_info["start_point"][0], node_info["start_point"][1]),
                 (node_info["end_point"][0], node_info["end_point"][1]),
@@ -4095,6 +4098,8 @@ async def search_to_symbols(
     results: FileSearchResults = Body(...),
 ):
     """根据文件搜索结果解析符号路径"""
+
+    # t = start_trace(config=TraceConfig(target_files=["*.py"], enable_var_trace=True, report_name="search.html"))
     parser_loader_s = ParserLoader()
     parser_util = ParserUtil(parser_loader_s)
     symbol_results = {}
@@ -4132,7 +4137,7 @@ async def search_to_symbols(
             value["name"] = f"{rel_path}/{key}"
             value["file_path"] = rel_path
         symbol_results.update(symbols)
-
+    # t.stop()
     return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
 
 

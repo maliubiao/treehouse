@@ -1192,7 +1192,7 @@ class TraceLogic:
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
-        self.enable_output("file", filename=TRACE_LOG_NAME)
+        self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
 
     def _get_frame_id(self, frame):
         """获取当前帧ID"""
@@ -1674,10 +1674,12 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
         config: 跟踪配置实例(可选)
     """
     if not config:
-        log_name = sys._getframe().f_back.f_code.co_name
+        if "report_name" not in kwargs:
+            log_name = sys._getframe().f_back.f_code.co_name
+            report_name = (log_name + ".html",)
+            kwargs["report_name"] = report_name
         config = TraceConfig(
             target_files=[sys._getframe().f_back.f_code.co_filename],
-            report_name=log_name + ".html",
             **kwargs,
         )
     tracer = None
@@ -1711,7 +1713,7 @@ class Counter:
     lock = threading.Lock()
 
     @classmethod
-    def increse(self):
+    def increase(self):
         with Counter.lock:
             Counter.counter += 1
             return Counter.counter
@@ -1730,8 +1732,11 @@ def trace(target_files: List[str] = None, **okwargs):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             print(color_wrap("[start tracer]", TraceTypes.COLOR_CALL))
+            if "report_name" not in okwargs:
+                log_name = func.__name__
+                report_name = log_name + ".html"
+                okwargs["report_name"] = report_name
             config = TraceConfig(
-                report_name=f"{func.__name__}_{Counter.increse()}.html",
                 **okwargs,
             )
             t = start_trace(config=config)

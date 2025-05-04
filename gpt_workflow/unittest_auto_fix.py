@@ -10,6 +10,8 @@ from colorama import Fore, Style
 colorama.init(autoreset=True)
 from llm_query import MatchResult, FileSearchResult, FileSearchResults
 from llm_query import query_symbol_service, GLOBAL_MODEL_CONFIG
+from collections import defaultdict
+from pathlib import Path
 
 
 class TestAutoFix:
@@ -108,7 +110,7 @@ class TestAutoFix:
 
     def _display_tracer_logs(self, file_path: str, line: int) -> None:
         """Display relevant tracer logs for the error location."""
-        log_extractor = tracer.TraceLogExtractor()
+        log_extractor = tracer.TraceLogExtractor(str(Path(__file__).parent.parent / "debugger/logs/run_all_tests.log"))
         try:
             logs, references_group = log_extractor.lookup(file_path, line)
             if logs:
@@ -144,21 +146,23 @@ class TestAutoFix:
 
     def get_symbol_info_for_references(self, ref_files: list, references: list) -> dict:
         """获取符号信息用于参考展示"""
-        # 创建FileSearchResult对象
-        file_results = []
+        # 按filename分组建立映射
+        file_to_lines = defaultdict(list)
         for filename, lineno in references:
-            # 为每个引用创建MatchResult
-            match_result = MatchResult(
-                line=lineno,
-                column_range=(0, 1),
-                text="",  # 列信息未知时使用默认值  # 文本内容不需要
-            )
-            # 按文件分组结果
-            file_result = next((fr for fr in file_results if fr.file_path == filename), None)
-            if file_result:
-                file_result.matches.append(match_result)
-            else:
-                file_results.append(FileSearchResult(file_path=filename, matches=[match_result]))
+            file_to_lines[filename].append(lineno)
+        # 创建分组后的FileSearchResult对象
+        file_results = []
+        for filename, lines in file_to_lines.items():
+            # 为每个行号创建MatchResult
+            matches = [
+                MatchResult(
+                    line=lineno,
+                    column_range=(0, 0),
+                    text="",  # 列信息未知时使用默认值
+                )
+                for lineno in lines
+            ]
+            file_results.append(FileSearchResult(file_path=filename, matches=matches))
 
         # 创建FileSearchResults容器
         search_results = FileSearchResults(results=file_results)
@@ -167,14 +171,13 @@ class TestAutoFix:
         symbol_results = query_symbol_service(search_results, GLOBAL_MODEL_CONFIG.max_context_size)
 
         # 构建符号字典
-        symbol_dict = {}
         if symbol_results and isinstance(symbol_results, dict):
             print(Fore.BLUE + "\nSymbol Information:")
             print(Fore.BLUE + "-" * 30)
             for name, symbol in symbol_results.items():
                 print(Fore.CYAN + f"Symbol: {name}")
-                print(Fore.GREEN + f"start_line: {symbol['start_line']}")
-                print(Fore.GREEN + f"end_line: {symbol['end_line']}")
+                print(Fore.BLUE + f"start_line: {symbol['start_line']}")
+                print(Fore.BLUE + f"end_line: {symbol['end_line']}")
                 print(Fore.GREEN + f"code:\n{symbol['code']}")
 
         return symbol_results
@@ -193,7 +196,7 @@ class TestAutoFix:
         return [line.strip() for line in lines[start:end]]
 
     @staticmethod
-    @tracer.trace(target_files=["*.py"])
+    @tracer.trace(target_files=["*.py"], enable_var_trace=True, report_name="run_all_tests.html")
     def run_tests(testcase: Optional[str] = None) -> Dict:
         """Run tests and return results in JSON format."""
         from tests.test_main import run_tests
