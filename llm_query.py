@@ -2688,7 +2688,6 @@ class GPTContextProcessor:
             config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
             if not config or not config.get("context"):
                 return []
-
             nodes = []
             for item in config["context"]:
                 if re.match(r"^\.\..*\.\.$", item):

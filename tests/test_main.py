@@ -7,6 +7,9 @@ from collections import defaultdict
 import inspect
 
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run unit tests with flexible selection")
     parser.add_argument(

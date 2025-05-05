@@ -127,6 +127,7 @@ class TraceConfig:
         enable_var_trace: bool = False,
         ignore_self: bool = True,
         ignore_system_paths: bool = True,
+        start_function: Tuple[str, int] = None,
     ):
         """
         初始化跟踪配置
@@ -151,6 +152,7 @@ class TraceConfig:
         self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
         self._system_paths = self._get_system_paths() if ignore_system_paths else set()
         self.report_name = report_name if report_name else _DEFAULT_REPORT_NAME
+        self.start_function = start_function
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -173,9 +175,8 @@ class TraceConfig:
         if self.ignore_self and filename == __file__:
             return False
         # 过滤<frozen posixpath>这类特殊文件名
-        if filename.endswith(">"):
+        if filename.endswith(">") or filename.endswith("sitecustomize.py"):
             return False
-
         if self.ignore_system_paths:
             try:
                 resolved = str(Path(filename).resolve())
@@ -363,7 +364,7 @@ def truncate_repr_value(value, keep_elements=10):
             preview = _truncate_object(value, keep_elements)
         else:
             preview = repr(value)
-    except (AttributeError, TypeError, ValueError) as e:
+    except (AttributeError, TypeError, ValueError, RecursionError) as e:
         return f"capture error: {str(e)}"
 
     if len(preview) > _MAX_VALUE_LENGTH:
@@ -496,6 +497,8 @@ class SysMonitoringTraceDispatcher:
         self._tool_id = None
         self._registered = False
         self.monitoring_module: MonitoringModule = sys.monitoring
+        self.start_function = config.start_function
+        self.start_at_enable = False
 
     def _register_tool(self):
         """Register this tool with sys.monitoring"""
@@ -619,10 +622,30 @@ class SysMonitoringTraceDispatcher:
     def _handle_py_start(self, _code, _offset):
         """Handle PY_START event (function entry)"""
         frame = sys._getframe(1)  # Get the frame of the function being called
+
         if not self.is_target_frame(frame):
             return self.monitoring_module.DISABLE
-        self.active_frames.add(frame)
-        self._logic.handle_call(frame)
+
+        # If we're already tracing after finding the start function
+        if self.start_function and self.start_at_enable:
+            self.active_frames.add(frame)
+            self._logic.handle_call(frame)
+            return None
+
+        # If we need to wait for a specific start function
+        if self.start_function:
+            filename, line_number = self.start_function
+            if frame.f_code.co_filename == filename and frame.f_lineno == line_number:
+                self.start_at_enable = True
+                self.active_frames.add(frame)
+                self._logic.handle_call(frame)
+            else:
+                return self.monitoring_module.DISABLE
+        # No start function specified, trace everything
+        else:
+            self.active_frames.add(frame)
+            self._logic.handle_call(frame)
+
         return None
 
     def _handle_py_resume(self, _code, _offset):
@@ -1192,6 +1215,7 @@ class TraceLogic:
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
+
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
 
     def _get_frame_id(self, frame):
@@ -1676,7 +1700,7 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
     if not config:
         if "report_name" not in kwargs:
             log_name = sys._getframe().f_back.f_code.co_name
-            report_name = (log_name + ".html",)
+            report_name = log_name + ".html"
             kwargs["report_name"] = report_name
         config = TraceConfig(
             target_files=[sys._getframe().f_back.f_code.co_filename],

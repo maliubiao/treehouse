@@ -259,7 +259,7 @@ def main():
         print(Fore.YELLOW + "正在生成修复建议...")
         user_requirement = (Path(__file__).parent.parent / "prompts/tracer").read_text(encoding="utf-8")
         user_requirement += f"""
-请根据以下tracer的报告, 解释问题的原因, 请以中文回复
+请根据以下tracer的报告, 按照分析要求，解释问题的原因, 请以中文回复
 [trace log start]
 {auto_fix.trace_log}
 [trace log end]

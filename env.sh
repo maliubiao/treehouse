@@ -418,7 +418,7 @@ function naskgpt() {
 }
 
 function trace() {
-  $GPT_PYTHON_BIN $GPT_PATH/debugger/tracer_main.py --open-report $@
+  $GPT_PYTHON_BIN $GPT_PATH/debugger/tracer_main.py --watch-files="*.py" --open-report $@
 }
 
 function symbolgpt() {
