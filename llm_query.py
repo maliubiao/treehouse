@@ -165,7 +165,7 @@ class ModelConfig:
         )
 
 
-GLOBAL_MODEL_CONFIG = ModelConfig.from_env()
+GLOBAL_MODEL_CONFIG = None
 MAX_FILE_SIZE = 32000
 LAST_QUERY_FILE = os.path.join(os.path.dirname(__file__), ".lastquery")
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
@@ -3297,7 +3297,7 @@ def prompt_words_search(words: List[str], args):
 def perform_search(
     words: List[str],
     config_path: str = LLM_PROJECT_CONFIG,
-    max_context_size=GLOBAL_MODEL_CONFIG.max_context_size,
+    max_context_size=1024 * 128,
     file_list: List[str] = None,
 ) -> dict:
     """执行代码搜索并返回强类型结果"""
