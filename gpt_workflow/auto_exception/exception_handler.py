@@ -37,7 +37,7 @@ class ExceptionHandler:
         )
         self.logger.info(f"异常信息已写入临时文件: {path}")
         # 输出相对路径如果文件在当前目录下
-        print("重新执行 TRACE=1 your_script.py your args")
+        print("加TRACE=1运行脚本以trace出错的函数")
 
     def _collect_exception_info(self, exc_type, exc_value, exc_traceback) -> Dict[str, Any]:
         """收集完整的异常信息"""
