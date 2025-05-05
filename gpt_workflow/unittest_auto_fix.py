@@ -266,7 +266,7 @@ def main():
         p = PatchPromptBuilder(use_patch=False, symbols=[])
         p.process_search_results(symbol_result)
         prompt = p.build(user_requirement=user_requirement)
-        explain_text = ModelSwitch().query_for_text("coder", prompt, stream=True)
+        explain_text = ModelSwitch().query_for_text("qwen3", prompt, stream=True)
         try:
             user_requirement = (
                 input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
@@ -297,7 +297,7 @@ def main():
         """
 
         prompt = p.build(user_requirement=prompt_content)
-        text = ModelSwitch().query_for_text("coder", prompt, stream=True)
+        text = ModelSwitch().query_for_text("qwen3", prompt, stream=True)
         process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 

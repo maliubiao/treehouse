@@ -67,6 +67,7 @@ class ModelConfig:
     temperature: float = 0.0
     is_thinking: bool = False
     max_tokens: int | None = None
+    thinking_budget: int = 32768  # 新增thinking_budget字段，默认32k
 
     def __init__(
         self,
@@ -77,6 +78,7 @@ class ModelConfig:
         temperature: float = 0.0,
         is_thinking: bool = False,
         max_tokens: int | None = None,
+        thinking_budget: int = 32768,  # 添加thinking_budget参数
     ):
         self.key = key
         self.base_url = base_url
@@ -85,13 +87,15 @@ class ModelConfig:
         self.temperature = temperature
         self.is_thinking = is_thinking
         self.max_tokens = max_tokens
+        self.thinking_budget = thinking_budget  # 初始化thinking_budget
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
         return (
             f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
             f"max_context_size={self.max_context_size}, temperature={self.temperature}, "
-            f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, key={masked_key})"
+            f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, "
+            f"thinking_budget={self.thinking_budget}, key={masked_key})"
         )
 
     def get_debug_info(self) -> dict:
@@ -103,6 +107,7 @@ class ModelConfig:
             "temperature": self.temperature,
             "is_thinking": self.is_thinking,
             "max_tokens": self.max_tokens,
+            "thinking_budget": self.thinking_budget,  # 添加thinking_budget到调试信息
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -130,6 +135,7 @@ class ModelConfig:
         temperature = os.environ.get("GPT_TEMPERATURE")
         is_thinking = os.environ.get("GPT_IS_THINKING")
         max_tokens = os.environ.get("GPT_MAX_TOKENS")
+        thinking_budget = os.environ.get("GPT_THINKING_BUDGET")  # 新增环境变量获取
 
         if max_context_size is not None:
             try:
@@ -154,6 +160,11 @@ class ModelConfig:
         except ValueError as exc:
             raise ValueError(f"无效的max_tokens值: {max_tokens}") from exc
 
+        try:
+            thinking_budget = int(thinking_budget) if thinking_budget is not None else 32768  # 默认32k
+        except ValueError as exc:
+            raise ValueError(f"无效的thinking_budget值: {thinking_budget}") from exc
+
         return cls(
             key=key,
             base_url=base_url,
@@ -162,6 +173,7 @@ class ModelConfig:
             temperature=temperature,
             is_thinking=is_thinking,
             max_tokens=max_tokens,
+            thinking_budget=thinking_budget,  # 添加thinking_budget参数
         )
 
 
@@ -433,6 +445,7 @@ def query_gpt_api(
             console: 控制台输出对象
             temperature (float): 生成温度
             proxies: 代理设置
+            thinking_budget (int): 思考预算限制
 
     返回:
         dict: 包含API响应结果的字典
@@ -533,11 +546,16 @@ def _get_api_response(
         Generator: 流式响应生成器
     """
     client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
+    extra_body = {
+        "enable_thinking": True if kwargs.get("enable_thinking") else False,
+        "thinking_budget": kwargs.get("thinking_budget", 32 * 1024),
+    }
     try:
         return client.chat.completions.create(
             model=model,
             messages=history,
             temperature=kwargs.get("temperature", 0.0),
+            extra_body=extra_body,
             top_p=0.8,
             stream=True,
         )
@@ -3616,6 +3634,7 @@ class ModelSwitch:
         model = config.model_name
         max_context_size = config.max_context_size
         temperature = config.temperature
+        thinking_budget = config.thinking_budget  # 新增thinking_budget字段
 
         combined_kwargs = {
             "disable_conversation_history": disable_conversation_history,
@@ -3623,6 +3642,8 @@ class ModelSwitch:
             **kwargs,
             "max_context_size": max_context_size,
             "temperature": temperature,
+            "enable_thinking": config.is_thinking,
+            "thinking_budget": thinking_budget,  # 添加thinking_budget到请求参数
         }
 
         max_repeat = 3
