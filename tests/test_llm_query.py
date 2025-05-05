@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import MagicMock, call, patch
-
+import logging
 from parameterized import parameterized
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -1560,7 +1560,7 @@ class TestFormatAndLint(unittest.TestCase):
 
         self.assertEqual(len(results), 0)
         self.assertEqual(mock_run.call_count, 2)
-        self.assertIn("black", mock_run.call_args_list[0].args[0])
+        self.assertIn("ruff", mock_run.call_args_list[0].args[0])
         self.assertIn("pylint", mock_run.call_args_list[1].args[0])
 
     @patch("subprocess.run")
@@ -1673,10 +1673,13 @@ class TestFormatAndLint(unittest.TestCase):
         verbose_formatter = FormatAndLint(verbose=True)
         test_file = self._create_temp_file(".py")
 
-        with self.assertLogs(verbose_formatter.logger, level="INFO") as logs:
+        # 设置logger级别为DEBUG以确保捕获所有日志
+        verbose_formatter.logger.setLevel(logging.DEBUG)
+
+        with self.assertLogs(verbose_formatter.logger, level="DEBUG") as logs:
             verbose_formatter.run_checks([test_file], fix=True)
 
-        self.assertTrue(any("Executing: black" in log for log in logs.output))
+        self.assertTrue(any("Executing: uvx" in log for log in logs.output))
         self.assertTrue(any("Formatted 1 file" in log for log in logs.output))
 
 

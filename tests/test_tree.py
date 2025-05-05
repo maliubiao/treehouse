@@ -2391,25 +2391,31 @@ class TestExtractIdentifiablePath(unittest.TestCase):
 
 
 class TestLSPIntegration(unittest.TestCase):
-    def setUp(self):
-        self.client = TestClient(app)
-        self.temp_files = []
-        self.lsp_client = GenericLSPClient(
+    @classmethod
+    def setUpClass(cls):
+        cls.lsp_client = GenericLSPClient(
             lsp_command=["pylsp"],
             workspace_path=os.path.dirname(__file__),
             init_params={"rootUri": f"file://{os.path.dirname(__file__)}"},
         )
-        app.state.LSP_CLIENT = self.lsp_client
-        self.lsp_client.start()
+        app.state.LSP_CLIENT = cls.lsp_client
+        cls.lsp_client.start()
         # 确保初始化完成
-        if not self.lsp_client.initialized_event.wait(timeout=5):
+        if not cls.lsp_client.initialized_event.wait(timeout=5):
             raise RuntimeError("LSP client failed to initialize")
         # 强制设置textDocumentSync能力为Full模式用于测试
-        self.lsp_client.capabilities.text_document_sync = {"change": 1}
+        cls.lsp_client.capabilities.text_document_sync = {"change": 1}
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.lsp_client.running:
+            asyncio.run(cls.lsp_client.shutdown())
+
+    def setUp(self):
+        self.client = TestClient(app)
+        self.temp_files = []
 
     def tearDown(self):
-        if self.lsp_client.running:
-            asyncio.run(self.lsp_client.shutdown())
         for tmp in self.temp_files:
             try:
                 os.unlink(tmp.name)
@@ -2424,7 +2430,7 @@ class TestLSPIntegration(unittest.TestCase):
             self.temp_files.append(tmp)
 
         # 先发送didOpen通知初始化文档
-        self.lsp_client.send_notification(
+        self.__class__.lsp_client.send_notification(
             "textDocument/didOpen",
             {
                 "textDocument": {
@@ -2458,26 +2464,34 @@ class TestLSPIntegration(unittest.TestCase):
 
     def test_client_not_initialized(self):
         """测试客户端未初始化场景"""
+        # 保存原始LSP客户端
+        original_lsp_client = app.state.LSP_CLIENT
         app.state.LSP_CLIENT = None
-        response = self.client.post("/lsp/didChange", data={"file_path": "test.py", "content": "content"})
-        self.assertEqual(response.status_code, 501)
-        self.assertIn("not initialized", response.json()["message"])
+
+        try:
+            response = self.client.post("/lsp/didChange", data={"file_path": "test.py", "content": "content"})
+            self.assertEqual(response.status_code, 501)
+            self.assertIn("not initialized", response.json()["message"])
+        finally:
+            # 恢复原始LSP客户端
+            app.state.LSP_CLIENT = original_lsp_client
 
     def test_unsupported_feature(self):
         """测试不支持的文档同步功能"""
         # 修改能力对象以模拟不支持Full模式
-        original_capabilities = self.lsp_client.capabilities
-        self.lsp_client.capabilities.text_document_sync = 2  # 设置为非Full模式
+        original_sync = self.__class__.lsp_client.capabilities.text_document_sync
+        self.__class__.lsp_client.capabilities.text_document_sync = 2  # 设置为非Full模式
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
-            self.temp_files.append(tmp)
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
+                self.temp_files.append(tmp)
 
-        response = self.client.post("/lsp/didChange", data={"file_path": tmp.name, "content": "content"})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("textDocumentSync Full", response.json()["message"])
-
-        # 恢复原始能力对象
-        self.lsp_client.capabilities = original_capabilities
+            response = self.client.post("/lsp/didChange", data={"file_path": tmp.name, "content": "content"})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("textDocumentSync Full", response.json()["message"])
+        finally:
+            # 恢复原始能力对象
+            self.__class__.lsp_client.capabilities.text_document_sync = original_sync
 
     def test_server_error_handling(self):
         """测试服务端异常处理"""

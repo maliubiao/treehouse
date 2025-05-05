@@ -183,7 +183,6 @@ class TestAutoFix:
                 print(Fore.CYAN + f"Symbol: {name}")
                 print(Fore.BLUE + f"start_line: {symbol['start_line']}")
                 print(Fore.BLUE + f"end_line: {symbol['end_line']}")
-                print(Fore.GREEN + f"code:\n{symbol['code']}")
 
         return symbol_results
 
@@ -267,7 +266,6 @@ def main():
         p = PatchPromptBuilder(use_patch=False, symbols=[])
         p.process_search_results(symbol_result)
         prompt = p.build(user_requirement=user_requirement)
-        print(prompt)
         explain_text = ModelSwitch().query_for_text("coder", prompt, stream=True)
         try:
             user_requirement = (
@@ -299,13 +297,8 @@ def main():
         """
 
         prompt = p.build(user_requirement=prompt_content)
-        print(prompt)
         text = ModelSwitch().query_for_text("coder", prompt, stream=True)
         process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":

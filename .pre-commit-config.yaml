@@ -4,7 +4,7 @@ repos:
       - id: ruff-format
         name: ruff (formatter)
         entry: uvx ruff format
-        args: []
+        args: ["--line-length=120", "--quiet"]
         language: system
         types: [python]
         require_serial: true

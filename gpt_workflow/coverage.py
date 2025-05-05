@@ -13,9 +13,7 @@ class CoverageTestPlan:
         name: str
         description: str
 
-    TEST_CASE_PATTERN = re.compile(
-        r"\[test case start\](.*?)\[test case end\]", re.DOTALL
-    )
+    TEST_CASE_PATTERN = re.compile(r"\[test case start\](.*?)\[test case end\]", re.DOTALL)
     CLASS_NAME_PATTERN = re.compile(r"\[class name start\](.*?)\[class name end\]")
     METHOD_PATTERN = re.compile(
         r'def (test_\w+)\(.*?\):(?:\s*"""(.*?)"""|\s*(?:[^"]|"[^"]|""[^"])*?(?=\s*def|\s*class|\Z))',

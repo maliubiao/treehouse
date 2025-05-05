@@ -16,9 +16,7 @@ class LoadPlugin(LSPCommandPlugin):
     description = "加载源代码文件到LSP服务器"
 
     @staticmethod
-    async def handle_command(
-        console: Console, lsp_client: GenericLSPClient, parts: list
-    ):
+    async def handle_command(console: Console, lsp_client: GenericLSPClient, parts: list):
         if not _validate_args(console, parts, 2):
             return
 

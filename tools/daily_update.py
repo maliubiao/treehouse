@@ -35,9 +35,7 @@ def get_git_commit_stats(days_ago=0):
 
     # Iterate through each commit and get the diff stats
     for commit in commit_list:
-        diff_stats = subprocess.check_output(
-            ["git", "diff", "--shortstat", f"{commit}^..{commit}"]
-        ).decode("utf-8")
+        diff_stats = subprocess.check_output(["git", "diff", "--shortstat", f"{commit}^..{commit}"]).decode("utf-8")
         if diff_stats:
             stats = diff_stats.strip().split(",")
             for stat in stats:

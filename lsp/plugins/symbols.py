@@ -33,21 +33,14 @@ class SymbolsPlugin(LSPCommandPlugin):
             return
 
         if not result:
-            console.print(
-                Panel("🕳️ 没有找到任何文档符号", title="空结果", border_style="blue")
-            )
+            console.print(Panel("🕳️ 没有找到任何文档符号", title="空结果", border_style="blue"))
             return
 
         if isinstance(result, list) and len(result) > 0:
             # 判断是DocumentSymbol还是SymbolInformation
             first_symbol = result[0]
-            if hasattr(first_symbol, "location") or (
-                isinstance(first_symbol, dict) and "location" in first_symbol
-            ):
-                if any(
-                    getattr(sym, "containerName", None) or sym.get("containerName")
-                    for sym in result
-                ):
+            if hasattr(first_symbol, "location") or (isinstance(first_symbol, dict) and "location" in first_symbol):
+                if any(getattr(sym, "containerName", None) or sym.get("containerName") for sym in result):
                     # 构建容器树
                     console.print(
                         Panel(
@@ -84,19 +77,13 @@ class SymbolsPlugin(LSPCommandPlugin):
                     )
                 )
         else:
-            console.print(
-                Panel("⚠️ 收到非预期的响应格式", title="解析错误", border_style="red")
-            )
+            console.print(Panel("⚠️ 收到非预期的响应格式", title="解析错误", border_style="red"))
 
 
 def _count_symbols(symbol):
     """递归统计符号数量"""
     count = 1
-    children = (
-        getattr(symbol, "children", [])
-        if not isinstance(symbol, dict)
-        else symbol.get("children", [])
-    )
+    children = getattr(symbol, "children", []) if not isinstance(symbol, dict) else symbol.get("children", [])
     for child in children:
         count += _count_symbols(child)
     return count

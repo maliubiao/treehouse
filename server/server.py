@@ -209,9 +209,7 @@ class BrowserWebSocketHandler(websocket.WebSocketHandler):
 
     def _find_existing_config(self, url):
         logger.debug("🔍 在main_config中查找URL: %s", url)
-        result = next(
-            (item for item in main_config[FILTER_KEY] if item["pattern"] == url), None
-        )
+        result = next((item for item in main_config[FILTER_KEY] if item["pattern"] == url), None)
         logger.debug("🔍 查找结果: %s", result)
         return result
 
@@ -270,17 +268,13 @@ class ConvertHandler(web.RequestHandler):
 
     async def _convert_to_markdown(self, html):
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".html", delete=True, encoding="utf-8"
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=True, encoding="utf-8") as f:
                 f.write(html)
                 f.flush()
                 logger.info("🔄 开始转换，临时文件: %s", f.name)
                 md = MarkItDown()
                 result = md.convert(f.name)
-                logger.info(
-                    "✅ 转换完成，Markdown长度: %s 字符", len(result.text_content)
-                )
+                logger.info("✅ 转换完成，Markdown长度: %s 字符", len(result.text_content))
                 return result.text_content
         except (OSError, IOError):
             logger.warning("⚠️ 无法创建临时文件，尝试普通文件")
@@ -291,9 +285,7 @@ class ConvertHandler(web.RequestHandler):
                 logger.info("🔄 开始转换，临时文件: %s", temp_file)
                 md = MarkItDown()
                 result = md.convert(temp_file)
-                logger.info(
-                    "✅ 转换完成，Markdown长度: %s 字符", len(result.text_content)
-                )
+                logger.info("✅ 转换完成，Markdown长度: %s 字符", len(result.text_content))
                 return result.text_content
             finally:
                 try:
@@ -313,9 +305,7 @@ class ConvertHandler(web.RequestHandler):
             for entry in main_config[FILTER_KEY]:
                 if fnmatch.fnmatch(url, entry["pattern"]):  # 使用glob模式匹配URL
                     matched_selectors = entry["selectors"]
-                    cache_seconds = entry.get(
-                        "cache_seconds", CACHE_DEFAULT_SECONDS
-                    )  # 获取配置的缓存时间
+                    cache_seconds = entry.get("cache_seconds", CACHE_DEFAULT_SECONDS)  # 获取配置的缓存时间
                     logger.info(
                         "🔍 URL匹配到glob: %s, 缓存时间: %d秒",
                         entry["pattern"],
@@ -335,9 +325,7 @@ class ConvertHandler(web.RequestHandler):
                         content, created_at = row
                         # 计算缓存是否过期
                         created_time = datetime.datetime.fromisoformat(created_at)
-                        time_diff = (
-                            datetime.datetime.now() - created_time
-                        ).total_seconds()
+                        time_diff = (datetime.datetime.now() - created_time).total_seconds()
                         if time_diff <= cache_seconds:
                             logger.info("💾 命中有效缓存，直接返回结果")
                             return self.write(content)
@@ -433,12 +421,8 @@ def make_app():
 if __name__ == "__main__":
     # 添加参数解析
     parser = argparse.ArgumentParser(description="启动服务器。")
-    parser.add_argument(
-        "--addr", default="127.0.0.1", help="服务器监听地址 (默认: 127.0.0.1)"
-    )
-    parser.add_argument(
-        "--port", type=int, default=8000, help="服务器监听端口 (默认: 8000)"
-    )
+    parser.add_argument("--addr", default="127.0.0.1", help="服务器监听地址 (默认: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8000, help="服务器监听端口 (默认: 8000)")
     parsed_args = parser.parse_args()
 
     # 创建进程锁
@@ -453,9 +437,7 @@ if __name__ == "__main__":
         app = make_app()
         # 使用参数中的地址和端口
         app.listen(parsed_args.port, address=parsed_args.addr)
-        logger.info(
-            "%s", f"🚀 服务器已启动，监听 {parsed_args.addr}:{parsed_args.port}"
-        )
+        logger.info("%s", f"🚀 服务器已启动，监听 {parsed_args.addr}:{parsed_args.port}")
 
         ioloop.IOLoop.current().start()
     finally:

@@ -41,16 +41,12 @@ class ChangelogMarkdown:
             text,
             re.DOTALL,
         )
-        description = (
-            desc_match.group(1).strip() if desc_match else "No description provided"
-        )
+        description = desc_match.group(1).strip() if desc_match else "No description provided"
         self.add_entry(description, diff)
 
     def get_recent(self, count=3):
         """获取最近的变更记录"""
-        recent = (
-            self.entries[-count:] if len(self.entries) > count else self.entries.copy()
-        )
+        recent = self.entries[-count:] if len(self.entries) > count else self.entries.copy()
         return f"[change log start]\n{self._format_entries(recent)}\n[change log end]"
 
     def _load_existing(self):
@@ -62,9 +58,7 @@ class ChangelogMarkdown:
 
     def _parse_markdown(self, content):
         """解析markdown格式的变更记录"""
-        pattern = (
-            r"## Date (.*?)\n### Description\n(.*?)\n\n### Diff\n```diff\n(.*?)\n```"
-        )
+        pattern = r"## Date (.*?)\n### Description\n(.*?)\n\n### Diff\n```diff\n(.*?)\n```"
         matches = re.findall(pattern, content, re.DOTALL)
         for timestamp, desc, diff in matches:
             self.entries.append(
@@ -95,8 +89,5 @@ class ChangelogMarkdown:
     def _format_entries(self, entries):
         """格式化条目用于输出"""
         return "\n".join(
-            f"Timestamp: {e['timestamp']}\n"
-            f"Description: {e['description']}\n"
-            f"Diff:\n{e['diff']}\n"
-            for e in entries
+            f"Timestamp: {e['timestamp']}\nDescription: {e['description']}\nDiff:\n{e['diff']}\n" for e in entries
         )

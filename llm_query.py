@@ -1698,7 +1698,7 @@ class FormatAndLint:
 
     COMMANDS: Dict[str, List[Tuple[List[str], List[str]]]] = {
         ".py": [
-            (["black", "--line-length=120", "--quiet"], []),
+            (["uvx", "ruff", "format", "--line-length=120", "--quiet"], []),
             (
                 [
                     "pylint",

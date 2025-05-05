@@ -5,7 +5,8 @@ import sys
 import unittest
 from collections import defaultdict
 import inspect
-
+import time
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -53,6 +54,17 @@ class JSONTestResult(unittest.TextTestResult):
         self.results = defaultdict(list)
         self.all_issues = []
 
+    def startTest(self, test):
+        super().startTest(test)
+        self._start_at_time = time.time()
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        elapsed = time.time() - self._start_at_time
+        print(f"\n{test.id()}: {elapsed:.3f}s")
+        if elapsed > 0.1:
+            self.all_issues.append(("timeout", test, f"Test {test.id()} took too long: {elapsed:.3f}s"))
+
     def addFailure(self, test, err):
         self._add_error_details(test, err, "failures")
         self.all_issues.append(("failure", test, err))
@@ -96,6 +108,12 @@ class JSONTestResult(unittest.TextTestResult):
         file_path = method.__code__.co_filename
         line = method.__code__.co_firstlineno
         func_name = method.__name__
+        for i in reversed(traceback.extract_tb(err[-1])):
+            if "/unittest/" not in i.filename:
+                file_path = i.filename
+                line = i._code.co_firstlineno
+                func_name = i.name
+                break
         tb = self._exc_info_to_string(err, test)
         # Use test method start line if available
         error_type = type(err[1]).__name__ if err[1] else "UnknownError"
@@ -115,9 +133,6 @@ class JSONTestResult(unittest.TextTestResult):
             self.errors.append((test, self._exc_info_to_string(err, test)))
 
     def _parse_test_id(self, test_id, err=None):
-        import pdb
-
-        pdb.set_trace()
         parts = test_id.split(".")
         base_module = parts[0]
 

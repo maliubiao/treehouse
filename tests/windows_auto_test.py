@@ -238,9 +238,7 @@ class Keyboard:
         try:
             subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
-            print(
-                f"[ERROR] AppleScript execution failed: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}"
-            )
+            print(f"[ERROR] AppleScript execution failed: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}")
             raise RuntimeError("AppleScript execution failed") from e
 
     @staticmethod
@@ -351,9 +349,7 @@ class CommandExecutor:
             if self.debug_mode:
                 print(f"[DEBUG] Notification output: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
-            print(
-                f"[ERROR] Failed to show notification: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}"
-            )
+            print(f"[ERROR] Failed to show notification: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}")
 
     def show_alert(self, message: str) -> None:
         """Show macOS alert dialog"""
@@ -371,9 +367,7 @@ class CommandExecutor:
             if self.debug_mode:
                 print(f"[DEBUG] Alert output: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
-            print(
-                f"[ERROR] Failed to show alert: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}"
-            )
+            print(f"[ERROR] Failed to show alert: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}")
 
 
 class WindowsVMActivator(CommandExecutor):
@@ -390,10 +384,7 @@ class WindowsVMActivator(CommandExecutor):
 
         print("[DEBUG] Checking if Remote Desktop is running...")
         workspace = NSWorkspace.sharedWorkspace()
-        running = any(
-            app.localizedName() == "Windows App"
-            for app in workspace.runningApplications()
-        )
+        running = any(app.localizedName() == "Windows App" for app in workspace.runningApplications())
         print(f"[DEBUG] Remote Desktop running status: {running}")
         return running
 
@@ -412,9 +403,7 @@ class WindowsVMActivator(CommandExecutor):
             time.sleep(self.initial_delay)
             print("[DEBUG] Remote Desktop window should now be focused")
         except subprocess.CalledProcessError as e:
-            print(
-                f"[ERROR] Failed to activate Remote Desktop: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}"
-            )
+            print(f"[ERROR] Failed to activate Remote Desktop: {str(e)}\nOutput: {e.stdout}\nError: {e.stderr}")
             raise RuntimeError("Failed to activate Remote Desktop") from e
 
     @contextlib.contextmanager
@@ -511,19 +500,13 @@ class TreeHouseEnvInstaller(CommandExecutor):
             self.keyboard.press_multiple(["powershell", "enter"])
             time.sleep(2)
             self._add_to_path()
-            self.send_keystrokes_with_delay(
-                "(Get-Command choco -ErrorAction SilentlyContinue).Version"
-            )
+            self.send_keystrokes_with_delay("(Get-Command choco -ErrorAction SilentlyContinue).Version")
             self.keyboard.press("enter")
             time.sleep(2)
-            self.send_keystrokes_with_delay(
-                "(Get-Command git -ErrorAction SilentlyContinue).Version"
-            )
+            self.send_keystrokes_with_delay("(Get-Command git -ErrorAction SilentlyContinue).Version")
             self.keyboard.press("enter")
             time.sleep(2)
-            self.send_keystrokes_with_delay(
-                "(Get-Command uv -ErrorAction SilentlyContinue).Version"
-            )
+            self.send_keystrokes_with_delay("(Get-Command uv -ErrorAction SilentlyContinue).Version")
             self.keyboard.press("enter")
             time.sleep(2)
             self.send_keystrokes_with_delay("$env:Path")
@@ -541,9 +524,7 @@ class TreeHouseEnvInstaller(CommandExecutor):
         try:
             self.keyboard.press_multiple(["powershell", "enter"])
             time.sleep(2)
-            self.send_keystrokes_with_delay(
-                "$env:Path += ';C:\\ProgramData\\chocolatey\\bin;$HOME\\.local\\bin'"
-            )
+            self.send_keystrokes_with_delay("$env:Path += ';C:\\ProgramData\\chocolatey\\bin;$HOME\\.local\\bin'")
             self.keyboard.press("enter")
             time.sleep(1)
             cmd = "iwr -useb https://astral.sh/uv/install.ps1 | iex;"
@@ -678,12 +659,8 @@ class TreeHouseEnvInstaller(CommandExecutor):
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(
-        description="Windows Activation Script via Remote Desktop"
-    )
-    parser.add_argument(
-        "--debug", action="store_true", help="Enable debug mode with key listener"
-    )
+    parser = argparse.ArgumentParser(description="Windows Activation Script via Remote Desktop")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode with key listener")
     parser.add_argument(
         "--apple-script",
         action="store_true",
@@ -706,9 +683,7 @@ if __name__ == "__main__":
         installer.install_uv()
         installer.clone_repo()
         installer.run_uv_sync()
-        print(
-            f"[INFO] Script execution completed. Chocolatey install: {CHOCO_SUCCESS}, Git install: {GIT_SUCCESS}"
-        )
+        print(f"[INFO] Script execution completed. Chocolatey install: {CHOCO_SUCCESS}, Git install: {GIT_SUCCESS}")
         sys.exit(0 if CHOCO_SUCCESS and GIT_SUCCESS else 1)
     except RuntimeError as e:
         print(f"[CRITICAL] Fatal error: {str(e)}")

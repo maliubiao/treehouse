@@ -24,9 +24,7 @@ class TestShellCompletion(unittest.TestCase):
 
         # Setup complex test directory structure
         self.root = Path(self.test_dir.name)
-        self.root_posix = str(self.root).replace(
-            os.sep, "/"
-        )  # 统一为Linux风格路径分隔符
+        self.root_posix = str(self.root).replace(os.sep, "/")  # 统一为Linux风格路径分隔符
         (self.root / LLM_PROJECT_CONFIG).touch()  # 确保根目录包含配置文件
         self._create_structure(
             {

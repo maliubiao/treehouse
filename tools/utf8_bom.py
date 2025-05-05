@@ -42,9 +42,7 @@ def convert_to_utf8_bom(input_file, output_file=None):
         else:
             with open(output_file, "w", encoding="utf-8-sig") as f:
                 f.write(text)
-            print(
-                f"Successfully converted {input_file} to UTF-8 with BOM (output to {output_file})"
-            )
+            print(f"Successfully converted {input_file} to UTF-8 with BOM (output to {output_file})")
 
         return True
     except (IOError, OSError, UnicodeError) as e:
