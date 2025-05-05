@@ -268,16 +268,31 @@ def main():
         p.process_search_results(symbol_result)
         prompt = p.build(user_requirement=user_requirement)
         print(prompt)
-        ModelSwitch().query_for_text("coder", prompt, stream=True)
-        user_requirement = input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ").strip()
+        explain_text = ModelSwitch().query_for_text("coder", prompt, stream=True)
+        try:
+            user_requirement = (
+                input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
+                .encode("utf-8", errors="ignore")
+                .decode("utf-8")
+                .strip()
+            )
+        except Exception:
+            user_requirement = (
+                input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
+                .encode("latin1")
+                .decode("utf-8", errors="ignore")
+                .strip()
+            )
         if not user_requirement:
-            user_requirement = "自行提取"
+            user_requirement = "按照专家建议，解决用户遇到的问题"
         GPT_FLAGS[GPT_FLAG_PATCH] = True
         p = PatchPromptBuilder(use_patch=True, symbols=[])
         p.process_search_results(symbol_result)
         prompt_content = f"""
 请根据以下tracer的报告, 修复testcase相关问题, 请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据
-测试的目的是: {user_requirement}
+技术专家的分析:
+{explain_text}
+用户的要求: {user_requirement}
 [trace log start]
 {auto_fix.trace_log}
 [trace log end]
@@ -285,8 +300,12 @@ def main():
 
         prompt = p.build(user_requirement=prompt_content)
         print(prompt)
-        text = ModelSwitch().query_for_text("qwen3", prompt, stream=True)
+        text = ModelSwitch().query_for_text("coder", prompt, stream=True)
         process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":

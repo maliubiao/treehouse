@@ -9,7 +9,7 @@
 - 不必实现import include等这样的包引用, 用户会自行处理
 
 **输出规则（必须严格遵守）：**
-- 以[modified file]: path\n[source code start]\n开始
+- 以[modified whole file]: path\n[source code start]\n开始
 - 使用纯文本代码块格式（无```标记或任何语法高亮）
 - 禁止添加解释/建议
 - 保留原有注释和格式风格

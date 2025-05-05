@@ -1549,6 +1549,9 @@ def read_last_query(_):
 
 
 PATCH_PROMPT_HEADER = """
+[project description start]
+当前目录: {current_dir}
+[project description end]
 {patch_rule}
 [symbol path rule start]
 {symbol_path_rule_content}
@@ -1562,7 +1565,7 @@ DUMB_PROMPT = f"""
 - 保持原有缩进和代码风格，不添注释
 - 用户提供的是类, 则输出完整的类，用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
 - 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
-- 代码输出以[modified file] or [modified symbol]开头，后面跟着文件路径或符号路径, [file name]输入对应[modified file], [SYMBOL START]输入对应[modified symbol]
+- 代码输出以[modified whole file] or [modified whole symbol]开头，后面跟着文件路径或符号路径, [file name]输入对应[modified whole file], [SYMBOL START]输入对应[modified whole symbol]
 
 {DUMB_EXAMPLE_A}
 用户的要求如下:
@@ -1593,13 +1596,13 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
             f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified {modified_type}]: 块路径
+[modified whole {modified_type}]: 块路径
 [{tag} start]
 完整文件内容
 [{tag} end]
 
 或（无修改时）:
-[modified {modified_type}]: 块路径
+[modified whole {modified_type}]: 块路径
 [{tag} start]
 完整原始内容
 [{tag} end]
@@ -1609,13 +1612,13 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
             else f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified {modified_type}]: 符号路径
+[modified whole {modified_type}]: 符号路径
 [{tag} start]
 完整文件内容
 [{tag} end]
 
 或（无修改时）:
-[modified {modified_type}]: 符号路径
+[modified whole {modified_type}]: 符号路径
 [{tag} start]
 完整原始内容
 [{tag} end]
@@ -1644,7 +1647,9 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
     if patch_require:
         text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
         patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
-        prompt += PATCH_PROMPT_HEADER.format(patch_rule=patch_text, symbol_path_rule_content=text)
+        prompt += PATCH_PROMPT_HEADER.format(
+            current_dir=str(Path.cwd()), patch_rule=patch_text, symbol_path_rule_content=text
+        )
     if not patch_require:
         prompt += "现有代码库里的一些符号和代码块:\n"
     # 添加符号信息
@@ -1847,7 +1852,7 @@ class BlockPatchResponse:
 
         # 匹配两种响应格式
         pattern = re.compile(
-            r"\[modified (symbol|block)\]:\s*([^\n]+)\s*\n\[source code start\](.*?)\n\[source code end\]",
+            r"\[modified whole (symbol|block)\]:\s*([^\n]+)\s*\n\[source code start\](.*?)\n\[source code end\]",
             re.DOTALL,
         )
 
@@ -1872,7 +1877,7 @@ class BlockPatchResponse:
 
         # 兼容旧格式校验
         if not results and ("[source code start]" in response_text or "[source code end]" in response_text):
-            raise ValueError("响应包含代码块标签但格式不正确，请使用[modified symbol/block]:标签")
+            raise ValueError("响应包含代码块标签但格式不正确，请使用[modified whole symbol/block]:标签")
 
         return results
 
@@ -1896,7 +1901,7 @@ class BlockPatchResponse:
         返回格式: {"file": [symbol_path1, symbol_path2, ...]}
         """
         symbol_paths = {}
-        pattern = re.compile(r"\[modified symbol\]:\s*([^\n]+)\s*\n\[source code start\]", re.DOTALL)
+        pattern = re.compile(r"\[modified whole symbol\]:\s*([^\n]+)\s*\n\[source code start\]", re.DOTALL)
 
         for match in pattern.finditer(response_text):
             whole_path = match.group(1).strip()
@@ -1935,7 +1940,7 @@ def process_file_change(response_text, valid_symbols=None):
         valid_symbols = []
 
     pattern = re.compile(
-        r"\[modified (?:symbol|file)\]:\s*(.+?)\n\[source code start\]\n(.*?)\n\[source code end\]",
+        r"\[modified whole (?:symbol|file)\]:\s*(.+?)\n\[source code start\]\n(.*?)\n\[source code end\]",
         re.DOTALL,
     )
     results = []
@@ -1950,14 +1955,14 @@ def process_file_change(response_text, valid_symbols=None):
         is_valid = (
             os.path.exists(symbol_path)
             or (valid_symbols and symbol_path not in valid_symbols)
-            or content.startswith("[modified file]:")
+            or content.startswith("[modified whole file]:")
         )
 
         if start > last_end:
             remaining_parts.append(response_text[last_end:start])
 
         if is_valid:
-            results.append(content.replace("[modified symbol]:", "[modified file]:", 1))
+            results.append(content.replace("[modified whole symbol]:", "[modified whole file]:", 1))
         else:
             remaining_parts.append(content)
 
@@ -2765,13 +2770,13 @@ class PatchPromptBuilder:
                 f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified {modified_type}]: 块路径
+[modified whole {modified_type}]: 块路径
 [{tag} start]
 完整文件内容
 [{tag} end]
 
 或（无修改时）:
-[modified {modified_type}]: 块路径
+[modified whole {modified_type}]: 块路径
 [{tag} start]
 完整原始内容
 [{tag} end]
@@ -2781,13 +2786,13 @@ class PatchPromptBuilder:
                 else f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified {modified_type}]: 符号路径
+[modified whole {modified_type}]: 符号路径
 [{tag} start]
 完整文件内容
 [{tag} end]
 
 或（无修改时）:
-[modified {modified_type}]: 符号路径
+[modified whole {modified_type}]: 符号路径
 [{tag} start]
 完整原始内容
 [{tag} end]
@@ -2848,7 +2853,9 @@ class PatchPromptBuilder:
         if self.use_patch:
             text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
             patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
-            prompt += PATCH_PROMPT_HEADER.format(patch_rule=patch_text, symbol_path_rule_content=text)
+            prompt += PATCH_PROMPT_HEADER.format(
+                current_dir=str(Path.cwd()), patch_rule=patch_text, symbol_path_rule_content=text
+            )
 
         prompt += self._build_symbol_prompt()
         prompt += self._build_file_range_prompt()
@@ -2959,7 +2966,7 @@ def _extract_file_matches(content):
     pattern = (
         r"(\[project setup shellscript start\]\n(.*?)\n\[project setup shellscript end\]|"
         r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
-        r"\[(modified|created) file\]: (.*?)\n\[source code start\]\n(.*?)\n\[source code end\])"
+        r"\[(modified whole|created) file\]: (.*?)\n\[source code start\]\n(.*?)\n\[source code end\])"
     )
     matches = []
     for match in re.finditer(pattern, content, re.DOTALL):
@@ -3584,7 +3591,7 @@ class ModelSwitch:
     def query_for_text(self, model_name: str, prompt: str, **kwargs) -> dict:
         return self.query(model_name, prompt, **kwargs)["choices"][0]["message"]["content"]
 
-    def query(self, model_name: str, prompt: str, **kwargs) -> dict:
+    def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> dict:
         """
         根据模型名称查询API
 
@@ -3611,7 +3618,8 @@ class ModelSwitch:
         temperature = config.temperature
 
         combined_kwargs = {
-            "disable_conversation_history": True,
+            "disable_conversation_history": disable_conversation_history,
+            "conversation_file": os.path.join(shadowroot, "conversation.json"),
             **kwargs,
             "max_context_size": max_context_size,
             "temperature": temperature,

@@ -1,15 +1,15 @@
 [Example 0: 修改说明]
-[modified symbol]: 本文件/新增说明段落
+[modified whole symbol]: 本文件/新增说明段落
 [source code start]
 # 修改操作类型说明:
-# 0. 如果用户输入没有[file name]一节，则总是用[modified file]
-# 1. 使用`modified file`时必须输出文件完整内容，包含未提及的的原始代码
-# 2. 当仅修改局部符号时，必须使用`modified symbol`定位并输出新代码片段
+# 0. 如果用户输入没有[file name]一节，则总是用[modified whole file]
+# 1. 使用`modified whole file`时必须输出文件完整内容，包含未提及的的原始代码
+# 2. 当仅修改局部符号时，必须使用`modified whole symbol`定位并输出新代码片段
 # 3. 混合使用两种修改方式会导致符号级修改被文件级修改覆盖
 [source code end]
 
 [Example 1: 多文件修改]
-[modified file]: debugger/examples/sample.go
+[modified whole file]: debugger/examples/sample.go
 [source code start]
 package main
 
@@ -26,7 +26,7 @@ var handler = func() {
 }
 [source code end]
 
-[modified file]: debugger/examples/sample.cpp
+[modified whole file]: debugger/examples/sample.cpp
 [source code start]
 namespace AI {
     class Robot {
@@ -39,14 +39,14 @@ namespace AI {
 [source code end]
 
 [Example 2: 符号级修改]
-[modified symbol]: debugger/examples/sample.go/main.User.GetName
+[modified whole symbol]: debugger/examples/sample.go/main.User.GetName
 [source code start]
 func (u User) GetName() string {
     return fmt.Sprintf("[User] %s", u.Name)  // 修改方法实现
 }
 [source code end]
 
-[modified symbol]: debugger/examples/sample.cpp/AI.Robot.speak
+[modified whole symbol]: debugger/examples/sample.cpp/AI.Robot.speak
 [source code start]
 void speak(const std::string& msg) {
     std::cout << "[Robot] " << msg << std::endl;
@@ -54,7 +54,7 @@ void speak(const std::string& msg) {
 [source code end]
 
 [Example 3: 行号标识符]
-[modified file]: debugger/examples/error.py/near_6
+[modified whole file]: debugger/examples/error.py/near_6
 [source code start]
 def outegr():
     def inner():  # 嵌套函数无法生成符号
@@ -64,14 +64,14 @@ def outegr():
     fn = lambda x: x+1
 [source code end]
 
-[modified symbol]: debugger/examples/error.py/at_3
+[modified whole symbol]: debugger/examples/error.py/at_3
 [source code start]
     def inner():  # 第3行所处的嵌套函数
         print("[Modified] inner")
 [source code end]
 
 [Example 8: 类多方法批量修改]
-[modified symbol]: debugger/examples/calculator.py/Calculator.add
+[modified whole symbol]: debugger/examples/calculator.py/Calculator.add
 [source code start]
     def add(self, a: int | float, b: int | float) -> int | float:
         """执行加法运算并记录日志"""
@@ -79,7 +79,7 @@ def outegr():
         return a + b
 [source code end]
 
-[modified symbol]: debugger/examples/calculator.py/Calculator.subtract
+[modified whole symbol]: debugger/examples/calculator.py/Calculator.subtract
 [source code start]
     def subtract(self, a: int | float, b: int | float) -> int | float:
         """执行减法运算并记录日志"""
@@ -88,7 +88,7 @@ def outegr():
 [source code end]
 
 [Example 9: TypeScript接口多方法优化]
-[modified symbol]: debugger/examples/service.ts/UserService.fetchUsers
+[modified whole symbol]: debugger/examples/service.ts/UserService.fetchUsers
 [source code start]
     async fetchUsers(filter: string): Promise<User[]> {
         console.log(`Fetching users with filter: ${filter}`);
@@ -97,7 +97,7 @@ def outegr():
     }
 [source code end]
 
-[modified symbol]: debugger/examples/service.ts/UserService.createUser
+[modified whole symbol]: debugger/examples/service.ts/UserService.createUser
 [source code start]
     async createUser(userData: Partial<User>): Promise<User> {
         console.log('Creating new user:', userData);
@@ -107,7 +107,7 @@ def outegr():
 [source code end]
 
 [Example 10: Go语言结构体多方法增强]
-[modified symbol]: debugger/examples/db.go/UserRepository.FindByID
+[modified whole symbol]: debugger/examples/db.go/UserRepository.FindByID
 [source code start]
 func (r *UserRepository) FindByID(id uint) (*User, error) {
     log.Printf("Querying user by ID: %d", id)
@@ -115,7 +115,7 @@ func (r *UserRepository) FindByID(id uint) (*User, error) {
 }
 [source code end]
 
-[modified symbol]: debugger/examples/db.go/UserRepository.Update
+[modified whole symbol]: debugger/examples/db.go/UserRepository.Update
 [source code start]
 func (r *UserRepository) Update(user *User) error {
     log.Printf("Updating user ID: %d", user.ID)
@@ -125,15 +125,15 @@ func (r *UserRepository) Update(user *User) error {
 [source code end]
 
 [Example 11: 符号删除示例]
-[modified symbol]: debugger/examples/legacy.cpp/Deprecated.cleanup
+[modified whole symbol]: debugger/examples/legacy.cpp/Deprecated.cleanup
 [source code start]
 [source code end]
 
-[modified symbol]: debugger/examples/old_service.go/DatabaseConnector.close
+[modified whole symbol]: debugger/examples/old_service.go/DatabaseConnector.close
 [source code start]
 [source code end]
 
-[modified symbol]: debugger/examples/obsolete.py/ObsoleteClass.run
+[modified whole symbol]: debugger/examples/obsolete.py/ObsoleteClass.run
 [source code start]
 [source code end]
 [source code end]

@@ -1140,9 +1140,16 @@ class TraceLogExtractor:
                     )
 
                 if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
-                    print(f"找到匹配的调用: {file}:{line_no} {func}")
                     target_frame_id = frame_id
                     start_position = position
+                    references.append(
+                        {
+                            "filename": file,
+                            "lineno": line_no,
+                            "func": func,
+                            "type": type_tag,
+                        }
+                    )
                     continue
 
                 if (
@@ -1492,7 +1499,7 @@ class TraceLogic:
                         try:
                             value = self.cache_eval(frame, var)  # nosec
                         except NameError:
-                            value = f"<NameError: {var}>"
+                            continue
                     tracked_vars[var] = truncate_repr_value(value)
         log_data = {
             "idx": self._message_id,
@@ -1532,7 +1539,7 @@ class TraceLogic:
         try:
             value = self.cache_eval(frame, cached_expr)  # 预编译表达式
         except NameError as e:
-            value = f"<NameError: {str(e)}>"
+            value = f"<Failed to evaluate: {str(e)}>"
         formatted = truncate_repr_value(value)
         self._add_to_buffer(
             {
