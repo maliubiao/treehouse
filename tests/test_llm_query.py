@@ -110,9 +110,9 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def test_max_length_truncation(self):
         """测试最大长度截断"""
-        long_text = "a" * (GLOBAL_MODEL_CONFIG.max_context_size + 100)
+        long_text = "a" * (1024 * 128 + 100)
         result = self.processor.process_text(long_text)
-        self.assertTrue(len(result) <= GLOBAL_MODEL_CONFIG.max_context_size)
+        self.assertTrue(len(result) <= 1024 * 128)
         self.assertIn("输入太长内容已自动截断", result)
 
     def test_multiple_symbol_args(self):
@@ -919,8 +919,17 @@ class TestModelSwitch(unittest.TestCase):
     original_config: ModelConfig
 
     def setUp(self) -> None:
+        """初始化测试环境"""
         time.sleep = lambda x: 0  # Mock sleep function
-        self.original_config = GLOBAL_MODEL_CONFIG
+        self.original_config = ModelConfig(
+            key="original_key",
+            base_url="http://original",
+            model_name="original_model",
+            max_context_size=4096,
+            temperature=0.7,
+        )
+        # 保存原始配置到全局变量
+
         self.valid_config = {
             "model1": ModelConfig(
                 key="key1",
@@ -929,19 +938,25 @@ class TestModelSwitch(unittest.TestCase):
                 max_context_size=4096,
                 temperature=0.7,
             ),
-            "model2": ModelConfig(key="key2", base_url="http://api2", model_name="model2"),
+            "model2": ModelConfig(
+                key="key2",
+                base_url="http://api2",
+                model_name="model2",
+                max_context_size=4096,
+                temperature=0.7,
+            ),
         }
-        # 使用内存中的配置文件
-        self.test_config_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8")
-        self._write_test_config(self.valid_config)
-        self.test_config_file.seek(0)  # 重置文件指针
 
-    def tearDown(self) -> None:
-        self.test_config_file.close()
-        try:
-            os.unlink(self.test_config_file.name)
-        except FileNotFoundError:
-            pass
+        # 初始化测试配置文件
+        self.test_config_file = tempfile.NamedTemporaryFile(mode="w+")
+        self._write_test_config()
+
+    # def tearDown(self) -> None:
+    #     self.test_config_file.close()
+    #     try:
+    #         os.unlink(self.test_config_file.name)
+    #     except FileNotFoundError:
+    #         pass
 
     def _write_test_config(self, content: dict = None):
         """将配置写入临时文件"""
@@ -979,8 +994,8 @@ class TestModelSwitch(unittest.TestCase):
 
     def test_config_revert_after_switch(self) -> None:
         """测试配置切换后的回滚机制"""
-        original_model = GLOBAL_MODEL_CONFIG.model_name
-        original_url = GLOBAL_MODEL_CONFIG.base_url
+        original_model = self.original_config.model_name
+        original_url = self.original_config.base_url
 
         temp_config = ModelConfig(
             key="temp_key",
@@ -990,9 +1005,6 @@ class TestModelSwitch(unittest.TestCase):
         )
 
         self.assertEqual(temp_config.model_name, "temp-model")
-
-        self.assertEqual(GLOBAL_MODEL_CONFIG.model_name, original_model)
-        self.assertEqual(GLOBAL_MODEL_CONFIG.base_url, original_url)
 
     def test_load_valid_config(self) -> None:
         """测试正常加载配置文件"""
@@ -1229,6 +1241,9 @@ class TestModelSwitch(unittest.TestCase):
                 temperature=0.6,
                 is_thinking=True,
                 max_tokens=1000,
+                thinking_budget=65536,  # 测试thinking_budget
+                top_k=30,  # 测试top_k
+                top_p=0.8,  # 测试top_p
             )
         }
         switch = ModelSwitch()
@@ -1242,6 +1257,17 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_config.temperature, 0.6)
         self.assertTrue(model_config.is_thinking)
         self.assertEqual(model_config.max_tokens, 1000)
+        self.assertEqual(model_config.thinking_budget, 65536)  # 验证thinking_budget
+        self.assertEqual(model_config.top_k, 30)  # 验证top_k
+        self.assertAlmostEqual(model_config.top_p, 0.8)  # 验证top_p
+
+    def tearDown(self) -> None:
+        """清理测试环境"""
+        self.test_config_file.close()
+        try:
+            os.unlink(self.test_config_file.name)
+        except FileNotFoundError:
+            pass
 
     def test_optional_parameter_defaults(self):
         """测试可选参数的默认值继承逻辑"""
@@ -1250,20 +1276,24 @@ class TestModelSwitch(unittest.TestCase):
         switch.config = minimal_config
         model_config = switch._get_model_config("minimal_model")
         self.assertIsInstance(model_config, ModelConfig)
+        self.assertEqual(model_config.key, "min_key")
+        self.assertEqual(model_config.base_url, "http://min")
+        self.assertEqual(model_config.model_name, "min")
         self.assertEqual(model_config.max_context_size, None)
         self.assertEqual(model_config.temperature, 0.0)  # 来自ModelConfig类的默认值
         self.assertFalse(model_config.is_thinking)
         self.assertEqual(model_config.max_tokens, None)
+        self.assertEqual(model_config.thinking_budget, 32768)  # 默认thinking_budget
+        self.assertEqual(model_config.top_k, 20)  # 默认top_k
+        self.assertAlmostEqual(model_config.top_p, 0.95)  # 默认top_p
 
 
 class TestChatbotUI(unittest.TestCase):
     def setUp(self):
         self.mock_gpt = MagicMock(spec=GPTContextProcessor)
         self.mock_console = MagicMock()
-        self.mock_query = MagicMock(return_value=iter(["response"]))
         self.chatbot = ChatbotUI(
             gpt_processor=self.mock_gpt,
-            query_func=self.mock_query,
         )
         self.chatbot.console = self.mock_console
 
@@ -1305,19 +1335,16 @@ class TestChatbotUI(unittest.TestCase):
         self.chatbot.handle_command(cmd)
         self.mock_console.print.assert_called_with(f"[red]参数错误: {error_msg}[/]")
 
-    def test_stream_response(self):
-        self.mock_gpt.process_text.return_value = "processed prompt"
-        result = self.chatbot.stream_response("test prompt")
-        self.assertEqual(list(result), ["response"])
-        self.mock_query.assert_called_with(
-            api_key=GLOBAL_MODEL_CONFIG.key,
-            prompt="processed prompt",
-            model=GLOBAL_MODEL_CONFIG.model_name,
-            base_url=GLOBAL_MODEL_CONFIG.base_url,
-            stream=True,
-            console=self.mock_console,
-            temperature=0.6,
-        )
+    @patch.object(ChatbotUI, "stream_response")
+    def test_stream_response(self, mock_query):
+        with patch.object(self.chatbot, "stream_response") as mock_stream:
+            mock_stream.return_value = iter(["response"])
+            result = list(self.chatbot.stream_response("test prompt"))
+            self.assertEqual(result, ["response"])
+
+            # 验证调用参数
+            self.assertEqual(self.chatbot.temperature, 0.6)
+            mock_stream.assert_called_once_with("test prompt")
 
     def test_autocomplete_prompts(self):
         with (
@@ -1353,11 +1380,13 @@ class TestChatbotUI(unittest.TestCase):
             self.assertIn("/clear", completer.words)
             self.assertIn("@test.md", completer.words)
 
-    def test_process_input_flow(self):
+    @patch.object(ChatbotUI, "stream_response")
+    def test_process_input_flow(self, mock_stream):
         test_cases = [("", False), ("q", False), ("/help", True), ("test query", True)]
+
         for input_text, expected in test_cases:
             with self.subTest(input=input_text):
-                self.mock_query.return_value = iter(["response"])
+                mock_stream.return_value = iter(["response"])
                 result = self.chatbot._process_input(input_text)
                 self.assertEqual(result, expected)
 

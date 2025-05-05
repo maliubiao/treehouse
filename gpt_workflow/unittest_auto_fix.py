@@ -173,7 +173,7 @@ class TestAutoFix:
         search_results = FileSearchResults(results=file_results)
 
         # 调用符号查询API
-        symbol_results = query_symbol_service(search_results, GLOBAL_MODEL_CONFIG.max_context_size)
+        symbol_results = query_symbol_service(search_results, 128 * 1024)
 
         # 构建符号字典
         if symbol_results and isinstance(symbol_results, dict):
@@ -266,21 +266,9 @@ def main():
         p = PatchPromptBuilder(use_patch=False, symbols=[])
         p.process_search_results(symbol_result)
         prompt = p.build(user_requirement=user_requirement)
-        explain_text = ModelSwitch().query_for_text("qwen3", prompt, stream=True)
-        try:
-            user_requirement = (
-                input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
-                .encode("utf-8", errors="ignore")
-                .decode("utf-8")
-                .strip()
-            )
-        except Exception:
-            user_requirement = (
-                input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
-                .encode("latin1")
-                .decode("utf-8", errors="ignore")
-                .strip()
-            )
+        explain_text = ModelSwitch().query_for_text("coder", prompt, stream=True)
+        user_requirement = input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
+
         if not user_requirement:
             user_requirement = "按照专家建议，解决用户遇到的问题"
         GPT_FLAGS[GPT_FLAG_PATCH] = True
@@ -297,7 +285,7 @@ def main():
         """
 
         prompt = p.build(user_requirement=prompt_content)
-        text = ModelSwitch().query_for_text("qwen3", prompt, stream=True)
+        text = ModelSwitch().query_for_text("coder", prompt, stream=True)
         process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 

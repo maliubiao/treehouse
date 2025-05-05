@@ -68,6 +68,8 @@ class ModelConfig:
     is_thinking: bool = False
     max_tokens: int | None = None
     thinking_budget: int = 32768  # 新增thinking_budget字段，默认32k
+    top_k: int = 20  # 新增top_k字段，默认20
+    top_p: float = 0.95  # 新增top_p字段，默认0.95
 
     def __init__(
         self,
@@ -79,6 +81,8 @@ class ModelConfig:
         is_thinking: bool = False,
         max_tokens: int | None = None,
         thinking_budget: int = 32768,  # 添加thinking_budget参数
+        top_k: int = 20,  # 新增top_k参数
+        top_p: float = 0.95,  # 新增top_p参数
     ):
         self.key = key
         self.base_url = base_url
@@ -88,6 +92,8 @@ class ModelConfig:
         self.is_thinking = is_thinking
         self.max_tokens = max_tokens
         self.thinking_budget = thinking_budget  # 初始化thinking_budget
+        self.top_k = top_k
+        self.top_p = top_p
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
@@ -95,7 +101,8 @@ class ModelConfig:
             f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
             f"max_context_size={self.max_context_size}, temperature={self.temperature}, "
             f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, "
-            f"thinking_budget={self.thinking_budget}, key={masked_key})"
+            f"thinking_budget={self.thinking_budget}, top_k={self.top_k}, top_p={self.top_p}, "
+            f"key={masked_key})"
         )
 
     def get_debug_info(self) -> dict:
@@ -108,6 +115,8 @@ class ModelConfig:
             "is_thinking": self.is_thinking,
             "max_tokens": self.max_tokens,
             "thinking_budget": self.thinking_budget,  # 添加thinking_budget到调试信息
+            "top_k": self.top_k,
+            "top_p": self.top_p,
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -136,6 +145,8 @@ class ModelConfig:
         is_thinking = os.environ.get("GPT_IS_THINKING")
         max_tokens = os.environ.get("GPT_MAX_TOKENS")
         thinking_budget = os.environ.get("GPT_THINKING_BUDGET")  # 新增环境变量获取
+        top_k = os.environ.get("GPT_TOP_K")  # 新增top_k环境变量获取
+        top_p = os.environ.get("GPT_TOP_P")  # 新增top_p环境变量获取
 
         if max_context_size is not None:
             try:
@@ -165,6 +176,16 @@ class ModelConfig:
         except ValueError as exc:
             raise ValueError(f"无效的thinking_budget值: {thinking_budget}") from exc
 
+        try:
+            top_k = int(top_k) if top_k is not None else 20  # 默认20
+        except ValueError as exc:
+            raise ValueError(f"无效的top_k值: {top_k}") from exc
+
+        try:
+            top_p = float(top_p) if top_p is not None else 0.95  # 默认0.95
+        except ValueError as exc:
+            raise ValueError(f"无效的top_p值: {top_p}") from exc
+
         return cls(
             key=key,
             base_url=base_url,
@@ -174,6 +195,8 @@ class ModelConfig:
             is_thinking=is_thinking,
             max_tokens=max_tokens,
             thinking_budget=thinking_budget,  # 添加thinking_budget参数
+            top_k=top_k,  # 添加top_k参数
+            top_p=top_p,  # 添加top_p参数
         )
 
 
@@ -446,6 +469,8 @@ def query_gpt_api(
             temperature (float): 生成温度
             proxies: 代理设置
             thinking_budget (int): 思考预算限制
+            top_k (int): 采样时保留的top k个token
+            top_p (float): 核采样概率阈值
 
     返回:
         dict: 包含API响应结果的字典
@@ -2636,7 +2661,7 @@ class GPTContextProcessor:
     def process_text(self, text: str, ignore_text: bool = False, tokens_left: int = None) -> str:
         """处理文本并生成上下文提示"""
         if not tokens_left:
-            tokens_left = GLOBAL_MODEL_CONFIG.max_context_size
+            tokens_left = 128 * 1024
 
         nodes = self.parse_text_into_nodes(text)
         self.processed_nodes = nodes.copy()
@@ -3635,6 +3660,8 @@ class ModelSwitch:
         max_context_size = config.max_context_size
         temperature = config.temperature
         thinking_budget = config.thinking_budget  # 新增thinking_budget字段
+        top_k = config.top_k  # 新增top_k字段
+        top_p = config.top_p  # 新增top_p字段
 
         combined_kwargs = {
             "disable_conversation_history": disable_conversation_history,
@@ -3644,6 +3671,8 @@ class ModelSwitch:
             "temperature": temperature,
             "enable_thinking": config.is_thinking,
             "thinking_budget": thinking_budget,  # 添加thinking_budget到请求参数
+            "top_k": top_k,  # 添加top_k到请求参数
+            "top_p": top_p,  # 添加top_p到请求参数
         }
 
         max_repeat = 3
