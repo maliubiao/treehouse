@@ -129,6 +129,7 @@ class TraceConfig:
         ignore_self: bool = True,
         ignore_system_paths: bool = True,
         start_function: Tuple[str, int] = None,
+        disable_html: bool = False,
     ):
         """
         初始化跟踪配置
@@ -154,6 +155,7 @@ class TraceConfig:
         self._system_paths = self._get_system_paths() if ignore_system_paths else set()
         self.report_name = report_name if report_name else _DEFAULT_REPORT_NAME
         self.start_function = start_function
+        self.disable_html = disable_html
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -1086,6 +1088,7 @@ class TraceLogExtractor:
                 entry["frame_id"],
                 entry["position"],
                 entry.get("func", ""),  # 新增func字段返回
+                entry.get("parent_frame_id", None),
             )
         except json.JSONDecodeError:
             return None
@@ -1106,6 +1109,7 @@ class TraceLogExtractor:
         start_position = None
         references_group = []
         references = []
+        frame_call_start = {}
         with open(self.index_file, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("#"):
@@ -1113,7 +1117,9 @@ class TraceLogExtractor:
                 parsed = self._parse_index_line(line)
                 if not parsed:
                     continue
-                type_tag, file, line_no, frame_id, position, func = parsed
+                type_tag, file, line_no, frame_id, position, func, parent_frame_id = parsed
+                if type_tag == TraceTypes.CALL:
+                    frame_call_start[frame_id] = position
                 # 收集调用链参考信息
                 if target_frame_id is not None and type_tag in (
                     TraceTypes.CALL,
@@ -1131,7 +1137,10 @@ class TraceLogExtractor:
 
                 if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
                     target_frame_id = frame_id
-                    start_position = position
+                    if parent_frame_id in frame_call_start:
+                        start_position = frame_call_start[parent_frame_id]
+                    else:
+                        start_position = position
                     references.append(
                         {
                             "filename": file,
@@ -1214,6 +1223,8 @@ class TraceLogic:
         self._output = self._OutputHandlers(self)
 
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
+        if self.config.disable_html:
+            self.disable_output("html")
 
     def _get_frame_id(self, frame):
         """获取当前帧ID"""
@@ -1255,13 +1266,15 @@ class TraceLogic:
 
     def write_log_index(self, log_type, log_data, position):
         """写入日志索引"""
+        data = log_data["data"]
         index_entry = {
             "type": log_type,
-            "filename": log_data["data"]["original_filename"],
-            "lineno": log_data["data"].get("lineno", 0),
-            "frame_id": log_data["data"]["frame_id"],
+            "filename": data["original_filename"],
+            "lineno": data.get("lineno", 0),
+            "frame_id": data["frame_id"],
             "position": position,
-            "func": log_data["data"].get("func", ""),
+            "func": data.get("func", ""),
+            "parent_frame_id": data.get("parent_frame_id", 0),
         }
         self._output._log_file_index.write(json.dumps(index_entry) + "\n")
 
@@ -1372,20 +1385,14 @@ class TraceLogic:
             if frame.f_code.co_name == "<module>":
                 log_prefix = TraceTypes.PREFIX_MODULE
             else:
-                try:
-                    args, _, _, values = inspect.getargvalues(frame)
-                    args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args]
-                except (AttributeError, TypeError) as e:
-                    self._add_to_buffer(
-                        {
-                            "template": "参数解析失败: {error}",
-                            "data": {"error": str(e)},
-                        },
-                        TraceTypes.ERROR,
-                    )
-                    args_info.append("<参数解析错误>")
+                args, _, _, values = inspect.getargvalues(frame)
+                args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args]
                 log_prefix = TraceTypes.PREFIX_CALL
-
+            parent_frame = frame.f_back
+            if parent_frame is not None:
+                parent_frame_id = self._get_frame_id(parent_frame)
+            else:
+                parent_frame_id = 0
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self._get_frame_id(frame)
             self._frame_data._frame_locals_map[frame_id] = frame.f_locals
@@ -1401,6 +1408,7 @@ class TraceLogic:
                         "func": frame.f_code.co_name,
                         "args": ", ".join(args_info),
                         "frame_id": frame_id,
+                        "parent_frame_id": parent_frame_id,
                     },
                 },
                 TraceTypes.COLOR_CALL,
@@ -1516,6 +1524,8 @@ class TraceLogic:
             self._process_captured_vars(frame)
 
     def handle_opcode(self, frame, opcode, name, value):
+        if self.config.disable_html:
+            return
         self._html_render.add_stack_variable_create(self._message_id, opcode, name, value)
 
     def _process_trace_expression(self, frame, line, filename, lineno):
@@ -1740,11 +1750,33 @@ class Counter:
             return Counter.counter
 
 
-def trace(target_files: List[str] = None, **okwargs):
+def trace(
+    target_files: List[str] = None,
+    line_ranges: Dict[str, List[Tuple[int, int]]] = None,
+    capture_vars: List[str] = None,
+    callback: Optional[callable] = None,
+    report_name: str = _DEFAULT_REPORT_NAME,
+    exclude_functions: List[str] = None,
+    enable_var_trace: bool = False,
+    ignore_self: bool = True,
+    ignore_system_paths: bool = True,
+    start_function: Tuple[str, int] = None,
+    disable_html: bool = False,
+):
     """函数跟踪装饰器
 
     Args:
-        config: 跟踪配置实例(可选)
+        target_files: 目标文件模式列表，支持通配符
+        line_ranges: 文件行号范围字典，key为文件名，value为 (start_line, end_line) 元组列表
+        capture_vars: 要捕获的变量表达式列表
+        callback: 变量捕获时的回调函数
+        report_name: 报告文件名
+        exclude_functions: 要排除的函数名列表
+        enable_var_trace: 是否启用变量操作跟踪
+        ignore_self: 是否忽略跟踪器自身
+        ignore_system_paths: 是否忽略系统路径和第三方包路径
+        start_function: 起始函数名和行号
+        disable_html: 是否禁用HTML报告
     """
     if not target_files:
         target_files = [sys._getframe().f_back.f_code.co_filename]
@@ -1753,12 +1785,18 @@ def trace(target_files: List[str] = None, **okwargs):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             print(color_wrap("[start tracer]", TraceTypes.COLOR_CALL))
-            if "report_name" not in okwargs:
-                log_name = func.__name__
-                report_name = log_name + ".html"
-                okwargs["report_name"] = report_name
             config = TraceConfig(
-                **okwargs,
+                target_files=target_files,
+                line_ranges=line_ranges,
+                capture_vars=capture_vars,
+                callback=callback,
+                report_name=report_name,
+                exclude_functions=exclude_functions,
+                enable_var_trace=enable_var_trace,
+                ignore_self=ignore_self,
+                ignore_system_paths=ignore_system_paths,
+                start_function=start_function,
+                disable_html=disable_html,
             )
             t = start_trace(config=config)
             try:

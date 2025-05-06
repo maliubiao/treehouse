@@ -158,7 +158,6 @@ class TestAutoFix:
         except Exception as e:
             print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
 
-    @tracer.trace(target_files=["*.py"], enable_var_trace=True, report_name="get_symbol_info_for_references.html")
     def get_symbol_info_for_references(self, ref_files: list, references: list) -> dict:
         """获取符号信息用于参考展示"""
         # 按filename分组建立映射
@@ -213,6 +212,7 @@ class TestAutoFix:
         report_name="run_all_tests.html",
         ignore_self=False,
         ignore_system_paths=True,
+        disable_html=True,
     )
     def run_tests(testcase: Optional[str] = None) -> Dict:
         """Run tests and return results in JSON format."""
