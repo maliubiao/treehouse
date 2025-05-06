@@ -19,6 +19,7 @@ import traceback
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from unittest.mock import Mock
 
 import yaml
 from colorama import Fore, Style, just_fix_windows_console
@@ -319,7 +320,7 @@ def _truncate_sequence(value, keep_elements):
     keep_list = []
     for i in range(keep_elements):
         keep_list.append(value[i])
-    return f"[{keep_list} ...]"
+    return f"{repr(keep_list)[:-1]} ...]"
 
 
 def _truncate_dict(value, keep_elements):
@@ -354,19 +355,17 @@ def truncate_repr_value(value, keep_elements=10):
     """智能截断保留关键类型信息"""
     preview = "..."
     try:
-        if inspect.isfunction(value) or inspect.ismodule(value) or inspect.isclass(value):
-            preview = f"{type(value).__name__}(...)"
+        # 检测是否是unittest.mock.Mock对象
+        if isinstance(value, Mock):
+            preview = f"mock.Mock({value.__class__})"
         elif isinstance(value, (list, tuple)):
             preview = _truncate_sequence(value, keep_elements)
         elif isinstance(value, dict):
             preview = _truncate_dict(value, keep_elements)
         elif hasattr(value, "__dict__"):
             preview = _truncate_object(value, keep_elements)
-        else:
-            preview = repr(value)
-    except (AttributeError, TypeError, ValueError, RecursionError) as e:
-        return f"capture error: {str(e)}"
-
+    except Exception as e:
+        preview = "[trace system error: %s]" % str(e)
     if len(preview) > _MAX_VALUE_LENGTH:
         preview = preview[:_MAX_VALUE_LENGTH] + "..."
     return preview
@@ -646,14 +645,12 @@ class SysMonitoringTraceDispatcher:
             self.active_frames.add(frame)
             self._logic.handle_call(frame)
 
-        return None
-
     def _handle_py_resume(self, _code, _offset):
         """Handle PY_RESUME event (function resume)"""
         # frame = sys._getframe(1)
         # if frame in self.active_frames:
         #     print(" resume in active frame: %s", frame)
-        return None
+        pass
 
     def _handle_py_return(self, _code, _offset, retval):
         """Handle PY_RETURN event (function return)"""
@@ -661,21 +658,18 @@ class SysMonitoringTraceDispatcher:
         if frame in self.active_frames:
             self._logic.handle_return(frame, retval)
             self.active_frames.discard(frame)
-        return None
 
     def _handle_line(self, _code, _line_number):
         """Handle LINE event"""
         frame = sys._getframe(1)  # Get the current frame
         if frame in self.active_frames:
             self._logic.handle_line(frame)
-        return None
 
     def _handle_raise(self, _code, _offset, exc):
         """Handle RAISE event (exception raised)"""
         frame = sys._getframe(1)  # Get the frame where exception was raised
         if frame in self.active_frames:
             self._logic.handle_exception(type(exc), exc, frame)
-        return None
 
     def _handle_exception_handled(self, _code, _offset, exc):
         """Handle EXCEPTION_HANDLED event"""
@@ -684,7 +678,6 @@ class SysMonitoringTraceDispatcher:
             if len(self._logic.exception_chain) > 0:
                 self._logic.exception_chain.pop()
             self._logic.stack_depth += 1
-        return None
 
     def _handle_py_yield(self, _code, _offset, value):
         """Handle PY_YIELD event (generator yield)"""
@@ -692,14 +685,13 @@ class SysMonitoringTraceDispatcher:
         # if frame in self.active_frames:
         #     func_name = frame.f_code.co_name
         #     pass
-        return None
+        pass
 
     def _handle_py_throw(self, _code, _offset, exc):
         """Handle PY_THROW event (generator throw)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
             self._logic.handle_exception(type(exc), exc, frame)
-        return None
 
     def _handle_py_unwind(self, *args):
         """Handle PY_UNWIND event (stack unwinding)"""
@@ -707,14 +699,12 @@ class SysMonitoringTraceDispatcher:
         if frame in self.active_frames:
             self._logic.flush_exception()
             self.active_frames.discard(frame)
-        return None
 
     def _handle_reraise(self, _code, _offset, exc):
         """Handle RERAISE event (exception re-raised)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
             self._logic.handle_exception(type(exc), exc, frame)
-        return None
 
     def is_target_frame(self, frame):
         """Check if frame matches target files"""
@@ -1664,24 +1654,24 @@ class TraceLogic:
 
 
 def get_tracer(module_path, config: TraceConfig):
-    tracer_core_name = "tracer_core.pyd" if os.name == "nt" else "tracer_core.so"
-    tracer_core_path = os.path.join(os.path.dirname(__file__), tracer_core_name)
-    if os.path.exists(tracer_core_path):
-        try:
-            spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)
-            tracer_core = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(tracer_core)
-            trace_dispatcher = tracer_core.TraceDispatcher
-            return trace_dispatcher(str(module_path), TraceLogic(config), config)
-        except Exception as e:
-            logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
-            print(
-                color_wrap(
-                    f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}",
-                    TraceTypes.COLOR_ERROR,
-                )
-            )
-            raise
+    # tracer_core_name = "tracer_core.pyd" if os.name == "nt" else "tracer_core.so"
+    # tracer_core_path = os.path.join(os.path.dirname(__file__), tracer_core_name)
+    # if os.path.exists(tracer_core_path):
+    #     try:
+    #         spec = importlib.util.spec_from_file_location("tracer_core", tracer_core_path)
+    #         tracer_core = importlib.util.module_from_spec(spec)
+    #         spec.loader.exec_module(tracer_core)
+    #         trace_dispatcher = tracer_core.TraceDispatcher
+    #         return trace_dispatcher(str(module_path), TraceLogic(config), config)
+    #     except Exception as e:
+    #         logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
+    #         print(
+    #             color_wrap(
+    #                 f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}",
+    #                 TraceTypes.COLOR_ERROR,
+    #             )
+    #         )
+    #         raise
     return None
 
 

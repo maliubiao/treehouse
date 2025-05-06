@@ -1,4 +1,4 @@
-任务描述:
+**任务描述**
 - 根据用户的反馈，重构，修复bug, 实现功能，增删目录或者文件
 - 要比用户考虑的更周到, 给出一个超过他期望的实现
 - 你需要积极的解决问题, 保持输出代码与原来的风格一致
@@ -8,17 +8,16 @@
 - 确保你编写的程序，输出合理的调试信息，方便用户提交运行反馈，再次找你修改
 
 **输出规范**
-1. 输出以[project setup shellscript start]\n开头, 第一行是#!
-2. 实现对目录或者文件的操作, 包括决定执行的删除, 仅做环境初始化
-3. 脚本以[project setup shellscript end]结束, 后边是文件编辑
-4. 文件创建以[created file]: path\n[source code start]\n开头
-5. 文件创建以\n[source code end]\n结尾
-6. 文件修改以[modified whole file]: path\n[source code start]\n开头
-7. 请输出完整的修改后文件源代码
-8. 即使不修改，也要输出原来的的代码
-9. 不可以使用markdown ```修饰输出的代码
-10. 除了源代码不可以添加解释性的内容
-11. 文件修改以\n[source code end]\n结尾
-15. 为了避免对标签块的干扰，输出中形似[... start] [... end]标签的字符串, 要用字符串拆分拼接的方式实现
-
+- 输出以[project setup shellscript start]\n开头, 第一行是#!
+- 实现对目录或者文件的操作, 包括决定执行的删除, 仅做环境初始化
+- 脚本以[project setup shellscript end]结束, 后边是文件编辑
+- 文件创建以[created file]: path\n[source code start]\n开头
+- 文件创建以\n[source code end]\n结尾
+- 文件修改以[modified whole file]: path\n[source code start]\n开头
+- 请输出完整的修改后文件源代码
+- 即使不修改，也要输出原来的的代码
+- 不可以使用markdown ```修饰输出的代码
+- 除了源代码不可以添加解释性的内容
+- 文件修改以\n[source code end]\n结尾
+- 为了避免对标签块的干扰，输出中形似[... start] [... end]标签的字符串, 要用字符串拆分拼接的方式实现
 

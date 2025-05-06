@@ -2,25 +2,35 @@ import argparse
 import sys
 from typing import Dict, List, Optional, Tuple
 
-from debugger import tracer
 import colorama
 from colorama import Fore, Style
 
+from debugger import tracer
+
 colorama.init(autoreset=True)
-from llm_query import MatchResult, FileSearchResult, FileSearchResults
-from llm_query import query_symbol_service, GLOBAL_MODEL_CONFIG
 from collections import defaultdict
 from pathlib import Path
-from llm_query import (
-    PatchPromptBuilder,
-    GPT_FLAGS,
-    GPT_FLAG_PATCH,
-    ModelSwitch,
-    process_patch_response,
-    GPT_VALUE_STORAGE,
-    GPT_SYMBOL_PATCH,
-)
 from textwrap import dedent
+
+# this will cause recursion with repr
+from unittest.mock import _Call
+
+from llm_query import (
+    GLOBAL_MODEL_CONFIG,
+    GPT_FLAG_PATCH,
+    GPT_FLAGS,
+    GPT_SYMBOL_PATCH,
+    GPT_VALUE_STORAGE,
+    FileSearchResult,
+    FileSearchResults,
+    MatchResult,
+    ModelSwitch,
+    PatchPromptBuilder,
+    process_patch_response,
+    query_symbol_service,
+)
+
+_Call.__repr__ = lambda self: f"<Call id={id(self)}>"  # type: ignore
 
 
 class TestAutoFix:
@@ -197,7 +207,13 @@ class TestAutoFix:
         return [line.strip() for line in lines[start:end]]
 
     @staticmethod
-    @tracer.trace(target_files=["*.py"], enable_var_trace=True, report_name="run_all_tests.html")
+    @tracer.trace(
+        target_files=["*.py"],
+        enable_var_trace=True,
+        report_name="run_all_tests.html",
+        ignore_self=False,
+        ignore_system_paths=True,
+    )
     def run_tests(testcase: Optional[str] = None) -> Dict:
         """Run tests and return results in JSON format."""
         from tests.test_main import run_tests
