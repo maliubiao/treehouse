@@ -4047,26 +4047,6 @@ async def lsp_file_didChange(file_path: str = Form(...), content: str = Form(...
         return JSONResponse(status_code=500, content={"message": "Internal server error"})
 
 
-@app.get("/extract_identifier")
-async def extract_identifier(text: str = QueryArgs(...)):
-    """
-    对输入文本进行分词，提取符合编程语言标识符规则的词语
-
-    Args:
-        text: 需要分词的原始文本，长度建议不超过1000字符
-        有效输入示例: "ParserUtil Python TestCase"
-
-    Returns:
-        list[str]: 符合标识符规则的词语列表
-    """
-    if not text.strip():
-        return []
-
-    words = list(dynamic_import("jieba").cut(text, cut_all=False))
-    identifier_pattern = re.compile(r"^[a-zA-Z_]\w*$")
-    return [word for word in words if identifier_pattern.fullmatch(word)]
-
-
 class MatchResult(BaseModel):
     line: int
     column_range: tuple[int, int]

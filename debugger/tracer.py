@@ -1501,7 +1501,7 @@ class TraceLogic:
                         else:
                             try:
                                 value = self.cache_eval(frame, var)  # nosec
-                            except NameError:
+                            except (AttributeError, NameError, SyntaxError):
                                 continue
                         tracked_vars[var] = truncate_repr_value(value)
             else:
@@ -1545,7 +1545,7 @@ class TraceLogic:
             return
         try:
             value = self.cache_eval(frame, cached_expr)  # 预编译表达式
-        except NameError as e:
+        except (AttributeError, NameError, SyntaxError) as e:
             value = f"<Failed to evaluate: {str(e)}>"
         formatted = truncate_repr_value(value)
         self._add_to_buffer(

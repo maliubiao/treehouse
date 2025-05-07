@@ -2501,26 +2501,6 @@ class TestLSPIntegration(unittest.TestCase):
             self.assertIn("Internal server error", response.json()["message"])
 
 
-class TestSentenceSegments:
-    client = TestClient(app)
-
-    def test_should_extract_identifiers(self):
-        response = self.client.get("/extract_identifier?text=我们试试看ParserUtil Python TestCase")
-        assert sorted(response.json()) == ["ParserUtil", "Python", "TestCase"]
-
-    def test_should_handle_empty_input(self):
-        response = self.client.get("/extract_identifier?text=")
-        assert response.status_code == 422
-
-    def test_should_filter_non_identifiers(self):
-        response = self.client.get("/extract_identifier?text=百度是高科技公司")
-        assert response.json() == []
-
-    def test_should_ignore_spaces_and_symbols(self):
-        response = self.client.get("/extract_identifier?text=hello_world x123 _temp var-2")
-        assert response.json() == ["hello_world", "x123", "_temp"]
-
-
 class TestLSPStart(unittest.TestCase):
     """测试LSP客户端启动功能"""
 

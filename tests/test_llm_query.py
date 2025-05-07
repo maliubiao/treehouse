@@ -54,10 +54,18 @@ class TestGPTContextProcessor(unittest.TestCase):
         self.test_dir = tempfile.mkdtemp()
         os.chdir(self.test_dir)
 
+        # Mock GLOBAL_MODEL_CONFIG
+        self.mock_model_config = MagicMock()
+        self.mock_model_config.is_thinking = False
+        self.patcher = patch("llm_query.GLOBAL_MODEL_CONFIG", self.mock_model_config)
+        self.patcher.start()
+
     def tearDown(self):
         """清理测试环境"""
         os.chdir(os.path.dirname(self.test_dir))
         os.rmdir(self.test_dir)
+        # 停止patcher
+        self.patcher.stop()
 
     def test_basic_text_processing(self):
         """测试基本文本处理"""
