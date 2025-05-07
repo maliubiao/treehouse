@@ -316,6 +316,11 @@ class GenericLSPClient:
         finally:
             self._cleanup()
 
+    async def force_down(self):
+        self.process.terminate()
+        self.process.wait(timeout=1)
+        self.process = None
+
     def _cleanup(self):
         """清理资源"""
         self.running = False
@@ -331,7 +336,11 @@ class GenericLSPClient:
             finally:
                 self.process.stdout.close()
                 self.process.stdin.close()
-
+            with self._lock:
+                for future in self.response_futures.values():
+                    if not future.done():
+                        future.set_exception(asyncio.CancelledError("LSP client shutdown"))
+                self.response_futures.clear()
         for pipe in [
             self.stdin,
             self.stdout,
@@ -342,12 +351,6 @@ class GenericLSPClient:
                     pipe.close()
             except (OSError, RuntimeError) as e:
                 logger.debug("Error closing pipe: %s", str(e))
-
-        with self._lock:
-            for future in self.response_futures.values():
-                if not future.done():
-                    future.set_exception(asyncio.CancelledError("LSP client shutdown"))
-            self.response_futures.clear()
 
     async def get_document_symbols(self, file_path):
         """获取文档符号"""

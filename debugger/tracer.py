@@ -366,6 +366,8 @@ def truncate_repr_value(value, keep_elements=10):
             preview = _truncate_dict(value, keep_elements)
         elif hasattr(value, "__dict__"):
             preview = _truncate_object(value, keep_elements)
+        else:
+            preview = repr(value)
     except Exception as e:
         preview = "[trace system error: %s]" % str(e)
     if len(preview) > _MAX_VALUE_LENGTH:
@@ -1221,6 +1223,7 @@ class TraceLogic:
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
+        self.last_line_vars = None
 
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         if self.config.disable_html:
@@ -1467,7 +1470,7 @@ class TraceLogic:
         if code_obj not in self._frame_data._code_var_ops:
             self._frame_data._code_var_ops[code_obj] = self._get_var_ops(code_obj)
 
-        line_vars = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno - 1, set())
+        line_vars = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno, set())
         return line_vars
 
     def cache_eval(self, frame, expr):
@@ -1484,21 +1487,25 @@ class TraceLogic:
         self._message_id += 1
         tracked_vars = {}
         if self.config.enable_var_trace:
-            var_names = self._get_line_vars(frame)
-            if var_names:
-                locals_dict = frame.f_locals
-                globals_dict = frame.f_globals
-                for var in var_names:
-                    if var in locals_dict:
-                        value = locals_dict[var]
-                    elif var in globals_dict:
-                        value = globals_dict[var]
-                    else:
-                        try:
-                            value = self.cache_eval(frame, var)  # nosec
-                        except NameError:
-                            continue
-                    tracked_vars[var] = truncate_repr_value(value)
+            if self.last_line_vars:
+                var_names = self.last_line_vars
+                self.last_line_vars = None
+                if var_names:
+                    locals_dict = frame.f_locals
+                    globals_dict = frame.f_globals
+                    for var in var_names:
+                        if var in locals_dict:
+                            value = locals_dict[var]
+                        elif var in globals_dict:
+                            value = globals_dict[var]
+                        else:
+                            try:
+                                value = self.cache_eval(frame, var)  # nosec
+                            except NameError:
+                                continue
+                        tracked_vars[var] = truncate_repr_value(value)
+            else:
+                self.last_line_vars = self._get_line_vars(frame)
         log_data = {
             "idx": self._message_id,
             "template": "{indent}▷ {filename}:{lineno} {line}",

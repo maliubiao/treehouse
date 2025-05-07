@@ -351,7 +351,7 @@ class TestParserUtil(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         if cls.lsp_client.running:
-            asyncio.run(cls.lsp_client.shutdown())
+            asyncio.run(cls.lsp_client.force_down())
 
     def setUp(self):
         self.parser_loader = ParserLoader()

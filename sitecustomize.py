@@ -4,13 +4,11 @@ import os
 import sys
 from pathlib import Path
 
-from colorama import Fore, Style, init
-
-from gpt_workflow.auto_exception import ExceptionHandler
-
 
 def install_auto_exception():
     """全局安装异常处理器"""
+    from gpt_workflow.auto_exception import ExceptionHandler
+
     handler = ExceptionHandler()
     handler.install()
 
@@ -35,6 +33,7 @@ TRACE = os.environ.get("TRACE", "")
 
 if TRACE:
     from debugger.tracer import TraceConfig, start_trace
+    from colorama import Fore, Style, init
 
     path = Path(__file__).parent / "gpt_workflow/auto_exception/logs/auto_exception.json"
     if path.exists():
@@ -74,4 +73,7 @@ if TRACE:
             atexit.register(close)
             TRACER = start_trace(config)
 else:
-    install_auto_exception()
+    try:
+        install_auto_exception()
+    except Exception:
+        pass
