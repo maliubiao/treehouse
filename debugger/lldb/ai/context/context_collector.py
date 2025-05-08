@@ -15,7 +15,7 @@ class ThreadContext:
     current_frame: Dict[str, Any]
     # memory_regions: Dict[str, Any]
     globals: Dict[str, Any]
-    registers: Dict[str, Any]
+    # registers: Dict[str, Any]
     variables: Dict[str, Any]
     extended_backtrace_types: List[str]
     history: List[Dict[str, Any]]  # Added thread history
@@ -87,7 +87,7 @@ class ContextCollector:
                 "frame_count": 0,
                 "current_frame": {},
                 "globals": {},
-                "registers": {},
+                # "registers": {},
                 "variables": {},
                 "extended_backtrace_types": [],
                 "history": [],
@@ -105,7 +105,7 @@ class ContextCollector:
             "current_frame": {},
             # 'memory_regions': {},
             "globals": {},
-            "registers": self._get_register_values(frame) if frame else {},
+            # "registers": self._get_register_values(frame) if frame else {},
             "variables": self._get_local_variables(frame) if frame else {},
             "extended_backtrace_types": self._get_extended_backtrace_types(thread),
             "history": self._get_thread_history(thread),
@@ -236,11 +236,11 @@ class ContextCollector:
                 "pid": 0,
                 "total_threads": 0,
                 "selected_thread_id": None,
-                "threads": {},
+                # "threads": {},
                 # 'memory_regions': {},
                 "exit_status": None,
                 "exit_description": None,
-                "is_alive": False,
+                # "is_alive": False,
                 "is_running": False,
                 "is_stopped": False,
                 "stop_id": 0,
@@ -308,7 +308,7 @@ class ContextCollector:
             env_probe = DebugEnvironment(debugger)
             env_data = {
                 "compiler": env_probe.get_compiler_info(),
-                "loaded_images": env_probe.get_loaded_images(),
+                # "loaded_images": env_probe.get_loaded_images(),
                 "runtime_stats": {
                     "thread_count": process.GetNumThreads(),
                     "state": str(process.GetState()),

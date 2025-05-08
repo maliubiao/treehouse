@@ -3455,6 +3455,15 @@ class ModelSwitch:
         self.current_config: Optional[ModelConfig] = None
         self.workflow = import_relative("gpt_workflow")
 
+    def models(self) -> list[str]:
+        """
+        获取所有可用的模型名称列表
+
+        返回:
+            list[str]: 模型名称列表
+        """
+        return list(self.config.keys())
+
     def _parse_config_dict(self, config_dict: dict) -> ModelConfig:
         """将原始配置字典转换为ModelConfig实例"""
         try:
