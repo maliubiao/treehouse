@@ -870,7 +870,6 @@ class CallTreeHtmlRender:
 
     def _message_to_html(self, message, msg_type, log_data):
         """将消息转换为HTML片段"""
-
         stripped_message = message.lstrip()
         indent = len(message) - len(stripped_message)
         escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
@@ -995,7 +994,7 @@ class CallTreeHtmlRender:
         """生成完整的HTML报告"""
         buffer = []
         error_count = 0
-
+        # 这块需要在js中进行，翻译成js代码， 使用到的self._messages,  self._stack_variables 直接传入js
         for idx, (message, msg_type, log_data) in enumerate(self._messages):
             if self._size_exceeded:
                 continue
