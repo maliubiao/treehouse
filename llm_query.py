@@ -2604,6 +2604,22 @@ class GPTContextProcessor:
         self.processed_nodes = []
         self._local_files = set()
 
+    def register_command(self, command: str, handler: Callable[[CmdNode], str]) -> None:
+        """注册自定义命令处理器
+
+        参数:
+            command: 命令名称(不带@前缀)
+            handler: 处理函数，接收CmdNode参数并返回处理后的字符串
+
+        示例:
+            processor.register_command("mycmd", lambda cmd: "处理结果")
+        """
+        if not command or not handler:
+            raise ValueError("命令和处理器不能为空")
+        if not callable(handler):
+            raise TypeError("处理器必须是可调用对象")
+        self.cmd_handlers[command] = handler
+
     def _initialize_command_handlers(self) -> dict:
         """初始化命令处理器映射"""
         return {
@@ -2663,7 +2679,7 @@ class GPTContextProcessor:
         if not tokens_left:
             tokens_left = 128 * 1024
 
-        nodes = self.parse_text_into_nodes(text)
+        nodes = self.parse_text_into_nodes(text.strip())
         self.processed_nodes = nodes.copy()
 
         # 处理项目配置文件
@@ -3190,8 +3206,8 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
     file_path = Path(file_path)
     if save and file_path:
         with open(file_path, "w+", encoding="utf8") as f:
-            # 删除<think>...</think>内容
-            cleaned_content = re.sub(r"<think>\n?.*?\n?</think>\n*", "", content, flags=re.DOTALL)
+            # 删除内容
+            cleaned_content = content.strip()
             f.write(cleaned_content)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", encoding="utf-8", delete=False) as tmp_file:
@@ -3200,43 +3216,7 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
 
     # 处理Obsidian文档存储
     if obsidian_doc:
-        obsidian_dir = Path(obsidian_doc)
-        obsidian_dir.mkdir(parents=True, exist_ok=True)
-
-        # 创建按年月分组的子目录
-        now = time.localtime()
-        month_dir = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}"
-        month_dir.mkdir(exist_ok=True)
-
-        # 生成时间戳文件名
-        timestamp = f"{now.tm_hour}-{now.tm_min}-{now.tm_sec}.md"
-        obsidian_file = month_dir / timestamp
-
-        # 格式化内容：将非空思维过程渲染为绿色，去除背景色
-        formatted_content = re.sub(
-            r"<think>\n*([\s\S]*?)\n*</think>",
-            lambda match: '<div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">'
-            + match.group(1).replace("\n", "<br>")
-            + "</div>",
-            content,
-            flags=re.DOTALL,
-        )
-
-        # 添加提示词
-        if prompt:
-            formatted_content = f"### 问题\n\n```\n{prompt}\n```\n\n### 回答\n{formatted_content}"
-
-        # 写入响应内容
-        with open(obsidian_file, "w", encoding="utf-8") as f:
-            f.write(formatted_content)
-
-        # 更新main.md
-        main_file = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}-索引.md"
-        link_name = re.sub(r"[{}]", "", ask_param[:256]) if ask_param else timestamp
-        link = f"[[{month_dir.name}/{timestamp}|{link_name}]]\n"
-
-        with open(main_file, "a", encoding="utf-8") as f:
-            f.write(link)
+        save_to_obsidian(obsidian_doc, content, prompt, ask_param)
 
     if not check_deps_installed():
         sys.exit(1)
@@ -3255,6 +3235,54 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
         extract_and_diff_files(content)
     if GPT_FLAGS.get(GPT_FLAG_PATCH):
         process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+
+
+def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
+    """将内容保存到Obsidian文档系统
+
+    Args:
+        obsidian_doc: Obsidian文档目录路径
+        content: 要保存的内容
+        prompt: 可选的问题提示
+        ask_param: 可选的参数用于生成链接名称
+    """
+    obsidian_dir = Path(obsidian_doc)
+    obsidian_dir.mkdir(parents=True, exist_ok=True)
+
+    # 创建按年月分组的子目录
+    now = time.localtime()
+    month_dir = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}"
+    month_dir.mkdir(exist_ok=True)
+
+    # 生成时间戳文件名
+    timestamp = f"{now.tm_hour}-{now.tm_min}-{now.tm_sec}.md"
+    obsidian_file = month_dir / timestamp
+
+    # 格式化内容：将非空思维过程渲染为绿色，去除背景色
+    formatted_content = re.sub(
+        r"<think>\n*([\s\S]*?)\n*</think>",
+        lambda match: '<div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">'
+        + match.group(1).replace("\n", "<br>")
+        + "</div>",
+        content,
+        flags=re.DOTALL,
+    )
+
+    # 添加提示词
+    if prompt:
+        formatted_content = f"### 问题\n\n````\n{prompt}\n````\n\n### 回答\n{formatted_content}"
+
+    # 写入响应内容
+    with open(obsidian_file, "w", encoding="utf-8") as f:
+        f.write(formatted_content)
+
+    # 更新main.md
+    main_file = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}-索引.md"
+    link_name = re.sub(r"[{}]", "", ask_param[:256]) if ask_param else timestamp
+    link = f"[[{month_dir.name}/{timestamp}|{link_name}]]\n"
+
+    with open(main_file, "a", encoding="utf-8") as f:
+        f.write(link)
 
 
 def validate_files(program_args):
@@ -3674,7 +3702,7 @@ class ModelSwitch:
 
         combined_kwargs = {
             "disable_conversation_history": disable_conversation_history,
-            "conversation_file": os.path.join(shadowroot, "conversation.json"),
+            # "conversation_file": os.path.join(shadowroot, "conversation.json"),
             **kwargs,
             "max_context_size": max_context_size,
             "temperature": temperature,

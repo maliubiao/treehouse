@@ -7,10 +7,14 @@ import lldb
 import yaml
 
 from debugger.tracer import trace
-from llm_query import GPTContextProcessor, ModelSwitch
+from llm_query import GPTContextProcessor, ModelSwitch, save_to_obsidian, GLOBAL_PROJECT_CONFIG, CmdNode
 
 from .context.context_collector import ContextCollector, DebugContext
 from .command_parser import CommandParser
+from pathlib import Path
+
+# from lldb.plugins.parsed_cmd import ParsedCommand
+import uuid
 
 
 class CommandValidator:
@@ -93,6 +97,10 @@ class GPTIntegrationService:
         """设置当前使用的模型"""
         self.current_model = model_name
 
+    def set_processor(self, processor: GPTContextProcessor) -> None:
+        """设置当前使用的上下文处理器"""
+        self.processor = processor
+
     def query(
         self, command, command_output: str, common_commands_output: str, context: DebugContext, question: str
     ) -> str:
@@ -108,12 +116,22 @@ class GPTIntegrationService:
                 temp_file_path = temp_file.name
 
             self.model_switch.select(self.current_model)
-            prompt = GPTContextProcessor().process_text(
+            role_prompt = Path(os.path.join(os.environ["GPT_PATH"], "prompts/lldb-rule")).read_text("utf-8")
+            context_string = (
                 f"[some debug commands output]\n{common_commands_output}[some debug commands output end]\n"
                 f"lldb context as the following:\n @{temp_file_path} \n[user question]\n{question}\n[user question end]"
             )
+            prompt = role_prompt + self.processor.process_text(context_string)
             print(prompt)
-            return self.model_switch.query_for_text(self.current_model, prompt, disable_conversation_history=True)
+            os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
+            response_text = self.model_switch.query_for_text(
+                self.current_model,
+                prompt,
+                disable_conversation_history=False,
+            )
+            save_to_obsidian(
+                os.path.join(os.environ["GPT_PATH"], "obsidian"), response_text, prompt, f"{command} :: {question}"
+            )
         finally:
             if temp_file_path and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
@@ -156,18 +174,59 @@ class AskGptCommand:
         from . import gpt_service
 
         self.gpt_service = gpt_service
+        self.processor = GPTContextProcessor()
+        self.gpt_service.set_processor(self.processor)
+        self._register_commands()
 
-    def help(self):
-        return """AskGPT Help:
-Usage:
-  askgpt <lldb_command> :: <question>  - Execute LLDB command and ask about its output
-  askgpt <question>                    - Ask a general question about the current debug session
+    def _register_commands(self):
+        """注册自定义命令处理器"""
+        self.processor.register_command("frames", self._handle_frames_command)
+        self.processor.register_command("frame", self._handle_frame_command)
+        self.processor.register_command("status", self._handle_status_command)
 
-Examples:
-  askgpt memory read 0x16fdd79c0 :: explain this memory
-  askgpt thread backtrace :: analyze call stack
-  askgpt What's wrong with my program?
-  askgpt help"""
+    def _handle_frames_command(self, cmd: CmdNode) -> str:
+        """处理@frames命令，返回所有帧的详细信息"""
+        return self.collect_frame_code(self.debugger)
+
+    def _handle_frame_command(self, cmd: CmdNode) -> str:
+        """处理@frame命令，返回当前帧的详细信息"""
+        target = self.debugger.GetSelectedTarget()
+        process = target.GetProcess()
+        thread = process.GetSelectedThread()
+        frame = thread.GetSelectedFrame()
+
+        result = []
+        result.append(f"Current frame: {frame}\n")
+        for att in ["addr", "args", "compile_unit", "function", "line_entry", "module", "name", "symbol"]:
+            result.append(f"{att}: {getattr(frame, att)}\n")
+        result.append("disassemble:\n")
+        result.append(frame.Disassemble())
+
+        if frame.line_entry.file:
+            with open(frame.line_entry.file.fullpath, "r") as f:
+                lines = f.readlines()
+                start_line = max(0, frame.line_entry.line - 10)
+                end_line = min(len(lines), frame.line_entry.line + 10)
+                result.append("\n[source code]:\n")
+                for i in range(start_line, end_line):
+                    if i == frame.line_entry.line - 1:
+                        result.append(f"{i + 1}: {lines[i].rstrip('\n')} <--\n")
+                    else:
+                        result.append(f"{i + 1}: {lines[i]}")
+                result.append("\n")
+        return "".join(result)
+
+    def _handle_status_command(self, cmd: CmdNode) -> str:
+        """处理@status命令，返回调试状态信息"""
+        executor = CommandExecutor(self.debugger)
+        sections = []
+        for i in ("settings show target.run-args", "process status", "bt", "frame variable", "target variable"):
+            try:
+                section = f"command: {i}\noutput: {executor.execute(i)}\n"
+            except RuntimeError as e:
+                section = f"command: {i}\noutput: {str(e)}\n"
+            sections.append(section)
+        return "\n".join(sections)
 
     def collect_frame_code(self, debugger):
         target = debugger.GetSelectedTarget()
@@ -200,17 +259,16 @@ Examples:
             result.append("\n")
         return "".join(result)
 
-    @trace(target_files=["*.py"])
+    @trace(target_files=["*.py"], enable_var_trace=True)
     def __call__(self, debugger, args, exe_ctx, result):
-        if not args.strip():
-            result.AppendMessage(self.help())
+        if len(args) == 0:
+            result.AppendMessage(self.get_help())
             return
-
         try:
             validator = CommandValidator(debugger)
             error = validator.validate(args)
             if error:
-                result.SetError(error + "\n" + self.help())
+                result.SetError(error + "\n" + self.get_help())
                 return
 
             if "::" in args:
@@ -222,59 +280,29 @@ Examples:
                 lldb_command = None
                 command_output = ""
                 question = args.strip()
-            executor = CommandExecutor(debugger)
-            sections = []
-            for i in ("settings show target.run-args", "process status", "bt", "frame variable", "target variable"):
-                try:
-                    section = f"command: {i}\noutput: {executor.execute(i)}\n"
-                except RuntimeError as e:
-                    section = f"command: {i}\noutput: {str(e)}\n"
-                sections.append(section)
-            common_commands_output = "\n".join(sections) + self.collect_frame_code(debugger)
+
             collector = ContextCollector()
             context = collector.collect_full_context(debugger)
-            response = self.gpt_service.query(lldb_command, command_output, common_commands_output, context, question)
+            response = self.gpt_service.query(lldb_command, command_output, "", context, question)
 
             result.AppendMessage(response)
         except Exception as e:
             result.SetError(str(e))
-            result.AppendMessage(self.help())
+            result.AppendMessage(self.get_help())
 
+    def get_help(self):
+        return """AskGPT Help:
+Usage:
+  askgpt <lldb_command> :: <question>  - Execute LLDB command and ask about its output
+  askgpt <question>                    - Ask a general question about the current debug session
+  askgpt @frames                       - Show all frames information
+  askgpt @frame                        - Show current frame details
+  askgpt @status                       - Show debug session status
 
-class AskGptCompleter:
-    @trace(target_files=["*.py"])
-    def __init__(self, debugger):
-        self.debugger = debugger
-        self._cached_commands = None
-
-    def _get_command_part(self, current_input: str) -> str:
-        command_part, _ = CommandParser.split_command_input(current_input)
-        return command_part
-
-    def _cache_commands(self):
-        ci = self.debugger.GetCommandInterpreter()
-        result = lldb.SBStringList()
-        ci.GetCommandNames(result, include_aliases=True, include_hidden=False)
-        self._cached_commands = [
-            (result.GetStringAtIndex(i), " " in result.GetStringAtIndex(i)) for i in range(result.GetSize())
-        ]
-
-    def __call__(self, result, current_input):
-        command_part, _ = CommandParser.split_command_input(current_input)
-        if not command_part:
-            return []
-
-        if not self._cached_commands:
-            self._cache_commands()
-
-        ci = self.debugger.GetCommandInterpreter()
-        completion_result = lldb.SBStringList()
-        ci.HandleCompletion(command_part, len(command_part), 0, -1, completion_result)
-
-        official_suggestions = [completion_result.GetStringAtIndex(i) for i in range(completion_result.GetSize())]
-
-        tokens = shlex.split(command_part)
-        if len(tokens) > 1:
-            return [cmd for cmd in official_suggestions if cmd.startswith(tokens[-1]) and " " not in cmd]
-
-        return [cmd for cmd in official_suggestions if cmd.startswith(command_part) and " " not in cmd]
+Examples:
+  askgpt memory read 0x16fdd79c0 :: explain this memory
+  askgpt thread backtrace :: analyze call stack
+  askgpt What's wrong with my program?
+  askgpt @frames
+  askgpt @status
+  askgpt help"""
