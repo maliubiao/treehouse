@@ -3207,8 +3207,8 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
     if save and file_path:
         with open(file_path, "w+", encoding="utf8") as f:
             # 删除内容
-            cleaned_content = content.strip()
-            f.write(cleaned_content)
+            cleaned_content = re.sub(r"<th" + r"ink>\n?.*?\n?</th" + r"ink>\n*", "", content, flags=re.DOTALL)
+            f.write(cleaned_content.strip())
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", encoding="utf-8", delete=False) as tmp_file:
         tmp_file.write(content)
