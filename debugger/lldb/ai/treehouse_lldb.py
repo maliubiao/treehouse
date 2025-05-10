@@ -1,20 +1,21 @@
 import os
 import re
-import shlex
 import tempfile
+import uuid
+from pathlib import Path
 
 import lldb
 import yaml
 
 from debugger.tracer import trace
-from llm_query import GPTContextProcessor, ModelSwitch, save_to_obsidian, GLOBAL_PROJECT_CONFIG, CmdNode
+from llm_query import (
+    CmdNode,
+    GPTContextProcessor,
+    ModelSwitch,
+    save_to_obsidian,
+)
 
 from .context.context_collector import ContextCollector, DebugContext
-from .command_parser import CommandParser
-from pathlib import Path
-
-# from lldb.plugins.parsed_cmd import ParsedCommand
-import uuid
 
 
 class CommandValidator:
@@ -84,6 +85,9 @@ class CommandExecutor:
         if not output:
             output = "Command executed successfully but returned no output"
 
+        # Strip ANSI color codes from the output
+        output = re.sub(r"\x1b\[\d+(;\d+)*m", "", output)
+
         return output
 
 
@@ -92,6 +96,7 @@ class GPTIntegrationService:
         self.session = session
         self.model_switch = ModelSwitch()
         self.current_model = "qwen3"  # 默认模型
+        self.processor = None
 
     def set_model(self, model_name: str) -> None:
         """设置当前使用的模型"""
@@ -111,15 +116,19 @@ class GPTIntegrationService:
                     temp_file.write(f"[lldb command start]\n{command}\n[lldb command end]\n")
                     temp_file.write(f"[output start]\n{command_output}\n[output end]\n")
                 temp_file.write(
-                    f"[lldb context start]\n{yaml.dump(context.to_dict(), allow_unicode=True, default_flow_style=False)}[lldb context end]\n"
+                    f"[lldb context start]\n"
+                    f"{yaml.dump(context.to_dict(), allow_unicode=True, default_flow_style=False)}"
+                    f"[lldb context end]\n"
                 )
                 temp_file_path = temp_file.name
 
             self.model_switch.select(self.current_model)
             role_prompt = Path(os.path.join(os.environ["GPT_PATH"], "prompts/lldb-rule")).read_text("utf-8")
             context_string = (
-                f"[some debug commands output]\n{common_commands_output}[some debug commands output end]\n"
-                f"lldb context as the following:\n @{temp_file_path} \n[user question]\n{question}\n[user question end]"
+                f"[some debug commands output]\n{common_commands_output}"
+                f"[some debug commands output end]\n"
+                f"lldb context as the following:\n @{temp_file_path} \n"
+                f"[user question]\n{question}\n[user question end]"
             )
             prompt = role_prompt + self.processor.process_text(context_string)
             print(prompt)
@@ -132,16 +141,15 @@ class GPTIntegrationService:
             save_to_obsidian(
                 os.path.join(os.environ["GPT_PATH"], "obsidian"), response_text, prompt, f"{command} :: {question}"
             )
+            return response_text
         finally:
             if temp_file_path and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
 
 
 class ModelSwitchCommand:
-    def __init__(self, *args):
+    def __init__(self, gpt_service):
         self.model_switch = ModelSwitch()
-        from . import gpt_service
-
         self.gpt_service = gpt_service
 
     def help(self):
@@ -168,11 +176,9 @@ Current model: {self.gpt_service.current_model}"""
 
 
 class AskGptCommand:
-    def __init__(self, debugger, session, *args):
+    def __init__(self, debugger, session, gpt_service):
         self.debugger = debugger
         self.session = session
-        from . import gpt_service
-
         self.gpt_service = gpt_service
         self.processor = GPTContextProcessor()
         self.gpt_service.set_processor(self.processor)
@@ -203,7 +209,7 @@ class AskGptCommand:
         result.append(frame.Disassemble())
 
         if frame.line_entry.file:
-            with open(frame.line_entry.file.fullpath, "r") as f:
+            with open(frame.line_entry.file.fullpath, "r", encoding="utf-8") as f:
                 lines = f.readlines()
                 start_line = max(0, frame.line_entry.line - 10)
                 end_line = min(len(lines), frame.line_entry.line + 10)
@@ -220,11 +226,12 @@ class AskGptCommand:
         """处理@status命令，返回调试状态信息"""
         executor = CommandExecutor(self.debugger)
         sections = []
-        for i in ("settings show target.run-args", "process status", "bt", "frame variable", "target variable"):
+        commands = ("settings show target.run-args", "process status", "bt", "frame variable", "target variable")
+        for cmd in commands:
             try:
-                section = f"command: {i}\noutput: {executor.execute(i)}\n"
+                section = f"command: {cmd}\noutput: {executor.execute(cmd)}\n"
             except RuntimeError as e:
-                section = f"command: {i}\noutput: {str(e)}\n"
+                section = f"command: {cmd}\noutput: {str(e)}\n"
             sections.append(section)
         return "\n".join(sections)
 
@@ -234,6 +241,7 @@ class AskGptCommand:
         thread = process.GetSelectedThread()
         executor = CommandExecutor(debugger)
         result = ["\n"]
+
         for i in range(thread.num_frames - 1):
             result.append(f"command : frame select {i}\n")
             result.append(executor.execute(f"frame select {i}"))
@@ -245,16 +253,16 @@ class AskGptCommand:
             result.append("disassemble:\n")
             result.append(frame.Disassemble())
             if frame.line_entry.file:
-                with open(frame.line_entry.file.fullpath, "r") as f:
+                with open(frame.line_entry.file.fullpath, "r", encoding="utf-8") as f:
                     lines = f.readlines()
                     start_line = max(0, frame.line_entry.line - 10)
                     end_line = min(len(lines), frame.line_entry.line + 10)
                     result.append("\n[source code]:\n")
-                    for i in range(start_line, end_line):
-                        if i == frame.line_entry.line - 1:
-                            result.append(f"{i + 1}: {lines[i].rstrip('\n')} <--\n")
+                    for j in range(start_line, end_line):
+                        if j == frame.line_entry.line - 1:
+                            result.append(f"{j + 1}: {lines[j].rstrip('\n')} <--\n")
                         else:
-                            result.append(f"{i + 1}: {lines[i]}")
+                            result.append(f"{j + 1}: {lines[j]}")
                     result.append("\n")
             result.append("\n")
         return "".join(result)
@@ -264,6 +272,7 @@ class AskGptCommand:
         if len(args) == 0:
             result.AppendMessage(self.get_help())
             return
+
         try:
             validator = CommandValidator(debugger)
             error = validator.validate(args)
@@ -286,9 +295,8 @@ class AskGptCommand:
             response = self.gpt_service.query(lldb_command, command_output, "", context, question)
 
             result.AppendMessage(response)
-        except Exception as e:
-            result.SetError(str(e))
-            result.AppendMessage(self.get_help())
+        except Exception as e:  # pylint: disable=broad-except
+            result.SetError(f"Error: {str(e)}\n{self.get_help()}")
 
     def get_help(self):
         return """AskGPT Help:
