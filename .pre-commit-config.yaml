@@ -9,6 +9,13 @@ repos:
         types: [python]
         require_serial: true
 
+      - id: ruff-isort
+        name: ruff (isort)
+        entry: uvx ruff check --select I --fix
+        language: system
+        types: [python]
+        require_serial: true
+
   - repo: https://github.com/pycqa/pylint
     rev: v3.3.4
     hooks:
