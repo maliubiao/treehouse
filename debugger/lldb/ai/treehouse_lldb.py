@@ -128,18 +128,22 @@ class GPTIntegrationService:
                 f"[some debug commands output]\n{common_commands_output}"
                 f"[some debug commands output end]\n"
                 f"lldb context as the following:\n @{temp_file_path} \n"
-                f"[user question]\n{question}\n[user question end]"
+                f"[user question]\n {question} \n[user question end]"
             )
-            prompt = role_prompt + self.processor.process_text(context_string)
-            print(prompt)
+            # 去除控制台色彩控制字符
+            clean_prompt = re.sub(r"\x1b\[[0-9;]*[mK]", "", role_prompt + self.processor.process_text(context_string))
+            print(clean_prompt)
             os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
             response_text = self.model_switch.query_for_text(
                 self.current_model,
-                prompt,
+                clean_prompt,
                 disable_conversation_history=False,
             )
             save_to_obsidian(
-                os.path.join(os.environ["GPT_PATH"], "obsidian"), response_text, prompt, f"{command} :: {question}"
+                os.path.join(os.environ["GPT_PATH"], "obsidian"),
+                response_text,
+                clean_prompt,
+                f"{command} :: {question}",
             )
             return response_text
         finally:
@@ -148,8 +152,10 @@ class GPTIntegrationService:
 
 
 class ModelSwitchCommand:
-    def __init__(self, gpt_service):
+    def __init__(self, *args):
         self.model_switch = ModelSwitch()
+        from . import gpt_service
+
         self.gpt_service = gpt_service
 
     def help(self):
@@ -176,11 +182,13 @@ Current model: {self.gpt_service.current_model}"""
 
 
 class AskGptCommand:
-    def __init__(self, debugger, session, gpt_service):
+    def __init__(self, debugger, session, *args):
         self.debugger = debugger
         self.session = session
-        self.gpt_service = gpt_service
         self.processor = GPTContextProcessor()
+        from . import gpt_service
+
+        self.gpt_service = gpt_service
         self.gpt_service.set_processor(self.processor)
         self._register_commands()
 

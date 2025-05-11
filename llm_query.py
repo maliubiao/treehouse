@@ -32,9 +32,8 @@ from urllib.parse import urlparse
 
 import requests
 import yaml
-from colorama import Fore
+from colorama import Fore, just_fix_windows_console
 from colorama import Style as ColorStyle
-from colorama import just_fix_windows_console
 from openai import OpenAI
 from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
@@ -1206,22 +1205,6 @@ def fetch_url_content(url, is_news=False):
         return response.text
     except requests.exceptions.RequestException as e:
         return f"获取URL内容失败: {str(e)}"
-
-
-def _handle_command(match: CmdNode, cmd_map: Dict[str, Callable]) -> str:
-    """处理命令类型匹配
-
-    根据输入的CmdNode或CmdNode列表，执行对应的命令处理函数。
-
-    参数：
-        match: 要处理的命令，可以是CmdNode或CmdNode列表
-        cmd_map: 命令映射字典，key为命令前缀，value为对应的处理函数
-
-    返回：
-        命令处理函数的执行结果
-    """
-    # 处理单个CmdNode
-    return cmd_map[match.command](match)
 
 
 def _handle_any_script(file_path: str) -> str:

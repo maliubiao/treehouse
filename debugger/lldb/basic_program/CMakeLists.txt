@@ -14,6 +14,10 @@ endif()
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g3 -O0 -DDEBUG")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2 -DNDEBUG")
 
+# Enable assembly support
+enable_language(ASM)
+set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -g")
+
 # Shared functions static library
 add_library(basic_lib STATIC basic_lib.c)
 target_include_directories(basic_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -71,4 +75,12 @@ target_link_libraries(op_parser_test op_parser_shared basic_lib)
 target_include_directories(op_parser_test PUBLIC 
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# ARM64 branch test executable
+add_executable(branch_test arm64_asm/branch_test.s)
+target_link_libraries(branch_test m c)
+set_target_properties(branch_test PROPERTIES
+    LINKER_LANGUAGE C
+    ENABLE_EXPORTS OFF
 )
