@@ -36,7 +36,6 @@ dependencies = [
     "tree-sitter-bash>=0.23.3",
     "tree-sitter-java>=0.23.5",
     "python-multipart>=0.0.20",
-    "jieba>=0.42.1",
     "pyyaml>=6.0.2",
     "parameterized>=0.9.0",
     "tree-sitter-typescript>=0.23.2",
@@ -48,6 +47,8 @@ dependencies = [
     "psutil>=7.0.0",
     "pyinstrument>=5.0.1",
     "pytest>=8.3.5",
+    "cffi>=1.17.1",
+    "swig>=4.3.1",
 ]
 
 [tool.black]

@@ -51,7 +51,16 @@ set_target_properties(so2 PROPERTIES
 )
 target_compile_definitions(so2 PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)
 
-# OP parser executable
-add_executable(op_parser op_parser.c)
-target_link_libraries(op_parser basic_lib)
-target_compile_definitions(op_parser PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)
+# OP parser shared library for Python CFFI
+add_library(op_parser_shared SHARED op_parser.c)
+target_include_directories(op_parser_shared PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(op_parser_shared basic_lib)
+set_target_properties(op_parser_shared PROPERTIES
+    C_VISIBILITY_PRESET default
+    SOVERSION 1
+    OUTPUT_NAME "op_parser"
+)
+target_compile_definitions(op_parser_shared PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)
