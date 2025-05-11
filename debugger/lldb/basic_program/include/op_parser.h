@@ -1,3 +1,8 @@
+#ifndef OP_PARSER_H
+#define OP_PARSER_H
+
+#include <stdint.h>
+
 typedef enum {
   OPERAND_REGISTER,  // xN 或 wN 寄存器
   OPERAND_IMMEDIATE, // #立即数
@@ -51,3 +56,5 @@ int parse_operands(const char *str, Operand *ops, int max_ops);
 int parse_disassembly_line(const char *line, DisasmLine *disasm_line);
 int parse_disassembly(const char *disassembly, DisasmLine *lines,
                       int max_lines);
+
+#endif // OP_PARSER_H

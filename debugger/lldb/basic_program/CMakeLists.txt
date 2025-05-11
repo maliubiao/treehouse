@@ -64,3 +64,11 @@ set_target_properties(op_parser_shared PROPERTIES
     OUTPUT_NAME "op_parser"
 )
 target_compile_definitions(op_parser_shared PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)
+
+# OP parser test executable
+add_executable(op_parser_test test/op_parser_main.c)
+target_link_libraries(op_parser_test op_parser_shared basic_lib)
+target_include_directories(op_parser_test PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)

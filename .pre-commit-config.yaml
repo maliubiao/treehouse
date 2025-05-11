@@ -54,3 +54,13 @@ repos:
         args: ["-i", "2", "-w"]
         require_serial: true
         verbose: true
+
+      - id: clang-format
+        name: clang-format (LLVM style)
+        entry: clang-format
+        language: system
+        types: [c]
+        files: \.(c|h)$
+        args: ["-i", "-style=LLVM"]
+        require_serial: true
+        verbose: true
