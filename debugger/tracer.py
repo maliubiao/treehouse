@@ -712,6 +712,8 @@ class SysMonitoringTraceDispatcher:
 
     def is_target_frame(self, frame):
         """Check if frame matches target files"""
+        if self.config.is_excluded_function(frame.f_code.co_name):
+            return
         try:
             if not frame or not frame.f_code or not frame.f_code.co_filename:
                 return False
@@ -761,7 +763,7 @@ class CallTreeHtmlRender:
         self._stack_variables = {}
         self._comments_data = defaultdict(lambda: defaultdict(list))
         self.current_message_id = 0
-        self._size_limit = 10 * 1024 * 1024  # 10MB大小限制
+        self._size_limit = 100 * 1024 * 1024
         self._current_size = 0
         self._size_exceeded = False
         self._html_template = """<!DOCTYPE html>
@@ -1476,6 +1478,38 @@ class TraceLogic:
         _, compiled = self._compile_expr(expr)
         return eval(compiled, frame.f_globals, frame.f_locals)  # nosec
 
+    def trace_variables(self, frame, var_names):
+        """
+        Trace variables in the given frame
+
+        Args:
+            frame: The current frame
+            var_names: List of variable names to trace
+
+        Returns:
+            Dict[str, str]: Dictionary of variable names and their formatted values
+        """
+        tracked_vars = {}
+        if not var_names:
+            return tracked_vars
+
+        locals_dict = frame.f_locals
+        globals_dict = frame.f_globals
+
+        for var in var_names:
+            if var in locals_dict:
+                value = locals_dict[var]
+            elif var in globals_dict:
+                value = globals_dict[var]
+            else:
+                try:
+                    value = self.cache_eval(frame, var)  # nosec
+                except (AttributeError, NameError, SyntaxError):
+                    continue
+            tracked_vars[var] = truncate_repr_value(value)
+
+        return tracked_vars
+
     def handle_line(self, frame):
         """基础行号跟踪"""
         lineno = frame.f_lineno
@@ -1485,26 +1519,15 @@ class TraceLogic:
         frame_id = self._get_frame_id(frame)
         self._message_id += 1
         tracked_vars = {}
+
         if self.config.enable_var_trace:
             if self.last_line_vars:
                 var_names = self.last_line_vars
                 self.last_line_vars = None
-                if var_names:
-                    locals_dict = frame.f_locals
-                    globals_dict = frame.f_globals
-                    for var in var_names:
-                        if var in locals_dict:
-                            value = locals_dict[var]
-                        elif var in globals_dict:
-                            value = globals_dict[var]
-                        else:
-                            try:
-                                value = self.cache_eval(frame, var)  # nosec
-                            except (AttributeError, NameError, SyntaxError):
-                                continue
-                        tracked_vars[var] = truncate_repr_value(value)
+                tracked_vars = self.trace_variables(frame, var_names)
             else:
                 self.last_line_vars = self._get_line_vars(frame)
+
         log_data = {
             "idx": self._message_id,
             "template": "{indent}▷ {filename}:{lineno} {line}",

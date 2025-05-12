@@ -42,40 +42,14 @@ def execute_script(target: Path, args: List[str]) -> None:
 
 
 def parse_args(argv: List[str]) -> Dict[str, Any]:
-    """解析命令行参数"""
-    parser = ArgumentParser(
-        prog="python -m debugger.tracer_main",
-        description="Python脚本调试跟踪工具",
-        formatter_class=RawDescriptionHelpFormatter,
-        epilog="""示例:
-  # 基本用法
-  python -m debugger.tracer_main script.py
-  
-  # 监控特定文件模式
-  python -m debugger.tracer_main --watch-files='src/*.py' --watch-files='tests/*.py' script.py
-  
-  # 自动打开报告
-  python -m debugger.tracer_main --open-report script.py
-  
-  # 传递脚本参数
-  python -m debugger.tracer_main script.py --script-arg1 --script-arg2
-""",
-    )
-    parser.add_argument(
-        "target",
-        type=Path,
-        help="要调试的Python脚本路径",
-    )
-    parser.add_argument(
-        "script_args",
-        nargs="*",
-        help="传递给目标脚本的参数",
-    )
+    """解析命令行参数并返回配置字典"""
+    parser = ArgumentParser(description="Python调试跟踪工具")
+    parser.add_argument("target", type=Path, help="要调试的Python脚本路径")
     parser.add_argument(
         "--watch-files",
         action="append",
         default=[],
-        help="要监控的文件模式(支持通配符), 可多次指定",
+        help="监控匹配的文件模式(支持通配符，可多次指定)",
     )
     parser.add_argument(
         "--open-report",
@@ -87,8 +61,55 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
         action="store_true",
         help="显示详细调试信息",
     )
+    parser.add_argument(
+        "--capture-vars",
+        action="append",
+        default=[],
+        help="要捕获的变量表达式(可多次指定)",
+    )
+    parser.add_argument(
+        "--exclude-functions",
+        action="append",
+        default=[],
+        help="要排除的函数名(可多次指定)",
+    )
+    parser.add_argument(
+        "--line-ranges",
+        type=str,
+        help="要跟踪的行号范围，格式为'文件路径:起始行-结束行'，多个范围用逗号分隔",
+    )
+    parser.add_argument(
+        "--enable-var-trace",
+        action="store_true",
+        help="启用变量操作跟踪",
+    )
+    parser.add_argument(
+        "--disable-html",
+        action="store_true",
+        help="禁用HTML报告生成",
+    )
+    parser.add_argument(
+        "--report-name",
+        type=str,
+        help="自定义报告文件名(不含扩展名)",
+        default="trace_report.html",
+    )
+    parser.add_argument(
+        "--include-system",
+        action="store_true",
+        help="包含系统路径和第三方库的跟踪",
+    )
+    parser.add_argument(
+        "--start-function",
+        type=str,
+        help="指定开始跟踪的函数，格式为'文件名:行号'",
+    )
+    parser.add_argument(
+        "script_args",
+        nargs="*",
+        help="传递给目标脚本的参数",
+    )
 
-    # 找到第一个存在的.py文件作为分界点
     split_index = 0
     for i, arg in enumerate(argv):
         if arg.endswith(".py") and Path(arg).exists():
@@ -98,20 +119,39 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
     if split_index == 0 and not argv:
         return parser.parse_args([])
 
-    try:
-        args = parser.parse_args(argv[: split_index + 1])
-        # 将剩余参数作为脚本参数
-        args.script_args = argv[split_index + 1 :]
-        return {
-            "target": args.target,
-            "script_args": args.script_args,
-            "watch_files": args.watch_files,
-            "open_report": args.open_report,
-            "verbose": args.verbose,
-        }
-    except SystemExit:
-        print(color_wrap("\n错误: 参数解析失败, 请检查输入参数", "error"))
-        raise
+    args = parser.parse_args(argv[: split_index + 1])
+
+    # 解析行号范围
+    line_ranges = {}
+    if args.line_ranges:
+        for range_str in args.line_ranges.split(","):
+            file_path, ranges = range_str.split(":")
+            start, end = map(int, ranges.split("-"))
+            if file_path not in line_ranges:
+                line_ranges[file_path] = []
+            line_ranges[file_path].append((start, end))
+
+    # 解析起始函数
+    start_function = None
+    if args.start_function:
+        filename, lineno = args.start_function.split(":")
+        start_function = (filename, int(lineno))
+
+    return {
+        "target": args.target,
+        "watch_files": args.watch_files,
+        "open_report": args.open_report,
+        "verbose": args.verbose,
+        "capture_vars": args.capture_vars,
+        "exclude_functions": args.exclude_functions,
+        "line_ranges": line_ranges,
+        "enable_var_trace": args.enable_var_trace,
+        "disable_html": args.disable_html,
+        "report_name": args.report_name,
+        "ignore_system_paths": not args.include_system,
+        "start_function": start_function,
+        "script_args": argv[split_index + 1 :],
+    }
 
 
 def open_trace_report() -> None:
@@ -145,12 +185,22 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
                     "用法: python -m debugger.tracer_main [选项] <脚本> [脚本参数]\n\n"
                     "选项:\n"
                     "  --watch-files=PATTERN   监控匹配的文件模式(可多次指定)\n"
+                    "  --capture-vars=EXPR     要捕获的变量表达式(可多次指定)\n"
+                    "  --exclude-functions=NAME 要排除的函数名(可多次指定)\n"
+                    "  --line-ranges=FILE:START-END 要跟踪的行号范围(可逗号分隔多个)\n"
+                    "  --enable-var-trace      启用变量操作跟踪\n"
+                    "  --disable-html         禁用HTML报告生成\n"
+                    "  --report-name=NAME     自定义报告文件名(不含扩展名)\n"
+                    "  --include-system       包含系统路径和第三方库的跟踪\n"
+                    "  --start-function=FILE:LINE 指定开始跟踪的函数\n"
                     "  --open-report          调试完成后自动打开HTML报告\n"
                     "  --verbose              显示详细调试信息\n\n"
                     "示例:\n"
                     "  python -m debugger.tracer_main script.py\n"
                     "  python -m debugger.tracer_main --watch-files='src/*.py' script.py\n"
-                    "  python -m debugger.tracer_main --open-report script.py\n",
+                    "  python -m debugger.tracer_main --capture-vars='x' --capture-vars='y.z' script.py\n"
+                    "  python -m debugger.tracer_main --line-ranges='test.py:10-20,test.py:30-40' script.py\n"
+                    "  python -m debugger.tracer_main --start-function='main.py:5' script.py\n",
                     "call",
                 )
             )
@@ -168,16 +218,25 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         print(color_wrap(f"\n🔍 启动调试会话 - 目标: {target}", "call"))
         if args["watch_files"]:
             print(color_wrap(f"📝 监控文件模式: {', '.join(args['watch_files'])}", "var"))
+        if args["capture_vars"]:
+            print(color_wrap(f"📝 捕获变量: {', '.join(args['capture_vars'])}", "var"))
+        if args["exclude_functions"]:
+            print(color_wrap(f"📝 排除函数: {', '.join(args['exclude_functions'])}", "var"))
+        if args["line_ranges"]:
+            print(color_wrap(f"📝 行号范围: {args['line_ranges']}", "var"))
+        if args["start_function"]:
+            print(color_wrap(f"📝 起始函数: {args['start_function'][0]}:{args['start_function'][1]}", "var"))
 
         print(color_wrap("\n📝 调试功能:", "line"))
         print(color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
-        print(color_wrap("  ✓ 自动跳过标准库和第三方库", "call"))
-        print(color_wrap("  ✓ 变量变化检测", "var"))
+        print(color_wrap(f"  ✓ {'包含' if not args['ignore_system_paths'] else '跳过'}标准库和第三方库", "call"))
+        print(color_wrap("  ✓ 变量变化检测", "var") if args["enable_var_trace"] else None)
         print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
         print(color_wrap(f"\n📂 调试日志路径: {Path(__file__).parent / 'logs/debug.log'}", "line"))
+        report_name = args.get("report_name", "trace_report") + ".html"
         print(
             color_wrap(
-                f"📂 报告文件路径: {Path(__file__).parent / 'logs/trace_report.html'}\n",
+                f"📂 报告文件路径: {Path(__file__).parent / 'logs' / report_name}\n",
                 "line",
             )
         )
@@ -191,8 +250,14 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             target_patterns = args["watch_files"] + [f"*{target.stem}.py"]
             config = TraceConfig(
                 target_files=target_patterns,
-                capture_vars=[],
-                enable_var_trace=True,
+                capture_vars=args["capture_vars"],
+                line_ranges=args["line_ranges"],
+                exclude_functions=args["exclude_functions"],
+                enable_var_trace=args["enable_var_trace"],
+                disable_html=args["disable_html"],
+                report_name=args.get("report_name", "trace_report.html"),
+                ignore_system_paths=args["ignore_system_paths"],
+                start_function=args["start_function"],
             )
             tracer = start_trace(target, config=config)
             execute_script(target, args["script_args"])
