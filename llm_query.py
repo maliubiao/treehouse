@@ -39,6 +39,7 @@ from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
 
+from debugger.tracer import trace
 from tree import (
     BINARY_MAGIC_NUMBERS,
     GLOBAL_PROJECT_CONFIG,
@@ -3348,6 +3349,7 @@ def prompt_words_search(words: List[str], args):
         sys.exit(1)
 
 
+@trace(target_files=["*.py"], report_name="ripgrep_searcher.html", enable_var_trace=True)
 def perform_search(
     words: List[str],
     config_path: str = LLM_PROJECT_CONFIG,

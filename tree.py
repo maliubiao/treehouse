@@ -41,6 +41,7 @@ from pygments import formatters, highlight, lexers, styles
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Node, Parser, Query
 
+from debugger.tracer import trace
 from lsp.client import GenericLSPClient, LSPFeatureError
 from lsp.language_id import LanguageId
 
@@ -383,22 +384,14 @@ class ConfigLoader:
             ).resolve(),
             lsp=user_config.get("lsp", self._default_config.lsp),
             exclude={
-                "dirs": list(
-                    set(self._default_config.exclude["dirs"] + user_config.get("exclude", {}).get("dirs", []))
-                ),
-                "files": list(
-                    set(self._default_config.exclude["files"] + user_config.get("exclude", {}).get("files", []))
-                ),
+                "dirs": user_config.get("exclude", {}).get("dirs", self._default_config.exclude["dirs"]),
+                "files": user_config.get("exclude", {}).get("files", self._default_config.exclude["files"]),
             },
             include={
-                "dirs": list(
-                    set(self._default_config.include["dirs"] + user_config.get("include", {}).get("dirs", []))
-                ),
-                "files": list(
-                    set(self._default_config.include["files"] + user_config.get("include", {}).get("files", []))
-                ),
+                "dirs": user_config.get("include", {}).get("dirs", self._default_config.include["dirs"]),
+                "files": user_config.get("include", {}).get("files", self._default_config.include["files"]),
             },
-            file_types=list(set(self._default_config.file_types + user_config.get("file_types", []))),
+            file_types=user_config.get("file_types", self._default_config.file_types),
         )
         project_config.symbol_service_url = user_config.get("symbol_service_url")
         return project_config
@@ -1723,20 +1716,14 @@ class RipgrepSearcher:
 
     def _build_file_pattern(self) -> str:
         """构建符合ripgrep要求的文件类型匹配模式"""
-        predefined = []
         extensions = []
         for ext in self.config.file_types:
-            clean_ext = ext.lstrip(".")
-            if "/" in clean_ext:  # 处理预定义类型如 'python'
-                predefined.append(clean_ext)
-            else:
-                extensions.append(clean_ext)
+            clean_ext = ext.lstrip("*.")
+            extensions.append(clean_ext)
+        patterns = f"*.{{{','.join(extensions)}}}"
+        return patterns
 
-        patterns = predefined.copy()
-        if extensions:
-            patterns.append(f"*.{{{','.join(extensions)}}}")
-        return ",".join(patterns)
-
+    @trace(target_files=["*.py"], report_name="ripgrep_searcher.html")
     def search(self, patterns: List[str], search_root: Path = None) -> List[SearchResult]:
         """Execute ripgrep search with multiple patterns
 

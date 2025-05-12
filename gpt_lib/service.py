@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import psutil
+
+from debugger.tracer import trace
 from tree import GLOBAL_PROJECT_CONFIG, LLM_PROJECT_CONFIG
 
 
@@ -96,23 +99,13 @@ class SymbolService:
 
     def _is_process_running(self, pid: int) -> bool:
         """检查进程是否在运行"""
-        if os.name == "nt":  # Windows系统
-            psutil = __import__("psutil")
+        try:
             return psutil.pid_exists(pid)
-        else:  # Unix-like系统
-            try:
-                # 使用/proc文件系统检查
-                proc_path = Path(f"/proc/{pid}")
-                if proc_path.exists():
-                    try:
-                        # 检查进程状态
-                        status = (proc_path / "status").read_text()
-                        return "running" in status.lower()
-                    except IOError:
-                        return False
-                return False
-            except Exception:
-                # 回退方案
+        except ImportError:
+            # 如果psutil不可用，则使用原始方法
+            if os.name == "nt":  # Windows系统
+                return False  # 没有psutil，在Windows下无法可靠检测
+            else:  # Unix-like系统
                 try:
                     os.kill(pid, 0)
                     return True
@@ -203,6 +196,7 @@ class SymbolService:
         return api_url
 
 
+@trace(target_files=["*.py"])
 def start_symbol_service(force=False):
     """
     use config in global object

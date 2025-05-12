@@ -142,7 +142,6 @@ usegpt() {
     echo >&2 "错误：未找到配置文件: $config_file"
     return 1
   }
-
   local key base_url model max_context_size max_tokens temperature is_thinking
   read key base_url model max_context_size max_tokens temperature is_thinking <<<$(_read_model_config "$model_name" "$config_file")
 
@@ -152,7 +151,6 @@ usegpt() {
   }
   export GPT_MODEL_KEY=$model_name
   _set_gpt_env_vars "$key" "$base_url" "$model" "$max_context_size" "$max_tokens" "$temperature" "$is_thinking"
-
   [[ -z "$no_verbose" ]] && {
     echo "成功设置GPT环境变量："
     echo "  GPT_KEY: ${key:0:4}****"
