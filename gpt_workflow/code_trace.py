@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from debugger.tracer import TraceConfig, start_trace
+# from debugger.tracer import TraceConfig, start_trace
 from llm_query import ModelSwitch, process_patch_response
 from tree import ParserLoader as PL
 from tree import ParserUtil as PU
@@ -23,8 +23,8 @@ dump_example_path = Path(os.path.dirname(__file__)).parent / "prompts/dumb-examp
 # symbol_rule_path = Path(os.path.dirname(__file__)).parent / "prompts/symbol-path-rule-v2"
 prompt = prompt_text_path.read_text(encoding="utf-8")
 prompt += "\n\n"
-tag = "symbol"
-modified_type = "symbol"
+TAG = "symbol"
+MODIFIED_TYPE = "symbol"
 prompt += """
 # 响应格式
 [modified whole {modified_type}]: 符号路径
@@ -37,48 +37,50 @@ prompt += """
 [{tag} start]
 完整原始内容
 [{tag} end]
-"""
+""".format(modified_type=MODIFIED_TYPE, tag=TAG)
 # prompt += symbol_rule_path.read_text(encoding="utf-8") + "\n\n"
 prompt += dump_example_path.read_text(encoding="utf-8") + "\n\n"
 
 
-fixed_part = prompt
-text_list = []
-total_length = 0
-max_length = 65535
-current_length = max_length - len(fixed_part)
-batch = []
-batch_length = 0
+FIXED_PROMPT = prompt
+MAX_LENGTH = 65535
+current_length = MAX_LENGTH - len(FIXED_PROMPT)
+BATCH_LENGTH = 0
+BATCH_COUNT = 0
+MAX_BATCH_SIZE = 10
 
 ms = ModelSwitch()
 ms.select("coder")
 symbol_detail_map = {}
 responses = []
+batch = []
 
 
-def process_batch(batch):
+def process_batch(current_batch):
     """处理当前批次的数据"""
-    if not batch:
+    if not current_batch:
         return
-    batch_prompt = fixed_part + "\n".join(batch)
-    print(batch_prompt)
-    print(f"Processing batch with {len(batch)} symbols, length: {len(batch_prompt)}")
-    response = ms.query_for_text("coder", batch_prompt)
+    batch_prompt = FIXED_PROMPT + "\n".join(current_batch)
+    print(f"Processing batch with {len(current_batch)} symbols, length: {len(batch_prompt)}")
+    response = ms.query_for_text("coder", batch_prompt, disable_conversation_history=True)
     responses.append(response)
-    print(f"Received response for batch")
+    print("Received response for batch")
     # 这里可以添加对响应的处理逻辑
 
 
 for symbol_name, symbol in code_map.items():
     symbol["file_path"] = file_path
-    if symbol["type"] not in ("function", "class", "namespace"):
+    if symbol["type"] not in ("function", "class", "namespace", "declaration"):
+        print("Skipping non-function/class/namespace symbol", symbol_name, symbol["type"])
+        continue
+    if symbol_name.count(".") > 1:
         continue
     symbol_detail_map[f"{file_path}/{symbol_name}"] = {
         "file_path": file_path,
         "block_range": symbol["block_range"],
         "block_content": symbol["code"].encode("utf-8"),
     }
-    one_symbol = f"""
+    ONE_SYMBOL = f"""
 [SYMBOL START]
 符号路径: {file_path}/{symbol_name}
 
@@ -88,15 +90,17 @@ for symbol_name, symbol in code_map.items():
 
 [SYMBOL END]
 """
-    symbol_length = len(one_symbol)
+    symbol_length = len(ONE_SYMBOL)
 
-    if batch_length + symbol_length > current_length:
+    if BATCH_LENGTH + symbol_length > current_length or BATCH_COUNT >= MAX_BATCH_SIZE:
         process_batch(batch)
         batch = []
-        batch_length = 0
+        BATCH_LENGTH = 0
+        BATCH_COUNT = 0
 
-    batch.append(one_symbol)
-    batch_length += symbol_length
+    batch.append(ONE_SYMBOL)
+    BATCH_LENGTH += symbol_length
+    BATCH_COUNT += 1
 
 # 处理最后一批
 process_batch(batch)
