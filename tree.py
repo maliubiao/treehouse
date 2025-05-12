@@ -642,7 +642,7 @@ class ParserLoader:
             raise ValueError(f"不支持的文件类型: {suffix}")
 
         if lang_name in self._parsers:
-            return self._parsers[lang_name], self._queries[lang_name], lang_name
+            return self._parsers[lang_name], None, lang_name
         self.lang = lang_name
 
         language = self._get_language(lang_name)
@@ -1720,6 +1720,7 @@ class RipgrepSearcher:
         for ext in self.config.file_types:
             clean_ext = ext.lstrip("*.")
             extensions.append(clean_ext)
+
         patterns = f"*.{{{','.join(extensions)}}}"
         return patterns
 
@@ -1788,7 +1789,7 @@ class RipgrepSearcher:
 
             # 添加包含目录（通过glob实现）
             for d in self.config.include_dirs:
-                cmd.extend(["--glob", f"{d.replace(os.sep, '/')}/**"])
+                cmd.extend(["--glob", f"{d.replace(os.sep, '/')}/**/*.cpp"])
             # 最终添加搜索根目录
             cmd.append(str(search_root).replace(os.sep, "/"))
         return cmd
@@ -2388,6 +2389,7 @@ class BlockPatch:
             return
         # 按文件路径分组存储源代码
         self.source_codes = {}
+
         for path in set(self.file_paths):
             with open(path, "rb") as f:
                 content = f.read()
@@ -4072,25 +4074,40 @@ async def search_to_symbols(
     symbol_results = {}
     symbol_cache = app.state.symbol_cache
     script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    total_start_time = time.time()
+    total_parse_time = 0.0
+
     for file_result in results.results:
         file_path_str = file_result.file_path
         file_path = Path(file_path_str)
         try:
             current_mtime = file_path.stat().st_mtime
         except FileNotFoundError:
+            print(f"File not found, skip: {file_path_str}")
             continue
+
         try:
             if file_path_str in symbol_cache:
                 cached_mtime, code_map = symbol_cache[file_path_str]
                 if cached_mtime != current_mtime:
+                    parse_start = time.time()
                     _, code_map = parser_util.get_symbol_paths(file_path_str)
+                    parse_time = time.time() - parse_start
+                    total_parse_time += parse_time
+                    print(f"Parse {file_path_str}: {parse_time:.3f}s (total: {total_parse_time:.3f}s)")
                     symbol_cache[file_path_str] = (current_mtime, code_map)
             else:
+                parse_start = time.time()
                 _, code_map = parser_util.get_symbol_paths(file_path_str)
+                parse_time = time.time() - parse_start
+                total_parse_time += parse_time
+                print(f"Parse {file_path_str}: {parse_time:.3f}s (total: {total_parse_time:.3f}s)")
                 symbol_cache[file_path_str] = (current_mtime, code_map)
         except ValueError as e:
-            print("解析出错", file_path_str, e)
+            print(f"Parse error {file_path_str}: {e}")
             continue
+
         locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
         symbols = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=max_context_size)
 
@@ -4104,6 +4121,9 @@ async def search_to_symbols(
             value["name"] = f"{rel_path}/{key}"
             value["file_path"] = rel_path
         symbol_results.update(symbols)
+
+    total_time = time.time() - total_start_time
+    print(f"Total processing time: {total_time:.3f}s (parse time: {total_parse_time:.3f}s)")
     # t.stop()
     return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
 

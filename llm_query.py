@@ -2060,7 +2060,6 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
 def add_symbol_details(remaining, symbol_detail):
     require_info_map = BlockPatchResponse.extract_symbol_paths(remaining)
     require_info_syms = {}
-
     # First pass: collect required symbols
     for file, symbols in require_info_map.items():
         for sym in symbols:
@@ -2092,6 +2091,7 @@ def process_patch_response(
     auto_commit: bool = True,
     auto_lint: bool = True,
     change_log: bool = True,
+    relative_to_root: bool = False,
 ):
     """处理大模型的补丁响应，生成差异并应用补丁"""
     # 处理响应文本
@@ -2102,7 +2102,6 @@ def process_patch_response(
         response_text,
         flags=re.DOTALL,
     ).strip()
-    os.chdir(GLOBAL_PROJECT_CONFIG.project_root_dir)
     add_symbol_details(filtered_response, symbol_detail)
     file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
 
@@ -2116,9 +2115,14 @@ def process_patch_response(
     # 准备补丁数据
     patch_items = []
     for symbol_name, source_code in results:
-        symbol_path = (GLOBAL_PROJECT_CONFIG.project_root_dir / symbol_detail[symbol_name]["file_path"]).relative_to(
-            Path.cwd()
-        )
+        if relative_to_root:
+            symbol_path = str(
+                Path(symbol_detail[symbol_name]["file_path"])
+                .resolve()
+                .relative_to(GLOBAL_PROJECT_CONFIG.project_root_dir)
+            )
+        else:
+            symbol_path = symbol_detail[symbol_name]["file_path"]
         if symbol_detail[symbol_name].get(NewSymbolFlag):
             source_code = f"\n{source_code}\n"
         patch_items.append(
@@ -3218,7 +3222,8 @@ def process_response(prompt, response_data, file_path, save=True, obsidian_doc=N
     if GPT_FLAGS.get(GPT_FLAG_EDIT):
         extract_and_diff_files(content)
     if GPT_FLAGS.get(GPT_FLAG_PATCH):
-        process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+        os.chdir(GLOBAL_PROJECT_CONFIG.project_root_dir)
+        process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], relative_to_root=True)
 
 
 def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):

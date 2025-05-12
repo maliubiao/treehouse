@@ -1,4 +1,4 @@
-from .treehouse_lldb import AskGptCommand, GPTIntegrationService, ModelSwitchCommand, start_tracing
+from .treehouse_lldb import AskGptCommand, GPTIntegrationService, ModelSwitchCommand
 
 __ALL__ = ["AskGptCommand", "AskGptCompleter"]
 
@@ -13,4 +13,3 @@ def __lldb_init_module(debugger, session):
     gpt_service = GPTIntegrationService(session)
     debugger.HandleCommand(f"command script add -c ai.AskGptCommand askgpt")
     debugger.HandleCommand(f"command script add -c ai.ModelSwitchCommand usegpt")
-    debugger.HandleCommand("command script add -f ai.start_tracing tracer")
