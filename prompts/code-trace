@@ -8,12 +8,14 @@
 - 使用语言原生特性（禁用第三方库）
 - 避开预处理器指令作用域（特别是C/C++宏）
 - 确保所有输入函数，方法都被追踪了
+- 跳过构造函数/析构函数/inline函数
 
 2. **追踪规则**
 ▲ 函数追踪
 - 入口处插入`[ENTRY] 函数名(参数...)`
 - 出口前插入`[EXIT] 函数名 返回值`
 - 自动识别void返回值类型
+- 排除构造函数、析构函数、inline函数
 
 ▲ 变量输出
 √ 允许类型：基本类型、char*
@@ -24,6 +26,8 @@
 - 在if/switch/case分支开始处插入`[BRANCH] 条件表达式`
 - 仅标记固定次数的循环（如for循环）
 - 跳过while/do-while循环次数不确定的情况
+- 对switch语句保持原始case结构，即使多个case返回值相同也不合并
+- 在case代码块首行插入追踪，保持原有fall-through逻辑
 
 3. **防御性处理**
 - 自动跳过预编译指令区域
@@ -31,11 +35,13 @@
 - 对lambda函数添加匿名标记（如`<lambda#1>`）
 - 敏感区域自动添加DEBUG宏保护
 - 变量输出时禁止调用未导入的API
+- 通过AST分析识别构造函数和析构函数
 
 【语言区分指令】
 1. 当目标语言为Python时：
    - 在函数首行插入`print(f"→ {函数名} in {__file__}")`
    - 在函数return前插入`print(f"← {函数名}")`
+   - 跳过__init__和__del__方法
 
 2. 当目标语言为C/C++时：
    - 使用printf输出，参数按类型格式化：
@@ -46,14 +52,25 @@
      - 指针：%p + static_cast<const void*>
    - 在函数入口处插入：
      ```c
+     #if !defined(__INLINE_FUNC__) && !defined(__GNUC_INLINE__)
      printf("[TRACE] > %s at %s:%d\n", __func__, __FILE__, __LINE__);
      /* 参数输出示例：printf("param1=%d param2=%p", val, static_cast<const void*>(ptr)); */
+     #endif
      ```
    - 在函数出口处插入：
      ```c
+     #if !defined(__INLINE_FUNC__) && !defined(__GNUC_INLINE__)
      printf("[TRACE] < %s at %s:%d\n", __func__, __FILE__, __LINE__);
+     #endif
      ```
    - 单语句if必须添加大括号：`if (cond) { statement; }`
+   - 通过__attribute__((noinline))确保追踪函数不内联
+   - 强制跳过以下函数：
+     ```cpp
+     // 构造函数示例: MyClass::MyClass() 
+     // 析构函数示例: MyClass::~MyClass()
+     // inline函数示例: __attribute__((always_inline)) void foo()
+     ```
 
 【变量输出规范】
 1. 白名单类型：
@@ -88,7 +105,7 @@
 1. 必须注入的位置：
    - 函数的开头，与返回
    - if/else分支的首行
-   - switch的case标签后
+   - switch的case标签后的代码块首行
    - for循环初始化语句后（仅限确定次数循环）
 
 2. 禁止注入的场景：
@@ -97,11 +114,22 @@
    for item in generator():  # 迭代器模式
    ```
 
+3. 特别保护措施：
+   - 保持switch语句原有case顺序和结构
+   - 不合并具有相同返回值的多个case分支
+   - 保留所有case的fall-through特性
+   - 在case代码块第一行插入追踪，不影响后续逻辑
+
 【代码保护机制】
 1. 使用AST分析确保：
    - 不改变原代码缩进层级
    - 保持变量命名一致性
    - 保留原有注释位置
+   - 识别构造函数特征：
+     ```python
+     # Python: def __init__ 或 def __del__
+     # C++: ClassName::ClassName 或 ClassName::~ClassName
+     ```
 
 2. 防御性插入策略：
    ```python
@@ -122,45 +150,82 @@
 ```
 
 【输出示例】
+新增C++构造/析构函数示例：
 输入代码：
-```c
-void process(int* x) {
-    if (*x > 0)
-        do_something();
-}
-```
-
-输出代码：
-```c
-void process(int* x) {
-    printf("[TRACE] > process at %s:%d x=%p\n", __FILE__, __LINE__, static_cast<const void*>(x));
-    if (*x > 0) {
-        printf("[BRANCH] *x > 0\n");
-        do_something();
+```cpp
+class DatabaseConnector {
+public:
+    DatabaseConnector() {
+        connect();
     }
-    printf("[TRACE] < process at %s:%d\n", __FILE__, __LINE__);
-}
-```
-
-输入代码：
-```python
-def safe_eval(expr):
-    try:
-        return eval(expr)
-    except Exception as e:
-        return str(e)
+    ~DatabaseConnector() {
+        disconnect();
+    }
+    inline void reconnect() { /* inline函数不追踪 */ }
+};
 ```
 
 输出代码：
+```cpp
+class DatabaseConnector {
+public:
+    DatabaseConnector() {  // 自动跳过构造函数
+        connect();
+    }
+    ~DatabaseConnector() {  // 自动跳过析构函数
+        disconnect();
+    }
+    inline void reconnect() { /* 保持原始inline函数 */ }
+};
+```
+
+保留原有switch处理示例：
+```cpp
+int handleStatusCode(int code) {
+    printf("[TRACE] > handleStatusCode at %s:%d\n", __FILE__, __LINE__);
+    switch(code) {
+        case 200:
+            printf("[BRANCH] case 200\n");
+        case 201:
+            printf("[BRANCH] case 201\n");
+            log("success");
+            printf("[TRACE] < handleStatusCode return=0\n");
+            return 0;
+        case 404:
+            printf("[BRANCH] case 404\n");
+            log("not found");
+            // fall through
+        case 500:
+            printf("[BRANCH] case 500\n");
+            log("server error");
+            printf("[TRACE] < handleStatusCode return=-1\n");
+            return -1;
+        default:
+            printf("[BRANCH] default\n");
+            printf("[TRACE] < handleStatusCode return=-2\n");
+            return -2;
+    }
+}
+```
+
+新增Python分支保护示例：
 ```python
-def safe_eval(expr):
-    print(f"→ safe_eval in {__file__} expr={expr}")
-    try:
-        ret = eval(expr)
-        print(f"← safe_eval return={ret}")
-        return ret
-    except Exception as e:
-        ret = str(e)
-        print(f"← safe_eval return={ret}")
-        return ret
+def evaluate(x):
+    print(f"→ evaluate in {__file__}")
+    match x:
+        case 0 | 1:
+            print("[BRANCH] case 0|1")
+            ret = "low"
+            print(f"← evaluate return={ret}")
+            return ret
+        case 2:
+            print("[BRANCH] case 2")
+            ret = "medium"
+            print(f"← evaluate return={ret}")
+            return ret
+        case _:
+            print("[BRANCH] default")
+            ret = "high"
+            print(f"← evaluate return={ret}")
+            return ret
 ```
