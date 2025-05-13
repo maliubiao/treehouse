@@ -3476,7 +3476,7 @@ class ModelSwitch:
         """
         self._config_path = config_path
         self.test_mode = test_mode
-        self.config = self._load_config()
+        self._config_cache = None  # 新增配置缓存
         self.current_config: Optional[ModelConfig] = None
         self.workflow = import_relative("gpt_workflow")
 
@@ -3487,96 +3487,82 @@ class ModelSwitch:
         返回:
             list[str]: 模型名称列表
         """
-        return list(self.config.keys())
+        return list(self._get_config().keys())
 
-    def _parse_config_dict(self, config_dict: dict) -> ModelConfig:
-        """将原始配置字典转换为ModelConfig实例"""
-        try:
-            return ModelConfig(
-                key=config_dict["key"],
-                base_url=config_dict["base_url"],
-                model_name=config_dict["model_name"],
-                max_context_size=config_dict.get("max_context_size"),
-                temperature=config_dict.get("temperature", 0.6),
-                is_thinking=config_dict.get("is_thinking", False),
-                max_tokens=config_dict.get("max_tokens"),
-            )
-        except KeyError as e:
-            error_code = "CONFIG_004"
-            error_msg = f"[{error_code}] 模型配置缺少必要字段: {str(e)}"
-            if self.test_mode:
-                return ModelConfig(
-                    key="test_key",
-                    base_url="http://test",
-                    model_name="test",
-                    max_context_size=8192,
-                    temperature=0.6,
-                )
-            raise ValueError(error_msg)
-        except (TypeError, ValueError) as e:
-            error_code = "CONFIG_005"
-            error_msg = f"[{error_code}] 模型配置字段类型错误: {str(e)}"
-            if self.test_mode:
-                return ModelConfig(
-                    key="test_key",
-                    base_url="http://test",
-                    model_name="test",
-                    max_context_size=8192,
-                    temperature=0.6,
-                )
-            raise ValueError(error_msg)
+    def _load_and_validate_config(self, config_dict: dict) -> ModelConfig:
+        """加载并验证配置字典"""
+        required_fields = {"key", "base_url", "model_name"}
+        if not required_fields.issubset(config_dict.keys()):
+            missing = required_fields - config_dict.keys()
+            raise ValueError(f"模型配置缺少必要字段: {missing}")
+
+        return ModelConfig(
+            key=config_dict["key"],
+            base_url=config_dict["base_url"],
+            model_name=config_dict["model_name"],
+            max_context_size=config_dict.get("max_context_size"),
+            temperature=config_dict.get("temperature", 0.6),
+            is_thinking=config_dict.get("is_thinking", False),
+            max_tokens=config_dict.get("max_tokens"),
+            thinking_budget=config_dict.get("thinking_budget", 32768),
+            top_k=config_dict.get("top_k", 20),
+            top_p=config_dict.get("top_p", 0.95),
+        )
+
+    def _get_config(self) -> dict[str, ModelConfig]:
+        """获取配置，使用缓存机制"""
+        if self._config_cache is not None:
+            return self._config_cache
+
+        config = self._load_config()
+        self._config_cache = config
+        return config
 
     def _load_config(self, default_path: str = "model.json") -> dict[str, ModelConfig]:
         """加载模型配置文件并转换为ModelConfig字典"""
         config_path = self._config_path or os.path.join(os.path.dirname(__file__), default_path)
+
         try:
             with open(config_path, "r") as f:
                 raw_config = json.load(f)
-                return {name: self._parse_config_dict(config) for name, config in raw_config.items()}
-        except FileNotFoundError:
-            error_code = "CONFIG_001"
-            error_msg = f"[{error_code}] 模型配置文件未找到: {config_path}"
+                return {name: self._load_and_validate_config(config) for name, config in raw_config.items()}
+        except FileNotFoundError as e:
+            error_msg = f"模型配置文件未找到: {config_path}"
             if self.test_mode:
-                return {
-                    "test_model": ModelConfig(
-                        key="test_key",
-                        base_url="http://test",
-                        model_name="test",
-                        max_context_size=8192,
-                        temperature=0.6,
-                    )
-                }
-            raise ValueError(error_msg)
-        except json.JSONDecodeError:
-            error_code = "CONFIG_002"
-            error_msg = f"[{error_code}] 配置文件格式错误: {config_path}"
+                return self._get_test_config()
+            raise ValueError(error_msg) from e
+        except json.JSONDecodeError as e:
+            error_msg = f"配置文件格式错误: {config_path}"
             if self.test_mode:
-                return {
-                    "test_model": ModelConfig(
-                        key="test_key",
-                        base_url="http://test",
-                        model_name="test",
-                        max_context_size=8192,
-                        temperature=0.6,
-                    )
-                }
-            raise ValueError(error_msg)
+                return self._get_test_config()
+            raise ValueError(error_msg) from e
+        except ValueError as e:
+            error_msg = f"配置验证失败: {str(e)}"
+            if self.test_mode:
+                return self._get_test_config()
+            raise ValueError(error_msg) from e
+
+    def _get_test_config(self) -> dict[str, ModelConfig]:
+        """获取测试配置"""
+        return {
+            "test_model": ModelConfig(
+                key="test_key",
+                base_url="http://test",
+                model_name="test",
+                max_context_size=8192,
+                temperature=0.6,
+            )
+        }
 
     def _get_model_config(self, model_name: str) -> ModelConfig:
         """获取指定模型的配置"""
-        if model_name not in self.config:
-            error_code = "CONFIG_003"
-            error_msg = f"[{error_code}] 未找到模型配置: {model_name}"
+        config = self._get_config()
+        if model_name not in config:
+            error_msg = f"未找到模型配置: {model_name}"
             if self.test_mode:
-                return ModelConfig(
-                    key="test_key",
-                    base_url="http://test",
-                    model_name="test",
-                    max_context_size=8192,
-                    temperature=0.6,
-                )
+                return self._get_test_config()["test_model"]
             raise ValueError(error_msg)
-        return self.config[model_name]
+        return config[model_name]
 
     def execute_workflow(
         self,
@@ -3597,57 +3583,72 @@ class ModelSwitch:
         """
         if self.test_mode:
             return ["test_response"]
+
         GPT_FLAGS[GPT_FLAG_PATCH] = True
         context_processor = GPTContextProcessor()
+
+        # 获取架构师配置
         self.select(architect_model)
-        config = self._get_model_config(architect_model)
-        text = context_processor.process_text(prompt, tokens_left=config.max_context_size or 32 * 1024)
+        architect_config = self._get_model_config(architect_model)
+
+        # 处理提示词
+        text = context_processor.process_text(prompt, tokens_left=architect_config.max_context_size or 32 * 1024)
         architect_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/architect")).read_text(
             encoding="utf-8"
         )
         architect_prompt += f"\n{text}"
-        print(architect_prompt)
-        architect_response = self.query(
-            model_name=architect_model,
-            prompt=architect_prompt,
-        )
+
+        # 获取架构师响应
+        architect_response = self.query(architect_model, architect_prompt)
         parsed = self.workflow.ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
-        print(parsed["task"])
-        config = self._get_model_config(coder_model)
+
+        # 处理编码任务
         results = []
-        coder_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/coder")).read_text(encoding="utf-8")
-        for job in parsed["jobs"]:
-            if architect_only:
-                continue
-            self.select(coder_model)
-            while True:
-                print(f"🔧 开始执行任务: {job['content']}")
-                part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMB_EXAMPLE_A)}\n{CHANGE_LOG_HEADER}\n"
-                part_b = f"{PUA_PROMPT}{coder_prompt}[your job start]:\n{job['content']}\n[your job end]"
-                context = context_processor.process_text(
-                    prompt,
-                    ignore_text=True,
-                    tokens_left=(config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
-                )
-                coder_prompt_combine = f"{part_b}{context}{part_a}"
-                coder_prompt_combine = coder_prompt_combine.replace(USER_DEMAND, "")
-                print(coder_prompt_combine)
-                result = self.query(model_name=coder_model, prompt=coder_prompt_combine)
-                content = result["choices"][0]["message"]["content"]
-                process_patch_response(
-                    content,
-                    GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH],
-                    auto_commit=False,
-                    auto_lint=False,
-                )
-                retry = input("是否要重新执行此任务？(y/n): ").lower()
-                if retry == "y":
-                    print("🔄 正在重试任务...")
-                    continue
-                else:
-                    results.append(content)
-                    break
+        if not architect_only:
+            coder_config = self._get_model_config(coder_model)
+            coder_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/coder")).read_text(encoding="utf-8")
+
+            for job in parsed["jobs"]:
+                results.append(self._process_coder_job(job, coder_model, coder_config, coder_prompt, prompt))
+
         return results
+
+    def _process_coder_job(self, job, coder_model, coder_config, coder_prompt, original_prompt) -> str:
+        """处理单个编码任务"""
+        while True:
+            print(f"🔧 开始执行任务: {job['content']}")
+
+            # 构建提示词
+            part_a = f"{get_patch_prompt_output(True, None, dumb_prompt=DUMB_EXAMPLE_A)}\n{CHANGE_LOG_HEADER}\n"
+            part_b = f"{PUA_PROMPT}{coder_prompt}[your job start]:\n{job['content']}\n[your job end]"
+
+            context_processor = GPTContextProcessor()
+            context = context_processor.process_text(
+                original_prompt,
+                ignore_text=True,
+                tokens_left=(coder_config.max_context_size or 32 * 1024) - len(part_a) - len(part_b),
+            )
+
+            coder_prompt_combine = f"{part_b}{context}{part_a}".replace(USER_DEMAND, "")
+
+            # 执行查询
+            result = self.query(coder_model, coder_prompt_combine)
+            content = result["choices"][0]["message"]["content"]
+
+            # 处理补丁响应
+            process_patch_response(
+                content,
+                GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH],
+                auto_commit=False,
+                auto_lint=False,
+            )
+
+            # 用户确认
+            retry = input("是否要重新执行此任务？(y/n): ").lower()
+            if retry != "y":
+                return content
+
+            print("🔄 正在重试任务...")
 
     def select(self, model_name: str) -> None:
         """
@@ -3666,19 +3667,7 @@ class ModelSwitch:
         globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
     def query_for_text(self, model_name: str, prompt: str, **kwargs) -> dict:
-        """根据模型名称查询API并返回文本结果，支持缓存功能
-
-        参数:
-            model_name: 模型名称
-            prompt: 提示文本
-            kwargs: 其他参数
-                - no_cache_prompt_file: 可选的提示文件名列表，用于检查缓存
-
-        返回:
-            dict: API响应结果
-        """
-
-        # 创建缓存目录
+        """根据模型名称查询API并返回文本结果，支持缓存功能"""
         cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -3687,31 +3676,45 @@ class ModelSwitch:
         cache_filename = f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}_{prompt_crc32:08x}.json"
         cache_path = os.path.join(cache_dir, cache_filename)
 
-        use_cache = True
-        # 检查是否有可用的缓存
-        no_cache_prompt_files = kwargs.pop("no_cache_prompt_file", [])
-        if no_cache_prompt_files:
-            for filename in no_cache_prompt_files:
-                last_part = filename.split("_")[-1]
-                if last_part in cache_filename:
-                    use_cache = False
-                    print("跳过缓存:", filename)
-                    break
-        if use_cache:
-            # 查找匹配的缓存文件
-            last_part = cache_filename.split("_")[-1]
-            for filename in os.listdir(cache_dir):
-                if last_part in filename:
-                    if os.path.exists(os.path.join(cache_dir, filename)):
-                        with open(os.path.join(cache_dir, filename), "r") as f:
-                            cache_data = json.load(f)
-                            print("找到缓存文件:", filename)
-                            return cache_data["response_text"]
+        # 检查缓存
+        if not self._should_skip_cache(kwargs.get("no_cache_prompt_file", []), cache_filename):
+            cached_response = self._check_cache(prompt_crc32, cache_dir)
+            if cached_response:
+                return cached_response
+
         # 没有缓存则调用API
         response = self.query(model_name, prompt, **kwargs)
         response_text = response["choices"][0]["message"]["content"]
 
         # 保存到缓存
+        self._save_to_cache(cache_path, prompt, prompt_crc32, response_text)
+        return response_text
+
+    def _should_skip_cache(self, no_cache_files: List[str], cache_filename: str) -> bool:
+        """检查是否应该跳过缓存"""
+        if not no_cache_files:
+            return False
+
+        for filename in no_cache_files:
+            last_part = filename.split("_")[-1]
+            if last_part in cache_filename:
+                print("跳过缓存:", filename)
+                return True
+        return False
+
+    def _check_cache(self, prompt_crc32: int, cache_dir: str) -> Optional[dict]:
+        """检查缓存是否存在"""
+        crc32_part = f"{prompt_crc32:08x}"
+        for filename in os.listdir(cache_dir):
+            if crc32_part in filename:
+                with open(os.path.join(cache_dir, filename), "r") as f:
+                    cache_data = json.load(f)
+                    print("找到缓存文件:", filename)
+                    return cache_data["response_text"]
+        return None
+
+    def _save_to_cache(self, cache_path: str, prompt: str, prompt_crc32: int, response_text: str) -> None:
+        """保存结果到缓存"""
         cache_data = {
             "prompt": prompt,
             "response_text": response_text,
@@ -3721,37 +3724,32 @@ class ModelSwitch:
         with open(cache_path, "w") as f:
             json.dump(cache_data, f, indent=2)
 
-        # 将缓存数据存储在实例变量中
-        if not hasattr(self, "_prompt_cache"):
-            self._prompt_cache = []
-        self._prompt_cache.append(cache_data)
-
-        return response_text
-
     def get_prompt_cache_info(self) -> list:
-        """获取所有prompt缓存文件的信息
-
-        返回:
-            list: 每个元素是包含filename和crc32的字典
-        """
-        # 优先返回内存中的缓存信息
+        """获取所有prompt缓存文件的信息"""
         if hasattr(self, "_prompt_cache") and self._prompt_cache:
-            return [
-                {
-                    "filename": f"{item['timestamp'].replace(':', '')}_{item['crc32']:08x}.json",
-                    "crc32": item["crc32"],
-                    "last_32_chars": item["response_text"][-32:],
-                    "timestamp": item["timestamp"],
-                    "prompt": item["prompt"][:100] + "..." if len(item["prompt"]) > 100 else item["prompt"],
-                }
-                for item in self._prompt_cache
-            ]
+            return self._format_cache_info(self._prompt_cache)
 
-        # 如果没有内存缓存，则从文件系统读取
         cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
         if not os.path.exists(cache_dir):
             return []
 
+        return self._get_file_cache_info(cache_dir)
+
+    def _format_cache_info(self, cache_items: List[dict]) -> List[dict]:
+        """格式化缓存信息"""
+        return [
+            {
+                "filename": f"{item['timestamp'].replace(':', '')}_{item['crc32']:08x}.json",
+                "crc32": item["crc32"],
+                "last_32_chars": item["response_text"][-32:],
+                "timestamp": item["timestamp"],
+                "prompt": item["prompt"][:100] + "..." if len(item["prompt"]) > 100 else item["prompt"],
+            }
+            for item in cache_items
+        ]
+
+    def _get_file_cache_info(self, cache_dir: str) -> List[dict]:
+        """从文件系统获取缓存信息"""
         cache_info = []
         for filename in os.listdir(cache_dir):
             if filename.endswith(".json"):
@@ -3761,7 +3759,6 @@ class ModelSwitch:
                     cache_info.append({"filename": filename, "crc32": crc32, "last_32_chars": filename[-32:]})
                 except (ValueError, IndexError):
                     continue
-
         return cache_info
 
     def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> dict:
@@ -3784,43 +3781,35 @@ class ModelSwitch:
 
         config = self._get_model_config(model_name)
         self.current_config = config
-        api_key = config.key
-        base_url = config.base_url
-        model = config.model_name
-        max_context_size = config.max_context_size
-        temperature = config.temperature
-        thinking_budget = config.thinking_budget  # 新增thinking_budget字段
-        top_k = config.top_k  # 新增top_k字段
-        top_p = config.top_p  # 新增top_p字段
 
         combined_kwargs = {
             "disable_conversation_history": disable_conversation_history,
-            # "conversation_file": os.path.join(shadowroot, "conversation.json"),
-            **kwargs,
-            "max_context_size": max_context_size,
-            "temperature": temperature,
+            "max_context_size": config.max_context_size,
+            "temperature": config.temperature,
             "enable_thinking": config.is_thinking,
-            "thinking_budget": thinking_budget,  # 添加thinking_budget到请求参数
-            "top_k": top_k,  # 添加top_k到请求参数
-            "top_p": top_p,  # 添加top_p到请求参数
+            "thinking_budget": config.thinking_budget,
+            "top_k": config.top_k,
+            "top_p": config.top_p,
+            **kwargs,
         }
 
         max_repeat = 3
         for i in range(max_repeat):
             try:
                 return query_gpt_api(
-                    base_url=base_url,
-                    api_key=api_key,
+                    base_url=config.base_url,
+                    api_key=config.key,
                     prompt=prompt,
-                    model=model,
+                    model=config.model_name,
                     **combined_kwargs,
                 )
             except Exception as e:
-                debug_info = f"API调用失败: {str(e)}\n当前配置状态: {self.current_config.get_debug_info()}"
+                debug_info = f"API调用失败: {str(e)}\n当前配置状态: {self.current_config}"
                 print(debug_info)
                 print("5s后重试...")
                 time.sleep(5)
-        raise RuntimeError("API调用失败，重试次数已用尽: %s" % max_repeat)
+
+        raise RuntimeError(f"API调用失败，重试次数已用尽: {max_repeat}")
 
 
 def handle_workflow(program_args):

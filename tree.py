@@ -1789,7 +1789,8 @@ class RipgrepSearcher:
 
             # 添加包含目录（通过glob实现）
             for d in self.config.include_dirs:
-                cmd.extend(["--glob", f"{d.replace(os.sep, '/')}/**/*.cpp"])
+                cmd.extend(["--glob", f"{d.replace(os.sep, '/')}/**"])
+
             # 最终添加搜索根目录
             cmd.append(str(search_root).replace(os.sep, "/"))
         return cmd

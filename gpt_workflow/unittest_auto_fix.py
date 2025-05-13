@@ -210,7 +210,7 @@ class TestAutoFix:
         target_files=["*.py"],
         enable_var_trace=True,
         report_name="run_all_tests.html",
-        ignore_self=False,
+        ignore_self=True,
         ignore_system_paths=True,
         disable_html=True,
     )
@@ -286,7 +286,7 @@ def main():
         user_requirement = input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
 
         if not user_requirement:
-            user_requirement = "按照专家建议，解决用户遇到的问题"
+            user_requirement = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
         GPT_FLAGS[GPT_FLAG_PATCH] = True
         p = PatchPromptBuilder(use_patch=True, symbols=[])
         p.process_search_results(symbol_result)
