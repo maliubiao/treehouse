@@ -1,31 +1,37 @@
-"""
-用大模型批量修改源代码, 在控制流语句前后插入trace代码
-然后重新编译，跑代码，看看程序是怎么运行的
-只靠LSP无法解决实际代码运行时序的问题，比如队列,callback, 异步等
-"""
-
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Dict, List
 
-# from debugger.tracer import TraceConfig, start_trace
 from llm_query import ModelSwitch, process_patch_response
 from tree import ParserLoader as PL
 from tree import ParserUtil as PU
 
-parser_loader_s = PL()
-parser_util = PU(parser_loader_s)
-file_path = sys.argv[1]
-results, code_map = parser_util.get_symbol_paths(file_path)
 
-prompt_text_path = Path(os.path.dirname(__file__)).parent / "prompts/code-trace"
-dump_example_path = Path(os.path.dirname(__file__)).parent / "prompts/dumb-example"
-# symbol_rule_path = Path(os.path.dirname(__file__)).parent / "prompts/symbol-path-rule-v2"
-prompt = prompt_text_path.read_text(encoding="utf-8")
-prompt += "\n\n"
-TAG = "symbol"
-MODIFIED_TYPE = "symbol"
-prompt += """
+class CodeTracer:
+    """跟踪代码符号并进行批量处理的核心类"""
+
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+        self.parser_loader = PL()
+        self.parser_util = PU(self.parser_loader)
+        self.results, self.code_map = self.parser_util.get_symbol_paths(file_path)
+        self.symbol_detail_map: Dict[str, dict] = {}
+        self.responses: List[str] = []
+        self.lock = threading.Lock()
+        self.executor = ThreadPoolExecutor(max_workers=32)
+
+        # 初始化提示模板
+        prompt_dir = Path(__file__).parent.parent / "prompts"
+        self.prompt = (prompt_dir / "code-trace").read_text(encoding="utf-8") + "\n\n"
+        self.prompt += self._build_response_template()
+        self.prompt += (prompt_dir / "dumb-example").read_text(encoding="utf-8") + "\n\n"
+
+    def _build_response_template(self) -> str:
+        """构建响应格式模板"""
+        return """
 # 响应格式
 [modified whole {modified_type}]: 符号路径
 [{tag} start]
@@ -37,74 +43,111 @@ prompt += """
 [{tag} start]
 完整原始内容
 [{tag} end]
-""".format(modified_type=MODIFIED_TYPE, tag=TAG)
-# prompt += symbol_rule_path.read_text(encoding="utf-8") + "\n\n"
-prompt += dump_example_path.read_text(encoding="utf-8") + "\n\n"
+""".format(modified_type="symbol", tag="symbol")
 
+    def _process_symbol(self, symbol_name: str, symbol: dict) -> str:
+        """处理单个符号并生成prompt片段"""
+        if symbol["type"] not in ("function", "class", "namespace", "declaration"):
+            print(f"Skipping non-target symbol: {symbol_name}({symbol['type']})")
+            return ""
+        if symbol_name.count(".") > 1:
+            return ""
 
-FIXED_PROMPT = prompt
-MAX_LENGTH = 65535
-current_length = MAX_LENGTH - len(FIXED_PROMPT)
-BATCH_LENGTH = 0
-BATCH_COUNT = 0
-MAX_BATCH_SIZE = 10
+        self.symbol_detail_map[f"{self.file_path}/{symbol_name}"] = {
+            "file_path": self.file_path,
+            "block_range": symbol["block_range"],
+            "block_content": symbol["code"].encode("utf-8"),
+        }
 
-ms = ModelSwitch()
-ms.select("coder")
-symbol_detail_map = {}
-responses = []
-batch = []
-
-
-def process_batch(current_batch):
-    """处理当前批次的数据"""
-    if not current_batch:
-        return
-    batch_prompt = FIXED_PROMPT + "\n".join(current_batch)
-    print(f"Processing batch with {len(current_batch)} symbols, length: {len(batch_prompt)}")
-    response = ms.query_for_text("coder", batch_prompt, disable_conversation_history=True)
-    responses.append(response)
-    print("Received response for batch")
-    # 这里可以添加对响应的处理逻辑
-
-
-for symbol_name, symbol in code_map.items():
-    symbol["file_path"] = file_path
-    if symbol["type"] not in ("function", "class", "namespace", "declaration"):
-        print("Skipping non-function/class/namespace symbol", symbol_name, symbol["type"])
-        continue
-    if symbol_name.count(".") > 1:
-        continue
-    symbol_detail_map[f"{file_path}/{symbol_name}"] = {
-        "file_path": file_path,
-        "block_range": symbol["block_range"],
-        "block_content": symbol["code"].encode("utf-8"),
-    }
-    ONE_SYMBOL = f"""
+        code_content = symbol["code"] if isinstance(symbol["code"], str) else symbol["code"].decode("utf-8")
+        return f"""
 [SYMBOL START]
-符号路径: {file_path}/{symbol_name}
+符号路径: {self.file_path}/{symbol_name}
 
 [source code start]
-{symbol["code"] if isinstance(symbol["code"], str) else symbol["code"].decode("utf-8")}
+{code_content}
 [source code end]
 
 [SYMBOL END]
 """
-    symbol_length = len(ONE_SYMBOL)
 
-    if BATCH_LENGTH + symbol_length > current_length or BATCH_COUNT >= MAX_BATCH_SIZE:
-        process_batch(batch)
-        batch = []
-        BATCH_LENGTH = 0
-        BATCH_COUNT = 0
+    def _submit_batch(self, batch: List[str]):
+        """提交批处理任务到线程池"""
+        if not batch:
+            return
 
-    batch.append(ONE_SYMBOL)
-    BATCH_LENGTH += symbol_length
-    BATCH_COUNT += 1
+        batch_prompt = self.prompt + "\n".join(batch)
+        print(f"Submitting batch with {len(batch)} symbols, length: {len(batch_prompt)}")
 
-# 处理最后一批
-process_batch(batch)
+        future = self.executor.submit(
+            ModelSwitch().query_for_text,
+            model_name="coder",
+            prompt=batch_prompt,
+            disable_conversation_history=True,
+            verbose=False,
+        )
+        future.add_done_callback(self._handle_response)
 
-process_patch_response("\n".join(responses), symbol_detail_map)
+    def _handle_response(self, future):
+        """处理异步响应结果"""
+        try:
+            response = future.result()
+            with self.lock:
+                self.responses.append(response)
+            print("Successfully processed batch response")
+        except Exception as e:
+            print(f"Error processing batch: {str(e)}")
 
-print("All symbols processed successfully")
+    def process(self):
+        """主处理流程"""
+        current_batch = []
+        current_length = 0
+        MAX_BATCH_LENGTH = 60000  # 预留部分长度给prompt前缀
+        MAX_BATCH_SIZE = 4
+
+        added = set()
+        for symbol_name, symbol in self.code_map.items():
+            symbol_snippet = self._process_symbol(symbol_name, symbol)
+            if not symbol_snippet:
+                continue
+            if "class" in symbol["code"] or "namespace" in symbol["code"]:
+                print(f"Skipping symbol {symbol_name}({symbol['type']})")
+                continue
+            if symbol_name.count(".") > 0 and symbol_name[: symbol_name.rfind(".")] in added:
+                print(f"Skipping symbol {symbol_name} due to parent symbol already added")
+                continue
+            print("adding symbol:", symbol_name)
+            added.add(symbol_name)
+            snippet_length = len(symbol_snippet)
+            if current_length + snippet_length > MAX_BATCH_LENGTH or len(current_batch) >= MAX_BATCH_SIZE:
+                self._submit_batch(current_batch)
+                current_batch = []
+                current_length = 0
+
+            current_batch.append(symbol_snippet)
+            current_length += snippet_length
+
+        # 提交最后一批
+        self._submit_batch(current_batch)
+
+        # 等待所有任务完成
+        self.executor.shutdown(wait=True)
+
+        with open("responses.txt", "w", encoding="utf-8") as f:
+            f.write("\n".join(self.responses))
+        # 统一处理响应
+        process_patch_response("\n".join(self.responses), self.symbol_detail_map, ignore_new_symbol=True, no_mix=True)
+        print("All symbols processed with multi-threading")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python code_trace.py <file_path>")
+        sys.exit(1)
+
+    tracer = CodeTracer(sys.argv[1])
+    tracer.process()
+
+
+if __name__ == "__main__":
+    main()

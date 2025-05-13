@@ -5,22 +5,24 @@
 1. **代码注入原则**
 - 保持原有缩进和代码风格
 - 仅插入trace语句，不修改现有标识符
-- 使用语言原生特性（禁用第三方库）
-- 避开预处理器指令作用域（特别是C/C++宏）
 - 确保所有输入函数，方法都被追踪了
-- 跳过构造函数/析构函数/inline函数
+- 你所输出的符号路径必须跟输出的符号路径一致，并且内容会被用于替换掉原有的内容，因此任何省略都会造成破坏
+- 只修改类，函数的符号，对于它们不修改也要输出原文，否则会造成破坏
+- 原文中的代码要完整保留, 注释也要完整保留, 不能省略
 
 2. **追踪规则**
 ▲ 函数追踪
-- 入口处插入`[ENTRY] 函数名(参数...)`
-- 出口前插入`[EXIT] 函数名 返回值`
-- 自动识别void返回值类型
+- 入口处插入`[ENTER] 函数名`
+- 出口前插入`[LEAVE] 函数名
 - 排除构造函数、析构函数、inline函数
 
-▲ 变量输出
-√ 允许类型：基本类型、char*
-× 禁止类型：需要额外头文件的类型
-→ 复杂类型显示指针地址（示例：`obj=0x7ffeeb774580`）
+▲ 函数调用追踪
+√ 在函数调用语句前插入调用追踪日志, 仅限[ENTER], [LEAVE], [BRANCH], [CALL]
+→ Python格式：`print(f"[CALL] will call {函数名}")` 
+→ C/C++格式：`printf("[CALL] will call {函数名} at %s:%d\\n",  __FILE__, __LINE__);`
+- 从调用代码行直接提取函数名（如`foo()`提取foo，`obj.method()`提取obj.method）
+- 忽略系统调用和标准库函数（如printf/malloc等）
+- 跳过模板实例化和宏展开的调用点
 
 ▲ 控制流处理
 - 在if/switch/case分支开始处插入`[BRANCH] 条件表达式`
@@ -29,18 +31,12 @@
 - 对switch语句保持原始case结构，即使多个case返回值相同也不合并
 - 在case代码块首行插入追踪，保持原有fall-through逻辑
 
-3. **防御性处理**
-- 自动跳过预编译指令区域
-- 处理多返回点函数时确保exit标记完整
-- 对lambda函数添加匿名标记（如`<lambda#1>`）
-- 敏感区域自动添加DEBUG宏保护
-- 变量输出时禁止调用未导入的API
-- 通过AST分析识别构造函数和析构函数
 
 【语言区分指令】
 1. 当目标语言为Python时：
    - 在函数首行插入`print(f"→ {函数名} in {__file__}")`
    - 在函数return前插入`print(f"← {函数名}")`
+   - 函数调用前插入`print(f"[CALL] will call {提取的函数名}")`
    - 跳过__init__和__del__方法
 
 2. 当目标语言为C/C++时：
@@ -49,21 +45,20 @@
      - float: %f
      - bool: %d
      - char*: %s
-     - 指针：%p + static_cast<const void*>
+     - 不得输出其它类型的值
    - 在函数入口处插入：
      ```c
-     #if !defined(__INLINE_FUNC__) && !defined(__GNUC_INLINE__)
-     printf("[TRACE] > %s at %s:%d\n", __func__, __FILE__, __LINE__);
-     /* 参数输出示例：printf("param1=%d param2=%p", val, static_cast<const void*>(ptr)); */
-     #endif
+     printf("[ENTER] > {函数名} at %s:%d\n", __FILE__, __LINE__);
+     ```
+   - 在函数调用语句前插入：
+     ```cpp
+     printf("[CALL] will call {函数名} at %s:%d\n", __FILE__, __LINE__);
      ```
    - 在函数出口处插入：
      ```c
-     #if !defined(__INLINE_FUNC__) && !defined(__GNUC_INLINE__)
-     printf("[TRACE] < %s at %s:%d\n", __func__, __FILE__, __LINE__);
-     #endif
+     printf("[RETURN] < {函数名} at %s:%d\n", __FILE__, __LINE__);
      ```
-   - 单语句if必须添加大括号：`if (cond) { statement; }`
+   - 单语句if必须添加大括号，才能写trace语句：`if (cond) { statement; }`
    - 通过__attribute__((noinline))确保追踪函数不内联
    - 强制跳过以下函数：
      ```cpp
@@ -74,9 +69,9 @@
 
 【变量输出规范】
 1. 白名单类型：
-   - 基础类型：int, float, bool
+   - 基础类型：int, float, bool, ...
    - 字符串类型：char*
-   - 指针类型：所有指针类型
+   - 不得输出其它类型的值
 
 2. 输出规则：
    ```c
@@ -84,27 +79,13 @@
    printf("var=%d", int_var);
    printf("var=%f", float_var);
    printf("var=%s", char_ptr_var);
-   
-   // 指针类型统一处理
-   printf("ptr=%p", static_cast<const void*>(any_ptr_var));
-   
-   // std::string仅在确认包含<string>时输出内容
-   #ifdef HAS_STRING_HEADER
-   printf("str=%s", std_str_var.c_str());
-   #else
-   printf("str=%p", static_cast<const void*>(&std_str_var));
-   #endif
    ```
-
-3. 安全限制：
-   - 禁止调用任何非白名单成员函数
-   - 输出std::string内容时必须检查<string>头文件包含状态
-   - 禁用可能产生副作用的表达式
 
 【控制流处理策略】
 1. 必须注入的位置：
    - 函数的开头，与返回
-   - if/else分支的首行
+   - 函数调用语句之前
+   - 非单行if/else分支的首行
    - switch的case标签后的代码块首行
    - for循环初始化语句后（仅限确定次数循环）
 
@@ -120,33 +101,27 @@
    - 保留所有case的fall-through特性
    - 在case代码块第一行插入追踪，不影响后续逻辑
 
-【代码保护机制】
-1. 使用AST分析确保：
-   - 不改变原代码缩进层级
-   - 保持变量命名一致性
-   - 保留原有注释位置
-   - 识别构造函数特征：
-     ```python
-     # Python: def __init__ 或 def __del__
-     # C++: ClassName::ClassName 或 ClassName::~ClassName
-     ```
+【调用追踪示例】
+Python新增示例：
+```python
+def main():
+    print("[CALL] will call connect")
+    connect()
+    if ready:
+        print("[CALL] will call process_data") 
+        process_data()
+```
 
-2. 防御性插入策略：
-   ```python
-   if not hasattr(context, 'modified_lines'):
-       context.modified_lines = set()
-   if lineno not in context.modified_lines:
-       inject_trace_code()
-       context.modified_lines.add(lineno)
-   ```
-
-【宏安全处理】
-对于C/C++宏定义：
-```c
-#define MACRO(x) do { \
-    original_code; \
-    DEBUG_PRINT("MACRO expanded with x=%d", x); \
-} while(0)
+C++新增示例：
+```cpp
+void runTests() {
+    printf("[CALL] will call setup at %s:%d\n", __FILE__, __LINE__);
+    setup();
+    for (int i=0; i<3; i++) {
+        printf("[CALL] will call main->testCase at %s:%d\n",  __FILE__, __LINE__);
+        main->testCase(i);
+    }
+}
 ```
 
 【输出示例】
@@ -179,31 +154,37 @@ public:
 };
 ```
 
+
 保留原有switch处理示例：
 ```cpp
 int handleStatusCode(int code) {
     printf("[TRACE] > handleStatusCode at %s:%d\n", __FILE__, __LINE__);
     switch(code) {
-        case 200:
+        case 200: {
             printf("[BRANCH] case 200\n");
-        case 201:
+        }
+        case 201: {
             printf("[BRANCH] case 201\n");
             log("success");
-            printf("[TRACE] < handleStatusCode return=0\n");
+            printf("[TRACE] < handleStatusCode\n");
             return 0;
-        case 404:
+        }
+        case 404: {
             printf("[BRANCH] case 404\n");
             log("not found");
             // fall through
-        case 500:
+        }
+        case 500: {
             printf("[BRANCH] case 500\n");
             log("server error");
-            printf("[TRACE] < handleStatusCode return=-1\n");
+            printf("[TRACE] < handleStatusCode\n");
             return -1;
-        default:
+        }
+        default: {
             printf("[BRANCH] default\n");
-            printf("[TRACE] < handleStatusCode return=-2\n");
+            printf("[TRACE] < handleStatusCode\n");
             return -2;
+        }
     }
 }
 ```
@@ -216,16 +197,80 @@ def evaluate(x):
         case 0 | 1:
             print("[BRANCH] case 0|1")
             ret = "low"
-            print(f"← evaluate return={ret}")
+            print(f"← evaluate")
             return ret
         case 2:
             print("[BRANCH] case 2")
             ret = "medium"
-            print(f"← evaluate return={ret}")
+            print(f"← evaluate")
             return ret
         case _:
             print("[BRANCH] default")
             ret = "high"
-            print(f"← evaluate return={ret}")
+            print(f"← evaluate")
             return ret
+```
+
+错误的输出示例:
+```cpp
+if (PrivateStateThreadIsValid()) //忘记{
+    printf("[CALL] will call ResumePrivateStateThread at %s:%d\n", __FILE__, __LINE__);
+    ResumePrivateStateThread();
+// 忘记}
+else //忘记{
+    printf("[CALL] will call StartPrivateStateThread at %s:%d\n", __FILE__, __LINE__);
+    StartPrivateStateThread();
+//忘记{
+```
+
+错误的输出示例:
+```
+if (select_helper.FDIsSetRead(pipe_read_fd)) {
+printf("[BRANCH] pipe_read_fd is set\n");
+// Consume the interrupt byte
+if (llvm::Expected<size_t> bytes_read = m_pipe.Read(&ch, 1)) {
+    if (ch == 'q')
+    break;
+    if (ch == 'i')
+    if (StateIsRunningState(m_process->GetState())) //忘记{
+        printf("[CALL] will call Process::SendAsyncInterrupt at %s:%d\n", __FILE__, __LINE__);
+        m_process->SendAsyncInterrupt();
+    // 忘记}
+} else {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Process), bytes_read.takeError(),
+                    "Pipe read failed: {0}");
+}
+}
+
+```
+
+错误的输出示例，没有正确继承原文的内容:
+原文
+```cpp
+  const lldb::ABISP &abi = GetABI();
+```
+错误的输出
+```cpp
+  const lldb::ABISP &abi = GetTargket().GetABI();
+```
+
+错误的输出示例，给void函数加了return:
+```cpp
+void Thread::ShouldStop(Event *event_ptr) {
+  printf("[ENTER] > Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
+  ThreadPlan *current_plan = GetCurrentPlan();
+
+  bool should_stop = true;
+
+  Log *log = GetLog(LLDBLog::Step);
+
+  if (GetResumeState() == eStateSuspended) {
+    LLDB_LOGF(log,
+              "Thread::%s for tid = 0x%4.4" PRIx64 " 0x%4.4" PRIx64
+              ", should_stop = 0 (ignore since thread was suspended)",
+              __FUNCTION__, GetID(), GetProtocolID());
+    printf("[RETURN] < Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
+    return false; //此处为错误的添加
+  }
+}
 ```

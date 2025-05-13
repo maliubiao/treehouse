@@ -2092,6 +2092,8 @@ def process_patch_response(
     auto_lint: bool = True,
     change_log: bool = True,
     relative_to_root: bool = False,
+    ignore_new_symbol: bool = False,
+    no_mix: bool = False,
 ):
     """处理大模型的补丁响应，生成差异并应用补丁"""
     # 处理响应文本
@@ -2102,11 +2104,15 @@ def process_patch_response(
         response_text,
         flags=re.DOTALL,
     ).strip()
-    add_symbol_details(filtered_response, symbol_detail)
-    file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
+    if not ignore_new_symbol:
+        add_symbol_details(filtered_response, symbol_detail)
+    if not no_mix:
+        file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
 
-    if file_part:
-        extract_and_diff_files(file_part, save=False)
+        if file_part:
+            extract_and_diff_files(file_part, save=False)
+    else:
+        remaining = filtered_response
 
     results = parse_llm_response(remaining, symbol_detail.keys())
     if not results:
