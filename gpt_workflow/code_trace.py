@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import threading
@@ -13,7 +14,7 @@ from tree import ParserUtil as PU
 class CodeTracer:
     """跟踪代码符号并进行批量处理的核心类"""
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, no_cache_prompt_file: List[str] = None):
         self.file_path = file_path
         self.parser_loader = PL()
         self.parser_util = PU(self.parser_loader)
@@ -22,6 +23,9 @@ class CodeTracer:
         self.responses: List[str] = []
         self.lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=32)
+        self.ranges = []
+        self.model_switch = ModelSwitch()
+        self.no_cache_prompt_file = no_cache_prompt_file or []
 
         # 初始化提示模板
         prompt_dir = Path(__file__).parent.parent / "prompts"
@@ -52,13 +56,21 @@ class CodeTracer:
             return ""
         if symbol_name.count(".") > 1:
             return ""
-
         self.symbol_detail_map[f"{self.file_path}/{symbol_name}"] = {
             "file_path": self.file_path,
             "block_range": symbol["block_range"],
             "block_content": symbol["code"].encode("utf-8"),
         }
-
+        range = symbol["block_range"]
+        start_pos, end_pos = range
+        # Check for overlap with previously processed ranges
+        for prev_start, prev_end in self.ranges:
+            # Detect if there's any overlap
+            if start_pos <= prev_end and end_pos >= prev_start:
+                print(f"Skipping overlapping symbol: {symbol_name}")
+                return ""
+        # Add the current range to our list of processed ranges
+        self.ranges.append(symbol["block_range"])
         code_content = symbol["code"] if isinstance(symbol["code"], str) else symbol["code"].decode("utf-8")
         return f"""
 [SYMBOL START]
@@ -80,11 +92,12 @@ class CodeTracer:
         print(f"Submitting batch with {len(batch)} symbols, length: {len(batch_prompt)}")
 
         future = self.executor.submit(
-            ModelSwitch().query_for_text,
+            self.model_switch.query_for_text,
             model_name="coder",
             prompt=batch_prompt,
             disable_conversation_history=True,
             verbose=False,
+            no_cache_prompt_file=self.no_cache_prompt_file,
         )
         future.add_done_callback(self._handle_response)
 
@@ -116,6 +129,8 @@ class CodeTracer:
             if symbol_name.count(".") > 0 and symbol_name[: symbol_name.rfind(".")] in added:
                 print(f"Skipping symbol {symbol_name} due to parent symbol already added")
                 continue
+            # if "PrivateResume" not in symbol_name: continue
+            print(f"Processing symbol: {symbol_name}({symbol['type']})")
             print("adding symbol:", symbol_name)
             added.add(symbol_name)
             snippet_length = len(symbol_snippet)
@@ -141,12 +156,25 @@ class CodeTracer:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python code_trace.py <file_path>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Trace code symbols and process them in batch")
+    parser.add_argument("file_path", help="Path to the file to be analyzed")
+    parser.add_argument(
+        "--no-cache", dest="no_cache_files", help="Comma-separated list of prompt files to not cache", default=""
+    )
 
-    tracer = CodeTracer(sys.argv[1])
+    args = parser.parse_args()
+
+    tracer = CodeTracer(args.file_path)
+    if args.no_cache_files:
+        tracer.no_cache_prompt_file = args.no_cache_files.split(",")
+        print("No cache prompt files: ", tracer.no_cache_prompt_file)
+
     tracer.process()
+    print(
+        "following prompts are cached, pass json name with --no-cache to use cache response for others, 20250513_161710_4db57b55.json"
+    )
+    for prompt in tracer.model_switch.get_prompt_cache_info():
+        print("filename: ", prompt["filename"])
 
 
 if __name__ == "__main__":

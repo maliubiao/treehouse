@@ -24,6 +24,7 @@ import threading
 import time
 import trace
 import traceback
+import zlib
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -3665,7 +3666,103 @@ class ModelSwitch:
         globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
     def query_for_text(self, model_name: str, prompt: str, **kwargs) -> dict:
-        return self.query(model_name, prompt, **kwargs)["choices"][0]["message"]["content"]
+        """根据模型名称查询API并返回文本结果，支持缓存功能
+
+        参数:
+            model_name: 模型名称
+            prompt: 提示文本
+            kwargs: 其他参数
+                - no_cache_prompt_file: 可选的提示文件名列表，用于检查缓存
+
+        返回:
+            dict: API响应结果
+        """
+
+        # 创建缓存目录
+        cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # 计算prompt的CRC32
+        prompt_crc32 = zlib.crc32(prompt.encode("utf-8")) & 0xFFFFFFFF
+        cache_filename = f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}_{prompt_crc32:08x}.json"
+        cache_path = os.path.join(cache_dir, cache_filename)
+
+        use_cache = True
+        # 检查是否有可用的缓存
+        no_cache_prompt_files = kwargs.pop("no_cache_prompt_file", [])
+        if no_cache_prompt_files:
+            for filename in no_cache_prompt_files:
+                last_part = filename.split("_")[-1]
+                if last_part in cache_filename:
+                    use_cache = False
+                    print("跳过缓存:", filename)
+                    break
+        if use_cache:
+            # 查找匹配的缓存文件
+            last_part = cache_filename.split("_")[-1]
+            for filename in os.listdir(cache_dir):
+                if last_part in filename:
+                    if os.path.exists(os.path.join(cache_dir, filename)):
+                        with open(os.path.join(cache_dir, filename), "r") as f:
+                            cache_data = json.load(f)
+                            print("找到缓存文件:", filename)
+                            return cache_data["response_text"]
+        # 没有缓存则调用API
+        response = self.query(model_name, prompt, **kwargs)
+        response_text = response["choices"][0]["message"]["content"]
+
+        # 保存到缓存
+        cache_data = {
+            "prompt": prompt,
+            "response_text": response_text,
+            "crc32": prompt_crc32,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+        with open(cache_path, "w") as f:
+            json.dump(cache_data, f, indent=2)
+
+        # 将缓存数据存储在实例变量中
+        if not hasattr(self, "_prompt_cache"):
+            self._prompt_cache = []
+        self._prompt_cache.append(cache_data)
+
+        return response_text
+
+    def get_prompt_cache_info(self) -> list:
+        """获取所有prompt缓存文件的信息
+
+        返回:
+            list: 每个元素是包含filename和crc32的字典
+        """
+        # 优先返回内存中的缓存信息
+        if hasattr(self, "_prompt_cache") and self._prompt_cache:
+            return [
+                {
+                    "filename": f"{item['timestamp'].replace(':', '')}_{item['crc32']:08x}.json",
+                    "crc32": item["crc32"],
+                    "last_32_chars": item["response_text"][-32:],
+                    "timestamp": item["timestamp"],
+                    "prompt": item["prompt"][:100] + "..." if len(item["prompt"]) > 100 else item["prompt"],
+                }
+                for item in self._prompt_cache
+            ]
+
+        # 如果没有内存缓存，则从文件系统读取
+        cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
+        if not os.path.exists(cache_dir):
+            return []
+
+        cache_info = []
+        for filename in os.listdir(cache_dir):
+            if filename.endswith(".json"):
+                try:
+                    crc32_part = filename.split("_")[-1].split(".")[0]
+                    crc32 = int(crc32_part, 16)
+                    cache_info.append({"filename": filename, "crc32": crc32, "last_32_chars": filename[-32:]})
+                except (ValueError, IndexError):
+                    continue
+
+        return cache_info
 
     def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> dict:
         """

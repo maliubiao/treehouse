@@ -6,31 +6,30 @@
 - 保持原有缩进和代码风格
 - 仅插入trace语句，不修改现有标识符
 - 确保所有输入函数，方法都被追踪了
+- 简短的描述函数的功能
 - 你所输出的符号路径必须跟输出的符号路径一致，并且内容会被用于替换掉原有的内容，因此任何省略都会造成破坏
 - 只修改类，函数的符号，对于它们不修改也要输出原文，否则会造成破坏
 - 原文中的代码要完整保留, 注释也要完整保留, 不能省略
 
 2. **追踪规则**
 ▲ 函数追踪
-- 入口处插入`[ENTER] 函数名`
+- 入口处插入`[ENTER] 函数名 函数功能`
 - 出口前插入`[LEAVE] 函数名
 - 排除构造函数、析构函数、inline函数
 
 ▲ 函数调用追踪
 √ 在函数调用语句前插入调用追踪日志, 仅限[ENTER], [LEAVE], [BRANCH], [CALL]
 → Python格式：`print(f"[CALL] will call {函数名}")` 
-→ C/C++格式：`printf("[CALL] will call {函数名} at %s:%d\\n",  __FILE__, __LINE__);`
+→ C/C++格式：`printf("[CALL] will call {函数名} {函数功能} at %s:%d\\n",  __FILE__, __LINE__);`
 - 从调用代码行直接提取函数名（如`foo()`提取foo，`obj.method()`提取obj.method）
 - 忽略系统调用和标准库函数（如printf/malloc等）
 - 跳过模板实例化和宏展开的调用点
 
 ▲ 控制流处理
-- 在if/switch/case分支开始处插入`[BRANCH] 条件表达式`
+- 在if/else/while/for插入`[BRANCH] 条件表达式`
 - 仅标记固定次数的循环（如for循环）
 - 跳过while/do-while循环次数不确定的情况
-- 对switch语句保持原始case结构，即使多个case返回值相同也不合并
-- 在case代码块首行插入追踪，保持原有fall-through逻辑
-
+- 不需要管switch，这个容易出错
 
 【语言区分指令】
 1. 当目标语言为Python时：
@@ -48,7 +47,7 @@
      - 不得输出其它类型的值
    - 在函数入口处插入：
      ```c
-     printf("[ENTER] > {函数名} at %s:%d\n", __FILE__, __LINE__);
+     printf("[ENTER] > {函数名} {功能是打印日志} at %s:%d\n", __FILE__, __LINE__);
      ```
    - 在函数调用语句前插入：
      ```cpp
@@ -56,7 +55,7 @@
      ```
    - 在函数出口处插入：
      ```c
-     printf("[RETURN] < {函数名} at %s:%d\n", __FILE__, __LINE__);
+     printf("[LEAVE] < {函数名} at %s:%d\n", __FILE__, __LINE__);
      ```
    - 单语句if必须添加大括号，才能写trace语句：`if (cond) { statement; }`
    - 通过__attribute__((noinline))确保追踪函数不内联
@@ -86,7 +85,6 @@
    - 函数的开头，与返回
    - 函数调用语句之前
    - 非单行if/else分支的首行
-   - switch的case标签后的代码块首行
    - for循环初始化语句后（仅限确定次数循环）
 
 2. 禁止注入的场景：
@@ -94,12 +92,6 @@
    while condition:  # 不确定次数的循环
    for item in generator():  # 迭代器模式
    ```
-
-3. 特别保护措施：
-   - 保持switch语句原有case顺序和结构
-   - 不合并具有相同返回值的多个case分支
-   - 保留所有case的fall-through特性
-   - 在case代码块第一行插入追踪，不影响后续逻辑
 
 【调用追踪示例】
 Python新增示例：
@@ -155,76 +147,39 @@ public:
 ```
 
 
-保留原有switch处理示例：
-```cpp
-int handleStatusCode(int code) {
-    printf("[TRACE] > handleStatusCode at %s:%d\n", __FILE__, __LINE__);
-    switch(code) {
-        case 200: {
-            printf("[BRANCH] case 200\n");
-        }
-        case 201: {
-            printf("[BRANCH] case 201\n");
-            log("success");
-            printf("[TRACE] < handleStatusCode\n");
-            return 0;
-        }
-        case 404: {
-            printf("[BRANCH] case 404\n");
-            log("not found");
-            // fall through
-        }
-        case 500: {
-            printf("[BRANCH] case 500\n");
-            log("server error");
-            printf("[TRACE] < handleStatusCode\n");
-            return -1;
-        }
-        default: {
-            printf("[BRANCH] default\n");
-            printf("[TRACE] < handleStatusCode\n");
-            return -2;
-        }
-    }
-}
-```
+**错误案例**
+以下为错误处理的案例，必须不要犯这些错误
 
-新增Python分支保护示例：
-```python
-def evaluate(x):
-    print(f"→ evaluate in {__file__}")
-    match x:
-        case 0 | 1:
-            print("[BRANCH] case 0|1")
-            ret = "low"
-            print(f"← evaluate")
-            return ret
-        case 2:
-            print("[BRANCH] case 2")
-            ret = "medium"
-            print(f"← evaluate")
-            return ret
-        case _:
-            print("[BRANCH] default")
-            ret = "high"
-            print(f"← evaluate")
-            return ret
-```
-
-错误的输出示例:
+错误的输出示例, 单行if else没有加大括号:
 ```cpp
-if (PrivateStateThreadIsValid()) //忘记{
+if (PrivateStateThreadIsValid()) //忘记加{
     printf("[CALL] will call ResumePrivateStateThread at %s:%d\n", __FILE__, __LINE__);
     ResumePrivateStateThread();
-// 忘记}
-else //忘记{
+// 忘记加}
+else //忘记加{
     printf("[CALL] will call StartPrivateStateThread at %s:%d\n", __FILE__, __LINE__);
     StartPrivateStateThread();
-//忘记{
+//忘记加{
 ```
-
-错误的输出示例:
-```
+```cpp
+Status Process::EnableBreakpointSiteByID(lldb::user_id_t break_id) {
+  printf("[ENTER] > Process::EnableBreakpointSiteByID 启用指定ID的断点位置 at %s:%d\n", __FILE__, __LINE__);
+  Status error;
+  printf("[CALL] will call m_breakpoint_site_list.FindByID at %s:%d\n", __FILE__, __LINE__);
+  BreakpointSiteSP bp_site_sp = m_breakpoint_site_list.FindByID(break_id);
+  if (bp_site_sp) {
+    if (!bp_site_sp->IsEnabled()) // 忘记加{
+      printf("[CALL] will call EnableBreakpointSite at %s:%d\n", __FILE__, __LINE__);
+      error = EnableBreakpointSite(bp_site_sp.get());
+    // 忘记加}
+  } else {
+    error = Status::FromErrorStringWithFormat(
+        "invalid breakpoint site ID: %" PRIu64, break_id);
+  }
+  printf("[LEAVE] < Process::EnableBreakpointSiteByID at %s:%d\n", __FILE__, __LINE__);
+  return error;
+}
+```cpp
 if (select_helper.FDIsSetRead(pipe_read_fd)) {
 printf("[BRANCH] pipe_read_fd is set\n");
 // Consume the interrupt byte
@@ -232,16 +187,36 @@ if (llvm::Expected<size_t> bytes_read = m_pipe.Read(&ch, 1)) {
     if (ch == 'q')
     break;
     if (ch == 'i')
-    if (StateIsRunningState(m_process->GetState())) //忘记{
+    if (StateIsRunningState(m_process->GetState())) //忘记加{
         printf("[CALL] will call Process::SendAsyncInterrupt at %s:%d\n", __FILE__, __LINE__);
         m_process->SendAsyncInterrupt();
-    // 忘记}
+    // 忘记加}
 } else {
     LLDB_LOG_ERROR(GetLog(LLDBLog::Process), bytes_read.takeError(),
                     "Pipe read failed: {0}");
 }
 }
+```
 
+```
+错误的输出示例, 单行if没加大括号:
+```cpp
+if (dyld) // 忘记加{
+    printf("[CALL] will call dyld->DidLaunch at %s:%d\n", __FILE__, __LINE__);
+    dyld->DidLaunch();
+// 忘记加}
+```
+```cpp
+if (!GetModID().IsLastResumeForUserExpression()) // 忘记加{
+    printf("[CALL] will call Process::ResetExtendedCrashInfoDict at %s:%d\n", __FILE__, __LINE__);
+    ResetExtendedCrashInfoDict();
+  // 忘记加}
+``` 
+```cpp
+if (m_mod_id.BumpStopID() == 0)// 忘记加{
+printf("[CALL] will call GetTarget().GetStatistics().SetFirstPrivateStopTime at %s:%d\n", __FILE__, __LINE__);
+GetTarget().GetStatistics().SetFirstPrivateStopTime();
+// 忘记加}
 ```
 
 错误的输出示例，没有正确继承原文的内容:
@@ -252,6 +227,20 @@ if (llvm::Expected<size_t> bytes_read = m_pipe.Read(&ch, 1)) {
 错误的输出
 ```cpp
   const lldb::ABISP &abi = GetTargket().GetABI();
+```
+
+错误的输出示例，不当删除了原文的内容:
+```cpp
+if (size > mem.size()) {
+// We did not read enough data. Skip to the next memory region.
+//原文中这句被吃掉了，造成下边出现未定义的info, 
+MemoryRegionInfo info;
+error = GetMemoryRegionInfo(mem_pos + mem.size(), info);
+if (error.Fail())
+    break;
+cur_addr = info.GetRange().GetRangeEnd();
+continue;
+}
 ```
 
 错误的输出示例，给void函数加了return:
@@ -269,8 +258,9 @@ void Thread::ShouldStop(Event *event_ptr) {
               "Thread::%s for tid = 0x%4.4" PRIx64 " 0x%4.4" PRIx64
               ", should_stop = 0 (ignore since thread was suspended)",
               __FUNCTION__, GetID(), GetProtocolID());
-    printf("[RETURN] < Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
+    printf("[LEAVE] < Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
     return false; //此处为错误的添加
   }
 }
 ```
+
