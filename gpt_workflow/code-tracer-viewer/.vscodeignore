@@ -1,0 +1,21 @@
+# 忽略开发相关文件
+node_modules
+pnpm-lock.yaml
+pnpm-workspace.yaml
+tsconfig.json
+webpack.config.js
+src/*.ts
+src/**/*.ts
+!dist/**/*.js
+
+# 忽略测试文件
+test.trace
+*.vsix
+
+# 忽略IDE相关文件
+.vscode/launch.json
+.gitignore
+.gitmodules
+
+# 忽略构建中间文件
+dist/*.map

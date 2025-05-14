@@ -1,0 +1,77 @@
+{
+  "name": "code-tracer",
+  "displayName": "Code Tracer Viewer",
+  "version": "0.0.1",
+  "description": "VS Code插件，用于查看和导航.trace格式的代码追踪日志",
+  "main": "dist/extension.js",
+  "scripts": {
+    "build": "webpack --mode production",
+    "watch": "webpack --watch --mode development",
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "pretest": "npm run build",
+    "vscode:prepublish": "npm run build"
+  },
+  "keywords": [
+    "trace",
+    "code navigation",
+    "control flow"
+  ],
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onLanguage:trace"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "trace",
+        "extensions": [
+          ".trace"
+        ],
+        "aliases": [
+          "Trace",
+          "code-tracer"
+        ],
+        "configuration": "./language-configuration.json",
+        "grammars": [
+          {
+            "language": "trace",
+            "scopeName": "source.trace",
+            "path": "./syntaxes/trace.tmLanguage.json"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "trace.openReference",
+        "title": "Open File Reference",
+        "category": "Code Tracer"
+      }
+    ]
+  },
+  "dependencies": {
+    "@types/vscode": "^1.100.0",
+    "yarn": "^1.22.22"
+  },
+  "devDependencies": {
+    "@types/node": "^18.11.18",
+    "@vscode/vsce": "^3.3.2",
+    "ts-loader": "^9.5.2",
+    "webpack": "^5.99.8",
+    "webpack-cli": "^4.10.0"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/code-tracer-viewer.git"
+  }
+}

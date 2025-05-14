@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Trace Log",
+  "scopeName": "source.trace",
+  "patterns": [
+    {
+      "name": "keyword.control.trace",
+      "match": "\\[\\b(ENTER|LEAVE|CALL)\\b\\]",
+      "captures": {
+        "1": {
+          "name": "entity.name.type.class.trace"
+        }
+      }
+    },
+    {
+      "name": "comment.line.trace",
+      "match": "^#.*"
+    },
+    {
+      "name": "markup.underline.link.trace",
+      "match": "(?<= at )((?:[a-zA-Z]:)?[^:]+?)(?::(\\d+))?(?=\\s|$)",
+      "captures": {
+        "1": {
+          "name": "meta.path.trace"
+        },
+        "2": {
+          "name": "constant.numeric.line-number.trace"
+        }
+      }
+    },
+    {
+      "name": "string.quoted.single.trace",
+      "match": "`[^`]*`"
+    },
+    {
+      "name": "string.quoted.double.trace",
+      "match": "\"[^\"]*\""
+    }
+  ],
+  "repository": {}
+}

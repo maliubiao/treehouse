@@ -1,11 +1,60 @@
-obsidian/*
-logs/*
-conversation/*
-model.json
-node/node_modules/*
-node/test_files/*
-**/__pycache__/
-grammar/gptlang/bindings/
-web/node_modules/*
-debugger/cpp/build/*
+# 依赖目录
+node_modules/
 
+# 构建产物
+dist/*.map
+
+# 包管理器文件
+pnpm-lock.yaml
+
+# 配置文件
+tsconfig.json
+webpack.config.js
+
+# 源码文件（保留编译后的dist）
+src/*.ts
+src/**/*.ts
+
+# 测试相关
+test.trace
+
+# VSIX扩展包
+*.vsix
+
+# IDE配置
+.vscode/launch.json
+
+# 系统文件
+.DS_Store
+*.log
+logs/
+
+# 开发环境文件
+.env
+.env.local
+
+# 临时文件
+*.swp
+*.swo
+*.vsix
+
+# 调试文件
+coverage/
+.idea/
+
+# 锁文件
+yarn.lock
+package-lock.json
+
+# 构建目录（保留编译后的js）
+dist/
+!dist/**/*.js
+
+# 类型声明文件
+*.d.ts
+
+# 缓存目录
+.cache
+
+# 操作系统元数据
+._*
