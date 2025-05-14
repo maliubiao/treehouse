@@ -117,7 +117,7 @@ class CodeTracer:
             model_name="siliconflow-r1",
             prompt=batch_prompt,
             disable_conversation_history=True,
-            verbose=True,
+            verbose=False,
             no_cache_prompt_file=self.no_cache_prompt_file,
         )
         future.add_done_callback(self._handle_response)
@@ -424,6 +424,12 @@ class TraceConfig:
 
 
 def main():
+    """
+    改后遇到编译不过，把不过的那行，找出是哪个prompt生成, 并删除缓存, 获取到一串crc32
+    python gpt_workflow/code_trace.py --lookup "thread_id_array.resize(num_threads);" --delete-matched
+    #git restore 编译失败的文件,  重试，跳过crc32代表的那些符号， 不处理它们， 如果不跳过，前边删除了缓存，可以重试，不过还是有可能会失败
+    python ~/code/terminal-llm/gpt_workflow/code_trace.py --file target/Process.cpp --skip-crc32 650fe38c,7d2f978c
+    """
     parser = argparse.ArgumentParser(description="Trace code symbols and process them in batch")
     parser.add_argument("--file", "-f", dest="file_path", help="Path to the file to be analyzed")
     parser.add_argument("--config", "-c", dest="config_file", help="Path to the trace configuration file")
