@@ -413,10 +413,10 @@ class TestFileRange(unittest.TestCase):
         response = dedent(
             """
 [modified whole block]: example.py:10-20
-[source code start]
+[start]
 def new_function():
     print("Added by patch")
-[source code end]
+[end]
         """
         )
         parser = BlockPatchResponse()
@@ -430,15 +430,15 @@ def new_function():
         # 模拟包含非法符号的响应
         response = """
 [modified whole symbol]: invalid_symbol
-[source code start]
+[start]
 print("Should attach to next valid")
-[source code end]
+[end]
 
 [modified whole symbol]: valid_symbol
-[source code start]
+[start]
 def valid_func():
     pass
-[source code end]
+[end]
         """
         parser = BlockPatchResponse(symbol_names=["valid_symbol"])
         results = parser.parse(response)
@@ -452,19 +452,19 @@ def valid_func():
         """测试多个非法符号连续附加"""
         response = """
 [modified whole symbol]: invalid1
-[source code start]
+[start]
 a = 1
-[source code end]
+[end]
 
 [modified whole symbol]: invalid2
-[source code start]
+[start]
 b = 2
-[source code end]
+[end]
 
 [modified whole symbol]: valid
-[source code start]
+[start]
 c = 3
-[source code end]
+[end]
         """
         parser = BlockPatchResponse(symbol_names=["valid"])
         results = parser.parse(response)
@@ -476,19 +476,19 @@ c = 3
         """测试从响应中提取符号路径"""
         response = """
 [modified whole symbol]: path/to/file1.py/symbol1
-[source code start]
+[start]
 code1
-[source code end]
+[end]
 
 [modified whole symbol]: path/to/file2.py/symbol2
-[source code start]
+[start]
 code2
-[source code end]
+[end]
 
 [modified whole symbol]: path/to/file1.py/symbol3
-[source code start]
+[start]
 code3
-[source code end]
+[end]
         """
         parser = BlockPatchResponse()
         result = parser.extract_symbol_paths(response)
@@ -521,19 +521,19 @@ code3
         remaining = dedent(
             '''
         [modified whole symbol]: {}/func1
-        [source code start]
+        [start]
         def func1():
             """修改后的函数1"""
             return 42
-        [source code end]
+        [end]
 
         [modified whole symbol]: {}/TestClass
-        [source code start]
+        [start]
         class TestClass:
             """修改后的类"""
             def method1(self):
                 return "modified"
-        [source code end]
+        [end]
         '''.format(tmp_path, tmp_path)
         )
         try:
@@ -651,9 +651,9 @@ code3
             remaining = dedent(
                 """
             [modified whole symbol]: {}/new_symbol
-            [source code start]
+            [start]
             new_code = 42
-            [source code end]
+            [end]
             """.format(tmp_path)
             )
 
@@ -773,11 +773,11 @@ class TestExtractAndDiffFiles(unittest.TestCase):
             with patch("llm_query.shadowroot", Path(tmpdir)):
                 test_content = f"""
 [modified whole file]: {test_file}
-[source code start]
+[start]
 line1
 line2
 line3
-[source code end]
+[end]
 """
                 llm_query.extract_and_diff_files(test_content, auto_apply=True)
 
@@ -794,9 +794,9 @@ line3
             with patch("llm_query.shadowroot", Path(tmpdir)):
                 test_content = f"""
 [modified whole file]: {test_file}
-[source code start]
+[start]
 new content
-[source code end]
+[end]
 """
                 llm_query.extract_and_diff_files(test_content, auto_apply=True)
                 self.assertEqual(test_file.read_text(), "new content")
@@ -1760,10 +1760,10 @@ class TestContentParse(unittest.TestCase):
         response = dedent(
             """
         [modified whole symbol]: valid/path.py
-        [source code start]
+        [start]
         def valid_func():
             pass
-        [source code end]
+        [end]
         """
         )
         modified, remaining = process_file_change(response)
@@ -1777,10 +1777,10 @@ class TestContentParse(unittest.TestCase):
         response = dedent(
             """
         [modified whole symbol]: valid/path.py
-        [source code start]
+        [start]
         def valid_func():
             pass
-        [source code end]
+        [end]
         """
         )
         modified, remaining = process_file_change(response, valid_symbols=["other/path.py"])
@@ -1793,10 +1793,10 @@ class TestContentParse(unittest.TestCase):
         response = dedent(
             """
         [modified whole symbol]: invalid/path.py
-        [source code start]
+        [start]
         def invalid_func():
             pass
-        [source code end]
+        [end]
         """
         )
         modified, remaining = process_file_change(response)
@@ -1808,10 +1808,10 @@ class TestContentParse(unittest.TestCase):
         response = dedent(
             """
         [modified whole symbol]: valid/path.py
-        [source code start]
+        [start]
         def valid_func():
             pass
-        [source code end]
+        [end]
         """
         )
 
@@ -1825,14 +1825,14 @@ class TestContentParse(unittest.TestCase):
             """
         Before content
         [modified whole symbol]: valid1.py
-        [source code start]
+        [start]
         content1
-        [source code end]
+        [end]
         Middle content
         [modified whole symbol]: valid2.py
-        [source code start]
+        [start]
         content2
-        [source code end]
+        [end]
         After content
         """
         )
@@ -1854,14 +1854,14 @@ class TestContentParse(unittest.TestCase):
             """
         Start text
         [modified whole symbol]: valid.py
-        [source code start]
+        [start]
         new_content
-        [source code end]
+        [end]
         Middle text
         [modified whole symbol]: invalid.py
-        [source code start]
+        [start]
         invalid_content
-        [source code end]
+        [end]
         End text
         """
         )
@@ -1873,7 +1873,7 @@ class TestContentParse(unittest.TestCase):
         self.assertIn("invalid.py", remaining)
         self.assertIn("Middle text", remaining)
         self.assertIn("End text", remaining)
-        self.assertEqual(remaining.count("[source code start]"), 1)
+        self.assertEqual(remaining.count("[start]"), 1)
 
     def test_no_modified_symbols(self):
         response = "Just regular text\nWithout any markers"
@@ -1885,12 +1885,12 @@ class TestContentParse(unittest.TestCase):
         response = dedent(
             """
         [modified whole symbol]: outer.py
-        [source code start]
+        [start]
         [modified whole symbol]: inner.py
-        [source code start]
+        [start]
         nested_content
-        [source code end]
-        [source code end]
+        [end]
+        [end]
         """
         )
         modified, remaining = process_file_change(response)

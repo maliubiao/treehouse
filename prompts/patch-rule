@@ -22,7 +22,7 @@
 
 ## 特殊的符号规范
 - near_n, at_n, n是行号, 这是用行号定位符号, near_n 表示包括n行的父级符号, at_n表示第n行开始的符号   
-- 修改这两类特殊符号，输出会整体替换原来的[source code start][source code end]里的内容，小心处理
+- 修改这两类特殊符号，输出会整体替换原来的[start][end]里的内容，小心处理
 
 ## tracer日志规范
 - 用户可能提供了tracer的日志, 如果提供了考虑以下规范
@@ -69,6 +69,6 @@ END
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 符号名，文件名要与输出的代码块完全一致
 - 代码输出以[modified whole file] or [modified whole symbol] 开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified whole file], [SYMBOL START]输入对应[modified whole symbol]
-- 后边跟随[source code start]代码内容[source code end]
-- 删除的符号格式同[modified whole symbol], source code内容置空
+- 后边跟随[start]代码内容[end]
+- 删除的符号格式也用[modified whole symbol] tag, 但[start][end]内容置空
 

@@ -6,21 +6,21 @@
 - 保持原有缩进和代码风格
 - 仅插入trace语句，不修改现有标识符
 - 确保所有输入函数，方法都被追踪了
-- 简短的描述函数的功能
+- 简短的描述函数的功能（50字以内）
 - 你所输出的符号路径必须跟输出的符号路径一致，并且内容会被用于替换掉原有的内容，因此任何省略都会造成破坏
 - 只修改类，函数的符号，对于它们不修改也要输出原文，否则会造成破坏
 - 原文中的代码要完整保留, 注释也要完整保留, 不能省略
 
 2. **追踪规则**
 ▲ 函数追踪
-- 入口处插入`[ENTER] 函数名 函数功能`
-- 出口前插入`[LEAVE] 函数名
+- 入口处插入`[ENTER] 函数名 函数功能（50字内简明描述）`
+- 出口前插入`[LEAVE] 函数名`
 - 排除构造函数、析构函数、inline函数
 
 ▲ 函数调用追踪
 √ 在函数调用语句前插入调用追踪日志, 仅限[ENTER], [LEAVE], [BRANCH], [CALL]
-→ Python格式：`print(f"[CALL] will call {函数名}")` 
-→ C/C++格式：`printf("[CALL] will call {函数名} {函数功能} at %s:%d\\n",  __FILE__, __LINE__);`
+→ Python格式：`print(f"[CALL] 将调用 {函数名}（功能描述）")` 
+→ C/C++格式：`fprintf(stderr, "[CALL] 将调用 {函数名} {50字内功能描述} at %s:%d\\n",  __FILE__, __LINE__);`
 - 从调用代码行直接提取函数名（如`foo()`提取foo，`obj.method()`提取obj.method）
 - 忽略系统调用和标准库函数（如printf/malloc等）
 - 跳过模板实例化和宏展开的调用点
@@ -33,13 +33,13 @@
 
 【语言区分指令】
 1. 当目标语言为Python时：
-   - 在函数首行插入`print(f"→ {函数名} in {__file__}")`
+   - 在函数首行插入`print(f"→ {函数名} [功能：50字内描述] in {__file__}")`
    - 在函数return前插入`print(f"← {函数名}")`
-   - 函数调用前插入`print(f"[CALL] will call {提取的函数名}")`
+   - 函数调用前插入`print(f"[CALL] 将调用 {提取的函数名}（功能描述）")`
    - 跳过__init__和__del__方法
 
 2. 当目标语言为C/C++时：
-   - 使用printf输出，参数按类型格式化：
+   - 使用fprintf到stderr输出，参数按类型格式化：
      - int: %d
      - float: %f
      - bool: %d
@@ -47,15 +47,15 @@
      - 不得输出其它类型的值
    - 在函数入口处插入：
      ```c
-     printf("[ENTER] > {函数名} {功能是打印日志} at %s:%d\n", __FILE__, __LINE__);
+     fprintf(stderr, "[ENTER] > {函数名} [功能：50字内简明描述] at %s:%d\n", __FILE__, __LINE__);
      ```
    - 在函数调用语句前插入：
      ```cpp
-     printf("[CALL] will call {函数名} at %s:%d\n", __FILE__, __LINE__);
+     fprintf(stderr, "[CALL] 将调用 {函数名} [功能：%s:%d] at %s:%d\n", 功能描述, __FILE__, __LINE__);
      ```
    - 在函数出口处插入：
      ```c
-     printf("[LEAVE] < {函数名} at %s:%d\n", __FILE__, __LINE__);
+     fprintf(stderr, "[LEAVE] < {函数名} at %s:%d\n", __FILE__, __LINE__);
      ```
    - 单语句if必须添加大括号，才能写trace语句：`if (cond) { statement; }`
    - 通过__attribute__((noinline))确保追踪函数不内联
@@ -75,9 +75,9 @@
 2. 输出规则：
    ```c
    // 基础类型
-   printf("var=%d", int_var);
-   printf("var=%f", float_var);
-   printf("var=%s", char_ptr_var);
+   fprintf(stderr, "var=%d", int_var);
+   fprintf(stderr, "var=%f", float_var);
+   fprintf(stderr, "var=%s", char_ptr_var);
    ```
 
 【控制流处理策略】
@@ -97,20 +97,20 @@
 Python新增示例：
 ```python
 def main():
-    print("[CALL] will call connect")
+    print("[CALL] 将调用 connect（建立网络连接）")
     connect()
     if ready:
-        print("[CALL] will call process_data") 
+        print("[CALL] 将调用 process_data（处理输入数据流）") 
         process_data()
 ```
 
 C++新增示例：
 ```cpp
 void runTests() {
-    printf("[CALL] will call setup at %s:%d\n", __FILE__, __LINE__);
+    fprintf(stderr, "[CALL] 将调用 setup [初始化测试环境] at %s:%d\n", __FILE__, __LINE__);
     setup();
     for (int i=0; i<3; i++) {
-        printf("[CALL] will call main->testCase at %s:%d\n",  __FILE__, __LINE__);
+        fprintf(stderr, "[CALL] 将调用 main->testCase [执行第%d组测试用例] at %s:%d\n", i, __FILE__, __LINE__);
         main->testCase(i);
     }
 }
@@ -150,86 +150,62 @@ public:
 **错误案例**
 以下为错误处理的案例，必须不要犯这些错误
 
-错误的输出示例, 单行if else没有加大括号:
+【错误示例】单行if else没有加大括号:
 ```cpp
 if (PrivateStateThreadIsValid()) //忘记加{
-    printf("[CALL] will call ResumePrivateStateThread at %s:%d\n", __FILE__, __LINE__);
+    fprintf(stderr, "[CALL] 将调用 ResumePrivateStateThread at %s:%d\n", __FILE__, __LINE__);
     ResumePrivateStateThread();
 // 忘记加}
 else //忘记加{
-    printf("[CALL] will call StartPrivateStateThread at %s:%d\n", __FILE__, __LINE__);
+    fprintf(stderr, "[CALL] 将调用 StartPrivateStateThread at %s:%d\n", __FILE__, __LINE__);
     StartPrivateStateThread();
 //忘记加{
 ```
+
+【正确示例】正确添加大括号:
 ```cpp
-Status Process::EnableBreakpointSiteByID(lldb::user_id_t break_id) {
-  printf("[ENTER] > Process::EnableBreakpointSiteByID 启用指定ID的断点位置 at %s:%d\n", __FILE__, __LINE__);
-  Status error;
-  printf("[CALL] will call m_breakpoint_site_list.FindByID at %s:%d\n", __FILE__, __LINE__);
-  BreakpointSiteSP bp_site_sp = m_breakpoint_site_list.FindByID(break_id);
-  if (bp_site_sp) {
-    if (!bp_site_sp->IsEnabled()) // 忘记加{
-      printf("[CALL] will call EnableBreakpointSite at %s:%d\n", __FILE__, __LINE__);
-      error = EnableBreakpointSite(bp_site_sp.get());
-    // 忘记加}
-  } else {
-    error = Status::FromErrorStringWithFormat(
-        "invalid breakpoint site ID: %" PRIu64, break_id);
-  }
-  printf("[LEAVE] < Process::EnableBreakpointSiteByID at %s:%d\n", __FILE__, __LINE__);
-  return error;
-}
-```cpp
-if (select_helper.FDIsSetRead(pipe_read_fd)) {
-printf("[BRANCH] pipe_read_fd is set\n");
-// Consume the interrupt byte
-if (llvm::Expected<size_t> bytes_read = m_pipe.Read(&ch, 1)) {
-    if (ch == 'q')
-    break;
-    if (ch == 'i')
-    if (StateIsRunningState(m_process->GetState())) //忘记加{
-        printf("[CALL] will call Process::SendAsyncInterrupt at %s:%d\n", __FILE__, __LINE__);
-        m_process->SendAsyncInterrupt();
-    // 忘记加}
+if (PrivateStateThreadIsValid()) {
+    fprintf(stderr, "[CALL] 将调用 ResumePrivateStateThread at %s:%d\n", __FILE__, __LINE__);
+    ResumePrivateStateThread();
 } else {
-    LLDB_LOG_ERROR(GetLog(LLDBLog::Process), bytes_read.takeError(),
-                    "Pipe read failed: {0}");
-}
+    fprintf(stderr, "[CALL] 将调用 StartPrivateStateThread at %s:%d\n", __FILE__, __LINE__);
+    StartPrivateStateThread();
 }
 ```
 
-```
-错误的输出示例, 单行if没加大括号:
+【错误示例】单行if没加大括号:
 ```cpp
 if (dyld) // 忘记加{
-    printf("[CALL] will call dyld->DidLaunch at %s:%d\n", __FILE__, __LINE__);
+    fprintf(stderr, "[CALL] 将调用 dyld->DidLaunch at %s:%d\n", __FILE__, __LINE__);
     dyld->DidLaunch();
 // 忘记加}
 ```
+
+【正确示例】正确添加大括号:
 ```cpp
-if (!GetModID().IsLastResumeForUserExpression()) // 忘记加{
-    printf("[CALL] will call Process::ResetExtendedCrashInfoDict at %s:%d\n", __FILE__, __LINE__);
-    ResetExtendedCrashInfoDict();
-  // 忘记加}
-``` 
-```cpp
-if (m_mod_id.BumpStopID() == 0)// 忘记加{
-printf("[CALL] will call GetTarget().GetStatistics().SetFirstPrivateStopTime at %s:%d\n", __FILE__, __LINE__);
-GetTarget().GetStatistics().SetFirstPrivateStopTime();
-// 忘记加}
+if (dyld) {
+    fprintf(stderr, "[CALL] 将调用 dyld->DidLaunch at %s:%d\n", __FILE__, __LINE__);
+    dyld->DidLaunch();
+}
 ```
 
-错误的输出示例，没有正确继承原文的内容:
+【错误示例】没有正确继承原文的内容:
 原文
 ```cpp
   const lldb::ABISP &abi = GetABI();
 ```
-错误的输出
+
+错误输出
 ```cpp
   const lldb::ABISP &abi = GetTargket().GetABI();
 ```
 
-错误的输出示例，不当删除了原文的内容:
+【正确示例】保持原文内容:
+```cpp
+  const lldb::ABISP &abi = GetABI();
+```
+
+【错误示例】不当删除了原文的内容:
 ```cpp
 if (size > mem.size()) {
 // We did not read enough data. Skip to the next memory region.
@@ -243,10 +219,23 @@ continue;
 }
 ```
 
-错误的输出示例，给void函数加了return:
+【正确示例】保留原文注释:
+```cpp
+if (size > mem.size()) {
+    // We did not read enough data. Skip to the next memory region.
+    MemoryRegionInfo info;
+    error = GetMemoryRegionInfo(mem_pos + mem.size(), info);
+    if (error.Fail())
+        break;
+    cur_addr = info.GetRange().GetRangeEnd();
+    continue;
+}
+```
+
+【错误示例】给void函数加了return:
 ```cpp
 void Thread::ShouldStop(Event *event_ptr) {
-  printf("[ENTER] > Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
+  fprintf(stderr, "[ENTER] > Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
   ThreadPlan *current_plan = GetCurrentPlan();
 
   bool should_stop = true;
@@ -258,9 +247,29 @@ void Thread::ShouldStop(Event *event_ptr) {
               "Thread::%s for tid = 0x%4.4" PRIx64 " 0x%4.4" PRIx64
               ", should_stop = 0 (ignore since thread was suspended)",
               __FUNCTION__, GetID(), GetProtocolID());
-    printf("[LEAVE] < Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
+    fprintf(stderr, "[LEAVE] < Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
     return false; //此处为错误的添加
   }
 }
 ```
 
+【正确示例】保持void函数无返回值:
+```cpp
+void Thread::ShouldStop(Event *event_ptr) {
+  fprintf(stderr, "[ENTER] > Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
+  ThreadPlan *current_plan = GetCurrentPlan();
+
+  bool should_stop = true;
+
+  Log *log = GetLog(LLDBLog::Step);
+
+  if (GetResumeState() == eStateSuspended) {
+    LLDB_LOGF(log,
+              "Thread::%s for tid = 0x%4.4" PRIx64 " 0x%4.4" PRIx64
+              ", should_stop = 0 (ignore since thread was suspended)",
+              __FUNCTION__, GetID(), GetProtocolID());
+    fprintf(stderr, "[LEAVE] < Thread::ShouldStop at %s:%d\n", __FILE__, __LINE__);
+    return; // 正确保持void函数返回
+  }
+}
+```

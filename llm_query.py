@@ -1615,7 +1615,6 @@ CHANGE_LOG_HEADER = """
 
 def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
     modified_type = "symbol" if patch_require else "block"
-    tag = "source code"
     prompt = ""
     if patch_require and dumb_prompt:
         prompt += dumb_prompt
@@ -1625,15 +1624,15 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
 # 响应格式
 {CHANGE_LOG_HEADER}
 [modified whole {modified_type}]: 块路径
-[{tag} start]
+[start]
 完整文件内容
-[{tag} end]
+[end]
 
 或（无修改时）:
 [modified whole {modified_type}]: 块路径
-[{tag} start]
+[start]
 完整原始内容
-[{tag} end]
+[end]
 
 """
             if file_ranges
@@ -1641,15 +1640,15 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
 # 响应格式
 {CHANGE_LOG_HEADER}
 [modified whole {modified_type}]: 符号路径
-[{tag} start]
+[start]
 完整文件内容
-[{tag} end]
+[end]
 
 或（无修改时）:
 [modified whole {modified_type}]: 符号路径
-[{tag} start]
+[start]
 完整原始内容
-[{tag} end]
+[end]
 
 """
         )
@@ -1688,9 +1687,9 @@ def generate_patch_prompt(symbol_name, symbol_map, patch_require=False, file_ran
 符号名称: {symbol_name}
 文件路径: {patch_dict["file_path"]}
 
-[source code start]
+[start]
 {patch_dict["block_content"] if isinstance(patch_dict["block_content"], str) else patch_dict["block_content"].decode("utf-8")}
-[source code end]
+[end]
 
 [SYMBOL END]
 """
@@ -1880,7 +1879,7 @@ class BlockPatchResponse:
 
         # 匹配两种响应格式
         pattern = re.compile(
-            r"\[modified whole (symbol|block)\]:\s*([^\n]+)\s*\n\[source code start\](.*?)\n\[source code end\]",
+            r"\[modified whole (symbol|block)\]:\s*([^\n]+)\s*\n\[start\](.*?)\n\[end\]",
             re.DOTALL,
         )
 
@@ -1904,15 +1903,15 @@ class BlockPatchResponse:
                 results.append((identifier, source_code))
 
         # 兼容旧格式校验
-        if not results and ("[source code start]" in response_text or "[source code end]" in response_text):
+        if not results and ("[start]" in response_text or "[end]" in response_text):
             raise ValueError("响应包含代码块标签但格式不正确，请使用[modified whole symbol/block]:标签")
 
         return results
 
     def _extract_source_code(self, text):
         """提取源代码内容（保留旧方法兼容异常处理）"""
-        start_tag = "[source code start]"
-        end_tag = "[source code end]"
+        start_tag = "[start]"
+        end_tag = "[end]"
 
         start_idx = text.find(start_tag)
         end_idx = text.find(end_tag)
@@ -1929,7 +1928,7 @@ class BlockPatchResponse:
         返回格式: {"file": [symbol_path1, symbol_path2, ...]}
         """
         symbol_paths = {}
-        pattern = re.compile(r"\[modified whole symbol\]:\s*([^\n]+)\s*\n\[source code start\]", re.DOTALL)
+        pattern = re.compile(r"\[modified whole symbol\]:\s*([^\n]+)\s*\n\[start\]", re.DOTALL)
 
         for match in pattern.finditer(response_text):
             whole_path = match.group(1).strip()
@@ -1968,7 +1967,7 @@ def process_file_change(response_text, valid_symbols=None):
         valid_symbols = []
 
     pattern = re.compile(
-        r"\[modified whole (?:symbol|file)\]:\s*(.+?)\n\[source code start\]\n(.*?)\n\[source code end\]",
+        r"\[modified whole (?:symbol|file)\]:\s*(.+?)\n\[start\]\n(.*?)\n\[end\]",
         re.DOTALL,
     )
     results = []
@@ -2095,6 +2094,7 @@ def process_patch_response(
     relative_to_root: bool = False,
     ignore_new_symbol: bool = False,
     no_mix: bool = False,
+    confirm: str = "",
 ):
     """处理大模型的补丁响应，生成差异并应用补丁"""
     # 处理响应文本
@@ -2160,7 +2160,10 @@ def process_patch_response(
     print(Fore.GREEN + "y - 全部应用" + ColorStyle.RESET_ALL)
     print(Fore.YELLOW + "m - 手动合并" + ColorStyle.RESET_ALL)
     print(Fore.RED + "n - 退出" + ColorStyle.RESET_ALL)
-    choice = input("请输入选择 [i/y/m/n]: ").lower().strip() or "i"
+    if confirm:
+        choice = confirm.lower()
+    else:
+        choice = input("请输入选择 [i/y/m/n]: ").lower().strip() or "i"
 
     if choice == "n":
         print(Fore.RED + "操作已取消" + ColorStyle.RESET_ALL)
@@ -2816,7 +2819,6 @@ class PatchPromptBuilder:
     def _get_patch_prompt_output(self) -> str:
         """生成补丁提示输出部分"""
         modified_type = "symbol" if self.use_patch else "block"
-        tag = "source code"
         prompt = ""
         # 优先使用文件范围提示而非示例（根据用户需求移除file_ranges支持）
         if self.use_patch and self.file_ranges:  # 禁用file_ranges逻辑
@@ -2825,15 +2827,15 @@ class PatchPromptBuilder:
 # 响应格式
 {CHANGE_LOG_HEADER}
 [modified whole {modified_type}]: 块路径
-[{tag} start]
+[start]
 完整文件内容
-[{tag} end]
+[end]
 
 或（无修改时）:
 [modified whole {modified_type}]: 块路径
-[{tag} start]
+[start]
 完整原始内容
-[{tag} end]
+[end]
 
 """
                 if self.file_ranges
@@ -2869,9 +2871,9 @@ class PatchPromptBuilder:
 符号名称: {symbol_name}
 文件路径: {patch_dict["file_path"]}
 
-[source code start]
+[start]
 {patch_dict["block_content"] if isinstance(patch_dict["block_content"], str) else patch_dict["block_content"].decode("utf-8")}
-[source code end]
+[end]
 
 [SYMBOL END]
 """
@@ -3020,7 +3022,7 @@ def _extract_file_matches(content):
     pattern = (
         r"(\[project setup shellscript start\]\n(.*?)\n\[project setup shellscript end\]|"
         r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
-        r"\[(modified whole|created) file\]: (.*?)\n\[source code start\]\n(.*?)\n\[source code end\])"
+        r"\[(modified whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\])"
     )
     matches = []
     for match in re.finditer(pattern, content, re.DOTALL):
@@ -3670,10 +3672,12 @@ class ModelSwitch:
         """根据模型名称查询API并返回文本结果，支持缓存功能"""
         cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
         os.makedirs(cache_dir, exist_ok=True)
-
         # 计算prompt的CRC32
         prompt_crc32 = zlib.crc32(prompt.encode("utf-8")) & 0xFFFFFFFF
-        cache_filename = f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}_{prompt_crc32:08x}.json"
+        current_time = datetime.datetime.now()
+        time_str = current_time.strftime("%Y%m%d-%H%M%S")
+        hint = kwargs.get("hint", "")
+        cache_filename = f"{time_str}_{prompt_crc32:08x}.json"
         cache_path = os.path.join(cache_dir, cache_filename)
 
         # 检查缓存
@@ -3687,7 +3691,17 @@ class ModelSwitch:
         response_text = response["choices"][0]["message"]["content"]
 
         # 保存到缓存
-        self._save_to_cache(cache_path, prompt, prompt_crc32, response_text)
+        cache_data = {
+            "prompt": prompt,
+            "response_text": response_text,
+            "crc32": prompt_crc32,
+            "timestamp": current_time.isoformat(),
+            "hint": hint,
+            "model_name": model_name,
+            "kwargs": {k: v for k, v in kwargs.items() if k not in ["no_cache_prompt_file"]},
+        }
+        with open(cache_path, "w") as f:
+            json.dump(cache_data, f, indent=2)
         return response_text
 
     def _should_skip_cache(self, no_cache_files: List[str], cache_filename: str) -> bool:
