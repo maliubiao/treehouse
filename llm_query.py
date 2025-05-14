@@ -2843,15 +2843,15 @@ class PatchPromptBuilder:
 # 响应格式
 {CHANGE_LOG_HEADER}
 [modified whole {modified_type}]: 符号路径
-[{tag} start]
+[start]
 完整文件内容
-[{tag} end]
+[end]
 
 或（无修改时）:
 [modified whole {modified_type}]: 符号路径
-[{tag} start]
+[start]
 完整原始内容
-[{tag} end]
+[end]
 
 """
             )

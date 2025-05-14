@@ -1,0 +1,5 @@
+source_files:
+  - Target/*.cpp
+verify_cmd: cd ~/code/llvm-project/lldb-build/; ninja
+
+  
