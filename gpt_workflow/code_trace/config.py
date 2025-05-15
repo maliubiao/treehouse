@@ -169,23 +169,20 @@ class TraceConfig:
 
         # Re-apply filtered responses
         process_patch_response(
-            "\n".join(filtered_responses), tracer.symbol_detail_map, ignore_new_symbol=True, no_mix=True, confirm="y"
+            "\n".join(filtered_responses),
+            tracer.symbol_detail_map,
+            ignore_new_symbol=True,
+            no_mix=True,
+            confirm="y",
+            change_log=False,
         )
         return True
-
-    def get_next_file(self) -> Optional[str]:
-        for file in self.source_files:
-            abs_path = self._to_absolute_path(file)
-            if abs_path not in self.staged_files and os.path.exists(abs_path):
-                return abs_path
-        return None
 
     def trace_single_file(self, file_path: str) -> Tuple[bool, Optional[str]]:
         from .tracer import CodeTracer
 
         if self.stop_event.is_set():
             return (False, file_path)
-
         abs_path = self._to_absolute_path(file_path)
         if abs_path in self.staged_files:
             print(f"Skipping staged file: {abs_path}")
@@ -195,8 +192,10 @@ class TraceConfig:
         tracer = CodeTracer(abs_path, stop_event=self.stop_event, skip_crc32=self.skip_crc32)
         tracer.process()
         processed_symbols = tracer.processed_symbols
+        print("Processed symbols:", processed_symbols)
         original_responses = tracer.responses.copy()
         with repair_lock:
+            print("Verifying trace...")
             _, verify_output = self.verify_trace()
             print(verify_output)
             error_lines = self._find_error_lines(verify_output)
@@ -243,7 +242,9 @@ class TraceConfig:
                 if not success:
                     return (False, failed_file)
             return (True, None)
-
+        for file in remaining_files:
+            self.trace_single_file(file)
+        return (True, None)
         print(f"Processing {len(remaining_files)} files in parallel")
         with ThreadPoolExecutor(max_workers=32) as pool:
             futures = {pool.submit(self.trace_single_file, file): file for file in remaining_files}

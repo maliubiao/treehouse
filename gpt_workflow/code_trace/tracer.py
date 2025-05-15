@@ -13,39 +13,10 @@ from tree import ParserLoader as PL
 from tree import ParserUtil as PU
 
 
-class CodeTracer:
-    """跟踪代码符号并进行批量处理的类，支持多线程处理"""
-
-    def __init__(
-        self, file_path: str, no_cache_prompt_file: List[str] = None, stop_event=None, skip_crc32: List[str] = None
-    ):
-        self.file_path = os.path.abspath(file_path)
-        self.parser_loader = PL()
-        self.parser_util = PU(self.parser_loader)
-        self.results, self.code_map = self.parser_util.get_symbol_paths(self.file_path)
-        self.symbol_detail_map: Dict[str, dict] = {}
-        self.responses: List[str] = []
-        self.lock = threading.Lock()
-        self.executor = ThreadPoolExecutor(max_workers=32)
-        self.ranges = []
-        self.model_switch = ModelSwitch()
-        self.no_cache_prompt_file = no_cache_prompt_file or []
-        self.processed_symbols = []
-        self.stop_event = stop_event
-        self.skip_crc32 = set(skip_crc32 or [])
-        self.symbol_crc_map: Dict[str, List[str]] = {}
-        self.current_batch_crc = None
-        self.batch_responses = []
-
-        prompt_dir = Path(__file__).parent.parent.parent / "prompts"
-        self.prompt = (prompt_dir / "code-trace").read_text(encoding="utf-8") + "\n\n"
-        self.prompt += self._build_response_template()
-        self.prompt += (prompt_dir / "dumb-example").read_text(encoding="utf-8") + "\n\n"
-
-    def _build_response_template(self) -> str:
-        header = "[modified whole {modified_type}]: 符号路径".format(modified_type="symbol")
-        end_tag = "[" + "end]"
-        return f"""
+def build_response_template() -> str:
+    header = "[modified whole {modified_type}]: 符号路径".format(modified_type="symbol")
+    end_tag = "[" + "end]"
+    return f"""
 # 响应格式
 {header}
 [start]
@@ -59,10 +30,41 @@ class CodeTracer:
 {end_tag}
 """
 
+
+prompt_dir = Path(__file__).parent.parent.parent / "prompts"
+base_prompt = (prompt_dir / "code-trace").read_text(encoding="utf-8") + "\n\n"
+base_prompt += build_response_template()
+
+
+class CodeTracer:
+    """跟踪代码符号并进行批量处理的类，支持多线程处理"""
+
+    def __init__(
+        self, file_path: str, no_cache_prompt_file: List[str] = None, stop_event=None, skip_crc32: List[str] = None
+    ):
+        self.file_path = os.path.abspath(file_path)
+        self.parser_loader = PL()
+        self.parser_util = PU(self.parser_loader)
+        self.results, self.code_map = self.parser_util.get_symbol_paths(self.file_path)
+        self.symbol_detail_map: Dict[str, dict] = {}
+        self.responses: List[str] = []
+        self.lock = threading.Lock()
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.ranges = []
+        self.model_switch = ModelSwitch()
+        self.no_cache_prompt_file = no_cache_prompt_file or []
+        self.processed_symbols = []
+        self.stop_event = stop_event
+        self.skip_crc32 = set(skip_crc32 or [])
+        self.symbol_crc_map: Dict[str, List[str]] = {}
+        self.current_batch_crc = None
+        self.batch_responses = []
+        self.prompt = base_prompt + "\n\n"
+
     def _process_symbol(self, symbol_name: str, symbol: dict) -> str:
         if self.stop_event and self.stop_event.is_set():
             return ""
-        if symbol["type"] not in ("function", "class", "namespace", "declaration"):
+        if symbol["type"] not in ("function", "class", "namespace"):
             print(f"Skipping non-target symbol: {symbol_name}({symbol['type']})")
             return ""
         if symbol_name.count(".") > 1:
@@ -97,24 +99,16 @@ class CodeTracer:
             return
         if not batch:
             return
-
         batch_prompt = self.prompt + "\n".join(batch)
-        batch_crc = hex(zlib.crc32(batch_prompt.encode("utf-8")) & 0xFFFFFFFF)[2:].zfill(8)
-
-        if batch_crc in self.skip_crc32:
-            print(f"Skipping batch with CRC32: {batch_crc}")
-            return
-
-        self.current_batch_crc = batch_crc
-        print(f"Submitting batch with CRC32: {batch_crc}, symbols count: {len(batch)}")
-
+        print(f"Submitting batch symbols count: {len(batch)}")
         future = self.executor.submit(
             self.model_switch.query_for_text,
-            model_name="siliconflow-r1",
+            model_name="deepseek-r1",
             prompt=batch_prompt,
             disable_conversation_history=True,
-            verbose=False,
+            verbose=True,
             no_cache_prompt_file=self.no_cache_prompt_file,
+            skip_crc32=self.skip_crc32,
         )
         future.add_done_callback(self._handle_response)
 
@@ -173,10 +167,14 @@ class CodeTracer:
             self._submit_batch(current_batch)
 
         self.executor.shutdown(wait=not (self.stop_event and self.stop_event.is_set()))
-
         if not (self.stop_event and self.stop_event.is_set()):
             process_patch_response(
-                "\n".join(self.responses), self.symbol_detail_map, ignore_new_symbol=True, no_mix=True, confirm="y"
+                "\n".join(self.responses),
+                self.symbol_detail_map,
+                ignore_new_symbol=True,
+                no_mix=True,
+                confirm="y",
+                change_log=False,
             )
             print("All symbols processed with multi-threading")
         else:

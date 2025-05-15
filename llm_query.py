@@ -3677,13 +3677,20 @@ class ModelSwitch:
         current_time = datetime.datetime.now()
         time_str = current_time.strftime("%Y%m%d-%H%M%S")
         hint = kwargs.get("hint", "")
+        prompt_crc32_hex = f"{prompt_crc32:08x}"
+        if prompt_crc32_hex in kwargs.get("skip_crc32", []):
+            print("跳过缓存:", prompt_crc32_hex)
+            return ""
         cache_filename = f"{time_str}_{prompt_crc32:08x}.json"
         cache_path = os.path.join(cache_dir, cache_filename)
 
         # 检查缓存
-        if not self._should_skip_cache(kwargs.get("no_cache_prompt_file", []), cache_filename):
+        if not kwargs.get("ignore_cache") and not self._should_skip_cache(
+            kwargs.get("no_cache_prompt_file", []), cache_filename
+        ):
             cached_response = self._check_cache(prompt_crc32, cache_dir)
             if cached_response:
+                print("prompt缓存命中:", cache_filename)
                 return cached_response
 
         # 没有缓存则调用API

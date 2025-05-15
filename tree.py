@@ -1022,13 +1022,16 @@ class PythonSpec(LangSpec):
 class CPPSpec(LangSpec):
     """C++语言特定处理策略"""
 
-    def get_symbol_name(self, node: Node):
+    def get_symbol_name(self, node: Node) -> Union[str, Tuple[str, str]]:
         if node.type in (NodeTypes.CPP_CLASS_SPECIFIER, NodeTypes.C_STRUCT_SPECFIER):
-            return self.get_cpp_class_name(node)
+            return "class", self.get_cpp_class_name(node)
         if node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
-            return self.get_cpp_namespace_name(node)
+            return "namespace", self.get_cpp_namespace_name(node)
         if node.type == NodeTypes.C_DECLARATION:
-            return self.get_cpp_declaration_name(node)
+            if self.node_is_function(node):
+                return "function", self.get_function_name(node)
+            else:
+                return self.get_cpp_declaration_name(node)
         if node.type == NodeTypes.CPP_FRIEND_DECLARATION:
             return self.get_friend_function_name(node)
         return None
@@ -1071,6 +1074,21 @@ class CPPSpec(LangSpec):
     def get_friend_function_name(self, node: Node):
         decl = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_DECLARATION)
         return self.get_function_name(decl) if decl else None
+
+    def node_is_function(self, node: Node):
+        pointer_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_POINTER_DECLARATOR)
+        if pointer_declarator:
+            func_declarator = pointer_declarator.child_by_field_name("declarator")
+            if func_declarator and func_declarator.type == NodeTypes.FUNCTION_DECLARATOR:
+                return True
+        reference_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_REFERENCE_DECLARATOR)
+        if reference_declarator:
+            func_declarator = BaseNodeProcessor.find_child_by_type(reference_declarator, NodeTypes.FUNCTION_DECLARATOR)
+            if func_declarator:
+                return True
+        func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
+        if func_declarator:
+            return True
 
     def get_function_name(self, node: Node):
         result = None
@@ -1198,7 +1216,7 @@ class NodeProcessor(BaseNodeProcessor):
     def __init__(self, lang_spec: LangSpec = None):
         self.lang_spec = lang_spec
 
-    def get_symbol_name(self, node):
+    def get_symbol_name(self, node) -> Union[str, Tuple[str, str]]:
         """提取节点的符号名称"""
         if not hasattr(node, "type"):
             return None
@@ -1423,29 +1441,31 @@ class CodeMapBuilder:
 
     def _process_symbol_node(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
         """处理符号节点，返回处理后的有效节点或None"""
-        symbol_name = self.node_processor.get_symbol_name(node)
+        symbol_name: Union[str, Tuple[str, str]] = self.node_processor.get_symbol_name(node)
+        symbol_type = ""
+        if isinstance(symbol_name, tuple):
+            symbol_type, symbol_name = symbol_name
         if symbol_name is None:
             return None
+        if not symbol_type:
+            type_mapping = {
+                NodeTypes.CLASS_DEFINITION: "class",
+                NodeTypes.GO_TYPE_DECLARATION: "type",
+                NodeTypes.GO_METHOD_DECLARATION: "method",
+                NodeTypes.CPP_NAMESPACE_DEFINITION: "namespace",
+                NodeTypes.CPP_TEMPLATE_DECLARATION: "template",
+                NodeTypes.IF_STATEMENT: "main_block" if PythonSpec.is_main_block(node) else None,
+                NodeTypes.GO_IMPORT_DECLARATION: "import_declaration",
+                NodeTypes.ASSIGNMENT: "module_variable" if not current_symbols else "variable",
+                NodeTypes.GO_PACKAGE_CLAUSE: "package",
+                NodeTypes.C_DECLARATION: "declaration",
+            }
+            symbol_type = type_mapping.get(node.type)
+            if symbol_type is None and NodeTypes.is_structure_tree_node(node.type):
+                symbol_type = "function"
 
-        type_mapping = {
-            NodeTypes.CLASS_DEFINITION: "class",
-            NodeTypes.GO_TYPE_DECLARATION: "type",
-            NodeTypes.GO_METHOD_DECLARATION: "method",
-            NodeTypes.CPP_NAMESPACE_DEFINITION: "namespace",
-            NodeTypes.CPP_TEMPLATE_DECLARATION: "template",
-            NodeTypes.IF_STATEMENT: "main_block" if PythonSpec.is_main_block(node) else None,
-            NodeTypes.GO_IMPORT_DECLARATION: "import_declaration",
-            NodeTypes.ASSIGNMENT: "module_variable" if not current_symbols else "variable",
-            NodeTypes.GO_PACKAGE_CLAUSE: "package",
-            NodeTypes.C_DECLARATION: "declaration",
-        }
-
-        symbol_type = type_mapping.get(node.type)
-        if symbol_type is None and NodeTypes.is_structure_tree_node(node.type):
-            symbol_type = "function"
-
-        if symbol_type is None:
-            symbol_type = node.type
+            if symbol_type is None:
+                symbol_type = node.type
 
         effective_node = self._get_effective_node(node)
         current_symbols.append(symbol_name)
