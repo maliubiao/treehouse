@@ -69,6 +69,6 @@ END
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 符号名，文件名要与输出的代码块完全一致
 - 代码输出以[modified whole file] or [modified whole symbol] 开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified whole file], [SYMBOL START]输入对应[modified whole symbol]
-- 后边跟随[start]代码内容[end]
+- 代码用[start][end]包括
 - 删除的符号格式也用[modified whole symbol] tag, 但[start][end]内容置空
 
