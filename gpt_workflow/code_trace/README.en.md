@@ -189,3 +189,28 @@ Key features:
 - Per-file transformation tracking
 - Cross-file symbol reference support
 - Consolidated verification
+
+## Testing Transformations
+
+You can test the transformation functionality using the included test script:
+
+```bash
+./gpt_workflow/code_trace/test_apply_transform.sh
+```
+
+The test script will:
+1. Create a temporary test environment
+2. Generate sample C++ files (test.cpp and test1.cpp)
+3. Create a configuration file (config.yaml)
+4. Run initial transformations
+5. Test applying transformations with symbol filtering
+6. Verify the transformations were applied correctly
+7. Clean up temporary files (while keeping output for inspection)
+
+The test script demonstrates:
+- Basic transformation workflow
+- Applying transformations with symbol filtering
+- Using specific transformation files
+- Verifying transformations were applied correctly
+
+For debugging purposes, the test script keeps the output files in `/tmp/code_trace_test` for inspection after the test completes.

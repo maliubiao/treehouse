@@ -14,6 +14,7 @@ from llm_query import ModelSwitch
 
 from .config import TraceConfig
 from .tracer import CodeTracer, base_prompt
+from .transform_applier import TransformApplier
 
 
 def parse_error_lines(output: str) -> List[str]:
@@ -248,6 +249,32 @@ def handle_lookup_operations(args: argparse.Namespace) -> None:
     sys.exit(0)
 
 
+def handle_apply_transform(args: argparse.Namespace) -> None:
+    """Handle applying transformations from transformation files."""
+    skip_symbols = set(args.skip_symbols.split(",")) if args.skip_symbols else set()
+
+    if args.transform_file:
+        transform_file = Path(args.transform_file)
+        if not transform_file.exists():
+            print(f"{Fore.RED}Error: Transformation file not found at {transform_file}{Style.RESET_ALL}")
+            sys.exit(1)
+
+        applier = TransformApplier(skip_symbols=skip_symbols)
+        success = applier.apply_transformations(args.file_path, transform_file)
+        if not success:
+            sys.exit(1)
+    else:
+        if not args.file_path:
+            print(f"{Fore.RED}Error: --file must be specified when using default transformation file{Style.RESET_ALL}")
+            sys.exit(1)
+
+        success = TransformApplier.apply_from_default_transform_file(args.file_path, skip_symbols)
+        if not success:
+            sys.exit(1)
+
+    sys.exit(0)
+
+
 def main() -> None:
     """Main entry point for code tracing functionality."""
     init()  # Initialize colorama
@@ -306,6 +333,18 @@ def main() -> None:
         dest="transform_file",
         help="Path to specific transformation file to inspect",
     )
+    parser.add_argument(
+        "--apply-transform",
+        dest="apply_transform",
+        action="store_true",
+        help="Apply transformations from transformation files",
+    )
+    parser.add_argument(
+        "--skip-symbols",
+        dest="skip_symbols",
+        help="Comma-separated list of symbols to skip when applying transformations",
+        default="",
+    )
 
     args = parser.parse_args()
 
@@ -320,6 +359,9 @@ def main() -> None:
 
     if args.lookup_strings or args.lookup_yaml or args.pasteboard:
         handle_lookup_operations(args)
+
+    if args.apply_transform:
+        handle_apply_transform(args)
 
     if args.config_file:
         config = TraceConfig(args.config_file)
