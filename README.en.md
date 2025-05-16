@@ -1,6 +1,6 @@
 
 # Treehouse  
-
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/maliubiao/treehouse)  
 [English users please view README.en.md](README.en.md)  
 
 A code assistance tool based on OpenAI-compatible APIs, offering convenient command-line interaction and context-aware functionality. It aims to be the command-line version of Cursor and Windsurf, with Deepseek R1 and V3 recommended for use.
