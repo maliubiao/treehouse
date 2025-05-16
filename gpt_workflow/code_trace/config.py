@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+from debugger.tracer import trace
 from llm_query import ModelSwitch, process_patch_response
 
 verify_lock = threading.Lock()
@@ -23,6 +24,7 @@ class TraceConfig:
         self.verify_cmd: str = ""
         self.traced_files: Set[str] = set()
         self.failed_files: List[str] = []
+        self.exclude_patterns: List[str] = []
 
         self.stop_event = threading.Event()
         self.skip_crc32: Set[str] = set()
@@ -46,6 +48,13 @@ class TraceConfig:
             path = os.path.join(self.git_root, path)
         return os.path.normpath(os.path.abspath(path))
 
+    def _should_exclude(self, file_path: str) -> bool:
+        abs_path = Path(file_path).resolve()
+        for pattern in self.exclude_patterns:
+            if abs_path.match(pattern):
+                return True
+        return False
+
     def load_config(self) -> None:
         try:
             import yaml
@@ -55,9 +64,10 @@ class TraceConfig:
             source_patterns = config.get("source_files", [])
             for pattern in source_patterns:
                 matched_files = glob.glob(pattern, recursive=True)
-                self.source_files.extend([Path(f).resolve() for f in matched_files])
+                self.source_files.extend([Path(f).resolve() for f in matched_files if not self._should_exclude(f)])
             self.verify_cmd = config.get("verify_cmd", "")
             self.skip_crc32 = set(config.get("skip_crc32", []))
+            self.exclude_patterns = config.get("exclude_patterns", [])
         except Exception as e:
             print(f"Error loading config file: {str(e)}")
             raise
@@ -206,6 +216,7 @@ class TraceConfig:
                 lines = self._find_error_lines(retry_output)
                 if lines:
                     print("Retry failed with error lines", lines)
+                    print(retry_output)
                     self.restore_file(abs_path)
                     crc_list = []
                     self.save_failed_symbols(abs_path, processed_symbols, crc_list)
@@ -223,10 +234,14 @@ class TraceConfig:
         remaining_files = []
         for file in self.source_files:
             abs_path = Path(file).resolve()
-            if abs_path not in self.staged_files and os.path.exists(abs_path):
+            if (
+                abs_path not in self.staged_files
+                and os.path.exists(abs_path)
+                and not self._should_exclude(str(abs_path))
+            ):
                 remaining_files.append(abs_path)
             else:
-                print(f"File {abs_path} is staged or does not exist, skipping")
+                print(f"File {abs_path} is staged, excluded or does not exist, skipping")
 
         if not remaining_files:
             print("All files have been processed successfully or do not exist.")

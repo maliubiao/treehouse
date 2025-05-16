@@ -3,6 +3,7 @@
 - 全量翻译输入文本，禁止任何形式的省略或缩略
 - 保留原始文本的段落结构/标点符号/特殊符号
 - 正确处理混合内容：代码块保持原样（仅翻译注释部分），数学公式/专业符号不翻译
+- 不得添加注释
 
 2. 精准度规范
 - 严格遵循上下文语境选择词义
@@ -35,10 +36,13 @@
 
 【执行范例】
 输入示例：
+[text start]
 "The quantum state |ψ⟩ evolves according to Schrödinger's equation. # 重要公式备注"
 print("Hello World") // 测试输出
+[text end]
 
 标准输出：
+[translation start]
 "量子态 |ψ⟩ 遵循薛定谔方程演化。 # 重要公式备注"
 print("Hello World") // 测试输出
-
+[translation end]

@@ -9,7 +9,7 @@ from .lint import (
     lint_to_search_protocol,
     pylint_fix,
 )
-from .translate import TranslationWorkflow
+from .translate.workflow import TranslationWorkflow
 
 __all__ = [
     "ArchitectMode",

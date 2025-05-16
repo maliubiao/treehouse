@@ -59,6 +59,43 @@ def get_clipboard_content() -> str:
         return ""
 
 
+def print_transformation_report(transform_data: dict, file_filter: str = None):
+    """Pretty print transformation report"""
+    init()  # Initialize colorama
+
+    print(f"\n{Fore.YELLOW}=== Code Transformation Report ==={Style.RESET_ALL}")
+
+    total_symbols = len(transform_data)
+    changed_symbols = sum(1 for t in transform_data.values() if t["is_changed"])
+    unchanged_symbols = total_symbols - changed_symbols
+
+    print(f"{Fore.CYAN}Summary:{Style.RESET_ALL}")
+    print(f"  Total symbols processed: {total_symbols}")
+    print(f"  Changed symbols: {Fore.GREEN}{changed_symbols}{Style.RESET_ALL}")
+    print(f"  Unchanged symbols: {unchanged_symbols}")
+    print(f"  Transformation rate: {changed_symbols / total_symbols:.1%}\n")
+
+    for symbol_path, data in transform_data.items():
+        if file_filter and file_filter not in symbol_path:
+            continue
+
+        file_path = data["file_path"]
+        symbol_name = data["symbol_name"]
+        is_changed = data["is_changed"]
+
+        print(f"\n{Fore.YELLOW}Symbol: {symbol_path}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}File: {file_path}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Status: {'MODIFIED' if is_changed else 'UNCHANGED'}{Style.RESET_ALL}")
+
+        print(f"\n{Fore.GREEN}Original Code:{Style.RESET_ALL}")
+        print(f"{Fore.WHITE}{data['original_code']}{Style.RESET_ALL}")
+
+        if is_changed:
+            print(f"\n{Fore.GREEN}Transformed Code:{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}{data['transformed_code']}{Style.RESET_ALL}")
+        print("-" * 80)
+
+
 def main():
     """
     改后遇到编译不过，把不过的那行，找出是哪个prompt生成, 并删除缓存, 获取到一串crc32
@@ -106,8 +143,37 @@ def main():
         dest="prompt_debug",
         help="Path to prompt cache JSON file to resend for debugging",
     )
+    parser.add_argument(
+        "--inspect-file",
+        dest="inspect_file",
+        help="Path to source file to view processing details (symbol batches, prompts and responses)",
+    )
+    parser.add_argument(
+        "--inspect-transform",
+        dest="inspect_transform",
+        action="store_true",
+        help="Show detailed report of all code transformations",
+    )
 
     args = parser.parse_args()
+
+    # Handle transformation inspection
+    if args.inspect_transform:
+        debug_dir = Path("trace_debug")
+        global_file = debug_dir / "global_transformations.json"
+
+        if not global_file.exists():
+            print(f"{Fore.RED}Error: No transformation data found. Run code tracing first.{Style.RESET_ALL}")
+            sys.exit(1)
+
+        try:
+            with open(global_file, "r", encoding="utf-8") as f:
+                transform_data = json.load(f)
+                print_transformation_report(transform_data, args.inspect_file)
+        except Exception as e:
+            print(f"{Fore.RED}Error loading transformation data: {str(e)}{Style.RESET_ALL}")
+            sys.exit(1)
+        sys.exit(0)
 
     # Handle prompt debug first
     if args.prompt_debug:
@@ -144,6 +210,31 @@ def main():
         except Exception as e:
             print(f"Error processing prompt debug file: {str(e)}")
             sys.exit(1)
+
+    # Handle file inspection
+    if args.inspect_file:
+        inspection_data = CodeTracer.inspect_file(args.inspect_file)
+        if "error" in inspection_data:
+            print(f"{Fore.RED}{inspection_data['error']}{Style.RESET_ALL}")
+            sys.exit(1)
+
+        print(f"\n{Fore.YELLOW}=== Inspection Report for {args.inspect_file} ==={Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Processed Symbols:{Style.RESET_ALL} {len(inspection_data.get('processed_symbols', []))}")
+
+        print(f"\n{Fore.GREEN}Batch Processing Details:{Style.RESET_ALL}")
+        for i, batch in enumerate(inspection_data.get("symbol_batches", []), 1):
+            print(f"{Fore.YELLOW}Batch #{i} ({batch['batch_id']}):{Style.RESET_ALL}")
+            print(f"  Symbols: {', '.join(batch['symbols'])}")
+            print(f"  Prompt Preview:\n{Fore.WHITE}{batch['prompt_snippet']}{Style.RESET_ALL}")
+            if "response" in batch:
+                print(f"  Response Preview:\n{Fore.WHITE}{batch['response']}{Style.RESET_ALL}")
+            print("-" * 80)
+
+        print(f"\n{Fore.GREEN}Latest 3 Responses:{Style.RESET_ALL}")
+        for resp in inspection_data.get("responses", [])[-3:]:
+            print(f"{Fore.WHITE}{resp}{Style.RESET_ALL}\n{'-' * 40}")
+
+        sys.exit(0)
 
     # Handle lookup operations first
     if args.lookup_strings or args.lookup_yaml or args.pasteboard:
@@ -213,6 +304,7 @@ def main():
         config = TraceConfig(args.config_file)
         if args.skip_crc32:
             config.skip_crc32.update(args.skip_crc32.split(","))
+
         success, failed_file = config.trace_all_files(parallel=args.parallel)
         if success:
             print("All files processed successfully")

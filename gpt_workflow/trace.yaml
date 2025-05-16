@@ -1,5 +1,12 @@
 source_files:
-  - Target/*.cpp
+  - API/*.cpp
+  - Core/*cpp
+exclude_patterns:
+  - Target/UnwindLLDB.cpp
+  - Core/IOHandler.cpp
+  - Core/IOHandlerCursesGUI.cpp
+  - API/SBPlatform.cpp
+  - Core/Disassembler.cpp
 verify_cmd: cd ~/code/llvm-project/lldb-build/; ninja
 
   

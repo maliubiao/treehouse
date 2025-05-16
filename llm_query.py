@@ -3669,6 +3669,26 @@ class ModelSwitch:
         globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
     def query_for_text(self, model_name: str, prompt: str, **kwargs) -> dict:
+        """根据模型名称查询API并返回文本结果，支持缓存功能
+
+        该方法基于提供的模型名称和提示文本查询AI模型API，并返回文本响应。
+        支持缓存机制以避免重复请求，使用CRC32哈希值来标识不同的提示。
+
+        参数:
+            model_name (str): 要查询的AI模型名称
+            prompt (str): 发送给模型的提示文本
+            **kwargs: 额外参数，支持的选项包括:
+                - hint (str): 提示的额外描述信息，用于缓存记录
+                - ignore_cache (bool): 是否忽略缓存直接请求API
+                - no_cache_prompt_file (list): 不应缓存的提示文件列表
+                - skip_crc32 (list): 要跳过的提示CRC32哈希值列表
+
+        返回:
+            str: 模型生成的文本响应
+
+        注意:
+            缓存文件保存在"prompt_cache"目录中，格式为"时间戳_CRC32.json"
+        """
         """根据模型名称查询API并返回文本结果，支持缓存功能"""
         cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
         os.makedirs(cache_dir, exist_ok=True)
@@ -3678,7 +3698,7 @@ class ModelSwitch:
         time_str = current_time.strftime("%Y%m%d-%H%M%S")
         hint = kwargs.get("hint", "")
         prompt_crc32_hex = f"{prompt_crc32:08x}"
-        if prompt_crc32_hex in kwargs.get("skip_crc32", []):
+        if prompt_crc32_hex in kwargs.pop("skip_crc32", []):
             print("跳过缓存:", prompt_crc32_hex)
             return ""
         cache_filename = f"{time_str}_{prompt_crc32:08x}.json"
