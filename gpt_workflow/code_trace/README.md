@@ -19,7 +19,7 @@ verify_cmd: "g++ gpt_workflow/code_trace/test.cpp gpt_workflow/code_trace/test1.
 
 ### 2. 运行转换:
 ```bash
-python gpt_workflow/code_trace --config config.yaml --parallel
+python -m gpt_workflow.code_trace --config gpt_workflow/code_trace/config.yaml --parallel
 ```
 
 
