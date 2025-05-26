@@ -1589,7 +1589,7 @@ DUMB_PROMPT = f"""
 - 保持原有缩进和代码风格，不添注释
 - 用户提供的是类, 则输出完整的类，用户提供的是函数, 则输出完整的修改函数，用户提供的是文件, 则输出完整的修改文件, 添加新符号要附于已经存在的符号
 - 你的输出会被用来替代输入的符号或者文件路径，请不要省略无论修改与否，符号名，文件名要与输出的代码内容一致, 不单独修改某个符号的子符号
-- 代码输出以[modified whole file] or [modified whole symbol]开头，后面跟着文件路径或符号路径, [file name]输入对应[modified whole file], [SYMBOL START]输入对应[modified whole symbol]
+- 代码输出以[overwrite whole file] or [overwrite whole symbol]开头，后面跟着文件路径或符号路径, [file name]输入对应[overwrite whole file], [SYMBOL START]输入对应[overwrite whole symbol]
 
 {DUMB_EXAMPLE_A}
 用户的要求如下:
@@ -1619,13 +1619,13 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
             f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified whole {modified_type}]: 块路径
+[overwrite whole {modified_type}]: 块路径
 [start]
 完整文件内容
 [end]
 
 或（无修改时）:
-[modified whole {modified_type}]: 块路径
+[overwrite whole {modified_type}]: 块路径
 [start]
 完整原始内容
 [end]
@@ -1635,13 +1635,13 @@ def get_patch_prompt_output(patch_require, file_ranges=None, dumb_prompt=""):
             else f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified whole {modified_type}]: 符号路径
+[overwrite whole {modified_type}]: 符号路径
 [start]
 完整文件内容
 [end]
 
 或（无修改时）:
-[modified whole {modified_type}]: 符号路径
+[overwrite whole {modified_type}]: 符号路径
 [start]
 完整原始内容
 [end]
@@ -1875,7 +1875,7 @@ class BlockPatchResponse:
 
         # 匹配两种响应格式
         pattern = re.compile(
-            r"\[modified whole (symbol|block)\]:\s*([^\n]+)\s*\n\[start\](.*?)\n\[end\]",
+            r"\[overwrite whole (symbol|block)\]:\s*([^\n]+)\s*\n\[start\](.*?)\n\[end\]",
             re.DOTALL,
         )
 
@@ -1900,7 +1900,7 @@ class BlockPatchResponse:
 
         # 兼容旧格式校验
         if not results and ("[start]" in response_text or "[end]" in response_text):
-            raise ValueError("响应包含代码块标签但格式不正确，请使用[modified whole symbol/block]:标签")
+            raise ValueError("响应包含代码块标签但格式不正确，请使用[overwrite whole symbol/block]:标签")
 
         return results
 
@@ -1924,7 +1924,7 @@ class BlockPatchResponse:
         返回格式: {"file": [symbol_path1, symbol_path2, ...]}
         """
         symbol_paths = {}
-        pattern = re.compile(r"\[modified whole symbol\]:\s*([^\n]+)\s*\n\[start\]", re.DOTALL)
+        pattern = re.compile(r"\[overwrite whole symbol\]:\s*([^\n]+)\s*\n\[start\]", re.DOTALL)
 
         for match in pattern.finditer(response_text):
             whole_path = match.group(1).strip()
@@ -1963,7 +1963,7 @@ def process_file_change(response_text, valid_symbols=None):
         valid_symbols = []
 
     pattern = re.compile(
-        r"\[modified whole (?:symbol|file)\]:\s*(.+?)\n\[start\]\n(.*?)\n\[end\]",
+        r"\[overwrite whole (?:symbol|file)\]:\s*(.+?)\n\[start\]\n(.*?)\n\[end\]",
         re.DOTALL,
     )
     results = []
@@ -1978,14 +1978,14 @@ def process_file_change(response_text, valid_symbols=None):
         is_valid = (
             os.path.exists(symbol_path)
             or (valid_symbols and symbol_path not in valid_symbols)
-            or content.startswith("[modified whole file]:")
+            or content.startswith("[overwrite whole file]:")
         )
 
         if start > last_end:
             remaining_parts.append(response_text[last_end:start])
 
         if is_valid:
-            results.append(content.replace("[modified whole symbol]:", "[modified whole file]:", 1))
+            results.append(content.replace("[overwrite whole symbol]:", "[overwrite whole file]:", 1))
         else:
             remaining_parts.append(content)
 
@@ -2822,13 +2822,13 @@ class PatchPromptBuilder:
                 f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified whole {modified_type}]: 块路径
+[overwrite whole {modified_type}]: 块路径
 [start]
 完整文件内容
 [end]
 
 或（无修改时）:
-[modified whole {modified_type}]: 块路径
+[overwrite whole {modified_type}]: 块路径
 [start]
 完整原始内容
 [end]
@@ -2838,13 +2838,13 @@ class PatchPromptBuilder:
                 else f"""
 # 响应格式
 {CHANGE_LOG_HEADER}
-[modified whole {modified_type}]: 符号路径
+[overwrite whole {modified_type}]: 符号路径
 [start]
 完整文件内容
 [end]
 
 或（无修改时）:
-[modified whole {modified_type}]: 符号路径
+[overwrite whole {modified_type}]: 符号路径
 [start]
 完整原始内容
 [end]
@@ -3018,7 +3018,7 @@ def _extract_file_matches(content):
     pattern = (
         r"(\[project setup shellscript start\]\n(.*?)\n\[project setup shellscript end\]|"
         r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
-        r"\[(modified whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\])"
+        r"\[(overwrite whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\])"
     )
     matches = []
     for match in re.finditer(pattern, content, re.DOTALL):

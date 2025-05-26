@@ -37,32 +37,63 @@ class TransformApplier:
 
         try:
             with open(transform_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                return self._validate_and_filter_transformations(data)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise ValueError(f"Invalid transformation file format: {str(e)}") from e
 
-    def _validate_transformation_data(self, transform_data: Dict, file_path: str) -> None:
-        """验证转换数据的有效性"""
-        if not isinstance(transform_data, dict):
-            raise ValueError("Transformation data must be a dictionary")
+    def _validate_and_filter_transformations(self, transform_data: Dict) -> Dict:
+        """验证并过滤转换数据，确保格式正确"""
+        valid_data = {}
+        for symbol_key, data in transform_data.items():
+            try:
+                # 基本字段验证
+                if not all(
+                    k in data for k in ["file_path", "symbol_name", "original_code", "transformed_code", "is_changed"]
+                ):
+                    print(
+                        f"{Fore.YELLOW}Skipping invalid transformation (missing fields): {symbol_key}{Style.RESET_ALL}"
+                    )
+                    continue
 
-        for key, data in transform_data.items():
-            if not isinstance(data, dict):
-                raise ValueError(f"Invalid transformation entry for {key}")
+                # 类型验证
+                if not isinstance(data["original_code"], str) or not isinstance(data["transformed_code"], str):
+                    print(
+                        f"{Fore.YELLOW}Skipping invalid transformation (invalid code type): {symbol_key}{Style.RESET_ALL}"
+                    )
+                    continue
 
-            required_fields = {
-                "file_path": str,
-                "symbol_name": str,
-                "original_code": str,
-                "transformed_code": str,
-                "is_changed": bool,
-            }
+                # 空字符串检查
+                if not data["original_code"].strip():
+                    print(
+                        f"{Fore.YELLOW}Skipping transformation with empty original code: {symbol_key}{Style.RESET_ALL}"
+                    )
+                    continue
 
-            for field, field_type in required_fields.items():
-                if field not in data:
-                    raise ValueError(f"Missing required field '{field}' in transformation for {key}")
-                if not isinstance(data[field], field_type):
-                    raise ValueError(f"Field '{field}' must be {field_type.__name__} in transformation for {key}")
+                # 布尔值验证
+                is_changed = data["is_changed"]
+                if isinstance(is_changed, str):
+                    is_changed = is_changed.lower() == "true"
+                elif not isinstance(is_changed, bool):
+                    is_changed = False
+
+                # 如果转换后代码为空，强制标记为未更改
+                if not data["transformed_code"].strip():
+                    is_changed = False
+
+                valid_data[symbol_key] = {
+                    "file_path": data["file_path"],
+                    "symbol_name": data["symbol_name"],
+                    "original_code": data["original_code"],
+                    "transformed_code": data["transformed_code"],
+                    "is_changed": is_changed,
+                }
+
+            except Exception as e:
+                print(f"{Fore.YELLOW}Skipping invalid transformation ({str(e)}): {symbol_key}{Style.RESET_ALL}")
+                continue
+
+        return valid_data
 
     def _get_symbol_key(self, file_path: str, symbol_name: str) -> str:
         """生成统一的符号键，使用绝对路径"""
@@ -71,7 +102,6 @@ class TransformApplier:
 
     def _should_skip_symbol(self, symbol_key: str, symbol_name: str) -> bool:
         """检查是否应该跳过该符号，支持glob模式匹配"""
-        # 检查完整路径格式
         for pattern in self.skip_symbols:
             if fnmatch.fnmatch(symbol_key, pattern):
                 if self.dry_run:
@@ -83,7 +113,6 @@ class TransformApplier:
                         f"{Fore.YELLOW}Skipping symbol (pattern match): {symbol_key} (pattern: {pattern}){Style.RESET_ALL}"
                     )
                 return True
-
         return False
 
     def apply_transformations(self, file_path: str, transform_file: Path) -> bool:
@@ -91,10 +120,8 @@ class TransformApplier:
         try:
             transform_data = self.load_transformations(transform_file)
             if not transform_data:
-                print(f"{Fore.YELLOW}No transformation data found in {transform_file}{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}No valid transformation data found in {transform_file}{Style.RESET_ALL}")
                 return False
-
-            self._validate_transformation_data(transform_data, file_path)
 
             # 获取文件中的符号
             _, code_map = self.parser_util.get_symbol_paths(file_path)
@@ -122,6 +149,12 @@ class TransformApplier:
 
                 transform = transform_data[symbol_key]
                 if not transform["is_changed"]:
+                    skipped_symbols.append(symbol_name)
+                    continue
+
+                # 确保转换后代码不为空
+                if not transform["transformed_code"].strip():
+                    print(f"{Fore.YELLOW}Skipping symbol with empty transformed code: {symbol_name}{Style.RESET_ALL}")
                     skipped_symbols.append(symbol_name)
                     continue
 

@@ -11,7 +11,7 @@ from tree import ParserUtil as PU
 
 
 def build_response_template() -> str:
-    header = f"[modified whole {'symbol'}]: 符号路径"
+    header = f"[overwrite whole {'symbol'}]: 符号路径"
     end_tag = "[end]"
     return f"""
 必须遵守响应格式, 说明modified的内容
@@ -116,7 +116,7 @@ class CodeTracer:
             model_name="hyperbolic-r1",
             prompt=batch_prompt,
             disable_conversation_history=True,
-            verbose=True,
+            verbose=False,
             no_cache_prompt_file=self.no_cache_prompt_file,
             skip_crc32=self.skip_crc32,
         )

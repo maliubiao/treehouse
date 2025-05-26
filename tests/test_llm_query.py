@@ -412,7 +412,7 @@ class TestFileRange(unittest.TestCase):
         # 模拟包含文件范围的响应内容
         response = dedent(
             """
-[modified whole block]: example.py:10-20
+[overwrite whole block]: example.py:10-20
 [start]
 def new_function():
     print("Added by patch")
@@ -429,12 +429,12 @@ def new_function():
         """测试未注册符号内容附加到最近合法符号"""
         # 模拟包含非法符号的响应
         response = """
-[modified whole symbol]: invalid_symbol
+[overwrite whole symbol]: invalid_symbol
 [start]
 print("Should attach to next valid")
 [end]
 
-[modified whole symbol]: valid_symbol
+[overwrite whole symbol]: valid_symbol
 [start]
 def valid_func():
     pass
@@ -451,17 +451,17 @@ def valid_func():
     def test_multiple_attachments(self):
         """测试多个非法符号连续附加"""
         response = """
-[modified whole symbol]: invalid1
+[overwrite whole symbol]: invalid1
 [start]
 a = 1
 [end]
 
-[modified whole symbol]: invalid2
+[overwrite whole symbol]: invalid2
 [start]
 b = 2
 [end]
 
-[modified whole symbol]: valid
+[overwrite whole symbol]: valid
 [start]
 c = 3
 [end]
@@ -475,17 +475,17 @@ c = 3
     def test_extract_symbol_paths(self):
         """测试从响应中提取符号路径"""
         response = """
-[modified whole symbol]: path/to/file1.py/symbol1
+[overwrite whole symbol]: path/to/file1.py/symbol1
 [start]
 code1
 [end]
 
-[modified whole symbol]: path/to/file2.py/symbol2
+[overwrite whole symbol]: path/to/file2.py/symbol2
 [start]
 code2
 [end]
 
-[modified whole symbol]: path/to/file1.py/symbol3
+[overwrite whole symbol]: path/to/file1.py/symbol3
 [start]
 code3
 [end]
@@ -520,14 +520,14 @@ code3
             # 准备测试数据
         remaining = dedent(
             '''
-        [modified whole symbol]: {}/func1
+        [overwrite whole symbol]: {}/func1
         [start]
         def func1():
             """修改后的函数1"""
             return 42
         [end]
 
-        [modified whole symbol]: {}/TestClass
+        [overwrite whole symbol]: {}/TestClass
         [start]
         class TestClass:
             """修改后的类"""
@@ -650,7 +650,7 @@ code3
             # 准备测试数据
             remaining = dedent(
                 """
-            [modified whole symbol]: {}/new_symbol
+            [overwrite whole symbol]: {}/new_symbol
             [start]
             new_code = 42
             [end]
@@ -772,7 +772,7 @@ class TestExtractAndDiffFiles(unittest.TestCase):
 
             with patch("llm_query.shadowroot", Path(tmpdir)):
                 test_content = f"""
-[modified whole file]: {test_file}
+[overwrite whole file]: {test_file}
 [start]
 line1
 line2
@@ -793,7 +793,7 @@ line3
             test_file.touch()
             with patch("llm_query.shadowroot", Path(tmpdir)):
                 test_content = f"""
-[modified whole file]: {test_file}
+[overwrite whole file]: {test_file}
 [start]
 new content
 [end]
@@ -1759,7 +1759,7 @@ class TestContentParse(unittest.TestCase):
     def test_valid_symbols(self):
         response = dedent(
             """
-        [modified whole symbol]: valid/path.py
+        [overwrite whole symbol]: valid/path.py
         [start]
         def valid_func():
             pass
@@ -1767,7 +1767,7 @@ class TestContentParse(unittest.TestCase):
         """
         )
         modified, remaining = process_file_change(response)
-        self.assertIn("[modified whole file]", modified)
+        self.assertIn("[overwrite whole file]", modified)
         self.assertEqual(len(modified.split("\n\n")), 1)
         self.assertIn("valid/path.py", modified)
         self.assertEqual(remaining.strip(), "")
@@ -1776,7 +1776,7 @@ class TestContentParse(unittest.TestCase):
         os.path.exists = lambda x: True
         response = dedent(
             """
-        [modified whole symbol]: valid/path.py
+        [overwrite whole symbol]: valid/path.py
         [start]
         def valid_func():
             pass
@@ -1784,7 +1784,7 @@ class TestContentParse(unittest.TestCase):
         """
         )
         modified, remaining = process_file_change(response, valid_symbols=["other/path.py"])
-        self.assertIn("[modified whole file]", modified)
+        self.assertIn("[overwrite whole file]", modified)
         self.assertIn("valid/path.py", modified)
         self.assertEqual(remaining.strip(), "")
 
@@ -1792,7 +1792,7 @@ class TestContentParse(unittest.TestCase):
         os.path.exists = lambda x: False
         response = dedent(
             """
-        [modified whole symbol]: invalid/path.py
+        [overwrite whole symbol]: invalid/path.py
         [start]
         def invalid_func():
             pass
@@ -1807,7 +1807,7 @@ class TestContentParse(unittest.TestCase):
         os.path.exists = lambda x: False
         response = dedent(
             """
-        [modified whole symbol]: valid/path.py
+        [overwrite whole symbol]: valid/path.py
         [start]
         def valid_func():
             pass
@@ -1824,12 +1824,12 @@ class TestContentParse(unittest.TestCase):
         response = dedent(
             """
         Before content
-        [modified whole symbol]: valid1.py
+        [overwrite whole symbol]: valid1.py
         [start]
         content1
         [end]
         Middle content
-        [modified whole symbol]: valid2.py
+        [overwrite whole symbol]: valid2.py
         [start]
         content2
         [end]
@@ -1853,12 +1853,12 @@ class TestContentParse(unittest.TestCase):
         response = dedent(
             """
         Start text
-        [modified whole symbol]: valid.py
+        [overwrite whole symbol]: valid.py
         [start]
         new_content
         [end]
         Middle text
-        [modified whole symbol]: invalid.py
+        [overwrite whole symbol]: invalid.py
         [start]
         invalid_content
         [end]
@@ -1884,9 +1884,9 @@ class TestContentParse(unittest.TestCase):
     def test_nested_blocks(self):
         response = dedent(
             """
-        [modified whole symbol]: outer.py
+        [overwrite whole symbol]: outer.py
         [start]
-        [modified whole symbol]: inner.py
+        [overwrite whole symbol]: inner.py
         [start]
         nested_content
         [end]
