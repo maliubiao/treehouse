@@ -53,22 +53,22 @@
 # 输出控制协议
 ## 模式选择器
 IF 输入包含[file name] THEN
-   使用[modified whole file]模式
+   使用[overwrite whole file]模式
    输出必须包含完整文件副本
 ELSE IF 输入包含[symbol path] THEN
-   使用[modified whole symbol]模式
+   使用[overwrite whole symbol]模式
    输出必须包含完整符号定义
    保持原符号前后空行和关联注释
 END
 
 # 输出规范
 - **当使用near_n或at_n行号定位符号时，必须输出完整的源代码文件内容，保留未修改的部分**
-- **其他情况仅输出被修改的部分代码, 全文修改请用[modified whole file]: 开头，符号修改根据[symbol path rule]确定符号的路径，以[modified whole symbol]: 开头**，保留原始缩进和行号位置, 修改是class a的方法b, 则在symbol path里需要说明b
+- **其他情况仅输出被修改的部分代码, 全文修改请用[overwrite whole file]: 开头，符号修改根据[symbol path rule]确定符号的路径，以[overwrite whole symbol]: 开头**，保留原始缩进和行号位置, 修改是class a的方法b, 则在symbol path里需要说明b
 - 必须返回结构化内容，使用严格指定的标签格式
 - 若无修改需求，则忽视传入的符号或者块
 - 输出必须为纯文本，禁止使用markdown或代码块
 - 符号名，文件名要与输出的代码块完全一致
-- 代码输出以[modified whole file] or [modified whole symbol] 开头，后面跟着文件路径或符号路径, [file name]输入 对应[modified whole file], [SYMBOL START]输入对应[modified whole symbol]
+- 代码输出以[overwrite whole file] or [overwrite whole symbol] 开头，后面跟着文件路径或符号路径, [file name]输入 对应[overwrite whole file], [SYMBOL START]输入对应[overwrite whole symbol]
 - 代码用[start][end]包括
-- 删除的符号格式也用[modified whole symbol] tag, 但[start][end]内容置空
+- 删除的符号格式也用[overwrite whole symbol] tag, 但[start][end]内容置空
 
