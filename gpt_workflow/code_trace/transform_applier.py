@@ -6,17 +6,27 @@ from typing import Dict, List, Optional, Set
 from colorama import Fore, Style, init
 
 from llm_query import process_patch_response
-from tree import BlockPatch, ParserLoader, ParserUtil
+from tree import BlockPatch, ParserLoader, ParserUtil, SyntaxHighlight
 
 
 class TransformApplier:
     """应用转换日志中的修改到源代码"""
 
     def __init__(self, skip_symbols: Optional[Set[str]] = None):
-        self.skip_symbols = skip_symbols or set()
+        self.skip_symbols = self._normalize_skip_symbols(skip_symbols or set())
         self.parser_loader = ParserLoader()
         self.parser_util = ParserUtil(self.parser_loader)
         init()  # Initialize colorama
+
+    def _normalize_skip_symbols(self, skip_symbols: Set[str]) -> Set[str]:
+        """标准化跳过符号的格式，确保与符号键格式一致"""
+        normalized = set()
+        for symbol in skip_symbols:
+            if "/" in symbol:  # 已经是完整路径格式
+                normalized.add(os.path.abspath(symbol))
+            else:  # 只有符号名，转换为统一格式
+                normalized.add(f"/{symbol}")
+        return normalized
 
     def load_transformations(self, transform_file: Path) -> Dict:
         """从转换文件加载转换数据"""
@@ -52,6 +62,25 @@ class TransformApplier:
                 if not isinstance(data[field], field_type):
                     raise ValueError(f"Field '{field}' must be {field_type.__name__} in transformation for {key}")
 
+    def _get_symbol_key(self, file_path: str, symbol_name: str) -> str:
+        """生成统一的符号键，使用绝对路径"""
+        abs_file_path = os.path.abspath(file_path)
+        return f"{abs_file_path}/{symbol_name}"
+
+    def _should_skip_symbol(self, symbol_key: str, symbol_name: str) -> bool:
+        """检查是否应该跳过该符号"""
+        # 检查完整路径格式
+        if symbol_key in self.skip_symbols:
+            print(f"{Fore.YELLOW}Skipping symbol (full path match): {symbol_key}{Style.RESET_ALL}")
+            return True
+
+        # 检查仅符号名格式
+        if f"/{symbol_name}" in self.skip_symbols:
+            print(f"{Fore.YELLOW}Skipping symbol (name only match): {symbol_name}{Style.RESET_ALL}")
+            return True
+
+        return False
+
     def apply_transformations(self, file_path: str, transform_file: Path) -> bool:
         """应用转换到指定文件"""
         try:
@@ -72,23 +101,26 @@ class TransformApplier:
             patch_items = []
             symbol_detail = {}
             applied_symbols = []
+            skipped_symbols = []
+            missing_symbols = []
 
             for symbol_name, symbol_info in code_map.items():
-                symbol_path = f"{file_path}/{symbol_name}"
-                if symbol_path in self.skip_symbols:
-                    print(f"{Fore.CYAN}Skipping symbol: {symbol_name}{Style.RESET_ALL}")
+                symbol_key = self._get_symbol_key(file_path, symbol_name)
+
+                if self._should_skip_symbol(symbol_key, symbol_name):
+                    skipped_symbols.append(symbol_name)
                     continue
 
-                transform_key = f"{file_path}/{symbol_name}"
-                if transform_key not in transform_data:
+                if symbol_key not in transform_data:
+                    missing_symbols.append(symbol_name)
                     continue
 
-                transform = transform_data[transform_key]
+                transform = transform_data[symbol_key]
                 if not transform["is_changed"]:
-                    print(f"{Fore.CYAN}Skipping unchanged symbol: {symbol_name}{Style.RESET_ALL}")
+                    skipped_symbols.append(symbol_name)
                     continue
 
-                symbol_detail[symbol_path] = {
+                symbol_detail[symbol_key] = {
                     "file_path": file_path,
                     "block_range": symbol_info["block_range"],
                     "block_content": symbol_info["code"].encode("utf-8")
@@ -108,11 +140,23 @@ class TransformApplier:
                 )
                 applied_symbols.append(symbol_name)
 
+            # 打印转换统计信息
+            print(f"\n{Fore.CYAN}=== Transformation Statistics ==={Style.RESET_ALL}")
+            print(f"Total symbols in file: {len(code_map)}")
+            print(f"Applied transformations: {Fore.GREEN}{len(applied_symbols)}{Style.RESET_ALL}")
+            print(f"Skipped symbols (config): {Fore.YELLOW}{len(skipped_symbols)}{Style.RESET_ALL}")
+            print(f"Missing transformations: {Fore.RED}{len(missing_symbols)}{Style.RESET_ALL}")
+
+            if skipped_symbols:
+                print(f"\n{Fore.YELLOW}Skipped symbols:{Style.RESET_ALL}")
+                for sym in skipped_symbols:
+                    print(f"  - {sym}")
+
             if not patch_items:
                 print(f"{Fore.YELLOW}No transformations to apply{Style.RESET_ALL}")
                 return False
 
-            print(f"{Fore.GREEN}Applying transformations to {len(applied_symbols)} symbols:{Style.RESET_ALL}")
+            print(f"\n{Fore.GREEN}Applying transformations to {len(applied_symbols)} symbols:{Style.RESET_ALL}")
             for sym in applied_symbols:
                 print(f"  - {sym}")
 
@@ -129,13 +173,15 @@ class TransformApplier:
             if not diff:
                 print(f"{Fore.YELLOW}No differences found{Style.RESET_ALL}")
                 return False
-
+            print(SyntaxHighlight.highlight_if_terminal("\n".join(diff.values()), file_path=file_path))
             # 直接应用补丁
             patched_files = patch.apply_patch()
             if not patched_files:
                 print(f"{Fore.RED}Failed to apply patch{Style.RESET_ALL}")
                 return False
-
+            for patched_file in patched_files:
+                with open(patched_file, "wb") as f:
+                    f.write(patched_files[patched_file])
             print(f"{Fore.GREEN}Successfully applied transformations to {file_path}{Style.RESET_ALL}")
             return True
 

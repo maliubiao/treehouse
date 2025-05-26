@@ -15,7 +15,22 @@ verify_cmd: "g++ gpt_workflow/code_trace/test.cpp gpt_workflow/code_trace/test1.
 
 ### 2. Run the transformation:
 ```bash
-python gpt_workflow/code_trace --config config.yaml --parallel
+python gpt_workflow/code_trace --config config.yaml --parallel --skip-symbols add,print_thread_info
+```
+
+### Symbol Skipping Syntax
+
+You can skip symbols in two ways:
+1. **Full path format**: `path/to/file.cpp/symbol_name`
+2. **Symbol name only**: `symbol_name` (will skip all symbols with this name)
+
+Example:
+```bash
+# Skip 'add' function in any file
+python gpt_workflow/code_trace --skip-symbols add
+
+# Skip specific symbol in specific file
+python gpt_workflow/code_trace --skip-symbols /path/to/test.cpp/add
 ```
 
 ### 3. Expected Transformation:
@@ -108,7 +123,7 @@ python gpt_workflow/code_trace --apply-transform --skip-symbols symbol1,symbol2
 
 Options:
 - `--apply-transform`: Apply transformations directly from file-specific transformation files
-- `--skip-symbols`: Comma-separated list of symbols to skip
+- `--skip-symbols`: Comma-separated list of symbols to skip (supports both full path and name-only formats)
 - `--transform-file`: Path to custom transformation file (default: trace_debug/file_transformations/<filename>_transformations.json)
 
 ### Inspecting Transformations

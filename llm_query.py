@@ -1395,7 +1395,7 @@ def _read_file_content(file_obj, line_range_match: re.Match) -> str:
 
 def _format_file_content(file_path: str, content: str) -> str:
     """格式化文件内容输出"""
-    return f"\n\n[file name]: {file_path}\n[file content begin]\n{content}\n[file content end]\n\n"
+    return f"\n\n[file name]: {file_path}\n[start]\n{content}\n[end]\n\n"
 
 
 def _process_directory(dir_path: str) -> str:
@@ -1416,9 +1416,7 @@ def _process_directory(dir_path: str) -> str:
                     content = f.read()
                     replacement += _format_file_content(file_path, content)
             except UnicodeDecodeError:
-                replacement += (
-                    f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
-                )
+                replacement += f"[file name]: {file_path}\n[start]\n二进制文件或无法解码\n[end]\n\n"
             except (OSError, IOError) as e:
                 replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
     replacement += f"[directory end]: {dir_path}\n\n"
@@ -1483,9 +1481,7 @@ def _process_glob_pattern(pattern: str) -> str:
                     content = f.read()
                     replacement += _format_file_content(file_path, content)
             except UnicodeDecodeError:
-                replacement += (
-                    f"[file name]: {file_path}\n[file content begin]\n二进制文件或无法解码\n[file content end]\n\n"
-                )
+                replacement += f"[file name]: {file_path}\n[start]\n二进制文件或无法解码\n[end]\n\n"
             except (OSError, IOError) as e:
                 replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
     except Exception as e:
