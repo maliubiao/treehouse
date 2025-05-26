@@ -1,5 +1,6 @@
 ```
 python gpt_workflow/code_trace --prompt-debug /Users/richard/code/terminal-llm/prompt_cache/20250515-113840_28dfa42a.json
+
 ```
 
 
@@ -125,6 +126,8 @@ verify_cmd: "make test"
 
 ```bash
 python gpt_workflow/code_trace --apply-transform --skip-symbols symbol1,symbol2
+#实例,去掉这几个大模型转换错的
+python -m gpt_workflow.code_trace --apply-transform --file /Users/richard/code/llvm-project/lldb/source/Target/Process.cpp --skip-symbols GetStateChangedEventsPrivate,Process.CalculateCoreFileSaveRanges,Process.ShouldBroadcastEvent,Process.MapSupportedStructuredDataPlugins
 ```
 
 
