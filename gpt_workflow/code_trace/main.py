@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 import yaml
 from colorama import Fore, Style, init
@@ -44,7 +44,7 @@ def get_clipboard_content() -> str:
             return subprocess.check_output(["pbpaste"]).decode("utf-8")
         if sys.platform == "win32":
             try:
-                import win32clipboard
+                import win32clipboard  # pylint: disable=import-outside-toplevel
 
                 win32clipboard.OpenClipboard()
                 data = win32clipboard.GetClipboardData()
@@ -259,7 +259,7 @@ def handle_apply_transform(args: argparse.Namespace) -> None:
             print(f"{Fore.RED}Error: Transformation file not found at {transform_file}{Style.RESET_ALL}")
             sys.exit(1)
 
-        applier = TransformApplier(skip_symbols=skip_symbols)
+        applier = TransformApplier(skip_symbols=skip_symbols, dry_run=args.dry_run)
         success = applier.apply_transformations(args.file_path, transform_file)
         if not success:
             sys.exit(1)
@@ -268,7 +268,7 @@ def handle_apply_transform(args: argparse.Namespace) -> None:
             print(f"{Fore.RED}Error: --file must be specified when using default transformation file{Style.RESET_ALL}")
             sys.exit(1)
 
-        success = TransformApplier.apply_from_default_transform_file(args.file_path, skip_symbols)
+        success = TransformApplier.apply_from_default_transform_file(args.file_path, skip_symbols, dry_run=args.dry_run)
         if not success:
             sys.exit(1)
 
@@ -345,7 +345,13 @@ def main() -> None:
         help="Comma-separated list of symbols to skip when applying transformations",
         default="",
     )
-
+    parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Preview which symbols would be skipped without actually applying changes",
+        default=False,
+    )
     args = parser.parse_args()
 
     if args.inspect_transform:

@@ -1,3 +1,4 @@
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -12,20 +13,21 @@ from tree import BlockPatch, ParserLoader, ParserUtil, SyntaxHighlight
 class TransformApplier:
     """应用转换日志中的修改到源代码"""
 
-    def __init__(self, skip_symbols: Optional[Set[str]] = None):
+    def __init__(self, skip_symbols: Optional[Set[str]] = None, dry_run: bool = False):
         self.skip_symbols = self._normalize_skip_symbols(skip_symbols or set())
+        self.dry_run = dry_run
         self.parser_loader = ParserLoader()
         self.parser_util = ParserUtil(self.parser_loader)
         init()  # Initialize colorama
 
     def _normalize_skip_symbols(self, skip_symbols: Set[str]) -> Set[str]:
-        """标准化跳过符号的格式，确保与符号键格式一致"""
+        """标准化跳过符号的格式，支持glob模式"""
         normalized = set()
         for symbol in skip_symbols:
             if "/" in symbol:  # 已经是完整路径格式
                 normalized.add(os.path.abspath(symbol))
             else:  # 只有符号名，转换为统一格式
-                normalized.add(f"/{symbol}")
+                normalized.add(f"*/{symbol}")  # 添加通配符以支持glob匹配
         return normalized
 
     def load_transformations(self, transform_file: Path) -> Dict:
@@ -68,16 +70,19 @@ class TransformApplier:
         return f"{abs_file_path}/{symbol_name}"
 
     def _should_skip_symbol(self, symbol_key: str, symbol_name: str) -> bool:
-        """检查是否应该跳过该符号"""
+        """检查是否应该跳过该符号，支持glob模式匹配"""
         # 检查完整路径格式
-        if symbol_key in self.skip_symbols:
-            print(f"{Fore.YELLOW}Skipping symbol (full path match): {symbol_key}{Style.RESET_ALL}")
-            return True
-
-        # 检查仅符号名格式
-        if f"/{symbol_name}" in self.skip_symbols:
-            print(f"{Fore.YELLOW}Skipping symbol (name only match): {symbol_name}{Style.RESET_ALL}")
-            return True
+        for pattern in self.skip_symbols:
+            if fnmatch.fnmatch(symbol_key, pattern):
+                if self.dry_run:
+                    print(
+                        f"{Fore.YELLOW}[DRY-RUN] Would skip symbol (pattern match): {symbol_key} (pattern: {pattern}){Style.RESET_ALL}"
+                    )
+                else:
+                    print(
+                        f"{Fore.YELLOW}Skipping symbol (pattern match): {symbol_key} (pattern: {pattern}){Style.RESET_ALL}"
+                    )
+                return True
 
         return False
 
@@ -152,6 +157,14 @@ class TransformApplier:
                 for sym in skipped_symbols:
                     print(f"  - {sym}")
 
+            if self.dry_run:
+                print(
+                    f"\n{Fore.BLUE}DRY-RUN: Would apply transformations to {len(applied_symbols)} symbols:{Style.RESET_ALL}"
+                )
+                for sym in applied_symbols:
+                    print(f"  - {sym}")
+                return True
+
             if not patch_items:
                 print(f"{Fore.YELLOW}No transformations to apply{Style.RESET_ALL}")
                 return False
@@ -196,12 +209,14 @@ class TransformApplier:
         return Path("trace_debug") / "file_transformations" / f"{file_name}_transformations.json"
 
     @classmethod
-    def apply_from_default_transform_file(cls, file_path: str, skip_symbols: Optional[Set[str]] = None) -> bool:
+    def apply_from_default_transform_file(
+        cls, file_path: str, skip_symbols: Optional[Set[str]] = None, dry_run: bool = False
+    ) -> bool:
         """从默认转换文件应用转换"""
         transform_file = cls.get_transform_file(file_path)
         if not transform_file.exists():
             print(f"{Fore.YELLOW}No transformation file found at {transform_file}{Style.RESET_ALL}")
             return False
 
-        applier = cls(skip_symbols=skip_symbols)
+        applier = cls(skip_symbols=skip_symbols, dry_run=dry_run)
         return applier.apply_transformations(file_path, transform_file)

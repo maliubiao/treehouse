@@ -29,8 +29,19 @@ Example:
 # Skip 'add' function in any file
 python gpt_workflow/code_trace --skip-symbols add
 
-# Skip specific symbol in specific file
-python gpt_workflow/code_trace --skip-symbols /path/to/test.cpp/add
+# Skip all symbols starting with 'test_' in any file
+python gpt_workflow/code_trace --skip-symbols '*/test_*'
+
+# Preview which symbols would be skipped (dry-run)
+python gpt_workflow/code_trace --skip-symbols '*/test_*' --dry-run
+```
+
+### Dry-Run Mode
+
+Use `--dry-run` to preview which symbols would be skipped without actually applying any changes:
+
+```bash
+python gpt_workflow/code_trace --apply-transform --skip-symbols '*/test_*,add' --dry-run
 ```
 
 ### 3. Expected Transformation:
