@@ -15,8 +15,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+import llm_query
 from llm_query import (
-    GLOBAL_MODEL_CONFIG,
     CmdNode,
     ModelSwitch,
     generate_patch_prompt,
@@ -284,7 +284,7 @@ class PylintFixer:
         current_size = 0
         for symbol in symbol_map.values():
             symbol_size = len(symbol["code"])
-            if current_size + symbol_size > GLOBAL_MODEL_CONFIG.max_context_size:
+            if current_size + symbol_size > llm_query.GLOBAL_MODEL_CONFIG.max_context_size:
                 groups.append(current_group)
                 current_group = [symbol]
                 current_size = symbol_size
@@ -327,7 +327,7 @@ class PylintFixer:
         if not self.results:
             print("未发现可修复的错误")
             return
-
+        ModelSwitch().select("coder")
         self.group_results_by_file()
 
         for file_path in self.file_groups:
