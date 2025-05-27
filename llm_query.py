@@ -2701,18 +2701,19 @@ class GPTContextProcessor:
                 processed_text = self._process_command(node)
                 processed_parts.append(processed_text)
                 self.current_context_length += len(processed_text)
-
+        processed_parts_text = "".join(processed_parts)
+        processed_parts_len = len(processed_parts_text)
         # 处理符号节点
         symbol_prompt = ""
         if symbol_nodes:
-            symbol_prompt = self.generate_symbol_patch_prompt(symbol_nodes)
+            symbol_prompt = self.generate_symbol_patch_prompt(symbol_nodes, tokens_left - processed_parts_len)
             tokens_left -= len(symbol_prompt)
 
-        return symbol_prompt + self._finalize_output("".join(processed_parts), tokens_left)
+        return symbol_prompt + self._finalize_output(processed_parts_text, tokens_left)
 
-    def generate_symbol_patch_prompt(self, symbol_nodes):
+    def generate_symbol_patch_prompt(self, symbol_nodes, tokens_left: int) -> str:
         """生成符号补丁提示"""
-        builder = PatchPromptBuilder(GPT_FLAGS.get(GPT_FLAG_PATCH), symbol_nodes)
+        builder = PatchPromptBuilder(GPT_FLAGS.get(GPT_FLAG_PATCH), symbol_nodes, tokens_left=tokens_left)
         return builder.build()
 
     def _process_command(self, cmd_node: CmdNode) -> str:
@@ -2761,11 +2762,12 @@ class GPTContextProcessor:
 
 
 class PatchPromptBuilder:
-    def __init__(self, use_patch: bool, symbols: List[Union[SearchSymbolNode, CmdNode]]):
+    def __init__(self, use_patch: bool, symbols: List[Union[SearchSymbolNode, CmdNode]], tokens_left: int = None):
         self.use_patch = use_patch
         self.symbols = symbols
         self.symbol_map = {}
         self.file_ranges = None
+        self.tokens_left = tokens_left or GLOBAL_MODEL_CONFIG.max_context_size
 
     def process_search_results(self, search_results: dict) -> None:
         """处理perform_search返回的结果并更新symbol_map"""
@@ -2873,6 +2875,10 @@ class PatchPromptBuilder:
 
 [SYMBOL END]
 """
+            self.tokens_left -= len(prompt)
+            if self.tokens_left < 0:
+                print("警告: 符号提示内容过长，已截断")
+                break
         return prompt
 
     def _build_file_range_prompt(self) -> str:
@@ -2908,18 +2914,25 @@ class PatchPromptBuilder:
             prompt += PATCH_PROMPT_HEADER.format(
                 current_dir=str(Path.cwd()), patch_rule=patch_text, symbol_path_rule_content=text
             )
+            self.tokens_left -= len(prompt)
 
-        prompt += self._build_symbol_prompt()
-        prompt += self._build_file_range_prompt()
-        prompt += f"""
+        file_range_prompt = self._build_file_range_prompt()
+        example_prompt = f"""
 {get_patch_prompt_output(self.use_patch, self.file_ranges, dumb_prompt=DUMB_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
 """
-
+        user_prompt = ""
         # 添加用户需求
         if user_requirement:
-            prompt += f"\n# 用户需求:\n {user_requirement}\n"
+            user_prompt = f"\n# 用户需求:\n {user_requirement}\n"
         else:
-            prompt += f"\n{USER_DEMAND}\n"
+            user_prompt = f"\n{USER_DEMAND}\n"
+
+        self.tokens_left -= len(user_prompt)
+        self.tokens_left -= len(example_prompt)
+        self.tokens_left -= len(file_range_prompt)
+        symbol_prompt = self._build_symbol_prompt()
+
+        prompt = f"{symbol_prompt}{file_range_prompt}{example_prompt}{user_prompt}"
         return prompt
 
 
@@ -3334,6 +3347,7 @@ def prompt_words_search(words: List[str], args):
         raise ValueError("需要至少一个有效搜索关键词")
 
     config = ConfigLoader(args.config).load_search_config()
+    config.root_dir = Path.cwd()
     searcher = RipgrepSearcher(config, debug=True)
 
     try:
@@ -3370,6 +3384,7 @@ def perform_search(
     if not words or any(not isinstance(word, str) or len(word.strip()) == 0 for word in words):
         raise ValueError("需要至少一个有效搜索关键词")
     config = ConfigLoader(Path(config_path)).load_search_config()
+    config.root_dir = Path.cwd()
     searcher = RipgrepSearcher(config, debug=True, file_list=file_list)
     rg_results = searcher.search(patterns=[re.escape(word) for word in words])
     results: FileSearchResults = FileSearchResults(
