@@ -843,22 +843,25 @@ class Tracer:
         if mnemonic == "br" or mnemonic == "br" or mnemonic == "braa" or mnemonic == "brab" or mnemonic == "blraa":
             if parsed_oprands[0].type == OperandType.REGISTER:
                 jump_to = frame.register[parsed_oprands[0].value]
+                addr = self._target.ResolveLoadAddress(jump_to.unsigned)
                 if self._should_skip_address(jump_to.unsigned):
-                    self.logger.info("%s Skipping jump to register value: %s", mnemonic, jump_to)
+                    self.logger.info("%s Skipping jump to register value: %s", mnemonic, addr.symbol.name)
                     return StepAction.STEP_OVER
-                self.logger.info("%s Jumping to register value: %s", mnemonic, jump_to)
+                self.logger.info("%s Jumping to register value: %s", mnemonic, addr)
         elif mnemonic == "b":
             self.logger.info("%s Branching to address: %s", mnemonic, parsed_oprands[0].value)
         elif mnemonic == "bl":
             target_addr = parsed_oprands[0].value
-            if self._should_skip_address(int(target_addr, 16)):
-                self.logger.info("%s Skipping branch to address: %s", mnemonic, target_addr)
+            raw_target_addr = int(target_addr, 16)
+            if self._should_skip_address(raw_target_addr):
+                addr = self._target.ResolveLoadAddress(raw_target_addr)
+                self.logger.info("%s Skipping branch to address: %s, %s", mnemonic, addr.symbol.name)
                 return StepAction.STEP_OVER
             self.logger.info(
-                "%s Branching to address: %s, at module: %s",
+                "%s Branching to address: %s,  %s",
                 mnemonic,
                 target_addr,
-                self.find_module_by_address(int(target_addr, 16)),
+                self._target.ResolveLoadAddress(int(target_addr, 16)).symbol.name,
             )
         elif mnemonic == "ret":
             if parsed_oprands:
