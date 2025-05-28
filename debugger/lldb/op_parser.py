@@ -1,4 +1,5 @@
 import sys
+from enum import IntEnum
 from pathlib import Path
 
 import cffi
@@ -7,13 +8,23 @@ ffi = cffi.FFI()
 
 # Load C definitions from header
 current_dir = Path(__file__).parent
-header_path = current_dir / "include" / "op_parser_ffi.h"
+header_path = current_dir / "op_parser/include" / "op_parser_ffi.h"
 with open(header_path, encoding="utf-8") as f:
     ffi.cdef(f.read())
 
+
+# Define Python-side OperandType enum to match C definition
+class OperandType(IntEnum):
+    REGISTER = 0  # xN or wN register
+    IMMEDIATE = 1  # #immediate value
+    MEMREF = 2  # [memory reference]
+    ADDRESS = 3  # 0x prefixed address
+    OTHER = 4  # unclassified
+
+
 # Determine library path based on build type
 LIB_NAME = "libop_parser.so" if sys.platform != "darwin" else "libop_parser.dylib"
-LIB_PATH = current_dir.parent / f"build/{LIB_NAME}"
+LIB_PATH = current_dir / f"op_parser/{LIB_NAME}"
 
 if not LIB_PATH.exists():
     raise RuntimeError(f"Shared library not found at {LIB_PATH}. Please build the project first.")
@@ -23,8 +34,8 @@ op_parser_lib = ffi.dlopen(str(LIB_PATH))
 
 class Operand:
     def __init__(self, c_operand):
-        self.type = c_operand.type
-        if self.type == op_parser_lib.OPERAND_MEMREF:
+        self.type = OperandType(c_operand.type)
+        if self.type == OperandType.MEMREF:
             self.value = {
                 "base_reg": ffi.string(c_operand.memref.base_reg).decode("utf-8"),
                 "offset": ffi.string(c_operand.memref.offset).decode("utf-8"),
@@ -32,11 +43,22 @@ class Operand:
         else:
             self.value = ffi.string(c_operand.value).decode("utf-8")
 
+    def is_register(self):
+        return self.type == OperandType.REGISTER
+
+    def is_immediate(self):
+        return self.type == OperandType.IMMEDIATE
+
+    def is_memref(self):
+        return self.type == OperandType.MEMREF
+
+    def is_address(self):
+        return self.type == OperandType.ADDRESS
+
     def __repr__(self):
-        type_str = op_parser_lib.operand_type_to_str(self.type)
-        if self.type == op_parser_lib.OPERAND_MEMREF:
-            return f"Operand({type_str}, base={self.value['base_reg']}, offset={self.value['offset']})"
-        return f"Operand({type_str}, {self.value})"
+        if self.type == OperandType.MEMREF:
+            return f"Operand(MEMREF, base={self.value['base_reg']}, offset={self.value['offset']})"
+        return f"Operand({self.type.name}, {self.value})"
 
 
 class DisasmLine:
@@ -75,10 +97,6 @@ def parse_disassembly(disassembly, max_lines=10):
     return [DisasmLine(c_lines[i]) for i in range(count)]
 
 
-def operand_type_to_str(operand_type):
-    return ffi.string(op_parser_lib.operand_type_to_str(operand_type)).decode("utf-8")
-
-
 if __name__ == "__main__":
     # Test operand parsing
     test_cases = [
@@ -105,6 +123,10 @@ if __name__ == "__main__":
             operands = parse_operands(case)
             for i, op in enumerate(operands):
                 print(f"  Operand {i + 1}: {op}")
+                print(f"    is_register: {op.is_register()}")
+                print(f"    is_immediate: {op.is_immediate()}")
+                print(f"    is_memref: {op.is_memref()}")
+                print(f"    is_address: {op.is_address()}")
         except ValueError as e:
             print(f"  Error parsing: {str(e)}")
         print()
@@ -122,6 +144,7 @@ if __name__ == "__main__":
             print(f"Addr: 0x{line.addr:x}, Opcode: {line.opcode}")
             for i, op in enumerate(line.operands):
                 print(f"  Operand {i + 1}: {op}")
+                print(f"    Type: {op.type.name}")
             print()
     except ValueError as e:
         print(f"Error parsing disassembly: {str(e)}")
