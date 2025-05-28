@@ -419,6 +419,25 @@ class Tracer:
         self._target = None
         self.process = None
 
+        # 初始化模块相关属性
+        self._module_ranges = {}
+        self._skip_ranges = []
+        self._skip_addresses = []
+        self._sorted_ranges = []
+        self._sorted_addresses = []
+        self._last_source_key = None
+
+        # 初始化符号缓存
+        self._symbol_cache = {}
+        self._module_cache = {}
+        self._section_cache = {}
+
+        # 初始化配置相关属性
+        self._skip_modules = self.config_manager.config.get("skip_modules", [])
+        self._log_target_info = self.config_manager.config.get("log_target_info", False)
+        self._log_module_info = self.config_manager.config.get("log_module_info", False)
+        self._log_breakpoint_details = self.config_manager.config.get("log_breakpoint_details", False)
+
     def symbols_html_renderer(self, symbols) -> str:
         return symbol_renderer(symbols)
 
@@ -663,12 +682,10 @@ class Tracer:
 
     def _build_skip_modules_ranges(self):
         """Build address ranges for modules that should be skipped with colored UI output."""
-        if not hasattr(self, "_module_ranges"):
-            self.load_modules_addresses()
+        self.load_modules_addresses()  # 确保模块地址已加载
 
         self._skip_ranges = []
-        skip_patterns = self.config_manager.config.get("skip_modules", [])
-        if not skip_patterns:
+        if not self._skip_modules:
             return
 
         console = Console()
@@ -685,7 +702,7 @@ class Tracer:
             basename = os.path.basename(module_name)
 
             # 检查完整路径和basename是否匹配任何skip模式
-            for pattern in skip_patterns:
+            for pattern in self._skip_modules:
                 if fnmatch.fnmatch(module_name, pattern) or fnmatch.fnmatch(basename, pattern):
                     matched_patterns.append(pattern)
 
@@ -762,8 +779,6 @@ class Tracer:
 
     def _should_skip_address(self, address):
         """Check if address is in any skip module range."""
-        if not hasattr(self, "_skip_ranges"):
-            self._build_skip_modules_ranges()
         if not self._skip_ranges:
             return False
 
@@ -814,6 +829,14 @@ class Tracer:
             if lines := self._get_file_lines(filepath):
                 if 0 < line_num <= len(lines):
                     source_line = lines[line_num - 1].strip()
+
+        # 添加去重逻辑
+        current_source_key = f"{source_info};{source_line}"
+        if hasattr(self, "_last_source_key") and current_source_key == self._last_source_key:
+            source_info = ""  # 如果与前一个相同，则清空source_info
+            source_line = ""  # 清空source_line
+        self._last_source_key = current_source_key  # 保存当前key用于下次比较
+
         parsed_oprands = parse_operands(operands, max_ops=4)
         if mnemonic.startswith("b"):
             self.logger.info("Branch instruction detected: %s", mnemonic)
@@ -854,10 +877,12 @@ class Tracer:
         # 验证断点位置信息
         if self.breakpoint.GetID() == bp_loc:
             self.logger.info("Hit entry point breakpoint at %s", frame.GetFunctionName())
-            entry_point_breakpoint_event.set()
-            if self.config_manager.config.get("dump_modules_for_skip"):
-                self.dump_modules_for_skip()
-                sys.exit(0)
+            if not entry_point_breakpoint_event.is_set():
+                entry_point_breakpoint_event.set()
+                self._build_skip_modules_ranges()
+                if self.config_manager.config.get("dump_modules_for_skip"):
+                    self.dump_modules_for_skip()
+                    sys.exit(0)
         file_spec = frame.GetLineEntry().GetFileSpec()
         line = frame.GetLineEntry().GetLine()
         self.logger.info("Break at %s:%d", file_spec.fullpath, line)
@@ -959,17 +984,8 @@ class Tracer:
             console.print()  # Add spacing between modules
 
     def find_module_by_address(self, address):
-        """Find module and section containing the given address using bisect for O(log n) lookup.
-
-        Args:
-            address: The memory address to lookup (int or hex string)
-
-        Returns:
-            Tuple of (module, section, offset) or (None, None, None) if not found
-        """
-        if not hasattr(self, "_module_ranges"):
-            self.load_modules_addresses()
-        if not hasattr(self, "_sorted_ranges"):
+        """Find module and section containing the given address using bisect for O(log n) lookup."""
+        if not self._sorted_ranges:
             self._build_sorted_ranges()
 
         if isinstance(address, str):
