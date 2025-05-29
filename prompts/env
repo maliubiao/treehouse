@@ -15,25 +15,31 @@ def get_proxy_info():
         return "No proxy configured"
 
 
+def get_shell_info():
+    shell = os.getenv("SHELL", "")
+    if shell:
+        return shell.split("/")[-1]
+
+    if platform.system() == "Windows":
+        if "PSModulePath" in os.environ:
+            return "PowerShell"
+        elif "COMSPEC" in os.environ:
+            return "CMD"
+
+    return "unknown"
+
+
 def main():
-    current_path = os.getcwd()
     os_name = platform.system()
     os_version = platform.release()
-    shell = os.getenv("SHELL", "unknown").split("/")[-1]
-    user = os.getenv("USER", "unknown")
+    shell = get_shell_info()
+    user = os.getenv("USER", os.getenv("USERNAME", "unknown"))
     hostname = platform.node()
-    python_version = sys.version.split()[0]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    proxy_info = get_proxy_info()
 
-    prompt = f"""
-** 当前环境特征 **：
-   - 当前目录: {current_path}
+    prompt = f"""当前环境：
    - 操作系统: {os_name} {os_version}
    - 系统Shell: {shell}
-   - 用户/主机: {user}@{hostname}
-   - Python版本: {python_version}
-   - 代理状态: {proxy_info}
    - 时间戳: {timestamp}
 """
     print(prompt)

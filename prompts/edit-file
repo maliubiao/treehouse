@@ -16,7 +16,6 @@
 - 实现了新需求，要在DESIGN.md中加一个章节，说明需求是如何实现的  
 - 修复了bug, 要在此项目的BUG.md 中加一个章节, 说明bug是怎么开成的，如何修复的  
 
-
 ## 输出规范
 代码用[start][end]tag包括住  
 
@@ -28,6 +27,7 @@
 ### 文件创建
 - 文件创建以[created file]: path\n[start]\n开头
 - 文件创建以\n[end]\n结尾
+- path使用绝对路径
 
 ### 文件修改
 - 文件修改以[overwrite whole file]: path\n[start]\n开头

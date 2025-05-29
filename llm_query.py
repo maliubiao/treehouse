@@ -1405,7 +1405,7 @@ def _process_directory(dir_path: str) -> str:
     is_ignored = _parse_gitignore(gitignore_path, root_dir)
     tree_content = get_directory_context(1024, dir_path)
     replacement = (
-        f"\n[directory tree start]: {dir_path}\n{tree_content}\n[directory tree end]\n[directory]: {dir_path}\n"
+        f"\n[directory tree start]: {dir_path}\n{tree_content}\n[directory tree end]\n[directory start]: {dir_path}\n"
     )
     for root, dirs, files in os.walk(dir_path):
         dirs[:] = [d for d in dirs if not is_ignored(os.path.join(root, d))]
