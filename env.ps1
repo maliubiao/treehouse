@@ -372,7 +372,7 @@ function global:codegpt {
     $originalSession = $env:GPT_SESSION_ID
     New-Conversation
     $Question = $Question -replace '\\@', '@'
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@edit @edit-file @tree $Question"
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@edit @edit-file $Question"
     $env:GPT_SESSION_ID = $originalSession
     Write-Host "已恢复原会话: $originalSession"
 }

@@ -846,11 +846,11 @@ def get_directory_context_wrapper(tag):
     return f"\n[directory tree start]\n{text}\n[directory tree end]\n"
 
 
-def get_directory_context(max_depth=1):
+def get_directory_context(max_depth=1, current_dir: Optional[str] = None):
     """获取当前目录上下文信息（支持动态层级控制）"""
     try:
-        current_dir = os.getcwd()
-
+        if not current_dir:
+            current_dir = os.getcwd()
         # Windows系统处理
         if sys.platform == "win32":
             if max_depth == 1:
@@ -864,7 +864,7 @@ def get_directory_context(max_depth=1):
                 cmd.extend(["/A", "/F"])
         else:
             # 非Windows系统使用Linux/macOS的tree命令
-            cmd = ["tree"]
+            cmd = ["tree", current_dir]
             if max_depth is not None:
                 cmd.extend(["-L", str(max_depth)])
             # 添加gitignore支持
@@ -1403,8 +1403,10 @@ def _process_directory(dir_path: str) -> str:
     gitignore_path = _find_gitignore(dir_path)
     root_dir = os.path.dirname(gitignore_path) if gitignore_path else dir_path
     is_ignored = _parse_gitignore(gitignore_path, root_dir)
-
-    replacement = f"\n\n[directory]: {dir_path}\n"
+    tree_content = get_directory_context(1024, dir_path)
+    replacement = (
+        f"\n[directory tree start]: {dir_path}\n{tree_content}\n[directory tree end]\n[directory]: {dir_path}\n"
+    )
     for root, dirs, files in os.walk(dir_path):
         dirs[:] = [d for d in dirs if not is_ignored(os.path.join(root, d))]
         for file in files:

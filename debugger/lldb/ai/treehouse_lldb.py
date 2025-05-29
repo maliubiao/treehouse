@@ -3,6 +3,7 @@ import re
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Any, Dict, List, Tuple, Union
 
 import lldb
 import yaml
@@ -115,15 +116,14 @@ class GPTIntegrationService:
                 if command_output:
                     temp_file.write(f"[lldb command start]\n{command}\n[lldb command end]\n")
                     temp_file.write(f"[output start]\n{command_output}\n[output end]\n")
-                temp_file.write(
-                    f"[lldb context start]\n"
-                    f"{yaml.dump(context.to_dict(), allow_unicode=True, default_flow_style=False)}"
-                    f"[lldb context end]\n"
-                )
+                context_dict = context.to_dict()
+                context_yaml = yaml.dump(context_dict, allow_unicode=True, default_flow_style=False)
+                temp_file.write(f"[lldb context start]\n{context_yaml}[lldb context end]\n")
                 temp_file_path = temp_file.name
 
             self.model_switch.select(self.current_model)
-            role_prompt = Path(os.path.join(os.environ["GPT_PATH"], "prompts/lldb-rule")).read_text("utf-8")
+            role_prompt_path = Path(os.path.join(os.environ["GPT_PATH"], "prompts/lldb-rule"))
+            role_prompt = role_prompt_path.read_text("utf-8")
             context_string = (
                 f"[some debug commands output]\n{common_commands_output}"
                 f"[some debug commands output end]\n"
@@ -131,7 +131,8 @@ class GPTIntegrationService:
                 f"[user question]\n {question} \n[user question end]"
             )
             # 去除控制台色彩控制字符
-            clean_prompt = re.sub(r"\x1b\[[0-9;]*[mK]", "", role_prompt + self.processor.process_text(context_string))
+            clean_prompt = role_prompt + self.processor.process_text(context_string)
+            clean_prompt = re.sub(r"\x1b\[[0-9;]*[mK]", "", clean_prompt)
             print(clean_prompt)
             os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
             response_text = self.model_switch.query_for_text(
@@ -210,24 +211,36 @@ class AskGptCommand:
         frame = thread.GetSelectedFrame()
 
         result = []
-        result.append(f"Current frame: {frame}\n")
-        for att in ["addr", "args", "compile_unit", "function", "line_entry", "module", "name", "symbol"]:
-            result.append(f"{att}: {getattr(frame, att)}\n")
+        frame_str = str(frame)
+        result.append(f"Current frame: {frame_str}\n")
+
+        # 使用临时变量避免f-string中的反斜杠
+        frame_attrs = ["addr", "args", "compile_unit", "function", "line_entry", "module", "name", "symbol"]
+        for att in frame_attrs:
+            att_value = getattr(frame, att)
+            result.append(f"{att}: {att_value}\n")
+
         result.append("disassemble:\n")
         result.append(frame.Disassemble())
 
         if frame.line_entry.file:
-            with open(frame.line_entry.file.fullpath, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                start_line = max(0, frame.line_entry.line - 10)
-                end_line = min(len(lines), frame.line_entry.line + 10)
-                result.append("\n[source code]:\n")
-                for i in range(start_line, end_line):
-                    if i == frame.line_entry.line - 1:
-                        result.append(f"{i + 1}: {lines[i].rstrip('\n')} <--\n")
-                    else:
-                        result.append(f"{i + 1}: {lines[i]}")
-                result.append("\n")
+            file_path = frame.line_entry.file.fullpath
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    start_line = max(0, frame.line_entry.line - 10)
+                    end_line = min(len(lines), frame.line_entry.line + 10)
+                    result.append("\n[source code]:\n")
+                    for i in range(start_line, end_line):
+                        line_num = i + 1
+                        line_text = lines[i].rstrip("\n")
+                        if i == frame.line_entry.line - 1:
+                            result.append(f"{line_num}: {line_text} <--\n")
+                        else:
+                            result.append(f"{line_num}: {line_text}\n")
+                    result.append("\n")
+            except Exception as e:
+                result.append(f"Error reading source file: {str(e)}\n")
         return "".join(result)
 
     def _handle_status_command(self, cmd: CmdNode) -> str:
@@ -235,11 +248,12 @@ class AskGptCommand:
         executor = CommandExecutor(self.debugger)
         sections = []
         commands = ("settings show target.run-args", "process status", "bt", "frame variable", "target variable")
-        for cmd in commands:
+        for cmd_str in commands:
             try:
-                section = f"command: {cmd}\noutput: {executor.execute(cmd)}\n"
+                output = executor.execute(cmd_str)
+                section = f"command: {cmd_str}\noutput: {output}\n"
             except RuntimeError as e:
-                section = f"command: {cmd}\noutput: {str(e)}\n"
+                section = f"command: {cmd_str}\noutput: {str(e)}\n"
             sections.append(section)
         return "\n".join(sections)
 
@@ -251,27 +265,40 @@ class AskGptCommand:
         result = ["\n"]
 
         for i in range(thread.num_frames - 1):
-            result.append(f"command : frame select {i}\n")
-            result.append(executor.execute(f"frame select {i}"))
+            frame_select_cmd = f"frame select {i}"
+            result.append(f"command : {frame_select_cmd}\n")
+            result.append(executor.execute(frame_select_cmd))
             result.append("\n")
             frame = thread.GetFrameAtIndex(i)
-            result.append(f"frame {i}: {frame}\n")
-            for att in ["addr", "args", "compile_unit", "function", "line_entry", "module", "name", "symbol"]:
-                result.append(f"{att}: {getattr(frame, att)}\n")
+            frame_str = str(frame)
+            result.append(f"frame {i}: {frame_str}\n")
+
+            frame_attrs = ["addr", "args", "compile_unit", "function", "line_entry", "module", "name", "symbol"]
+            for att in frame_attrs:
+                att_value = getattr(frame, att)
+                result.append(f"{att}: {att_value}\n")
+
             result.append("disassemble:\n")
             result.append(frame.Disassemble())
+
             if frame.line_entry.file:
-                with open(frame.line_entry.file.fullpath, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                    start_line = max(0, frame.line_entry.line - 10)
-                    end_line = min(len(lines), frame.line_entry.line + 10)
-                    result.append("\n[source code]:\n")
-                    for j in range(start_line, end_line):
-                        if j == frame.line_entry.line - 1:
-                            result.append(f"{j + 1}: {lines[j].rstrip('\n')} <--\n")
-                        else:
-                            result.append(f"{j + 1}: {lines[j]}")
-                    result.append("\n")
+                file_path = frame.line_entry.file.fullpath
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                        start_line = max(0, frame.line_entry.line - 10)
+                        end_line = min(len(lines), frame.line_entry.line + 10)
+                        result.append("\n[source code]:\n")
+                        for j in range(start_line, end_line):
+                            line_num = j + 1
+                            line_text = lines[j].rstrip("\n")
+                            if j == frame.line_entry.line - 1:
+                                result.append(f"{line_num}: {line_text} <--\n")
+                            else:
+                                result.append(f"{line_num}: {line_text}\n")
+                        result.append("\n")
+                except Exception as e:
+                    result.append(f"Error reading source file: {str(e)}\n")
             result.append("\n")
         return "".join(result)
 

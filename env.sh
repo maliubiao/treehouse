@@ -218,7 +218,7 @@ askgpt() {
 }
 
 codegpt() {
-  naskgpt @edit @edit-file @tree $@
+  naskgpt @edit @edit-file $@
 }
 
 patchgpt() {
