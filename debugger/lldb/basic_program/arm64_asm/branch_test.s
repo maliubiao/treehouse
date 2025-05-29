@@ -328,33 +328,35 @@ _run_branch_tests:
     bl _printf
     bl _sleep_demo
     adr x9, func3
+    adr lr, .Lafter_br   // 设置返回地址，避免无限循环
     .align 2
     br x9
 
 .Lafter_br:
     .align 2
     // Test CBZ/CBNZ
-    mov x0, #0
-    adrp x1, msg_cbz@PAGE
-    add x1, x1, msg_cbz@PAGEOFF
-    adrp x2, zero_str@PAGE
-    add x2, x2, zero_str@PAGEOFF
-    adr x3, .Lcbz_target
+    adrp x0, msg_cbz@PAGE
+    add x0, x0, msg_cbz@PAGEOFF
+    adrp x1, zero_str@PAGE
+    add x1, x1, zero_str@PAGEOFF
+    adr x2, .Lcbz_target
     bl _printf
     bl _sleep_demo
+    mov x0, #0                     ; 设置x0为0用于后续CBZ测试
     .align 2
     cbz x0, .Lcbz_target
 
 .Lcbz_target:
     .align 2
     // Test TBZ/TBNZ
-    mov x0, #0x1
-    adrp x1, msg_tbz@PAGE
-    add x1, x1, msg_tbz@PAGEOFF
-    mov x2, #1
-    adr x3, .Ltbz_target
+    adrp x0, msg_tbz@PAGE
+    add x0, x0, msg_tbz@PAGEOFF
+    mov x1, #1
+    adr x2, .Ltbz_target
     bl _printf
     bl _sleep_demo
+    
+    mov x0, #0x1
     .align 2
     tbz x0, #1, .Ltbz_target
 

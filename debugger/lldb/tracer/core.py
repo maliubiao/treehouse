@@ -25,6 +25,8 @@ from .logging import LogManager
 from .symbols import symbol_renderer
 from .utils import get_stop_reason_str
 
+die_event = threading.Event()
+
 
 class Tracer:
     _max_cached_files = 10
@@ -239,7 +241,7 @@ class Tracer:
 
     def _event_loop(self):
         event = lldb.SBEvent()
-        while True:
+        while die_event.is_set() is False:
             ok = self.listener.WaitForEvent(1, event)
             if ok:
                 process = lldb.SBProcess.GetProcessFromEvent(event)
@@ -272,7 +274,7 @@ class Tracer:
                 self.logger.info("hit trace, continue execution")
                 self.process.Continue()
             else:
-                handle_special_stop(thread, stop_reason, self.logger, self._target)
+                handle_special_stop(thread, stop_reason, self.logger, self._target, die_event=die_event)
 
         elif state in (lldb.eStateExited, lldb.eStateCrashed, lldb.eStateDetached):
             if state == lldb.eStateExited:
@@ -439,8 +441,8 @@ class Tracer:
         self._last_source_key = current_source_key
 
         parsed_oprands = parse_operands(operands, max_ops=4)
-        if mnemonic.startswith("b"):
-            self.logger.info("Branch instruction detected: %s", mnemonic)
+        # if mnemonic.startswith("b"):
+        #     self.logger.info("Branch instruction detected: %s", mnemonic)
 
         if mnemonic in ("br", "braa", "brab", "blraa"):
             if parsed_oprands[0].type == OperandType.REGISTER:
@@ -467,11 +469,52 @@ class Tracer:
             )
         elif mnemonic == "ret":
             self.logger.info("Returning from function: %s", function)
-
+        registers = []
+        for operand in parsed_oprands:
+            if operand.type == OperandType.REGISTER:
+                if operand.value == "x29":
+                    operand.value = "fp"  # Normalize frame pointer register
+                elif operand.value == "x30":
+                    operand.value = "lr"
+                registers.append(f"${operand.value}={frame.register[operand.value].value}")
+            elif operand.type == OperandType.MEMREF:
+                reg = operand.value["base_reg"]
+                if reg == "x29":
+                    reg = "fp"
+                elif reg == "x30":
+                    reg = "lr"
+                reg_int = frame.register[reg].unsigned
+                if not operand.value.get("offset"):
+                    offset = 0
+                else:
+                    offset = int(operand.value["offset"].strip("#"), 16)
+                addr = reg_int + offset
+                error = lldb.SBError()
+                if mnemonic.endswith("b"):
+                    bytesize = 1
+                elif mnemonic.endswith("h"):
+                    bytesize = 2
+                elif mnemonic.endswith("w"):
+                    bytesize = 4
+                else:
+                    bytesize = self._target.GetAddressByteSize()
+                value = self.process.ReadUnsignedFromMemory(addr, bytesize, error)
+                if error.Success():
+                    registers.append(f"[{reg} + {offset:#x}] = [0x{addr:016x}] =  0x{value:x}")
+                else:
+                    self.logger.error("Failed to read memory at address 0x%x: %s", addr, error.GetCString())
         if source_line:
-            self.logger.info("0x%x %s %s ; %s // %s", pc, mnemonic, operands, source_info, source_line)
+            self.logger.info(
+                "0x%x %s %s ; %s // %s; Debug: %s",
+                pc,
+                mnemonic,
+                operands,
+                source_info,
+                source_line,
+                ", ".join(registers),
+            )
         else:
-            self.logger.info("0x%x %s %s ; %s", pc, mnemonic, operands, source_info)
+            self.logger.info("0x%x %s %s ; %s; Debug %s", pc, mnemonic, operands, source_info, ", ".join(registers))
 
         return StepAction.STEP_IN
 

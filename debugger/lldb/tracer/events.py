@@ -13,7 +13,7 @@ class StepAction(Enum):
     CONTINUE = auto()
 
 
-def handle_special_stop(thread, stop_reason, logger, target=None):
+def handle_special_stop(thread, stop_reason, logger, target=None, die_event=False):
     """Handle various stop reasons with enhanced information and actions."""
     frame = thread.GetFrameAtIndex(0) if thread.GetNumFrames() > 0 else None
     process = thread.GetProcess()
@@ -65,8 +65,11 @@ def handle_special_stop(thread, stop_reason, logger, target=None):
             exc_type = thread.GetStopReasonDataAtIndex(0)
             exc_addr = thread.GetStopReasonDataAtIndex(1)
             exc_desc = " type=0x%x, address=0x%x" % (exc_type, exc_addr)
-        logger.info("Exception occurred%s%s", exc_desc, location_info)
-
+        logger.info("Exception occurred%s %s", exc_desc, thread.GetStopDescription(1024))
+        target.process.Stop()
+        if die_event:
+            logger.info("Process will exit due to exception stop reason.")
+            die_event.set()
     elif stop_reason in (
         lldb.eStopReasonExec,
         lldb.eStopReasonFork,

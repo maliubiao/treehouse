@@ -3,6 +3,7 @@ import threading
 import lldb
 
 entry_point_breakpoint_event = threading.Event()
+die_event = threading.Event()
 
 
 def breakpoint_function_wrapper(frame, bp_loc, extra_args, internal_dict):
