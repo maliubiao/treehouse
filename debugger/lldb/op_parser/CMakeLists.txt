@@ -14,6 +14,11 @@ endif()
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g3 -O0 -DDEBUG")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2 -DNDEBUG")
 
+# Enable AddressSanitizer for test target in Debug builds
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address -fno-omit-frame-pointer")
+endif()
+
 # OP parser shared library for Python CFFI
 add_library(op_parser_shared SHARED op_parser.c)
 target_include_directories(op_parser_shared PUBLIC 
@@ -34,3 +39,9 @@ target_include_directories(op_parser_test PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+# Enable ASan for test executable in Debug builds
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(op_parser_test PRIVATE -fsanitize=address)
+    target_link_options(op_parser_test PRIVATE -fsanitize=address)
+endif()

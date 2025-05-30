@@ -24,7 +24,7 @@ class OperandType(IntEnum):
 
 # Determine library path based on build type
 LIB_NAME = "libop_parser.so" if sys.platform != "darwin" else "libop_parser.dylib"
-LIB_PATH = current_dir / f"op_parser/{LIB_NAME}"
+LIB_PATH = current_dir / f"{LIB_NAME}"
 
 if not LIB_PATH.exists():
     raise RuntimeError(f"Shared library not found at {LIB_PATH}. Please build the project first.")
@@ -38,6 +38,9 @@ class Operand:
         if self.type == OperandType.MEMREF:
             self.value = {
                 "base_reg": ffi.string(c_operand.memref.base_reg).decode("utf-8"),
+                "index_reg": ffi.string(c_operand.memref.index_reg).decode("utf-8"),
+                "shift_op": ffi.string(c_operand.memref.shift_op).decode("utf-8"),
+                "shift_amount": ffi.string(c_operand.memref.shift_amount).decode("utf-8"),
                 "offset": ffi.string(c_operand.memref.offset).decode("utf-8"),
             }
         else:
@@ -57,7 +60,18 @@ class Operand:
 
     def __repr__(self):
         if self.type == OperandType.MEMREF:
-            return f"Operand(MEMREF, base={self.value['base_reg']}, offset={self.value['offset']})"
+            parts = []
+            if self.value["base_reg"]:
+                parts.append(f"base={self.value['base_reg']}")
+            if self.value["index_reg"]:
+                parts.append(f"index={self.value['index_reg']}")
+            if self.value["shift_op"]:
+                parts.append(f"shift_op={self.value['shift_op']}")
+            if self.value["shift_amount"]:
+                parts.append(f"shift_amount={self.value['shift_amount']}")
+            if self.value["offset"]:
+                parts.append(f"offset={self.value['offset']}")
+            return f"Operand(MEMREF, {', '.join(parts)})"
         return f"Operand({self.type.name}, {self.value})"
 
 
@@ -114,6 +128,12 @@ if __name__ == "__main__":
         "[#0x20]",
         "[, #0x30]",
         "x8, [x8, #0x8]",
+        # 复杂内存引用测试用例
+        "[x17, x16, lsl #3]",
+        "[x1, x2, lsl #1]",
+        "[x3, x4, lsr #2]",
+        "[x5, x6, asr #3]",
+        "[x7, x8, ror #4]",
     ]
 
     print("Operand parsing test:")
@@ -135,7 +155,8 @@ if __name__ == "__main__":
     disassembly = """0x100001240 <+0>:   sub    sp, sp, #0x90
 0x100001244 <+4>:   stp    x29, x30, [sp, #0x80]
 0x100001248 <+8>:   add    x29, sp, #0x80
-0x10000124c <+12>:  stur   wzr, [x29, #-0x4]"""
+0x10000124c <+12>:  stur   wzr, [x29, #-0x4]
+0x100001250 <+16>:  ldr    x17, [x17, x16, lsl #3]"""
 
     print("\nDisassembly parsing test:")
     try:

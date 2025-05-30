@@ -18,6 +18,11 @@ def parse_args():
     parser.add_argument(
         "--dump-modules-for-skip", action="store_true", help="Dump module information and generate skip modules config"
     )
+    parser.add_argument(
+        "--dump_source_files_for_skip",
+        action="store_true",
+        help="dump source files information and generate skip source files config",
+    )
     return parser.parse_args()
 
 
@@ -40,6 +45,8 @@ def main():
         )
     if args.dump_modules_for_skip:
         tracer.config_manager.config["dump_modules_for_skip"] = True
+    if args.dump_source_files_for_skip:
+        tracer.config_manager.config["dump_source_files_for_skip"] = True
     tracer.start()
 
 

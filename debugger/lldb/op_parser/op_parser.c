@@ -144,7 +144,7 @@ int parse_operands(const char *str, Operand *ops, int max_ops) {
   int buf_pos = 0;
   int op_count = 0;
 
-  MemRef memref = {.base_reg = "", .offset = ""};
+  MemRef memref = {0};
 
   // 预处理：去除注释和前后空格
   char clean_str[256];
@@ -240,11 +240,111 @@ int parse_operands(const char *str, Operand *ops, int max_ops) {
           state = STATE_START;
           continue;
         }
-        state = STATE_IN_MEM_OFFSET;
-        pos++; // 跳过逗号
+        // 遇到逗号后，检查下一个字符是否是寄存器名
+        pos++;
         while (pos < len && isspace(clean_str[pos]))
           pos++;
+        if (pos < len && (clean_str[pos] == 'x' || clean_str[pos] == 'w')) {
+          state = STATE_IN_MEM_INDEX;
+        } else if (clean_str[pos] == '#') {
+          state = STATE_IN_MEM_OFFSET;
+        } else {
+          state = STATE_START;
+        }
         pos--; // 补偿循环的pos++
+      } else {
+        buffer[buf_pos++] = c;
+      }
+      break;
+
+    case STATE_IN_MEM_INDEX:
+      if (c == ',' || c == ']' || c == '\0') {
+        strncpy(memref.index_reg, buffer, buf_pos);
+        memref.index_reg[buf_pos] = '\0';
+        buf_pos = 0;
+        memset(buffer, 0, sizeof(buffer));
+
+        if (c == ']' || c == '\0') {
+          ops[op_count].type = OPERAND_MEMREF;
+          memcpy(&ops[op_count].memref, &memref, sizeof(MemRef));
+          op_count++;
+          memset(&memref, 0, sizeof(memref));
+          pos++;
+          state = STATE_START;
+          continue;
+        }
+        // 遇到逗号后，准备解析移位操作
+        pos++;
+        while (pos < len && isspace(clean_str[pos]))
+          pos++;
+        state = STATE_IN_MEM_SHIFT;
+        pos--; // 补偿循环的pos++
+      } else {
+        buffer[buf_pos++] = c;
+      }
+      break;
+
+    case STATE_IN_MEM_SHIFT:
+      if (c == ']' || c == '\0') {
+        ops[op_count].type = OPERAND_MEMREF;
+        memcpy(&ops[op_count].memref, &memref, sizeof(MemRef));
+        op_count++;
+        memset(&memref, 0, sizeof(memref));
+        buf_pos = 0;
+        memset(buffer, 0, sizeof(buffer));
+        pos++;
+        state = STATE_START;
+        continue;
+      } else if (c == ',') {
+        // 跳过逗号，继续解析偏移量
+        pos++;
+        while (pos < len && isspace(clean_str[pos]))
+          pos++;
+        state = STATE_IN_MEM_OFFSET;
+        pos--; // 补偿循环的pos++
+      } else if (isspace(c)) {
+        // 跳过空格
+      } else if (isalpha(c)) {
+        // 解析移位操作符 (lsl, lsr, asr, ror)
+        buffer[buf_pos++] = c;
+      } else if (c == '#') {
+        // 移位量 - 检查是否已经收集了移位操作符
+        if (buf_pos > 0) {
+          // 保存移位操作符
+          buffer[buf_pos] = '\0';
+          strncpy(memref.shift_op, buffer, sizeof(memref.shift_op) - 1);
+          buf_pos = 0;
+        }
+        // 开始收集移位量
+        state = STATE_IN_MEM_SHIFT_AMOUNT;
+        buffer[buf_pos++] = c;
+      }
+      break;
+
+    case STATE_IN_MEM_SHIFT_AMOUNT:
+      if (c == ']' || c == ',' || isspace(c) || c == '\0') {
+        // 保存移位量
+        buffer[buf_pos] = '\0';
+        strncpy(memref.shift_amount, buffer, sizeof(memref.shift_amount) - 1);
+        buf_pos = 0;
+
+        if (c == ']' || c == '\0') {
+          ops[op_count].type = OPERAND_MEMREF;
+          memcpy(&ops[op_count].memref, &memref, sizeof(MemRef));
+          op_count++;
+          memset(&memref, 0, sizeof(memref));
+          state = STATE_START;
+          if (c != '\0')
+            pos++;
+          continue;
+        } else if (c == ',') {
+          // 后面可能还有偏移量
+          state = STATE_IN_MEM_OFFSET;
+        } else {
+          // 空格后可能是']'或逗号，继续处理
+          state = STATE_IN_MEM_SHIFT;
+          continue; // 不增加pos，让外层循环处理当前字符
+        }
       } else {
         buffer[buf_pos++] = c;
       }
@@ -303,6 +403,25 @@ int parse_operands(const char *str, Operand *ops, int max_ops) {
     }
 
     pos++;
+  }
+
+  // 处理最后一个操作数
+  if (state == STATE_IN_MEM_BASE || state == STATE_IN_MEM_INDEX ||
+      state == STATE_IN_MEM_OFFSET || state == STATE_IN_MEM_SHIFT ||
+      state == STATE_IN_MEM_SHIFT_AMOUNT) {
+    if (state == STATE_IN_MEM_SHIFT && buf_pos > 0) {
+      // 处理未保存的移位操作符
+      buffer[buf_pos] = '\0';
+      strncpy(memref.shift_op, buffer, sizeof(memref.shift_op) - 1);
+    } else if (state == STATE_IN_MEM_SHIFT_AMOUNT && buf_pos > 0) {
+      // 处理未保存的移位量
+      buffer[buf_pos] = '\0';
+      strncpy(memref.shift_amount, buffer, sizeof(memref.shift_amount) - 1);
+    }
+
+    ops[op_count].type = OPERAND_MEMREF;
+    memcpy(&ops[op_count].memref, &memref, sizeof(MemRef));
+    op_count++;
   }
 
   return op_count;

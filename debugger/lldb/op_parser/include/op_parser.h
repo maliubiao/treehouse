@@ -12,8 +12,11 @@ typedef enum {
 } OperandType;
 
 typedef struct {
-  char base_reg[32]; // 基址寄存器
-  char offset[32];   // 偏移量
+  char base_reg[32];     // 基址寄存器
+  char index_reg[32];    // 索引寄存器
+  char shift_op[8];      // 移位操作 (lsl, lsr, asr, ror)
+  char shift_amount[16]; // 移位量
+  char offset[32];       // 偏移量
 } MemRef;
 
 typedef struct {
@@ -29,8 +32,11 @@ typedef enum {
   STATE_IN_REG,
   STATE_IN_IMM,
   STATE_IN_MEM_BASE,
+  STATE_IN_MEM_INDEX,
+  STATE_IN_MEM_SHIFT,
   STATE_IN_MEM_OFFSET,
   STATE_IN_ADDR,
+  STATE_IN_MEM_SHIFT_AMOUNT,
   STATE_IN_OTHER
 } ParseState;
 

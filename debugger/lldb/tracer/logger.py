@@ -10,16 +10,23 @@ class LogManager:
         self._init_logger()
 
     def _init_logger(self):
-        formatter = logging.Formatter("[%(asctime)s][%(thread)d][%(levelname)s][%(lineno)d] %(message)s")
+        # 简化日志格式：只显示时间
+        formatter = logging.Formatter("[%(asctime)s] %(message)s")
 
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        self.logger.addHandler(console_handler)
+        # 清除所有现有处理器
+        for handler in self.logger.handlers[:]:
+            self.logger.removeHandler(handler)
 
+        # 如果指定了日志文件，只添加文件处理器
         if self.logfile:
             file_handler = logging.FileHandler(self.logfile)
             file_handler.setFormatter(formatter)
             self.logger.addHandler(file_handler)
+        # 否则只添加控制台处理器
+        else:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
 
     def log_target_info(self, target):
         if not self.config.get("log_target_info"):

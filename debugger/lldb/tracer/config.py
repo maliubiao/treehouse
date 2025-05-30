@@ -17,6 +17,11 @@ class ConfigManager:
             "log_breakpoint_details": True,
             "skip_modules": [],
             "dump_modules_for_skip": False,
+            "skip_source_files": [],
+            "dump_source_files_for_skip": False,
+            "skip_symbols_file": "skip_symbols.yaml",
+            "use_source_cache": True,  # 新增缓存启用选项
+            "cache_dir": "cache",  # 新增缓存目录配置
         }
         self.config_file = config_file
         if config_file:
@@ -25,15 +30,33 @@ class ConfigManager:
             self.config_watcher.start()
         else:
             self.config_file = "tracer_config.yaml"
+        # 加载符号配置文件
+        self._load_skip_symbols()
 
     def _load_config(self, filepath):
+        with open(filepath, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+            self.config.update(config)
+            self.logger.info("Loaded config from %s: %s", filepath, config)
+
+    def _load_skip_symbols(self):
+        """加载符号配置文件"""
+        skip_symbols_file = self.config.get("skip_symbols_file")
+        if not skip_symbols_file:
+            return
+
         try:
-            with open(filepath, encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-                self.config.update(config)
-                self.logger.info("Loaded config from %s: %s", filepath, config)
+            if os.path.exists(skip_symbols_file):
+                with open(skip_symbols_file, "r", encoding="utf-8") as f:
+                    skip_symbols = yaml.safe_load(f) or {}
+                # 合并到主配置
+                if "skip_source_files" in skip_symbols:
+                    self.config["skip_source_files"] = list(
+                        set(self.config.get("skip_source_files", []) + skip_symbols["skip_source_files"])
+                    )
+                self.logger.info("Loaded skip symbols from %s", skip_symbols_file)
         except (yaml.YAMLError, OSError) as e:
-            self.logger.error("Error loading config file %s: %s", filepath, str(e))
+            self.logger.error("Error loading skip symbols file: %s", str(e))
 
     def _watch_config(self):
         last_mtime = 0
@@ -80,3 +103,22 @@ class ConfigManager:
             )
         except (yaml.YAMLError, OSError) as e:
             self.logger.error("Error saving skip modules: %s", str(e))
+
+    def save_skip_source_files(self, source_files):
+        """保存skip source files到符号配置文件"""
+        skip_symbols_file = self.config.get("skip_symbols_file")
+        if not skip_symbols_file:
+            self.logger.warning("No skip symbols file specified")
+            return
+
+        try:
+            # 创建或更新配置文件
+            config = {"skip_source_files": source_files}
+            with open(skip_symbols_file, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, indent=4, sort_keys=False)
+
+            # 更新内存中的配置
+            self.config["skip_source_files"] = source_files
+            self.logger.info("Saved skip source files to %s: %d files", skip_symbols_file, len(source_files))
+        except (yaml.YAMLError, OSError) as e:
+            self.logger.error("Error saving skip source files: %s", str(e))
