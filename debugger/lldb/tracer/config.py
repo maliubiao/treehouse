@@ -22,7 +22,9 @@ class ConfigManager:
             "skip_symbols_file": "skip_symbols.yaml",
             "use_source_cache": True,
             "cache_dir": "cache",
-            "environment": {},  # 新增环境变量配置字段
+            "environment": {},
+            "attach_pid": None,
+            "forward_stdin": True,
         }
         self.config_file = config_file
         if config_file:
@@ -132,3 +134,7 @@ class ConfigManager:
         """获取环境变量列表（格式：["KEY=value", ...]）"""
         env_dict = self.get_environment()
         return [f"{key}={value}" for key, value in env_dict.items()]
+
+    def get_attach_pid(self):
+        """获取附加PID配置"""
+        return self.config.get("attach_pid")

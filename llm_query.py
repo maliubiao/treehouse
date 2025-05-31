@@ -1402,27 +1402,42 @@ def _process_directory(dir_path: str) -> str:
     """处理目录内容"""
     gitignore_path = _find_gitignore(dir_path)
     root_dir = os.path.dirname(gitignore_path) if gitignore_path else dir_path
-    is_ignored = _parse_gitignore(gitignore_path, root_dir)
-    tree_content = get_directory_context(1024, dir_path)
-    replacement = (
-        f"\n[directory tree start]: {dir_path}\n{tree_content}\n[directory tree end]\n[directory start]: {dir_path}\n"
-    )
+    is_ignored = _parse_gitignore(gitignore_path, root_dir) if gitignore_path else lambda x: False
+
+    # 获取目录树
+    tree_content = get_directory_context(max_depth=1024, current_dir=dir_path)
+
+    # 处理目录中的文件
+    file_contents = []
     for root, dirs, files in os.walk(dir_path):
+        # 过滤被忽略的目录
         dirs[:] = [d for d in dirs if not is_ignored(os.path.join(root, d))]
+
         for file in files:
             file_path = os.path.join(root, file)
+            rel_path = os.path.relpath(file_path, dir_path)
+
             if is_ignored(file_path) or _is_binary_file(file_path):
                 continue
+
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
-                    replacement += _format_file_content(file_path, content)
+                    file_contents.append(_format_file_content(rel_path, content))
             except UnicodeDecodeError:
-                replacement += f"[file name]: {file_path}\n[start]\n二进制文件或无法解码\n[end]\n\n"
+                file_contents.append(f"[file name]: {rel_path}\n[start]\n二进制文件或无法解码\n[end]\n\n")
             except (OSError, IOError) as e:
-                replacement += f"[file error]: 无法读取文件 {file_path}: {str(e)}\n\n"
-    replacement += f"[directory end]: {dir_path}\n\n"
-    return replacement
+                file_contents.append(f"[file error]: 无法读取文件 {rel_path}: {str(e)}\n\n")
+
+    # 组合目录树和文件内容
+    return (
+        f"\n[directory tree start]: {dir_path}\n"
+        f"{tree_content}\n"
+        f"[directory tree end]\n"
+        f"[directory start]: {dir_path}\n"
+        f"{''.join(file_contents)}"
+        f"[directory end]: {dir_path}\n\n"
+    )
 
 
 def _is_binary_file(file_path: str) -> bool:
@@ -1493,11 +1508,17 @@ def _process_glob_pattern(pattern: str) -> str:
 
 
 def _find_gitignore(path: str) -> str:
-    """向上查找最近的.gitignore文件"""
+    """向上查找最近的.gitignore文件，首先检查当前路径"""
+    # 首先检查提供的路径本身
+    current_gitignore = os.path.join(path, ".gitignore")
+    if os.path.isfile(current_gitignore):
+        return current_gitignore
+
+    # 然后向上查找父目录
     current = os.path.abspath(path)
     while True:
         parent = os.path.dirname(current)
-        if parent == current:
+        if parent == current:  # 已到达文件系统根目录
             return None
         gitignore = os.path.join(parent, ".gitignore")
         if os.path.isfile(gitignore):
@@ -1875,19 +1896,28 @@ class BlockPatchResponse:
         results = []
         pending_code = []  # 暂存未注册符号的代码片段
 
-        # 匹配两种响应格式
+        # 匹配两种响应格式：传统格式和 Markdown 代码块格式
         pattern = re.compile(
-            r"\[overwrite whole (symbol|block)\]:\s*([^\n]+)\s*\n\[start\](.*?)\n\[end\]",
+            r"(\[overwrite whole (symbol|block)\]:\s*([^\n]+)\s*\n\[start\](.*?)\n\[end\]|"
+            r"```([a-zA-Z0-9_]+)?:([^\n`]+)\n(.*?)```)",
             re.DOTALL,
         )
 
         for match in pattern.finditer(response_text):
-            section_type, identifier, source_code = match.groups()
-            identifier = identifier.strip()
-            source_code = source_code
+            # 传统格式处理
+            if match.group(1):
+                section_type = match.group(2)
+                identifier = match.group(3).strip()
+                source_code = match.group(4)
 
+            # Markdown 代码块格式处理
+            else:
+                section_type = "symbol"  # 代码块格式默认为符号类型
+                identifier = match.group(6).strip()
+                source_code = match.group(7)
+
+            # 处理未注册符号的暂存逻辑
             if section_type == "symbol":
-                # 处理未注册符号的暂存逻辑
                 if self.symbol_names is not None and identifier not in self.symbol_names:
                     pending_code.append(source_code)
                     continue
@@ -1901,23 +1931,10 @@ class BlockPatchResponse:
                 results.append((identifier, source_code))
 
         # 兼容旧格式校验
-        if not results and ("[start]" in response_text or "[end]" in response_text):
-            raise ValueError("响应包含代码块标签但格式不正确，请使用[overwrite whole symbol/block]:标签")
+        if not results and ("[start]" in response_text or "[end]" in response_text or "```" in response_text):
+            raise ValueError("响应包含代码块标签但格式不正确，请使用正确的标签格式")
 
         return results
-
-    def _extract_source_code(self, text):
-        """提取源代码内容（保留旧方法兼容异常处理）"""
-        start_tag = "[start]"
-        end_tag = "[end]"
-
-        start_idx = text.find(start_tag)
-        end_idx = text.find(end_tag)
-
-        if start_idx == -1 or end_idx == -1:
-            raise ValueError("源代码块标签不完整")
-
-        return text[start_idx + len(start_tag) : end_idx].strip()
 
     @staticmethod
     def extract_symbol_paths(response_text):
@@ -1926,12 +1943,24 @@ class BlockPatchResponse:
         返回格式: {"file": [symbol_path1, symbol_path2, ...]}
         """
         symbol_paths = {}
-        pattern = re.compile(r"\[overwrite whole symbol\]:\s*([^\n]+)\s*\n\[start\]", re.DOTALL)
+        # 匹配传统格式和 Markdown 代码块格式
+        pattern = re.compile(
+            r"\[overwrite whole symbol\]:\s*([^\n]+)\s*\n\[start\]|"
+            r"```[a-zA-Z0-9_]+?:([^\n`]+)\n",
+            re.DOTALL,
+        )
 
         for match in pattern.finditer(response_text):
-            whole_path = match.group(1).strip()
+            if match.group(1):  # 传统格式
+                whole_path = match.group(1).strip()
+            else:  # Markdown 格式
+                whole_path = match.group(2).strip()
+
+            # 提取符号路径
             idx = whole_path.rfind("/")
-            assert idx != -1
+            if idx == -1:
+                continue  # 跳过无效格式
+
             symbol_path = whole_path[idx + 1 :].strip()
             file_path = whole_path[:idx]
             if file_path not in symbol_paths:
@@ -3029,26 +3058,37 @@ def _save_response_content(content):
 
 
 def _extract_file_matches(content):
-    """从内容中提取文件匹配项"""
+    """从内容中提取文件匹配项，支持多种格式"""
+    # 统一的正则表达式模式，匹配所有可能的格式
     pattern = (
         r"(\[project setup shellscript start\]\n(.*?)\n\[project setup shellscript end\]|"
         r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
-        r"\[(overwrite whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\])"
+        r"\[(overwrite whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\]|"
+        r"```(\w+):([^\n]+)\n(.*?)\n```)"
     )
     matches = []
     for match in re.finditer(pattern, content, re.DOTALL):
-        if match.group(1).startswith("[project setup"):
+        # 处理项目设置脚本
+        if match.group(1) and match.group(1).startswith("[project setup"):
             matches.append(("project_setup_script", match.group(2).strip(), ""))
-        elif match.group(1).startswith("[user verify"):
+
+        # 处理用户验证脚本
+        elif match.group(1) and match.group(1).startswith("[user verify"):
             matches.append(("user_verify_script", match.group(3).strip(), ""))
-        else:
-            matches.append(
-                (
-                    f"{match.group(4)}_file",
-                    match.group(6).strip(),
-                    match.group(5).strip(),
-                )
-            )
+
+        # 处理文件覆盖/创建格式
+        elif match.group(4):
+            action_type = match.group(4).replace(" ", "_")  # 转换为 snake_case
+            file_path = match.group(5).strip()
+            file_content = match.group(6).strip()
+            matches.append((f"{action_type}_file", file_content, file_path))
+
+        # 处理 Markdown 代码块格式
+        elif match.group(7):
+            file_path = match.group(8).strip()
+            file_content = match.group(9).strip()
+            matches.append(("overwrite_whole_file", file_content, file_path))
+
     return matches
 
 

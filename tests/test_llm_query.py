@@ -176,7 +176,7 @@ class TestGPTContextProcessor(unittest.TestCase):
         with patch.object(self.processor, "generate_symbol_patch_prompt") as mock_process:
             mock_process.return_value = "符号处理结果"
             result = self.processor.process_text(text)
-            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["test_symbol"])])
+            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["test_symbol"])], 131061)
             self.assertEqual(result, "符号处理结果test_symbol")
 
     def test_multiple_symbols_processing(self):
@@ -185,7 +185,7 @@ class TestGPTContextProcessor(unittest.TestCase):
         with patch.object(self.processor, "generate_symbol_patch_prompt") as mock_process:
             mock_process.return_value = "多符号处理结果"
             result = self.processor.process_text(text)
-            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
+            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])], 131057)
             self.assertEqual(result, "多符号处理结果symbol1 symbol2")
 
     def test_mixed_symbols_and_content(self):
@@ -197,7 +197,7 @@ class TestGPTContextProcessor(unittest.TestCase):
         ):
             mock_symbol.return_value = "符号处理结果"
             result = self.processor.process_text(text)
-            mock_symbol.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])])
+            mock_symbol.assert_called_once_with([SearchSymbolNode(symbols=["symbol1", "symbol2"])], 131044)
             self.assertEqual(result, "符号处理结果前置内容symbol1中间剪贴板内容 symbol2结尾")
 
     def test_project_command_processing(self):
@@ -269,18 +269,18 @@ class TestGPTContextProcessor(unittest.TestCase):
             with patch("llm_query.PatchPromptBuilder") as mock_builder:
                 mock_instance = mock_builder.return_value
                 mock_instance.build.return_value = "test prompt"
-                result = self.processor.generate_symbol_patch_prompt(["test_symbol"])
+                result = self.processor.generate_symbol_patch_prompt(["test_symbol"], 102400)
                 self.assertEqual(result, "test prompt")
-                mock_builder.assert_called_once_with(False, ["test_symbol"])
+                mock_builder.assert_called_once_with(False, ["test_symbol"], tokens_left=102400)
                 mock_instance.build.assert_called_once()
 
             # 测试多个符号
             with patch("llm_query.PatchPromptBuilder") as mock_builder:
                 mock_instance = mock_builder.return_value
                 mock_instance.build.return_value = "multi symbol prompt"
-                result = self.processor.generate_symbol_patch_prompt(["symbol1", "symbol2"])
+                result = self.processor.generate_symbol_patch_prompt(["symbol1", "symbol2"], tokens_left=102400)
                 self.assertEqual(result, "multi symbol prompt")
-                mock_builder.assert_called_once_with(False, ["symbol1", "symbol2"])
+                mock_builder.assert_called_once_with(False, ["symbol1", "symbol2"], tokens_left=102400)
                 mock_instance.build.assert_called_once()
 
     def test_get_symbol_detail(self):

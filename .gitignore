@@ -58,3 +58,8 @@ dist/
 
 # 操作系统元数据
 ._*
+prompt_cache
+obsidian
+__pycache__
+obsidian
+*__pycache__
