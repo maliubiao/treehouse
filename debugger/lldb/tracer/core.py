@@ -1,9 +1,8 @@
 import logging
 import os
-import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import lldb
 from ai import set_entrypoint_breakpoints
@@ -15,7 +14,6 @@ from .logger import LogManager
 from .modules import ModuleManager
 from .source_ranges import SourceRangeManager
 from .step_handler import StepHandler
-from .utils import get_stop_reason_str
 
 
 class Tracer:
@@ -58,6 +56,8 @@ class Tracer:
         self.step_handler: Optional[StepHandler] = None
         self.breakpoint_handler: Optional[BreakpointHandler] = None
         self.event_loop: Optional[EventLoop] = None
+
+        self.lr_breakpoint_id: Optional[int] = None
 
     def continue_to_main(self) -> None:
         while not self.entry_point_breakpoint_event.is_set():
