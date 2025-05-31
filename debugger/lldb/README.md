@@ -44,6 +44,16 @@ pip install -r requirements.txt
 
 ## 新功能
 
+### 环境变量配置
+在配置文件中设置环境变量：
+```yaml
+# tracer_config.yaml
+environment:
+  DEBUG: "1"
+  PATH: "/custom/path:$PATH"
+  CUSTOM_SETTING: "special_value"
+```
+
 ### 模块跳过配置
 使用`--dump-modules-for-skip`生成配置，工具会交互式显示所有模块并让用户选择保留的模块，其余模块将被跳过。
 
@@ -57,7 +67,7 @@ pip install -r requirements.txt
 ./test_tracer.sh
 ```
 
-测试新功能：
+测试环境变量功能：
 ```bash
-./test_skip_modules.sh
+./test_env_vars.sh
 ```

@@ -20,8 +20,9 @@ class ConfigManager:
             "skip_source_files": [],
             "dump_source_files_for_skip": False,
             "skip_symbols_file": "skip_symbols.yaml",
-            "use_source_cache": True,  # 新增缓存启用选项
-            "cache_dir": "cache",  # 新增缓存目录配置
+            "use_source_cache": True,
+            "cache_dir": "cache",
+            "environment": {},  # 新增环境变量配置字段
         }
         self.config_file = config_file
         if config_file:
@@ -122,3 +123,12 @@ class ConfigManager:
             self.logger.info("Saved skip source files to %s: %d files", skip_symbols_file, len(source_files))
         except (yaml.YAMLError, OSError) as e:
             self.logger.error("Error saving skip source files: %s", str(e))
+
+    def get_environment(self):
+        """获取环境变量字典"""
+        return self.config.get("environment", {})
+
+    def get_environment_list(self):
+        """获取环境变量列表（格式：["KEY=value", ...]）"""
+        env_dict = self.get_environment()
+        return [f"{key}={value}" for key, value in env_dict.items()]

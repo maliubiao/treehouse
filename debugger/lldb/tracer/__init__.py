@@ -1,5 +1,6 @@
 """LLDB Tracer 包入口"""
 
+from .basic_thread_plan import BasicStepThreadPlan
 from .breakpoint_handler import BreakpointHandler
 from .breakpoints import breakpoint_function_wrapper, entry_point_breakpoint_event
 from .config import ConfigManager
@@ -25,4 +26,5 @@ __all__ = [
     "StepAction",
     "breakpoint_function_wrapper",
     "entry_point_breakpoint_event",
+    "BasicStepThreadPlan",
 ]
