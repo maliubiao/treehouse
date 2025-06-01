@@ -1,0 +1,4 @@
+{
+    "test_program": "path/to/your/test_program",
+    "test_script": "path/to/your/test_script.py"
+}
