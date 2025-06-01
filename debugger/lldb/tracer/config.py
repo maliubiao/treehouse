@@ -25,7 +25,8 @@ class ConfigManager:
             "environment": {},
             "attach_pid": None,
             "forward_stdin": True,
-            "expression_hooks": [],  # 新增表达式钩子配置
+            "expression_hooks": [],
+            "libc_functions": [],  # 新增libc函数跟踪配置
         }
         self.config_file = config_file
         if config_file:
@@ -94,6 +95,17 @@ class ConfigManager:
                         len(valid_hooks),
                     )
                 self.config["expression_hooks"] = valid_hooks
+
+            # 验证libc_functions配置
+            if "libc_functions" in config:
+                if not isinstance(config["libc_functions"], list):
+                    self.logger.error("Invalid libc_functions config: must be list")
+                    self.config["libc_functions"] = []
+                else:
+                    # 确保所有条目都是字符串
+                    self.config["libc_functions"] = [
+                        str(func) for func in config["libc_functions"] if isinstance(func, (str, int, float))
+                    ]
 
     def _load_skip_symbols(self):
         """加载符号配置文件"""
@@ -195,3 +207,7 @@ class ConfigManager:
     def get_expression_hooks(self):
         """获取表达式钩子配置"""
         return self.config.get("expression_hooks", [])
+
+    def get_libc_functions(self):
+        """获取要跟踪的libc函数列表"""
+        return self.config.get("libc_functions", [])

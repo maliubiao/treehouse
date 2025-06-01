@@ -21,8 +21,7 @@ class StepHandler:
         self._max_cached_files: int = 10
         self.instruction_cache: Dict[int, lldb.SBInstruction] = {}
         self.line_cache: Dict[str, lldb.SBLineEntry] = {}
-
-        # 加载表达式钩子配置
+        self.function_start_addrs = set()
         self.expression_hooks = self.tracer.config_manager.get_expression_hooks()
 
     @lru_cache(maxsize=100)
@@ -64,22 +63,109 @@ class StepHandler:
                     expr_results.append(f"[EXPR] {expression} exception: {str(e)}")
         return expr_results
 
+    def explore_sbvalue(self, value: lldb.SBValue) -> str:
+        """
+        探索SBValue对象的所有API方法并返回结果表格
+
+        参数:
+            value (lldb.SBValue): 要探索的SBValue对象
+
+        返回:
+            str: 包含所有方法调用结果的Markdown表格
+        """
+        # 定义要探索的方法列表（无参数方法）
+        methods = [
+            ("GetByteSize", "size_t"),
+            ("GetValue", "const char*"),
+            ("GetValueType", "ValueType"),
+            ("GetTypeName", "const char*"),
+            ("GetDisplayTypeName", "const char*"),
+            ("GetSummary", "const char*"),
+            ("GetObjectDescription", "const char*"),
+            ("GetLocation", "const char*"),
+            ("IsValid", "bool"),
+            ("MightHaveChildren", "bool"),
+            ("GetNumChildren", "uint32_t"),
+            ("GetName", "const char*"),
+            ("GetType", "SBType"),
+            ("GetLoadAddress", "addr_t"),
+            ("GetAddress", "SBAddress"),
+            ("GetFrame", "SBFrame"),
+            ("GetProcess", "SBProcess"),
+            ("GetThread", "SBThread"),
+            ("GetTarget", "SBTarget"),
+            ("GetData", "SBData"),
+            ("GetError", "SBError"),
+            ("GetValueDidChange", "bool"),
+            ("GetValueAsSigned", "int64_t"),
+            ("GetValueAsUnsigned", "uint64_t"),
+            ("GetValueAsAddress", "addr_t"),
+            ("GetDynamicValue", "SBValue"),
+            ("GetStaticValue", "SBValue"),
+            ("GetNonSyntheticValue", "SBValue"),
+            ("GetPreferDynamicValue", "DynamicValueType"),
+            ("GetPreferSyntheticValue", "bool"),
+            ("IsDynamic", "bool"),
+            ("IsSynthetic", "bool"),
+            ("IsSyntheticChildrenGenerated", "bool"),
+            ("IsInScope", "bool"),
+        ]
+
+        # 构建结果表格
+        table = "| Method | Return Type | Return Value |\n"
+        table += "|--------|-------------|--------------|\n"
+
+        for method_name, return_type in methods:
+            try:
+                # 获取方法对象
+                method = getattr(value, method_name)
+                # 调用方法
+                result = method()
+
+                # 特殊处理某些类型的返回值
+                if result is None:
+                    result_str = "None"
+                elif method_name == "GetType" and result.IsValid():
+                    result_str = result.GetName()
+                elif method_name == "GetAddress" and result.IsValid():
+                    result_str = f"addr = {result.GetLoadAddress(self.tracer.target)}"
+                elif method_name in ["GetFrame", "GetProcess", "GetThread", "GetTarget"]:
+                    result_str = "Valid" if result.IsValid() else "Invalid"
+                elif method_name == "GetData" and result.IsValid():
+                    result_str = f"data[{result.GetByteSize()} bytes]"
+                elif method_name == "GetError" and result.Fail():
+                    result_str = f"Error: {result.GetCString()}"
+                elif isinstance(result, lldb.SBValue) and result.IsValid():
+                    result_str = f"{result.GetName()} ({result.GetTypeName()})"
+                else:
+                    result_str = str(result)
+
+                # 截断过长的结果
+                if len(result_str) > 100:
+                    result_str = result_str[:100] + "..."
+            except Exception as e:
+                result_str = f"Error: {str(e)}"
+
+            table += f"| {method_name} | {return_type} | {result_str} |\n"
+
+        return table
+
     def on_step_hit(self, frame: lldb.SBFrame) -> StepAction:
         """Handle step events with detailed debug information."""
         pc: int = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
         if pc not in self.instruction_cache:
             instructions: lldb.SBInstructions = frame.symbol.GetInstructions(self.tracer.target)
             first_inst: lldb.SBInstruction = instructions.GetInstructionAtIndex(0)
-            offset: int = (
-                first_inst.GetAddress().GetLoadAddress(self.tracer.target) - first_inst.GetAddress().GetFileAddress()
-            )
+            function_start: int = first_inst.GetAddress().GetLoadAddress(self.tracer.target)
+            self.function_start_addrs.add(frame.symbol.GetStartAddress().GetLoadAddress(self.tracer.target))
+            offset: int = function_start - first_inst.GetAddress().GetFileAddress()
             for i in instructions:
                 self.instruction_cache[i.addr.file_addr + offset] = i
         inst: lldb.SBInstruction = self.instruction_cache[pc]
         mnemonic: str = inst.GetMnemonic(self.tracer.target)
         operands: str = inst.GetOperands(self.tracer.target)
         parsed_operands = parse_operands(operands, max_ops=4)
-        registers: List[str] = self._capture_register_values(frame, mnemonic, parsed_operands)
+        debug_values: List[str] = self._capture_register_values(frame, mnemonic, parsed_operands)
         if pc in self.line_cache:
             line_entry: lldb.SBLineEntry = self.line_cache[pc]
         else:
@@ -87,6 +173,11 @@ class StepHandler:
             self.line_cache[pc] = line_entry
         source_info: str = ""
         source_line: str = ""
+        if pc in self.function_start_addrs:
+            if frame.args:
+                debug_values.append(f"args of {frame.symbol.name}")
+                for arg in frame.args:
+                    debug_values.append(f"{arg.name}={arg.value}")
         if line_entry.IsValid():
             filepath: str = line_entry.GetFileSpec().fullpath
             line_num: int = int(line_entry.GetLine())
@@ -94,9 +185,10 @@ class StepHandler:
             lines: Optional[List[str]] = self._get_file_lines(filepath)
             if lines and 0 < line_num <= len(lines):
                 source_line = lines[line_num - 1].strip()
+
             # 执行表达式钩子并获取结果
             expr_results = self._execute_expression_hooks(filepath, line_num, frame)
-            registers.extend(expr_results)
+            debug_values.extend(expr_results)
         current_source_key: str = f"{source_info};{source_line}"
         if hasattr(self, "_last_source_key") and current_source_key == self._last_source_key:
             source_info = ""
@@ -110,10 +202,10 @@ class StepHandler:
                 operands,
                 source_info,
                 source_line,
-                ", ".join(registers),
+                ", ".join(debug_values),
             )
         else:
-            self.logger.info("0x%x %s %s ; %s; Debug: %s", pc, mnemonic, operands, source_info, ", ".join(registers))
+            self.logger.info("0x%x %s %s ; %s; Debug: %s", pc, mnemonic, operands, source_info, ", ".join(debug_values))
 
         return self._determine_step_action(mnemonic, parsed_operands, frame)
 
@@ -139,7 +231,41 @@ class StepHandler:
         if not reg_val or not reg_val.IsValid():
             self.logger.warning("Invalid register: %s", normalized_reg)
             return []
-        return [f"${normalized_reg}={hex(int(reg_val.value, 16))}"]
+
+        # Check if this is an ARM64 floating-point register (v0-v31, d0-d31, s0-s31, etc)
+        if normalized_reg.startswith(("v", "d", "s", "q")) and normalized_reg[1:].isdigit():
+            # For vector/SIMD registers
+            if normalized_reg.startswith("v"):
+                try:
+                    # Try to display in different formats based on available methods
+                    if reg_val.GetData().GetFloat:
+                        return [f"${normalized_reg}={reg_val.GetData().GetFloat():.6g}"]
+                    # Fallback to hex representation
+                    return [f"${normalized_reg}={reg_val.value}"]
+                except Exception:
+                    return [f"${normalized_reg}={reg_val.value}"]
+            # For double precision floating point
+            elif normalized_reg.startswith("d"):
+                try:
+                    as_float = float(reg_val.GetValue())
+                    return [f"${normalized_reg}={as_float:.6g}"]
+                except (ValueError, TypeError):
+                    return [f"${normalized_reg}={reg_val.value}"]
+            # For single precision floating point
+            elif normalized_reg.startswith("s"):
+                try:
+                    as_float = float(reg_val.GetValue())
+                    return [f"${normalized_reg}={as_float:.6g}"]
+                except (ValueError, TypeError):
+                    return [f"${normalized_reg}={reg_val.value}"]
+            else:
+                return [f"${normalized_reg}={reg_val.value}"]
+        else:
+            # For integer registers
+            try:
+                return [f"${normalized_reg}={hex(int(reg_val.value, 16))}"]
+            except (ValueError, TypeError):
+                return [f"${normalized_reg}={reg_val.value}"]
 
     def _normalize_register_name(self, reg_name: str) -> str:
         """Normalize register names for consistency"""
