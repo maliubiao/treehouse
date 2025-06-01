@@ -25,6 +25,7 @@ class ConfigManager:
             "environment": {},
             "attach_pid": None,
             "forward_stdin": True,
+            "expression_hooks": [],  # 新增表达式钩子配置
         }
         self.config_file = config_file
         if config_file:
@@ -41,6 +42,58 @@ class ConfigManager:
             config = yaml.safe_load(f)
             self.config.update(config)
             self.logger.info("Loaded config from %s: %s", filepath, config)
+
+            # 验证expression_hooks配置
+            if "expression_hooks" in config:
+                valid_hooks = []
+                invalid_count = 0
+                for i, hook in enumerate(config["expression_hooks"]):
+                    if not isinstance(hook, dict):
+                        self.logger.error("Invalid expression_hooks[%d]: must be dict, got %s", i, type(hook))
+                        invalid_count += 1
+                        continue
+
+                    # 验证path字段
+                    if "path" not in hook or not isinstance(hook["path"], str):
+                        self.logger.error(
+                            "Invalid expression_hooks[%d]: missing or invalid 'path' field (must be string)", i
+                        )
+                        invalid_count += 1
+                        continue
+
+                    # 将path转换为绝对路径
+                    original_path = hook["path"]
+                    if not os.path.isabs(original_path):
+                        hook["path"] = os.path.abspath(original_path)
+                        self.logger.info(
+                            "Converted expression_hooks[%d] path to absolute: %s -> %s", i, original_path, hook["path"]
+                        )
+
+                    # 验证line字段
+                    if "line" not in hook or not isinstance(hook["line"], int):
+                        self.logger.error(
+                            "Invalid expression_hooks[%d]: missing or invalid 'line' field (must be integer)", i
+                        )
+                        invalid_count += 1
+                        continue
+
+                    # 验证expr字段
+                    if "expr" not in hook or not isinstance(hook["expr"], str) or not hook["expr"].strip():
+                        self.logger.error(
+                            "Invalid expression_hooks[%d]: missing or empty 'expr' field (must be non-empty string)", i
+                        )
+                        invalid_count += 1
+                        continue
+
+                    valid_hooks.append(hook)
+
+                if invalid_count > 0:
+                    self.logger.warning(
+                        "Discarded %d invalid expression hooks, using %d valid entries",
+                        invalid_count,
+                        len(valid_hooks),
+                    )
+                self.config["expression_hooks"] = valid_hooks
 
     def _load_skip_symbols(self):
         """加载符号配置文件"""
@@ -138,3 +191,7 @@ class ConfigManager:
     def get_attach_pid(self):
         """获取附加PID配置"""
         return self.config.get("attach_pid")
+
+    def get_expression_hooks(self):
+        """获取表达式钩子配置"""
+        return self.config.get("expression_hooks", [])

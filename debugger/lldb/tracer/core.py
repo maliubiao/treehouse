@@ -30,7 +30,8 @@ class Tracer:
         self.logger: logging.Logger = self.log_manager.logger
         self.config_manager: ConfigManager = ConfigManager(config_file, self.logger)
         self.log_manager.config = self.config_manager.config
-
+        self.breakpoint_table = {}
+        self.breakpoint_seen = set()
         self.debugger: lldb.SBDebugger = lldb.SBDebugger.Create()
         self.debugger.Initialize()
         self.debugger.SetAsync(True)

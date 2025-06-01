@@ -95,7 +95,7 @@ class EventLoop:
     def _handle_breakpoint_stop(self, thread: lldb.SBThread) -> None:
         """处理断点停止"""
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
-        if bp_id == self.tracer.lr_breakpoint_id:
+        if bp_id in self.tracer.breakpoint_seen:
             self._handle_lr_breakpoint(thread)
         else:
             bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
@@ -105,7 +105,6 @@ class EventLoop:
 
     def _handle_lr_breakpoint(self, thread: lldb.SBThread) -> None:
         """处理LR断点"""
-        self.tracer.lr_breakpoint_id = None
         self.logger.info("Hit LR breakpoint, continuing execution")
         frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
         action: StepAction = self.tracer.step_handler.on_step_hit(frame)

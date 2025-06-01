@@ -1,3 +1,4 @@
+import fnmatch
 import logging
 import os
 from functools import lru_cache
@@ -18,6 +19,11 @@ class StepHandler:
         self.logger: logging.Logger = tracer.logger
         self._last_source_key: Optional[str] = None
         self._max_cached_files: int = 10
+        self.instruction_cache: Dict[int, lldb.SBInstruction] = {}
+        self.line_cache: Dict[str, lldb.SBLineEntry] = {}
+
+        # 加载表达式钩子配置
+        self.expression_hooks = self.tracer.config_manager.get_expression_hooks()
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -32,42 +38,70 @@ class StepHandler:
             self.logger.error("Unexpected error reading file %s: %s", filepath, str(e))
             return None
 
+    def _execute_expression_hooks(self, filepath: str, line_num: int, frame: lldb.SBFrame) -> List[str]:
+        """执行匹配的表达式钩子并返回结果列表"""
+        expr_results = []
+        for hook in self.expression_hooks:
+            if filepath != hook.get("path") or hook.get("line") != line_num:
+                self.logger.debug(
+                    "Skipping expression hook for %s:%d, expected %s:%d",
+                    filepath,
+                    line_num,
+                    hook.get("path"),
+                    hook.get("line"),
+                )
+                continue
+            # 获取表达式并执行
+            expression = hook.get("expr")
+            if expression:
+                try:
+                    result = frame.EvaluateExpression(expression)
+                    if result.error.Success():
+                        expr_results.append(f"{expression} = {result.GetValue()}")
+                    else:
+                        expr_results.append(f"[EXPR] {expression} failed: {result.error.GetCString()}")
+                except Exception as e:
+                    expr_results.append(f"[EXPR] {expression} exception: {str(e)}")
+        return expr_results
+
     def on_step_hit(self, frame: lldb.SBFrame) -> StepAction:
         """Handle step events with detailed debug information."""
         pc: int = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
-        insts: lldb.SBInstructionList = self.tracer.target.ReadInstructions(frame.addr, 1)
-        if insts.GetSize() == 0:
-            self.logger.warning("No instructions found at PC: 0x%x", pc)
-            return StepAction.CONTINUE
-
-        inst: lldb.SBInstruction = insts.GetInstructionAtIndex(0)
-        if not inst.IsValid():
-            self.logger.warning("Invalid instruction at PC: 0x%x", pc)
-            return StepAction.CONTINUE
-
+        if pc not in self.instruction_cache:
+            instructions: lldb.SBInstructions = frame.symbol.GetInstructions(self.tracer.target)
+            first_inst: lldb.SBInstruction = instructions.GetInstructionAtIndex(0)
+            offset: int = (
+                first_inst.GetAddress().GetLoadAddress(self.tracer.target) - first_inst.GetAddress().GetFileAddress()
+            )
+            for i in instructions:
+                self.instruction_cache[i.addr.file_addr + offset] = i
+        inst: lldb.SBInstruction = self.instruction_cache[pc]
         mnemonic: str = inst.GetMnemonic(self.tracer.target)
         operands: str = inst.GetOperands(self.tracer.target)
-        line_entry: lldb.SBLineEntry = frame.GetLineEntry()
+        parsed_operands = parse_operands(operands, max_ops=4)
+        registers: List[str] = self._capture_register_values(frame, mnemonic, parsed_operands)
+        if pc in self.line_cache:
+            line_entry: lldb.SBLineEntry = self.line_cache[pc]
+        else:
+            line_entry: lldb.SBLineEntry = frame.GetLineEntry()
+            self.line_cache[pc] = line_entry
         source_info: str = ""
         source_line: str = ""
-
         if line_entry.IsValid():
             filepath: str = line_entry.GetFileSpec().fullpath
-            line_num: int = line_entry.GetLine()
+            line_num: int = int(line_entry.GetLine())
             source_info = f"{filepath}:{line_num}"
             lines: Optional[List[str]] = self._get_file_lines(filepath)
             if lines and 0 < line_num <= len(lines):
                 source_line = lines[line_num - 1].strip()
-
+            # 执行表达式钩子并获取结果
+            expr_results = self._execute_expression_hooks(filepath, line_num, frame)
+            registers.extend(expr_results)
         current_source_key: str = f"{source_info};{source_line}"
         if hasattr(self, "_last_source_key") and current_source_key == self._last_source_key:
             source_info = ""
             source_line = ""
         self._last_source_key = current_source_key
-
-        parsed_operands = parse_operands(operands, max_ops=4)
-        registers: List[str] = self._capture_register_values(frame, mnemonic, parsed_operands)
-
         if source_line:
             self.logger.info(
                 "0x%x %s %s ; %s // %s; Debug: %s",
@@ -79,15 +113,19 @@ class StepHandler:
                 ", ".join(registers),
             )
         else:
-            self.logger.info("0x%x %s %s ; %s; Debug %s", pc, mnemonic, operands, source_info, ", ".join(registers))
+            self.logger.info("0x%x %s %s ; %s; Debug: %s", pc, mnemonic, operands, source_info, ", ".join(registers))
 
         return self._determine_step_action(mnemonic, parsed_operands, frame)
 
     def _capture_register_values(self, frame: lldb.SBFrame, mnemonic: str, parsed_operands) -> List[str]:
         """Capture register and memory values for logging"""
         registers: List[str] = []
+        captured_regs = []
         for operand in parsed_operands:
             if operand.type == OperandType.REGISTER:
+                if operand.value in captured_regs:
+                    continue
+                captured_regs.append(operand.value)
                 registers.extend(self._capture_register_value(frame, operand.value))
             elif operand.type == OperandType.MEMREF:
                 memref: Dict[str, Any] = operand.value
@@ -101,7 +139,7 @@ class StepHandler:
         if not reg_val or not reg_val.IsValid():
             self.logger.warning("Invalid register: %s", normalized_reg)
             return []
-        return [f"${normalized_reg}={reg_val.value}"]
+        return [f"${normalized_reg}={hex(int(reg_val.value, 16))}"]
 
     def _normalize_register_name(self, reg_name: str) -> str:
         """Normalize register names for consistency"""
@@ -222,15 +260,16 @@ class StepHandler:
         if lr_value == 0:
             self.logger.warning("LR is 0, cannot set breakpoint")
             return False
-
+        if lr_value in self.tracer.breakpoint_table:
+            return True
         bp: lldb.SBBreakpoint = self.tracer.target.BreakpointCreateByAddress(lr_value)
         if not bp.IsValid():
             self.logger.error("Failed to set breakpoint at address 0x%x", lr_value)
             return False
-
-        bp.SetOneShot(True)
+        bp.SetOneShot(False)
         self.logger.info("Set one-shot breakpoint at 0x%x for return address", lr_value)
-        self.tracer.lr_breakpoint_id = bp.GetID()
+        self.tracer.breakpoint_table[lr_value] = bp.GetID()
+        self.tracer.breakpoint_seen.add(bp.GetID())
         return True
 
     def _determine_step_action(self, mnemonic: str, parsed_operands, frame: lldb.SBFrame) -> StepAction:
@@ -242,9 +281,10 @@ class StepHandler:
                     return StepAction.CONTINUE
                 jump_to: int = reg_val.unsigned
                 sym_name: str = self.tracer.modules.get_addr_symbol(jump_to)
+                # 使用新的动态检查方法
                 if self.tracer.modules.should_skip_address(
                     jump_to
-                ) or self.tracer.source_ranges.should_skip_source_address(jump_to):
+                ) or self.tracer.source_ranges.should_skip_source_address_dynamic(jump_to):
                     self.logger.info("%s Skipping jump to register value: %s", mnemonic, sym_name)
                     if mnemonic in ("br", "braa", "brab"):
                         self._set_return_breakpoint(frame)
@@ -257,9 +297,11 @@ class StepHandler:
             target_addr: str = parsed_operands[0].value
             raw_target_addr: int = int(target_addr, 16)
             sym_name: str = self.tracer.modules.get_addr_symbol(raw_target_addr)
+            # 使用新的动态检查方法
             if self.tracer.modules.should_skip_address(
                 raw_target_addr
-            ) or self.tracer.source_ranges.should_skip_source_address(raw_target_addr):
+            ) or self.tracer.source_ranges.should_skip_source_address_dynamic(raw_target_addr):
+                self._set_return_breakpoint(frame)
                 self.logger.info("%s Skipping branch to address: %s, %s", mnemonic, target_addr, sym_name)
                 return StepAction.STEP_OVER
             self.logger.info("%s Branching to address: %s, %s", mnemonic, target_addr, sym_name)

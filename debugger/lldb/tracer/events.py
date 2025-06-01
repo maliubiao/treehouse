@@ -65,7 +65,11 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
             exc_type = thread.GetStopReasonDataAtIndex(0)
             exc_addr = thread.GetStopReasonDataAtIndex(1)
             exc_desc = " type=0x%x, address=0x%x" % (exc_type, exc_addr)
-        logger.info("Exception occurred%s %s", exc_desc, thread.GetStopDescription(1024))
+        stop_desc = thread.GetStopDescription(1024)
+        if "EXC_BREAKPOINT" in stop_desc:
+            logger.info("Process hit a breakpoint: %s", stop_desc)
+            return
+        logger.info("Exception occurred%s %s", exc_desc, stop_desc)
         target.process.Stop()
         if die_event:
             logger.info("Process will exit due to exception stop reason.")
@@ -98,4 +102,5 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
             logger.info(reason_str + location_info)
 
     else:
-        logger.info("Unhandled stop reason: %s%s", get_stop_reason_str(stop_reason), location_info)
+        logger.info("Unhandled stop reason: %s %s %s", stop_reason, get_stop_reason_str(stop_reason), location_info)
+        thread.StepInstruction(True)
