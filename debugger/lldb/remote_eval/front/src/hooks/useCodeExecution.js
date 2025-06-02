@@ -3,34 +3,35 @@ import {
   setCode, 
   setOutput, 
   setError, 
-  setExecuting 
+  setExecuting,
+  setConsole 
 } from '../features/codeSlice';
 import { addHistoryItem } from '../features/historySlice';
 import axios from 'axios';
 
 export const useCodeExecution = () => {
   const dispatch = useDispatch();
-  const { content, output, isExecuting, error } = useSelector(state => state.code);
+  const { content, output, isExecuting, error, consoleOutput } = useSelector(state => state.code);
   
   const executeCode = async () => {
     if (!content.trim() || isExecuting) return;
     
     dispatch(setExecuting(true));
     try {
-      const response = await axios.post('/evaluate', {
+      const response = await axios.post('/execute', {
         code: content
       });
       
-      const result = response.data.result || response.data.error;
-      
-      dispatch(setOutput(result));
-      dispatch(setError(null));
+      dispatch(setOutput(response.data.output));
+      dispatch(setConsole(response.data.console));
+      dispatch(setError(response.data.error || ''));
       
       const newHistoryItem = {
         id: Date.now(),
         timestamp: new Date().toISOString(),
         code: content,
-        output: result
+        output: response.data.output,
+        console: response.data.console
       };
       
       dispatch(addHistoryItem(newHistoryItem));
@@ -45,12 +46,10 @@ export const useCodeExecution = () => {
   return {
     content,
     output,
+    consoleOutput,
     isExecuting,
     error,
     setCode: (code) => dispatch(setCode(code)),
-    executeCode,
-    setOutput: (output) => dispatch(setOutput(output)),
-    setError: (error) => dispatch(setError(error)),
-    setExecuting: (isExecuting) => dispatch(setExecuting(isExecuting))
+    executeCode
   };
 };
