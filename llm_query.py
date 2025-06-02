@@ -3064,8 +3064,10 @@ def _extract_file_matches(content):
         r"(\[project setup shellscript start\]\n(.*?)\n\[project setup shellscript end\]|"
         r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
         r"\[(overwrite whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\]|"
-        r"```(\w+):([^\n]+)\n(.*?)\n```|"
-        r"```\w*\n\[(?:overwrite whole|created) file\]:\s+([^\n]+)\n(.*?)\n```)"
+        r"```(\w+):([^\[\n]+)\n(.*?)\n```|"
+        r"```\w*\n\[(?:overwrite whole|created) file\]:\s+([^\n]+)\n(.*?)\n```|"
+        r"```\w*:\[(?:overwrite whole|created) file\]:\s+([^\n]+)\n(.*?)\n```|"
+        r"```(\w*)\n(.*?)\n```)"  # 新增：通用Markdown代码块模式
     )
     matches = []
     for match in re.finditer(pattern, content, re.DOTALL):
@@ -3084,7 +3086,7 @@ def _extract_file_matches(content):
             file_content = match.group(6).strip()
             matches.append((f"{action_type}_file", file_content, file_path))
 
-        # 处理 Markdown 代码块格式
+        # 处理 Markdown 代码块格式 (带语言和文件路径)
         elif match.group(7):
             file_path = match.group(8).strip()
             file_content = match.group(9).strip()
@@ -3099,6 +3101,25 @@ def _extract_file_matches(content):
             # Remove [start] and [end] tags if they exist
             file_content = re.sub(r"^\[start\]\n?|\n?\[end\]$", "", file_content).strip()
             matches.append(("overwrite_whole_file", file_content, file_path))
+
+        # 处理 markdown:[overwrite whole file]: 格式
+        elif match.group(12):
+            file_path = match.group(12).strip()
+            file_content = match.group(13).strip()
+            # Remove [start] and [end] tags if they exist
+            file_content = re.sub(r"^\[start\]\n?|\n?\[end\]$", "", file_content).strip()
+            matches.append(("overwrite_whole_file", file_content, file_path))
+
+        # 新增：处理通用Markdown代码块（第一行包含文件注释）
+        elif match.group(14):
+            code_content = match.group(15).strip()
+            # 尝试从第一行提取文件路径
+            first_line, _, rest = code_content.partition("\n")
+            file_path_match = re.search(r"#\s*file:\s*(\S+)", first_line)
+            if file_path_match:
+                file_path = file_path_match.group(1)
+                file_content = rest
+                matches.append(("overwrite_whole_file", file_content, file_path))
 
     return matches
 

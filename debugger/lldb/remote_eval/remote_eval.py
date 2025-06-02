@@ -206,5 +206,41 @@ def run(port: int = 5678):
         print("✅ 服务器已停止")
 
 
-if __name__ == "__main__":
+def sample_function(param1: str = "默认值", param2: int = 42):
+    """
+    示例函数，用于展示调试上下文绑定效果
+
+    当直接运行 remote_eval.py 时，将在此函数的上下文中启动调试服务器
+    在调试器中可以访问以下变量：
+    - param1: 字符串参数
+    - param2: 整数参数
+    - sample_list: 示例列表
+    - sample_dict: 示例字典
+    - sample_value: 示例变量
+
+    示例代码:
+        print(f"参数1: {param1}, 参数2: {param2}")
+        print(f"示例列表: {sample_list}")
+        print(f"示例字典: {sample_dict}")
+        sample_value += 10
+        print(f"修改后的值: {sample_value}")
+    """
+    # 创建一些变量用于调试
+    sample_list = [1, 2, 3, 4, 5]
+    sample_dict = {"key1": "value1", "key2": 100}
+    sample_value = 42
+
+    print("=" * 60)
+    print("进入示例调试上下文...")
+    print(f"局部变量: param1={param1}, param2={param2}")
+    print(f"示例变量: sample_list={sample_list}, sample_dict={sample_dict}, sample_value={sample_value}")
+    print("=" * 60)
+    print("💡 提示: 在调试器中可以操作这些变量")
+
+    # 启动调试服务器，绑定到当前帧
     run()
+
+
+if __name__ == "__main__":
+    # 调用示例函数，传入测试参数
+    sample_function("测试参数", 100)

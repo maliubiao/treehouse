@@ -833,6 +833,21 @@ echo 'verify'
                 self.assertEqual(verify_script.read_text(), "#!/bin/bash\necho 'verify'")
                 self.assertTrue(os.access(verify_script, os.X_OK))
 
+    def test_markdown_code_block_with_comment_file_path(self):
+        test_content = """
+Some text here
+```python
+# file: path/to/file.py
+print("hello")
+```
+Some text here
+"""
+        matches = llm_query._extract_file_matches(test_content)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0][0], "overwrite_whole_file")
+        self.assertEqual(matches[0][1], 'print("hello")')
+        self.assertEqual(matches[0][2], "path/to/file.py")
+
 
 class TestDisplayAndApplyDiff(unittest.TestCase):
     @patch("builtins.input", return_value="y")
