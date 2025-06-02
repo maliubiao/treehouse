@@ -42,8 +42,30 @@
    - 智能调整UI组件布局
    - 优化小屏幕体验
 
+## 使用方法
+
+### 启动调试服务器
+在Python代码中需要调试的位置添加：
+```python
+import remote_eval
+remote_eval.run(port=5678)  # 端口号可选
+```
+
+执行效果：
+1. 获取当前执行帧作为上下文环境
+2. 启动HTTP调试服务器
+3. 打印服务器访问地址
+4. 按Ctrl+C停止服务器
+
+### 前端调试
+```bash
+cd front
+pnpm install
+pnpm run build
+```
+
 ### 使用示例
-1. 访问前端界面：`http://localhost:3000`
+1. 访问前端界面：`http://localhost:5678`
 2. 在代码编辑器中输入Python代码
 3. 按`Ctrl+Enter`执行代码
 4. 查看右侧执行结果面板
@@ -74,15 +96,21 @@ curl -X POST http://localhost:5000/evaluate \
 
 ## 开发指南
 
-### 后端调试
-```bash
-# 调试模式启动（支持热重载）
-FLASK_ENV=development flask run --port 5000
-```
-
 ### 前端调试
 ```bash
 cd front
-npm install
-npm run dev
+pnpm install
+pnpm run build
 ```
+
+### 上下文绑定说明
+当通过`remote_eval.run()`启动调试器时：
+- 自动捕获当前执行帧作为上下文
+- 所有代码执行都在原始上下文中进行
+- 变量修改会直接影响原始执行环境
+- 支持在断点处实时调试和修改变量
+
+### 注意事项
+1. 确保前端已构建（`front/dist`内容复制到`static`目录）
+2. 调试服务器会阻塞当前线程（Ctrl+C可退出）
+3. 生产环境请勿使用（仅用于调试目的）
