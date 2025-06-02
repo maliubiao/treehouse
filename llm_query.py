@@ -3065,7 +3065,7 @@ def _extract_file_matches(content):
         r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
         r"\[(overwrite whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\]|"
         r"```(\w+):([^\n]+)\n(.*?)\n```|"
-        r"```\w*\n\[overwrite whole file\]:\s+([^\n]+)\n(.*?)\n```)"
+        r"```\w*\n\[(?:overwrite whole|created) file\]:\s+([^\n]+)\n(.*?)\n```)"
     )
     matches = []
     for match in re.finditer(pattern, content, re.DOTALL):

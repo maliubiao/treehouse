@@ -1,0 +1,40 @@
+/* 主容器弹性布局 */
+.MonacoEditorContainer {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* 响应式布局调整 */
+@media (max-width: 600px) {
+  .MuiGrid-container {
+    flex-direction: column;
+  }
+  
+  .MuiPaper-root {
+    margin: 8px;
+  }
+}
+
+/* 执行结果区域美化 */
+.execution-output {
+  padding: 16px;
+  border-radius: 8px;
+  margin-top: 16px;
+  white-space: pre-wrap;
+}
+
+/* 历史记录项动效 */
+.MuiListItem-root {
+  transition: all 0.3s ease;
+}
+
+/* 暗黑模式适配 */
+[data-mui-color-scheme="dark"] {
+  .MuiPaper-root {
+    background-color: #1e1e1e;
+  }
+  
+  .execution-output {
+    background-color: #2d2d2d;
+  }
+}
