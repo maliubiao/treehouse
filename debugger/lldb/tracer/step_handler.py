@@ -8,6 +8,7 @@ import lldb
 from op_parser import OperandType, parse_operands
 
 from .events import StepAction
+from .utils import get_symbol_type_str
 
 if TYPE_CHECKING:
     from .core import Tracer
@@ -19,12 +20,14 @@ class StepHandler:
         self.logger: logging.Logger = tracer.logger
         self._last_source_key: Optional[str] = None
         self._max_cached_files: int = 10
-        self.instruction_cache: Dict[int, lldb.SBInstruction] = {}
+        # 使用PC作为key缓存指令信息 (mnemonic, parsed_operands)
+        self.instruction_info_cache: Dict[int, tuple[str, list]] = {}
         self.line_cache: Dict[str, lldb.SBLineEntry] = {}
         self.function_start_addrs = set()
         self.expression_hooks = self.tracer.config_manager.get_expression_hooks()
-        # 新增函数地址范围缓存
         self.function_range_cache = {}
+        # 统一缓存格式: (symbol_name, module_path, symbol_type)
+        self.addr_to_symbol_cache: Dict[int, tuple[str, str, int]] = {}
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -82,17 +85,23 @@ class StepHandler:
     def on_step_hit(self, frame: lldb.SBFrame) -> StepAction:
         """Handle step events with detailed debug information."""
         pc: int = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
-        if pc not in self.instruction_cache:
+        if pc not in self.instruction_info_cache:
             instructions: lldb.SBInstructions = frame.symbol.GetInstructions(self.tracer.target)
-            first_inst: lldb.SBInstruction = instructions.GetInstructionAtIndex(0)
-            first_inst_addr: int = first_inst.GetAddress().GetLoadAddress(self.tracer.target)
             self.function_start_addrs.add(frame.symbol.GetStartAddress().GetLoadAddress(self.tracer.target))
-            offset: int = first_inst_addr - first_inst.GetAddress().GetFileAddress()
-            for i in instructions:
-                self.instruction_cache[i.addr.file_addr + offset] = i
-        inst: lldb.SBInstruction = self.instruction_cache[pc]
-        mnemonic: str = inst.GetMnemonic(self.tracer.target)
-        operands: str = inst.GetOperands(self.tracer.target)
+            first_inst: lldb.SBInstruction = instructions.GetInstructionAtIndex(0)
+            first_inst_offset = (
+                first_inst.GetAddress().GetLoadAddress(self.tracer.target) - first_inst.GetAddress().GetFileAddress()
+            )
+            for inst in instructions:
+                mnemonic: str = inst.GetMnemonic(self.tracer.target)
+                operands: str = inst.GetOperands(self.tracer.target)
+                self.instruction_info_cache[inst.GetAddress().GetFileAddress() + first_inst_offset] = (
+                    mnemonic,
+                    operands,
+                    inst.size,
+                )
+        mnemonic, operands, size = self.instruction_info_cache[pc]
+        next_pc = pc + size
         parsed_operands = parse_operands(operands, max_ops=4)
         debug_values: List[str] = self._capture_register_values(frame, mnemonic, parsed_operands)
         if pc in self.line_cache:
@@ -107,8 +116,12 @@ class StepHandler:
                 debug_values.append(f"args of {frame.symbol.name}")
                 for arg in frame.args:
                     debug_values.append(f"{arg.name}={arg.value}")
+        no_line_entry: bool = not line_entry.IsValid()
         if line_entry.IsValid():
             filepath: str = line_entry.GetFileSpec().fullpath
+            if self.tracer.source_ranges.should_skip_source_file_by_path(filepath):
+                # self.logger.info("Skipping source file: %s", filepath)
+                return StepAction.STEP_OVER
             line_num: int = int(line_entry.GetLine())
             source_info = f"{filepath}:{line_num}"
             lines: Optional[List[str]] = self._get_file_lines(filepath)
@@ -136,7 +149,7 @@ class StepHandler:
         else:
             self.logger.info("0x%x %s %s ; %s; Debug: %s", pc, mnemonic, operands, source_info, ", ".join(debug_values))
 
-        return self._determine_step_action(mnemonic, parsed_operands, frame)
+        return self._determine_step_action(mnemonic, parsed_operands, frame, no_line_entry, next_pc)
 
     def _capture_register_values(self, frame: lldb.SBFrame, mnemonic: str, parsed_operands) -> List[str]:
         """Capture register and memory values for logging"""
@@ -158,7 +171,7 @@ class StepHandler:
         normalized_reg = self._normalize_register_name(reg_name)
         reg_val: lldb.SBValue = frame.FindRegister(normalized_reg)
         if not reg_val or not reg_val.IsValid():
-            self.logger.warning("Invalid register: %s", normalized_reg)
+            # self.logger.warning("Invalid register: %s", normalized_reg)
             return []
 
         # Check if this is an ARM64 floating-point register (v0-v31, d0-d31, s0-s31, etc)
@@ -304,22 +317,7 @@ class StepHandler:
             return 4
         return self.tracer.target.GetAddressByteSize()
 
-    def _set_return_breakpoint(self, frame: lldb.SBFrame) -> bool:
-        """Set a one-shot breakpoint at the return address stored in LR."""
-        lr_reg = frame.FindRegister("lr")
-        if not lr_reg.IsValid():
-            self.logger.warning("Failed to get LR register")
-            return False
-
-        lr_value = lr_reg.unsigned
-        if lr_value == 0:
-            self.logger.warning("LR is 0, cannot set breakpoint")
-            return False
-
-        # 避免重复设置断点
-        if lr_value in self.tracer.breakpoint_table:
-            return True
-
+    def _set_return_breakpoint(self, lr_value: int) -> bool:
         bp: lldb.SBBreakpoint = self.tracer.target.BreakpointCreateByAddress(lr_value)
         if not bp.IsValid():
             self.logger.error("Failed to set breakpoint at address 0x%x", lr_value)
@@ -331,59 +329,123 @@ class StepHandler:
         self.tracer.breakpoint_seen.add(bp.GetID())
         return True
 
-    def _determine_step_action(self, mnemonic: str, parsed_operands, frame: lldb.SBFrame) -> StepAction:
+    def _get_address_info(self, addr: int) -> tuple[str, str, int]:
+        """统一获取地址的符号信息，带缓存"""
+        if addr in self.addr_to_symbol_cache:
+            return self.addr_to_symbol_cache[addr]
+
+        resolved = self.tracer.target.ResolveLoadAddress(addr)
+        symbol = resolved.symbol
+        if symbol:
+            symbol_name = symbol.name
+            symbol_type = symbol.type
+        else:
+            symbol_name = f"0x{addr:x}"
+            symbol_type = lldb.eSymbolTypeInvalid
+
+        module_fullpath = resolved.module.file.fullpath if resolved.module and resolved.module.file else "unknown"
+        # 统一缓存格式: (符号名, 模块路径, 符号类型)
+        self.addr_to_symbol_cache[addr] = (symbol_name, module_fullpath, symbol_type)
+        return symbol_name, module_fullpath, symbol_type
+
+    def _handle_branch_instruction(
+        self, mnemonic: str, target_addr: int, frame: lldb.SBFrame, next_pc: int
+    ) -> StepAction:
+        """统一处理分支指令逻辑"""
+        # 检查目标地址是否在当前函数内
+        if self._is_address_in_current_function(frame, target_addr):
+            return StepAction.STEP_IN
+
+        # 获取地址信息
+        symbol_name, module_fullpath, symbol_type = self._get_address_info(target_addr)
+
+        # 检查是否应该跳过该地址
+        skip_address = self.tracer.modules.should_skip_address(
+            target_addr, module_fullpath
+        ) or self.tracer.source_ranges.should_skip_source_address_dynamic(target_addr)
+
+        # 根据指令类型处理
         if mnemonic in ("br", "braa", "brab", "blraa", "blr"):
-            if parsed_operands[0].type == OperandType.REGISTER:
-                reg_val: lldb.SBValue = frame.FindRegister(parsed_operands[0].value)
-                if not reg_val.IsValid():
-                    self.logger.warning("Failed to get register value: %s", parsed_operands[0].value)
-                    return StepAction.CONTINUE
-                jump_to: int = reg_val.unsigned
+            if skip_address:
+                self.logger.info("%s Skipping jump to register value: %s", mnemonic, symbol_name)
+                if mnemonic in ("br", "braa", "brab"):
+                    self._set_return_breakpoint(next_pc)
+                return StepAction.STEP_OVER
 
-                # 检查目标地址是否在当前函数内
-                if self._is_address_in_current_function(frame, jump_to):
-                    return StepAction.SOURCE_STEP_IN
+            self.logger.info("%s Jumping to register value: %s, %s", mnemonic, symbol_name, frame.module)
+            return StepAction.STEP_IN
 
-                sym_name: str = self.tracer.modules.get_addr_symbol(jump_to)
-                # 使用新的动态检查方法
-                if self.tracer.modules.should_skip_address(
-                    jump_to
-                ) or self.tracer.source_ranges.should_skip_source_address_dynamic(jump_to):
-                    self.logger.info("%s Skipping jump to register value: %s", mnemonic, sym_name)
-                    if mnemonic in ("br", "braa", "brab"):
-                        self._set_return_breakpoint(frame)
-                        return StepAction.STEP_OVER
-                    else:
-                        return StepAction.SOURCE_STEP_OUT
-                self.logger.info("%s Jumping to register value: %s", mnemonic, sym_name)
         elif mnemonic == "b":
-            target_addr: str = parsed_operands[0].value
-            try:
-                raw_target_addr: int = int(target_addr, 16)
-            except ValueError:
-                self.logger.error("Failed to parse target address: %s", target_addr)
-                return StepAction.SOURCE_STEP_IN
+            if skip_address:
+                self.logger.info("%s Skipping branch to: %s", mnemonic, symbol_name)
+                return StepAction.STEP_OVER
 
-            # 检查目标地址是否在当前函数内
-            if self._is_address_in_current_function(frame, raw_target_addr):
-                self.logger.info("%s branch within current function to 0x%x", mnemonic, raw_target_addr)
-                return StepAction.SOURCE_STEP_IN
+            self._set_return_breakpoint(next_pc)
+            self.logger.info("%s Branching to address: %s (%s)", mnemonic, hex(target_addr), symbol_name)
+            return StepAction.STEP_IN
 
-            self._set_return_breakpoint(frame)
-            self.logger.info("%s Branching to address: %s", mnemonic, target_addr)
         elif mnemonic == "bl":
-            target_addr: str = parsed_operands[0].value
-            raw_target_addr: int = int(target_addr, 16)
-            sym_name: str = self.tracer.modules.get_addr_symbol(raw_target_addr)
-            # 使用新的动态检查方法
-            if self.tracer.modules.should_skip_address(
-                raw_target_addr
-            ) or self.tracer.source_ranges.should_skip_source_address_dynamic(raw_target_addr):
-                self._set_return_breakpoint(frame)
-                self.logger.info("%s Skipping branch to address: %s, %s", mnemonic, target_addr, sym_name)
-                return StepAction.SOURCE_STEP_OUT
-            self.logger.info("%s Branching to address: %s, %s", mnemonic, target_addr, sym_name)
-        elif mnemonic == "ret":
-            self.logger.info("Returning from function: %s", frame.symbol.name if frame.symbol else "unknown")
+            if symbol_type == lldb.eSymbolTypeTrampoline or skip_address:
+                self._set_return_breakpoint(next_pc)
+                self.logger.info(
+                    "%s Skipping branch to: %s, %s %s",
+                    mnemonic,
+                    hex(target_addr),
+                    symbol_name,
+                    get_symbol_type_str(symbol_type),
+                )
+                return StepAction.STEP_OVER
 
-        return StepAction.SOURCE_STEP_IN
+            self.logger.info(
+                "%s Branching to: %s, %s, %s, %s",
+                mnemonic,
+                hex(target_addr),
+                symbol_name,
+                frame.module,
+                get_symbol_type_str(symbol_type),
+            )
+            return StepAction.STEP_IN
+
+        return StepAction.STEP_IN
+
+    def _determine_step_action(
+        self, mnemonic: str, parsed_operands, frame: lldb.SBFrame, no_line_entry: bool, next_pc: int
+    ) -> StepAction:
+        # 处理分支指令
+        if mnemonic in ("br", "braa", "brab", "blraa", "blr", "b", "bl"):
+            target_addr = None
+
+            # 寄存器分支指令
+            if mnemonic in ("br", "braa", "brab", "blraa", "blr"):
+                if parsed_operands[0].type == OperandType.REGISTER:
+                    reg_val: lldb.SBValue = frame.FindRegister(parsed_operands[0].value)
+                    if not reg_val.IsValid():
+                        self.logger.warning("Failed to get register value: %s", parsed_operands[0].value)
+                        return StepAction.CONTINUE
+                    target_addr = reg_val.unsigned
+
+            # 直接分支指令
+            elif mnemonic in ("b", "bl"):
+                target_addr_str = parsed_operands[0].value
+                try:
+                    target_addr = int(target_addr_str, 16)
+                except ValueError:
+                    self.logger.error("Failed to parse target address: %s", target_addr_str)
+                    return StepAction.STEP_IN
+
+            if target_addr is not None:
+                return self._handle_branch_instruction(mnemonic, target_addr, frame, next_pc)
+
+        # 处理返回指令
+        elif mnemonic.startswith("ret"):
+            self.logger.info(
+                "%s Returning from function: %s %s",
+                mnemonic,
+                frame.symbol.name if frame.symbol else "unknown",
+                frame.module,
+            )
+
+        # 默认执行单步进入
+        return StepAction.STEP_IN
+        # 如果启用源码级调试，可改为:
+        # return StepAction.SOURCE_STEP_IN if not no_line_entry else StepAction.STEP_IN

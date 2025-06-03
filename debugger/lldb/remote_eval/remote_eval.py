@@ -12,6 +12,49 @@ from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.serving import make_server
 
 
+class DebugUtils:
+    """调试工具类，提供自定义函数供调试环境使用"""
+
+    def __init__(self):
+        """初始化工具类"""
+        self.counter = 0  # 示例计数器
+
+    def askgpt(self, context: str) -> str:
+        """
+        向LLM提问的示例函数（实际应用中需替换为真正的LLM调用）
+
+        Args:
+            context: 提供给LLM的上下文信息
+
+        Returns:
+            LLM生成的回答（当前为示例实现）
+        """
+        self.counter += 1
+        return f"这是askgpt函数的示例响应 #{self.counter}。你提供的上下文是: {context[:50]}{'...' if len(context) > 50 else ''}"
+
+    def save_file(self, content: str, filename: str = "debug_output.txt") -> str:
+        """
+        将内容保存到文件
+
+        Args:
+            content: 要保存的内容
+            filename: 文件名（默认为debug_output.txt）
+
+        Returns:
+            操作结果信息
+        """
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(content)
+            return f"✅ 内容已保存到: {os.path.abspath(filename)}"
+        except Exception as e:
+            return f"❌ 保存文件失败: {str(e)}"
+
+    def get_timestamp(self) -> str:
+        """获取当前时间戳"""
+        return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
 class DebugContext:
     """调试上下文管理类，提供代码执行和上下文管理功能"""
 
@@ -22,14 +65,20 @@ class DebugContext:
         Args:
             frame: 要绑定的堆栈帧（可选），默认为创建新的上下文环境
         """
+        # 创建工具类实例
+        self.utils = DebugUtils()
+
         if frame:
             # 绑定到指定帧的上下文
             self.globals = frame.f_globals
             self.locals = frame.f_locals
+            # 注入工具类实例
+            self.locals["utils"] = self.utils
         else:
             # 创建新的上下文环境
             self.globals = {"__builtins__": builtins}
-            self.locals = {}
+            self.locals = {"utils": self.utils}
+
         self.history = []
 
     def execute(self, code: str) -> dict:
@@ -182,6 +231,11 @@ def run(port: int = 5678):
 
     这将启动HTTP服务器并打印访问地址
 
+    🆕 调试环境中已注入自定义工具类:
+        - utils.askgpt(context): 向LLM提问的示例函数
+        - utils.save_file(content, filename): 保存内容到文件
+        - utils.get_timestamp(): 获取当前时间戳
+
     Args:
         port: 服务器端口号，默认为5678
     """
@@ -195,6 +249,10 @@ def run(port: int = 5678):
     print(f"🚀 调试服务器已启动: http://localhost:{port}")
     print("🛑 按 Ctrl+C 停止服务器")
     print("💡 提示: 在浏览器中打开上述地址使用交互式调试器")
+    print("🆕 调试环境中已注入自定义工具类 `utils`:")
+    print("    - utils.askgpt(context): 向LLM提问的示例函数")
+    print("    - utils.save_file(content, filename): 保存内容到文件")
+    print("    - utils.get_timestamp(): 获取当前时间戳")
 
     try:
         # 保持主线程运行
@@ -218,12 +276,23 @@ def sample_function(param1: str = "默认值", param2: int = 42):
     - sample_dict: 示例字典
     - sample_value: 示例变量
 
+    🆕 调试环境中已注入自定义工具类 `utils`:
+        - utils.askgpt(context): 向LLM提问的示例函数
+        - utils.save_file(content, filename): 保存内容到文件
+        - utils.get_timestamp(): 获取当前时间戳
+
     示例代码:
         print(f"参数1: {param1}, 参数2: {param2}")
         print(f"示例列表: {sample_list}")
         print(f"示例字典: {sample_dict}")
         sample_value += 10
         print(f"修改后的值: {sample_value}")
+
+        # 使用自定义工具函数
+        response = utils.askgpt("请解释这个函数")
+        print(f"LLM响应: {response}")
+
+        utils.save_file("测试内容", "test.txt")
     """
     # 创建一些变量用于调试
     sample_list = [1, 2, 3, 4, 5]
@@ -236,6 +305,10 @@ def sample_function(param1: str = "默认值", param2: int = 42):
     print(f"示例变量: sample_list={sample_list}, sample_dict={sample_dict}, sample_value={sample_value}")
     print("=" * 60)
     print("💡 提示: 在调试器中可以操作这些变量")
+    print("🆕 提示: 可以使用 `utils` 对象调用自定义函数:")
+    print("    - utils.askgpt(context): 向LLM提问")
+    print("    - utils.save_file(content, filename): 保存内容")
+    print("    - utils.get_timestamp(): 获取时间戳")
 
     # 启动调试服务器，绑定到当前帧
     run()

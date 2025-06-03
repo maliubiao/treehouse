@@ -12,6 +12,7 @@ class StepAction(Enum):
     STEP_IN = auto()
     CONTINUE = auto()
     SOURCE_STEP_IN = auto()
+    SOURCE_STEP_OVER = auto()
     SOURCE_STEP_OUT = auto()
 
 
@@ -104,5 +105,5 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
             logger.info(reason_str + location_info)
 
     else:
-        logger.info("Unhandled stop reason: %s %s %s", stop_reason, get_stop_reason_str(stop_reason), location_info)
+        # logger.info("Unhandled stop reason: %s %s %s", stop_reason, get_stop_reason_str(stop_reason), location_info)
         thread.StepInstruction(True)

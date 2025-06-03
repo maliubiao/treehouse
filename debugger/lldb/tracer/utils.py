@@ -46,6 +46,43 @@ def get_state_str(state):
     return state_map.get(state, f"Unknown ({state})")
 
 
+def get_symbol_type_str(symbol_type):
+    """Convert symbol type integer to descriptive string."""
+    symbol_type_map = {
+        lldb.eSymbolTypeAny: "Any",
+        lldb.eSymbolTypeInvalid: "Invalid",
+        lldb.eSymbolTypeAbsolute: "Absolute",
+        lldb.eSymbolTypeCode: "Code",
+        lldb.eSymbolTypeResolver: "Resolver",
+        lldb.eSymbolTypeData: "Data",
+        lldb.eSymbolTypeTrampoline: "Trampoline",
+        lldb.eSymbolTypeRuntime: "Runtime",
+        lldb.eSymbolTypeException: "Exception",
+        lldb.eSymbolTypeSourceFile: "SourceFile",
+        lldb.eSymbolTypeHeaderFile: "HeaderFile",
+        lldb.eSymbolTypeObjectFile: "ObjectFile",
+        lldb.eSymbolTypeCommonBlock: "CommonBlock",
+        lldb.eSymbolTypeBlock: "Block",
+        lldb.eSymbolTypeLocal: "Local",
+        lldb.eSymbolTypeParam: "Param",
+        lldb.eSymbolTypeVariable: "Variable",
+        lldb.eSymbolTypeVariableType: "VariableType",
+        lldb.eSymbolTypeLineEntry: "LineEntry",
+        lldb.eSymbolTypeLineHeader: "LineHeader",
+        lldb.eSymbolTypeScopeBegin: "ScopeBegin",
+        lldb.eSymbolTypeScopeEnd: "ScopeEnd",
+        lldb.eSymbolTypeAdditional: "Additional",
+        lldb.eSymbolTypeCompiler: "Compiler",
+        lldb.eSymbolTypeInstrumentation: "Instrumentation",
+        lldb.eSymbolTypeUndefined: "Undefined",
+        lldb.eSymbolTypeObjCClass: "ObjCClass",
+        lldb.eSymbolTypeObjCMetaClass: "ObjCMetaClass",
+        lldb.eSymbolTypeObjCIVar: "ObjCIVar",
+        lldb.eSymbolTypeReExported: "ReExported",
+    }
+    return symbol_type_map.get(symbol_type, f"Unknown ({symbol_type})")
+
+
 def get_platform_stdin_listener():
     """获取平台特定的标准输入监听器"""
     os_name = platform.system()

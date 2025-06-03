@@ -50,7 +50,7 @@ class ModuleManager:
                     }
                     module_info["sections"].append(section_info)
 
-            self._module_ranges[module.GetFileSpec().GetFilename()] = module_info
+            self._module_ranges[module.file.fullpath] = module_info
         self.logger.debug("Loaded module address ranges for %d modules", len(self._module_ranges))
 
     def dump_modules_info(self):
@@ -253,11 +253,18 @@ class ModuleManager:
         self._skip_ranges.sort(key=lambda x: x["start_addr"])
         self._skip_addresses = [x["start_addr"] for x in self._skip_ranges]
 
-    def should_skip_address(self, address):
+    def should_skip_address(self, address, module_fullpath=""):
         """检查地址是否在跳过范围内，使用缓存优化"""
         # 首先检查缓存
         if address in self._skip_cache:
             return self._skip_cache[address]
+
+        if module_fullpath:
+            # 如果提供了模块路径，检查是否在跳过模块列表中
+            skip_modules = self.config_manager.config.get("skip_modules", [])
+            if any(fnmatch.fnmatch(module_fullpath, pattern) for pattern in skip_modules):
+                self._skip_cache[address] = True
+                return True
 
         skip_result = False
 

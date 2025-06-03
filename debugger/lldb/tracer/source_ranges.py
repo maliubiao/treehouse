@@ -19,48 +19,15 @@ class SourceRangeManager:
         self._address_decision_cache = {}
         self._file_skip_cache = {}
 
-    def should_skip_source_address_dynamic(self, address):
-        """动态检查地址是否应跳过（使用缓存优化）"""
-        # 检查缓存
-        if address in self._address_decision_cache:
-            self.logger.debug(f"Cache hit for address 0x{address:x}: {self._address_decision_cache[address]}")
-            return self._address_decision_cache[address]
-
-        self.logger.debug(f"Cache miss for address 0x{address:x}, resolving...")
-
-        # 解析地址获取源文件信息
-        sb_addr = self._target.ResolveLoadAddress(address)
-        if not sb_addr.IsValid():
-            # self.logger.debug(f"Failed to resolve load address 0x{address:x}")
-            self._address_decision_cache[address] = True
-            return True
-
-        # 使用行信息而非编译单元获取文件信息
-        line_entry = sb_addr.GetLineEntry()
-
-        # 如果无法获取行信息则不跳过
-        if not line_entry or not line_entry.IsValid():
-            self.logger.debug(f"No valid line entry found for address 0x{address:x}")
-            self._address_decision_cache[address] = False
-            return False
-
-        file_spec = line_entry.GetFileSpec()
-        if not file_spec:
-            self.logger.debug(f"No file specification found for address 0x{address:x}")
-            self._address_decision_cache[address] = False
-            return False
-
-        full_path = file_spec.fullpath
-        self.logger.debug(f"Address 0x{address:x} maps to file: {full_path}")
-
+    def should_skip_source_file_by_path(self, full_path):
+        """根据文件路径判断是否跳过（使用缓存优化）"""
         # 检查文件缓存
         if full_path in self._file_skip_cache:
             decision = self._file_skip_cache[full_path]
-            self.logger.debug(f"File cache hit for {full_path}: skip={decision}")
-            self._address_decision_cache[address] = decision
+            # self.logger.debug(f"File cache hit for {full_path}: skip={decision}")
             return decision
 
-        self.logger.debug(f"File cache miss for {full_path}, checking patterns...")
+        # self.logger.debug(f"File cache miss for {full_path}, checking patterns...")
 
         # 检查是否匹配跳过模式
         matched_patterns = []
@@ -74,21 +41,57 @@ class SourceRangeManager:
 
         # 更新缓存
         self._file_skip_cache[full_path] = matched
+
+        # if matched:
+        #     self.logger.info(f"Skipping file: {full_path}, matched: {', '.join(matched_patterns)}")
+        # else:
+        #     self.logger.debug(f"Not skipping file: {full_path}, no matching patterns")
+
+        return matched
+
+    def should_skip_source_address_dynamic(self, address):
+        """动态检查地址是否应跳过（使用缓存优化）"""
+        # 检查地址缓存
+        if address in self._address_decision_cache:
+            self.logger.debug(f"Address cache hit for 0x{address:x}: {self._address_decision_cache[address]}")
+            return self._address_decision_cache[address]
+
+        # self.logger.debug(f"Address cache miss for 0x{address:x}, resolving...")
+
+        # 解析地址获取源文件信息
+        sb_addr = self._target.ResolveLoadAddress(address)
+        if not sb_addr.IsValid():
+            # self.logger.debug(f"Failed to resolve load address 0x{address:x}")
+            self._address_decision_cache[address] = True
+            return True
+
+        # 使用行信息获取文件信息
+        line_entry = sb_addr.GetLineEntry()
+        if not line_entry or not line_entry.IsValid():
+            self.logger.debug(f"No valid line entry found for address 0x{address:x}")
+            self._address_decision_cache[address] = False
+            return False
+
+        file_spec = line_entry.GetFileSpec()
+        if not file_spec:
+            self.logger.debug(f"No file specification found for address 0x{address:x}")
+            self._address_decision_cache[address] = False
+            return False
+
+        full_path = file_spec.fullpath
+        # self.logger.debug(f"Address 0x{address:x} maps to file: {full_path}")
+
+        # 使用文件路径检查函数
+        matched = self.should_skip_source_file_by_path(full_path)
+
+        # 更新地址缓存
         self._address_decision_cache[address] = matched
 
-        if matched:
-            self.logger.info(
-                f"Skipping address 0x{address:x} in file: {full_path}, matched: {', '.join(matched_patterns)}"
-            )
-        else:
-            self.logger.debug(f"Not skipping address 0x{address:x} in file: {full_path}, no matching patterns")
-
-        # Log pattern check details for debugging
-        self.logger.debug(
-            f"Skip patterns checked: {len(self._skip_source_files)}, cache sizes: "
-            f"address_cache={len(self._address_decision_cache)}, "
-            f"file_cache={len(self._file_skip_cache)}"
-        )
+        # 记录缓存统计信息
+        # self.logger.debug(
+        #     f"Cache sizes: address_cache={len(self._address_decision_cache)}, "
+        #     f"file_cache={len(self._file_skip_cache)}"
+        # )
         return matched
 
     def dump_source_files_for_skip(self):
