@@ -11,6 +11,8 @@ class StepAction(Enum):
     STEP_OVER = auto()
     STEP_IN = auto()
     CONTINUE = auto()
+    SOURCE_STEP_IN = auto()
+    SOURCE_STEP_OUT = auto()
 
 
 def handle_special_stop(thread, stop_reason, logger, target=None, die_event=False):

@@ -1,16 +1,17 @@
-[start]
 #!/usr/bin/env python3
 """
 LLDB Source Code Tracer
 ------------------------
-Enhanced execution tracer with function call tracking, parameter logging, 
+Enhanced execution tracer with function call tracking, parameter logging,
 return value capture, and call graph generation.
 """
+
 import argparse
 import hashlib
 import json
 import os
 import re
+import signal
 import sys
 import time
 from collections import defaultdict
@@ -72,6 +73,7 @@ class SourceTracer:
         self.process = None
         self.current_thread = None
         self.main_thread = None
+        self.broadcaster = None  # Will be initialized after process launch
 
         # Execution tracking state
         self.call_stack = []
@@ -81,24 +83,31 @@ class SourceTracer:
         self.log_buffer = []
         self.source_files = {}
         self.start_time = time.time()
+        self.interrupted = False  # Ctrl+C interrupt flag
+
+        # Pretty-print configuration
+        self.max_depth = 3
+        self.max_value_length = 200
 
         # Configure event handlers
         self.listener = self.debugger.GetListener()
-        self.broadcaster = self.debugger.GetBroadcaster()
-        self.broadcaster.AddListener(self.listener, lldb.SBDebugger.eBroadcastBitStateChanged)
-
-        # Pretty print configuration
-        self.max_value_length = 100
-        self.max_depth = 3
+        self.start_time = time.time()
 
     def start(self):
         """Launch the target process and begin tracing."""
+        # Set up interrupt handler
+        signal.signal(signal.SIGINT, self._handle_interrupt)
+
         launch_info = lldb.SBLaunchInfo(self.target_args)
         error = lldb.SBError()
         self.process = self.target.Launch(launch_info, error)
 
         if not self.process or error.Fail():
             raise RuntimeError(f"Failed to launch process: {error}")
+
+        # Initialize process broadcaster after process is launched
+        self.broadcaster = self.process.GetBroadcaster()
+        self.broadcaster.AddListener(self.listener, lldb.SBProcess.eBroadcastBitStateChanged)
 
         self.main_thread = self.process.GetThreadAtIndex(0)
         self.current_thread = self.main_thread
@@ -121,14 +130,46 @@ class SourceTracer:
         # Generate final outputs
         self._generate_outputs()
 
+    def _handle_interrupt(self, signum, frame):
+        """Handle Ctrl+C interrupt signal."""
+        print("\nReceived interrupt signal, stopping trace...")
+        self.interrupted = True
+
+        # Try to stop the process if it's still running
+        if self.process and self.process.IsValid():
+            self.process.Stop()
+
     def _trace_execution(self):
         """Main tracing loop - steps through each line of code."""
-        while self.process.IsValid() and self.process.GetState() == lldb.eStateStopped:
+        while not self.interrupted:
+            # Check process state
+            state = self.process.GetState()
+
+            if state == lldb.eStateExited:
+                print(f"Process exited with status: {self.process.GetExitStatus()}")
+                break
+            elif state == lldb.eStateCrashed:
+                print("Process crashed!")
+                break
+            elif state != lldb.eStateStopped:
+                # Wait for process to stop or exit
+                if not self._wait_for_stop(timeout=1.0):
+                    if self.verbose:
+                        print("Timeout waiting for process to stop")
+                    continue
+
             self.step_counter += 1
 
             # Get current frame and line information
             frame = self.current_thread.GetSelectedFrame()
             line_entry = frame.GetLineEntry()
+
+            if not line_entry.IsValid():
+                if self.verbose:
+                    print("Invalid line entry, stepping...")
+                self._step_next()
+                continue
+
             module = frame.GetModule()
 
             # Get source location
@@ -140,7 +181,7 @@ class SourceTracer:
                 full_path = source_file
 
             line_number = line_entry.GetLine()
-            function_name = frame.GetFunctionName()
+            function_name = frame.GetFunctionName() or "<unknown>"
 
             # Cache source file content
             if full_path and os.path.exists(full_path) and full_path not in self.source_files:
@@ -172,6 +213,14 @@ class SourceTracer:
 
             # Move to next line
             self._step_next()
+
+    def _wait_for_stop(self, timeout=1.0):
+        """Wait for process to stop with timeout."""
+        event = lldb.SBEvent()
+        if self.listener.WaitForEvent(timeout, event):
+            self._handle_stop_event()
+            return True
+        return False
 
     def _handle_function_entry(self, frame, function_name, source_file, line_number):
         """Process function entry event."""
@@ -229,25 +278,39 @@ class SourceTracer:
 
         # Log function exit
         line_entry = frame.GetLineEntry()
-        source_file = line_entry.GetFileSpec().GetFilename()
-        line_number = line_entry.GetLine()
+        source_file = line_entry.GetFileSpec().GetFilename() if line_entry.IsValid() else "<unknown>"
+        line_number = line_entry.GetLine() if line_entry.IsValid() else 0
 
         self._log_event("RETURN", f"{func_ctx['function']} -> {func_ctx['return_str']}", source_file, line_number)
 
     def _handle_stop_event(self):
         """Handle process stop events."""
         event = lldb.SBEvent()
-        if self.listener.PeekAtNextEvent(event):
-            self.listener.GetNextEvent(event)
-
+        while self.listener.GetNextEvent(event):
             if event.GetType() == lldb.SBProcess.eBroadcastBitStateChanged:
                 state = lldb.SBProcess.GetStateFromEvent(event)
                 if state == lldb.eStateStopped:
                     self.current_thread = self.process.GetSelectedThread()
+                if self.verbose:
+                    state_str = {
+                        lldb.eStateInvalid: "invalid",
+                        lldb.eStateUnloaded: "unloaded",
+                        lldb.eStateConnected: "connected",
+                        lldb.eStateAttaching: "attaching",
+                        lldb.eStateLaunching: "launching",
+                        lldb.eStateStopped: "stopped",
+                        lldb.eStateRunning: "running",
+                        lldb.eStateStepping: "stepping",
+                        lldb.eStateCrashed: "crashed",
+                        lldb.eStateDetached: "detached",
+                        lldb.eStateExited: "exited",
+                        lldb.eStateSuspended: "suspended",
+                    }.get(state, f"unknown ({state})")
+                    print(f"Process state changed to: {state_str}")
 
     def _step_next(self):
         """Step to the next source line."""
-        self.current_thread.StepOver()
+        self.current_thread.StepInstruction(False)  # Step over by instruction
         self._handle_stop_event()
 
     def _step_over(self):
@@ -260,12 +323,22 @@ class SourceTracer:
         if not self.call_stack:
             return False
 
-        # Check if we're at the end of the current function
-        current_function = self.call_stack[-1]["function"]
-        function_end = frame.GetFunction().GetEndAddress().GetFileAddress()
-        current_pc = frame.GetPCAddress().GetFileAddress()
+        # Check if we're at a return instruction
+        pc = frame.GetPC()
+        function = frame.GetFunction()
 
-        return current_pc >= function_end
+        if not function.IsValid():
+            return False
+
+        # Check if we're at the last instruction of the function
+        instructions = function.GetInstructions(self.target)
+        if instructions.GetSize() == 0:
+            return False
+
+        last_instruction = instructions.GetInstructionAtIndex(instructions.GetSize() - 1)
+
+        # Check if current PC is at function's end address
+        return pc >= function.GetEndAddress().GetLoadAddress(self.target)
 
     def _get_return_value(self, frame):
         """Attempt to retrieve the function return value."""
@@ -315,10 +388,12 @@ class SourceTracer:
         # Handle structs/classes
         if value.GetType().IsAggregateType():
             fields = []
-            for i in range(value.GetNumChildren()):
+            for i in range(min(value.GetNumChildren(), 10)):  # Limit fields output
                 child = value.GetChildAtIndex(i)
                 fields.append(f"{child.GetName()}={self._pretty_print_value(child, depth + 1)}")
-            return f"{value.GetType().GetName()} {{{', '.join(fields)}}}"
+            return f"{value.GetType().GetName()} {{{', '.join(fields)}}}" + (
+                "..." if value.GetNumChildren() > 10 else ""
+            )
 
         # Handle basic types
         summary = value.GetSummary()
@@ -528,4 +603,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-[end]

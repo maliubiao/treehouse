@@ -781,11 +781,13 @@ line3
 """
                 llm_query.extract_and_diff_files(test_content, auto_apply=True)
 
-                # Verify file content
+                # 验证文件内容
                 self.assertEqual(test_file.read_text(), "line1\nline2\nline3")
-                # Verify diff file
-                diff_file = Path(tmpdir) / "changes.diff"
-                self.assertTrue(diff_file.exists())
+
+                # 验证diff文件（使用通配符匹配时间戳文件名）
+                diff_files = list(Path(tmpdir).glob("changes_*.diff"))
+                self.assertEqual(len(diff_files), 1, "应该生成一个diff文件")
+                self.assertTrue(diff_files[0].exists())
 
     def test_diff_application_flow(self):
         with tempfile.TemporaryDirectory() as tmpdir:

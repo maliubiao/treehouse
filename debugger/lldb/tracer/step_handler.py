@@ -23,6 +23,8 @@ class StepHandler:
         self.line_cache: Dict[str, lldb.SBLineEntry] = {}
         self.function_start_addrs = set()
         self.expression_hooks = self.tracer.config_manager.get_expression_hooks()
+        # 新增函数地址范围缓存
+        self.function_range_cache = {}
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -37,18 +39,32 @@ class StepHandler:
             self.logger.error("Unexpected error reading file %s: %s", filepath, str(e))
             return None
 
+    def _is_address_in_current_function(self, frame: lldb.SBFrame, addr: int) -> bool:
+        """检查地址是否在当前函数范围内（带缓存优化）"""
+        if not frame.symbol:
+            return False
+
+        # 尝试从缓存获取地址范围
+        if addr in self.function_range_cache:
+            start_addr, end_addr = self.function_range_cache[addr]
+            return start_addr <= addr < end_addr
+
+        # 缓存未命中，计算地址范围
+        start_addr = frame.symbol.GetStartAddress().GetLoadAddress(self.tracer.target)
+        end_addr = frame.symbol.GetEndAddress().GetLoadAddress(self.tracer.target)
+
+        if start_addr == lldb.LLDB_INVALID_ADDRESS or end_addr == lldb.LLDB_INVALID_ADDRESS:
+            return False
+
+        # 存入缓存
+        self.function_range_cache[addr] = (start_addr, end_addr)
+        return start_addr <= addr < end_addr
+
     def _execute_expression_hooks(self, filepath: str, line_num: int, frame: lldb.SBFrame) -> List[str]:
         """执行匹配的表达式钩子并返回结果列表"""
         expr_results = []
         for hook in self.expression_hooks:
             if filepath != hook.get("path") or hook.get("line") != line_num:
-                self.logger.debug(
-                    "Skipping expression hook for %s:%d, expected %s:%d",
-                    filepath,
-                    line_num,
-                    hook.get("path"),
-                    hook.get("line"),
-                )
                 continue
             # 获取表达式并执行
             expression = hook.get("expr")
@@ -63,102 +79,15 @@ class StepHandler:
                     expr_results.append(f"[EXPR] {expression} exception: {str(e)}")
         return expr_results
 
-    def explore_sbvalue(self, value: lldb.SBValue) -> str:
-        """
-        探索SBValue对象的所有API方法并返回结果表格
-
-        参数:
-            value (lldb.SBValue): 要探索的SBValue对象
-
-        返回:
-            str: 包含所有方法调用结果的Markdown表格
-        """
-        # 定义要探索的方法列表（无参数方法）
-        methods = [
-            ("GetByteSize", "size_t"),
-            ("GetValue", "const char*"),
-            ("GetValueType", "ValueType"),
-            ("GetTypeName", "const char*"),
-            ("GetDisplayTypeName", "const char*"),
-            ("GetSummary", "const char*"),
-            ("GetObjectDescription", "const char*"),
-            ("GetLocation", "const char*"),
-            ("IsValid", "bool"),
-            ("MightHaveChildren", "bool"),
-            ("GetNumChildren", "uint32_t"),
-            ("GetName", "const char*"),
-            ("GetType", "SBType"),
-            ("GetLoadAddress", "addr_t"),
-            ("GetAddress", "SBAddress"),
-            ("GetFrame", "SBFrame"),
-            ("GetProcess", "SBProcess"),
-            ("GetThread", "SBThread"),
-            ("GetTarget", "SBTarget"),
-            ("GetData", "SBData"),
-            ("GetError", "SBError"),
-            ("GetValueDidChange", "bool"),
-            ("GetValueAsSigned", "int64_t"),
-            ("GetValueAsUnsigned", "uint64_t"),
-            ("GetValueAsAddress", "addr_t"),
-            ("GetDynamicValue", "SBValue"),
-            ("GetStaticValue", "SBValue"),
-            ("GetNonSyntheticValue", "SBValue"),
-            ("GetPreferDynamicValue", "DynamicValueType"),
-            ("GetPreferSyntheticValue", "bool"),
-            ("IsDynamic", "bool"),
-            ("IsSynthetic", "bool"),
-            ("IsSyntheticChildrenGenerated", "bool"),
-            ("IsInScope", "bool"),
-        ]
-
-        # 构建结果表格
-        table = "| Method | Return Type | Return Value |\n"
-        table += "|--------|-------------|--------------|\n"
-
-        for method_name, return_type in methods:
-            try:
-                # 获取方法对象
-                method = getattr(value, method_name)
-                # 调用方法
-                result = method()
-
-                # 特殊处理某些类型的返回值
-                if result is None:
-                    result_str = "None"
-                elif method_name == "GetType" and result.IsValid():
-                    result_str = result.GetName()
-                elif method_name == "GetAddress" and result.IsValid():
-                    result_str = f"addr = {result.GetLoadAddress(self.tracer.target)}"
-                elif method_name in ["GetFrame", "GetProcess", "GetThread", "GetTarget"]:
-                    result_str = "Valid" if result.IsValid() else "Invalid"
-                elif method_name == "GetData" and result.IsValid():
-                    result_str = f"data[{result.GetByteSize()} bytes]"
-                elif method_name == "GetError" and result.Fail():
-                    result_str = f"Error: {result.GetCString()}"
-                elif isinstance(result, lldb.SBValue) and result.IsValid():
-                    result_str = f"{result.GetName()} ({result.GetTypeName()})"
-                else:
-                    result_str = str(result)
-
-                # 截断过长的结果
-                if len(result_str) > 100:
-                    result_str = result_str[:100] + "..."
-            except Exception as e:
-                result_str = f"Error: {str(e)}"
-
-            table += f"| {method_name} | {return_type} | {result_str} |\n"
-
-        return table
-
     def on_step_hit(self, frame: lldb.SBFrame) -> StepAction:
         """Handle step events with detailed debug information."""
         pc: int = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
         if pc not in self.instruction_cache:
             instructions: lldb.SBInstructions = frame.symbol.GetInstructions(self.tracer.target)
             first_inst: lldb.SBInstruction = instructions.GetInstructionAtIndex(0)
-            function_start: int = first_inst.GetAddress().GetLoadAddress(self.tracer.target)
+            first_inst_addr: int = first_inst.GetAddress().GetLoadAddress(self.tracer.target)
             self.function_start_addrs.add(frame.symbol.GetStartAddress().GetLoadAddress(self.tracer.target))
-            offset: int = function_start - first_inst.GetAddress().GetFileAddress()
+            offset: int = first_inst_addr - first_inst.GetAddress().GetFileAddress()
             for i in instructions:
                 self.instruction_cache[i.addr.file_addr + offset] = i
         inst: lldb.SBInstruction = self.instruction_cache[pc]
@@ -386,12 +315,16 @@ class StepHandler:
         if lr_value == 0:
             self.logger.warning("LR is 0, cannot set breakpoint")
             return False
+
+        # 避免重复设置断点
         if lr_value in self.tracer.breakpoint_table:
             return True
+
         bp: lldb.SBBreakpoint = self.tracer.target.BreakpointCreateByAddress(lr_value)
         if not bp.IsValid():
             self.logger.error("Failed to set breakpoint at address 0x%x", lr_value)
             return False
+
         bp.SetOneShot(False)
         self.logger.info("Set one-shot breakpoint at 0x%x for return address", lr_value)
         self.tracer.breakpoint_table[lr_value] = bp.GetID()
@@ -406,6 +339,11 @@ class StepHandler:
                     self.logger.warning("Failed to get register value: %s", parsed_operands[0].value)
                     return StepAction.CONTINUE
                 jump_to: int = reg_val.unsigned
+
+                # 检查目标地址是否在当前函数内
+                if self._is_address_in_current_function(frame, jump_to):
+                    return StepAction.SOURCE_STEP_IN
+
                 sym_name: str = self.tracer.modules.get_addr_symbol(jump_to)
                 # 使用新的动态检查方法
                 if self.tracer.modules.should_skip_address(
@@ -414,11 +352,25 @@ class StepHandler:
                     self.logger.info("%s Skipping jump to register value: %s", mnemonic, sym_name)
                     if mnemonic in ("br", "braa", "brab"):
                         self._set_return_breakpoint(frame)
-                    return StepAction.STEP_OVER
+                        return StepAction.STEP_OVER
+                    else:
+                        return StepAction.SOURCE_STEP_OUT
                 self.logger.info("%s Jumping to register value: %s", mnemonic, sym_name)
         elif mnemonic == "b":
+            target_addr: str = parsed_operands[0].value
+            try:
+                raw_target_addr: int = int(target_addr, 16)
+            except ValueError:
+                self.logger.error("Failed to parse target address: %s", target_addr)
+                return StepAction.SOURCE_STEP_IN
+
+            # 检查目标地址是否在当前函数内
+            if self._is_address_in_current_function(frame, raw_target_addr):
+                self.logger.info("%s branch within current function to 0x%x", mnemonic, raw_target_addr)
+                return StepAction.SOURCE_STEP_IN
+
             self._set_return_breakpoint(frame)
-            self.logger.info("%s Branching to address: %s", mnemonic, parsed_operands[0].value)
+            self.logger.info("%s Branching to address: %s", mnemonic, target_addr)
         elif mnemonic == "bl":
             target_addr: str = parsed_operands[0].value
             raw_target_addr: int = int(target_addr, 16)
@@ -429,9 +381,9 @@ class StepHandler:
             ) or self.tracer.source_ranges.should_skip_source_address_dynamic(raw_target_addr):
                 self._set_return_breakpoint(frame)
                 self.logger.info("%s Skipping branch to address: %s, %s", mnemonic, target_addr, sym_name)
-                return StepAction.STEP_OVER
+                return StepAction.SOURCE_STEP_OUT
             self.logger.info("%s Branching to address: %s, %s", mnemonic, target_addr, sym_name)
         elif mnemonic == "ret":
             self.logger.info("Returning from function: %s", frame.symbol.name if frame.symbol else "unknown")
 
-        return StepAction.STEP_IN
+        return StepAction.SOURCE_STEP_IN

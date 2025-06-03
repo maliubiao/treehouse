@@ -3179,7 +3179,11 @@ def _generate_unified_diff(old_file_path, shadow_file_path, original_content, fi
 def _save_diff_content(diff_content):
     """将diff内容保存到文件"""
     if diff_content:
-        diff_file = shadowroot / "changes.diff"
+        # 生成带时间戳的文件名
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        diff_filename = f"changes_{timestamp}.diff"
+        diff_file = shadowroot / diff_filename
+
         with open(diff_file, "w", encoding="utf-8") as f:
             f.write(diff_content)
         print(f"已生成diff文件: {diff_file}")
@@ -3269,7 +3273,6 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
             original_content = f.read()
         diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
         diff_content += diff + "\n\n"
-
     diff_file = _save_diff_content(diff_content)
     if diff_file:
         display_and_apply_diff(diff_file, auto_apply=auto_apply)

@@ -108,22 +108,26 @@ class EventLoop:
         self.logger.info("Hit LR breakpoint, continuing execution")
         frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
         action: StepAction = self.tracer.step_handler.on_step_hit(frame)
+        self.action_handle(action, thread)
+
+    def action_handle(self, action: StepAction, thread: lldb.SBThread) -> None:
+        """处理特定的步进动作"""
         if action == StepAction.STEP_OVER:
             self.logger.info("Step over detected")
             thread.StepInstruction(True)
         elif action == StepAction.STEP_IN:
             thread.StepInstruction(False)
+        elif action == StepAction.SOURCE_STEP_IN:
+            thread.StepInto()
+        elif action == StepAction.SOURCE_STEP_OUT:
+            thread.StepOver()
 
     def _handle_plan_complete(self, thread: lldb.SBThread) -> None:
         """处理计划完成"""
         if self.tracer.entry_point_breakpoint_event.is_set():
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
             action: StepAction = self.tracer.step_handler.on_step_hit(frame)
-            if action == StepAction.STEP_OVER:
-                self.logger.info("Step over detected")
-                thread.StepInstruction(True)
-            elif action == StepAction.STEP_IN:
-                thread.StepInstruction(False)
+            self.action_handle(action, thread)
 
     def _handle_termination_state(self, process: lldb.SBProcess, state: int) -> None:
         """处理进程终止状态"""

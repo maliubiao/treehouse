@@ -31,9 +31,9 @@ class SourceRangeManager:
         # 解析地址获取源文件信息
         sb_addr = self._target.ResolveLoadAddress(address)
         if not sb_addr.IsValid():
-            self.logger.debug(f"Failed to resolve load address 0x{address:x}")
-            self._address_decision_cache[address] = False
-            return False
+            # self.logger.debug(f"Failed to resolve load address 0x{address:x}")
+            self._address_decision_cache[address] = True
+            return True
 
         # 使用行信息而非编译单元获取文件信息
         line_entry = sb_addr.GetLineEntry()
@@ -41,8 +41,8 @@ class SourceRangeManager:
         # 如果无法获取行信息则不跳过
         if not line_entry or not line_entry.IsValid():
             self.logger.debug(f"No valid line entry found for address 0x{address:x}")
-            self._address_decision_cache[address] = True
-            return True
+            self._address_decision_cache[address] = False
+            return False
 
         file_spec = line_entry.GetFileSpec()
         if not file_spec:
