@@ -138,7 +138,7 @@ class StepHandler:
         self._last_source_key = current_source_key
         if source_line:
             self.logger.info(
-                "0x%x %s %s ; %s // %s; Debug: %s",
+                "0x%x %s %s ; %s // %s; Debug : %s",
                 pc,
                 mnemonic,
                 operands,

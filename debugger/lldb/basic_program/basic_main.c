@@ -2,6 +2,7 @@
 #include "so1/basic_so1.h"
 #include "so2/basic_so2.h"
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -23,43 +24,36 @@ volatile int *so2_data_ptr = &so2_data_symbol;
 // Declare assembly test functions
 extern void run_branch_tests(void) __asm__("_run_branch_tests");
 extern void run_cond_branch_tests(void) __asm__("_run_cond_branch_tests");
+extern int so2_plt_function(int x);
+// 线程参数结构
+typedef struct {
+  int thread_id;
+  const char *marker;
+  uint32_t asm_marker;
+} ThreadArgs;
 
-int main() {
-  asm volatile("nop");
+// 工作线程1：主逻辑线程
+void *work_thread_main(void *arg) {
+  ThreadArgs *args = (ThreadArgs *)arg;
+  printf("Thread %d (%s) started\n", args->thread_id, args->marker);
+
   int x = 5;
   int y = 3;
   static int loop_counter = 0;
 
-  // Run ARM64 branch instruction tests
-  printf("\n=== Running ARM64 branch instruction tests ===\n");
-  run_branch_tests();
-  run_cond_branch_tests();
-  printf("=== Branch tests completed ===\n\n");
-
-  // Dynamic loading test
-  void *dl_handle = dlopen(NULL, RTLD_NOW);
-  init_fn_t so1_dl_init = (init_fn_t)dlsym(dl_handle, "so1_init");
-  func_fn_t so2_plt_fn = (func_fn_t)dlsym(dl_handle, "so2_plt_function");
-
-  // Initialize libraries
-  so1_init();
-  so2_init();
-  so1_dl_init(); // Call through dynamic symbol
-
-  // Setup function pointers
-  so1_func_ptr = (void (*)())so2_plt_function;
-
   while (1) {
     loop_counter++;
-    asm volatile("nop");
-    printf("\n--- Loop iteration %d ---\n", loop_counter);
+    // 线程专用标记
+
+    printf("\n--- [Thread %d] Loop iteration %d ---\n", args->thread_id,
+           loop_counter);
 
     // Direct calls
     int so1_res = so1_function(10 + loop_counter);
     int so2_res = so2_function(5 + loop_counter);
 
-    // Function pointer calls
-    int fp_res = so2_plt_fn(loop_counter);
+    // Function pointer calls (修复函数指针调用语法)
+    int fp_res = so2_function(loop_counter);
 
     // Access data symbols
     (*so1_global_ptr)++;
@@ -100,9 +94,82 @@ int main() {
     printf("Symbols: SO1_GLOBAL=%-6d SO2_DATA=0x%X\n", *so1_global_ptr,
            *so2_data_ptr);
 
-    printf("Sleeping for 1 second...\n");
+    printf("[Thread %d] Sleeping for 1 second...\n", args->thread_id);
     sleep(1);
   }
+  return NULL;
+}
+
+// 工作线程2：简单计数线程
+void *work_thread_counter(void *arg) {
+  ThreadArgs *args = (ThreadArgs *)arg;
+  printf("Thread %d (%s) started\n", args->thread_id, args->marker);
+
+  int counter = 0;
+  while (1) {
+    printf("[Thread %d] Counter: %d\n", args->thread_id, counter++);
+    sleep(2);
+  }
+  return NULL;
+}
+
+// 工作线程3：数学计算线程
+void *work_thread_math(void *arg) {
+  ThreadArgs *args = (ThreadArgs *)arg;
+  printf("Thread %d (%s) started\n", args->thread_id, args->marker);
+
+  double pi = 3.1415926535;
+  int iteration = 0;
+
+  while (1) {
+    double result = pi * iteration * iteration;
+    printf("[Thread %d] Math: π * %d^2 = %.2f\n", args->thread_id, iteration,
+           result);
+    iteration = (iteration + 1) % 10;
+    sleep(3);
+  }
+  return NULL;
+}
+
+int main() {
+  asm volatile("nop");
+
+  // 运行动态库初始化
+  so1_init();
+  so2_init();
+
+  // 运行动态加载测试
+  void *dl_handle = dlopen(NULL, RTLD_NOW);
+  init_fn_t so1_dl_init = (init_fn_t)dlsym(dl_handle, "so1_init");
+  func_fn_t so2_plt_fn = (func_fn_t)dlsym(dl_handle, "so2_plt_function");
+
+  // 初始化函数指针
+  so1_func_ptr = (void (*)())so2_plt_function;
+  so1_dl_init(); // 通过动态符号调用
+
+  // 运行ARM64分支指令测试
+  printf("\n=== Running ARM64 branch instruction tests ===\n");
+  run_branch_tests();
+  run_cond_branch_tests();
+  printf("=== Branch tests completed ===\n\n");
+
+  // 创建线程参数
+  ThreadArgs thread1_args = {1, "MAIN_LOGIC", 0xAA};
+  ThreadArgs thread2_args = {2, "COUNTER", 0xBB};
+  ThreadArgs thread3_args = {3, "MATH", 0xCC};
+
+  // 创建线程
+  pthread_t thread1, thread2, thread3;
+  pthread_create(&thread1, NULL, work_thread_main, &thread1_args);
+  pthread_create(&thread2, NULL, work_thread_counter, &thread2_args);
+  pthread_create(&thread3, NULL, work_thread_math, &thread3_args);
+
+  printf("Main thread: Created 3 worker threads\n");
+
+  // 主线程等待工作线程结束（实际上不会结束）
+  pthread_join(thread1, NULL);
+  pthread_join(thread2, NULL);
+  pthread_join(thread3, NULL);
 
   dlclose(dl_handle);
   return 0;

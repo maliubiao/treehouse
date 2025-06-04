@@ -187,7 +187,7 @@ ${bodyContent}
   function sendHtmlContent(html) {
     if (DEBUG) {
       console.debug("📄 生成最终HTML:");
-      console.debug(html.substring(0, 200) + (html.length > 200 ? "..." : "");
+      console.debug(html.substring(0, 200) + (html.length > 200 ? "..." : ""));
     }
     
     chrome.runtime.sendMessage({

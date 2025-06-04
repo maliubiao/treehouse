@@ -6,6 +6,9 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -O0 -fno-inline -fno-optimize-sibling-calls")
 
+# 添加pthread支持
+find_package(Threads REQUIRED)
+
 # Build type configuration
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Choose the type of build" FORCE)
@@ -29,14 +32,14 @@ target_include_directories(basic_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(basic_lib PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)
 
 # ARM64 branch test executables
-add_executable(branch_test 
+add_executable(branch_test
     arm64_asm/branch_test.s
     branch_test_main.c
 )
 target_link_libraries(branch_test test_entry_point m c)
 
 # Additional test for conditional branches
-add_executable(cond_branch_test 
+add_executable(cond_branch_test
     arm64_asm/cond_branch_test.s
     cond_branch_test_main.c
 )
@@ -53,7 +56,7 @@ set_target_properties(arm64_asm_objs PROPERTIES
 
 # Main executable
 add_executable(basic_program basic_main.c $<TARGET_OBJECTS:arm64_asm_objs>)
-target_link_libraries(basic_program basic_lib so1 so2 dl m)
+target_link_libraries(basic_program basic_lib so1 so2 dl m Threads::Threads)
 set_target_properties(basic_program PROPERTIES
     ENABLE_EXPORTS ON
     LINK_DEPENDS_NO_SHARED ON
@@ -72,7 +75,7 @@ target_compile_definitions(so1 PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)
 
 # SO2 shared library
 add_library(so2 SHARED so2/basic_so2.c)
-target_include_directories(so2 PUBLIC 
+target_include_directories(so2 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/so2
 )
