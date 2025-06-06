@@ -99,8 +99,9 @@ class StepHandler:
                     mnemonic,
                     operands,
                     inst.size,
+                    inst.GetAddress().file_addr - first_inst.GetAddress().file_addr,
                 )
-        mnemonic, operands, size = self.instruction_info_cache[pc]
+        mnemonic, operands, size, first_inst_offset = self.instruction_info_cache[pc]
         next_pc = pc + size
         parsed_operands = parse_operands(operands, max_ops=4)
         debug_values: List[str] = self._capture_register_values(frame, mnemonic, parsed_operands)
@@ -120,14 +121,12 @@ class StepHandler:
         if line_entry.IsValid():
             filepath: str = line_entry.GetFileSpec().fullpath
             if self.tracer.source_ranges.should_skip_source_file_by_path(filepath):
-                # self.logger.info("Skipping source file: %s", filepath)
                 return StepAction.STEP_OVER
             line_num: int = int(line_entry.GetLine())
             source_info = f"{filepath}:{line_num}"
             lines: Optional[List[str]] = self._get_file_lines(filepath)
             if lines and 0 < line_num <= len(lines):
                 source_line = lines[line_num - 1].strip()
-
             # 执行表达式钩子并获取结果
             expr_results = self._execute_expression_hooks(filepath, line_num, frame)
             debug_values.extend(expr_results)
@@ -138,8 +137,9 @@ class StepHandler:
         self._last_source_key = current_source_key
         if source_line:
             self.logger.info(
-                "0x%x %s %s ; %s // %s; Debug : %s",
+                "0x%x <+%d> %s %s ; %s // %s; -> %s",
                 pc,
+                first_inst_offset,
                 mnemonic,
                 operands,
                 source_info,
@@ -147,7 +147,15 @@ class StepHandler:
                 ", ".join(debug_values),
             )
         else:
-            self.logger.info("0x%x %s %s ; %s; Debug: %s", pc, mnemonic, operands, source_info, ", ".join(debug_values))
+            self.logger.info(
+                "0x%x <+%d> %s %s ; %s; -> %s",
+                pc,
+                first_inst_offset,
+                mnemonic,
+                operands,
+                source_info,
+                ", ".join(debug_values),
+            )
 
         return self._determine_step_action(mnemonic, parsed_operands, frame, no_line_entry, next_pc)
 
@@ -155,6 +163,8 @@ class StepHandler:
         """Capture register and memory values for logging"""
         registers: List[str] = []
         captured_regs = []
+        if mnemonic == "ldr":
+            parsed_operands = parsed_operands[1:]
         for operand in parsed_operands:
             if operand.type == OperandType.REGISTER:
                 if operand.value in captured_regs:
@@ -253,7 +263,7 @@ class StepHandler:
         error = lldb.SBError()
         value: int = self.tracer.process.ReadUnsignedFromMemory(addr, bytesize, error)
         if error.Success():
-            return [f"{expr_str} = [0x{addr:016x}] = 0x{value:x}"]
+            return [f"{expr_str} = [0x{addr:x}] = 0x{value:x}"]
         self.logger.error("Failed to read memory at address 0x%x: %s", addr, error.GetCString())
         return []
 

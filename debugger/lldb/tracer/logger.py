@@ -38,7 +38,8 @@ class LogManager:
         self.logger.addFilter(time_filter)
 
         # 使用相对时间的日志格式
-        formatter = logging.Formatter("[%(relative_time)12.3f] %(message)s")
+        # formatter = logging.Formatter("[%(relative_time)12.3f] %(message)s")
+        formatter = logging.Formatter("%(message)s")
 
         # 如果指定了日志文件，只添加文件处理器
         if self.logfile:

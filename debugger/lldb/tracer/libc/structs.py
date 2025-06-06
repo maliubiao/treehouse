@@ -1,7 +1,10 @@
+import logging
 from typing import Any, Dict, Optional
 
 import cffi
 import lldb
+
+logger = logging.getLogger(__name__)
 
 
 class LibcStructs:
@@ -37,7 +40,7 @@ class LibcStructs:
         "dirent": """
             typedef struct {
                 long d_ino;
-                off_t d_off;
+                long d_off;          // 修复类型为long
                 unsigned short d_reclen;
                 unsigned char d_type;
                 char d_name[256];
@@ -55,8 +58,9 @@ class LibcStructs:
         for name, defn in self.STRUCT_DEFS.items():
             try:
                 self.ffi.cdef(defn)
+                logger.debug("Successfully loaded struct %s", name)
             except cffi.CDefError as e:
-                print(f"Failed to load struct {name}: {str(e)}")
+                logger.error("Failed to load struct %s: %s", name, str(e))
 
     def get_struct(self, name: str, addr: int) -> Optional[Dict[str, Any]]:
         """
@@ -82,6 +86,7 @@ class LibcStructs:
         result = self.target.EvaluateExpression(expr)
 
         if not result.IsValid() or result.GetError().Fail():
+            logger.debug("LLDB解析失败: %s @ 0x%x", name, addr)
             return None
 
         return {
@@ -93,6 +98,7 @@ class LibcStructs:
     def _get_via_cffi(self, name: str, addr: int) -> Optional[Dict[str, Any]]:
         """通过CFFI解析结构体"""
         if name not in self.STRUCT_DEFS:
+            logger.warning("未定义的结构体: %s", name)
             return None
 
         try:
@@ -103,12 +109,14 @@ class LibcStructs:
             error = lldb.SBError()
             buf = process.ReadMemory(addr, size, error)
             if error.Fail():
+                logger.error("读取内存失败 @ 0x%x: %s", addr, error.GetCString())
                 return None
 
+            # 使用正确的类型转换
             cdata = self.ffi.cast(f"{struct_type} *", addr)
             return self._cdata_to_dict(cdata)
         except (cffi.CDataError, lldb.SBError) as e:
-            print(f"Failed to parse struct {name}: {str(e)}")
+            logger.exception("解析结构体 %s 失败", name)
             return None
 
     def _cdata_to_dict(self, cdata) -> Dict[str, Any]:
@@ -121,6 +129,7 @@ class LibcStructs:
                     if isinstance(value, (int, float, str, bytes)):
                         result[field] = value
                     elif hasattr(value, "__class__"):
+                        # 递归处理嵌套结构体
                         result[field] = self._cdata_to_dict(value)
                 except (AttributeError, TypeError):
                     continue
@@ -136,7 +145,8 @@ class LibcStructs:
         try:
             self.ffi.cdef(definition)
             self.STRUCT_DEFS[name] = definition
+            logger.info("添加自定义结构体: %s", name)
             return True
         except cffi.CDefError as e:
-            print(f"Failed to add struct {name}: {str(e)}")
+            logger.error("添加结构体 %s 失败: %s", name, str(e))
             return False

@@ -56,7 +56,7 @@ set_target_properties(arm64_asm_objs PROPERTIES
 
 # Main executable
 add_executable(basic_program basic_main.c $<TARGET_OBJECTS:arm64_asm_objs>)
-target_link_libraries(basic_program basic_lib so1 so2 dl m Threads::Threads)
+target_link_libraries(basic_program basic_lib so1 so2 so3 dl m Threads::Threads)
 set_target_properties(basic_program PROPERTIES
     ENABLE_EXPORTS ON
     LINK_DEPENDS_NO_SHARED ON
@@ -85,3 +85,14 @@ set_target_properties(so2 PROPERTIES
     VISIBILITY_INLINES_HIDDEN OFF
 )
 target_compile_definitions(so2 PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)
+
+# SO3 shared library (File I/O)
+add_library(so3 SHARED so3/basic_so3.c)
+target_include_directories(so3 PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/so3
+)
+set_target_properties(so3 PROPERTIES
+    C_VISIBILITY_PRESET default
+    VISIBILITY_INLINES_HIDDEN OFF
+)
+target_compile_definitions(so3 PRIVATE $<$<CONFIG:Debug>:DEBUG=1>)

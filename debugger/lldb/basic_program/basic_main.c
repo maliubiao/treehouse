@@ -1,6 +1,7 @@
 #include "basic_lib.h"
 #include "so1/basic_so1.h"
 #include "so2/basic_so2.h"
+#include "so3/basic_so3.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -137,6 +138,7 @@ int main() {
   // 运行动态库初始化
   so1_init();
   so2_init();
+  so3_init(); // 初始化SO3文件IO库
 
   // 运行动态加载测试
   void *dl_handle = dlopen(NULL, RTLD_NOW);
@@ -152,6 +154,9 @@ int main() {
   run_branch_tests();
   run_cond_branch_tests();
   printf("=== Branch tests completed ===\n\n");
+
+  so3_file_operations();
+  so3_test_file_io();
 
   // 创建线程参数
   ThreadArgs thread1_args = {1, "MAIN_LOGIC", 0xAA};

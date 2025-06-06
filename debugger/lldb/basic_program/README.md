@@ -51,6 +51,33 @@ register read x0 x1 x2 x3
 ./test_argument_passing.sh
 ```
 
+## 文件IO调试功能
+
+### 调试文件操作
+```bash
+lldb ./basic_program
+(lldb) b write
+(lldb) b read
+(lldb) b fwrite
+(lldb) b fread
+(lldb) run
+```
+
+### 调试技巧
+```lldb
+# 查看文件描述符
+frame variable fd
+
+# 查看读写缓冲区
+memory read --size 1 --format c --count 32 buffer
+
+# 查看文件位置
+p (long)lseek(fd, 0, SEEK_CUR)
+
+# 查看FILE结构体
+frame variable *fp
+```
+
 ## 新增的复杂参数类型
 ```c
 // 基础结构体

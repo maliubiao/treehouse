@@ -10,6 +10,7 @@ from ai import set_entrypoint_breakpoints
 from .breakpoint_handler import BreakpointHandler
 from .config import ConfigManager
 from .event_loop import EventLoop
+from .libc_hooker import prepare_hooker
 from .logger import LogManager
 from .modules import ModuleManager
 from .source_ranges import SourceRangeManager
@@ -184,6 +185,7 @@ class Tracer:
         self.step_handler = StepHandler(self)
         self.breakpoint_handler = BreakpointHandler(self)
         self.event_loop = EventLoop(self, self.listener, self.logger)
+        prepare_hooker(self)
 
     def start(self) -> bool:
         if self.attach_pid:

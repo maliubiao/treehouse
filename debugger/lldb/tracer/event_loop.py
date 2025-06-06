@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import lldb
 
 from .events import StepAction, handle_special_stop
+from .libc_hooker import get_libc_hooker
 from .utils import get_state_str, get_stop_reason_str
 
 if TYPE_CHECKING:
@@ -106,7 +107,17 @@ class EventLoop:
             self.handle_pthread_create_breakpoint(process, thread)
         elif bp_id == self.tracer.pthread_join_breakpoint_id:
             self.logger.info("Hit pthread_join breakpoint, continuing execution")
-            thread.Resume()
+            process.Continue()
+        elif bp_id in get_libc_hooker().libc_breakpoint_entry_seen:
+            get_libc_hooker().handle_function_entry(
+                thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
+            )
+            process.Continue()
+        elif bp_id in get_libc_hooker().libc_breakpoint_return_seen:
+            get_libc_hooker().handle_function_return(
+                thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
+            )
+            process.Continue()
         else:
             bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
             self.logger.info("Breakpoint ID: %d, Location: %d", bp_id, bp_loc_id)
