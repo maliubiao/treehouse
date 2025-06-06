@@ -123,10 +123,10 @@ void *work_thread_math(void *arg) {
 
   while (1) {
     double result = pi * iteration * iteration;
-    printf("[Thread %d] Math: π * %d^2 = %.2f\n", args->thread_id, iteration,
-           result);
+    printf("[work_thread_math Thread %d] Math: π * %d^2 = %.2f\n",
+           args->thread_id, iteration, result);
     iteration = (iteration + 1) % 10;
-    sleep(3);
+    sleep(1);
   }
   return NULL;
 }

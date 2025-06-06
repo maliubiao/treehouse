@@ -1,12 +1,13 @@
 import logging
 import sys
 import threading
+import traceback
 from typing import TYPE_CHECKING
 
 import lldb
 
 from .events import StepAction, handle_special_stop
-from .utils import get_stop_reason_str
+from .utils import get_state_str, get_stop_reason_str
 
 if TYPE_CHECKING:
     from .core import Tracer  # Avoid circular import issues
@@ -67,23 +68,26 @@ class EventLoop:
         """处理状态变化事件"""
         process: lldb.SBProcess = lldb.SBProcess.GetProcessFromEvent(event)
         if process and process.IsValid():
-            self._handle_process_state(process)
+            self._handle_process_state(process, event)
 
-    def _handle_process_state(self, process: lldb.SBProcess) -> None:
+    def _handle_process_state(self, process: lldb.SBProcess, event: lldb.SBEvent) -> None:
         """处理进程状态变化"""
         state: int = process.GetState()
         if state == lldb.eStateStopped:
-            self._handle_stopped_state(process)
+            self._handle_stopped_state(process, event)
         elif state in (lldb.eStateExited, lldb.eStateCrashed, lldb.eStateDetached):
             self._handle_termination_state(process, state)
+        elif state == lldb.eStateRunning:
+            return
+        else:
+            print("Unhandled process state: %s", get_state_str(state))
 
-    def _handle_stopped_state(self, process: lldb.SBProcess) -> None:
+    def _handle_stopped_state(self, process: lldb.SBProcess, event: lldb.SBEvent) -> None:
         """处理停止状态"""
-        thread: lldb.SBThread = process.GetSelectedThread()
-        stop_reason: int = thread.GetStopReason()
-
+        thread = process.GetSelectedThread()
+        stop_reason = thread.GetStopReason()
         if stop_reason == lldb.eStopReasonBreakpoint:
-            self._handle_breakpoint_stop(thread)
+            self._handle_breakpoint_stop(process, thread)
         elif stop_reason == lldb.eStopReasonPlanComplete:
             self._handle_plan_complete(thread)
         elif stop_reason == lldb.eStopReasonTrace:
@@ -92,16 +96,53 @@ class EventLoop:
         else:
             handle_special_stop(thread, stop_reason, self.logger, self.tracer.target, die_event=self.die_event)
 
-    def _handle_breakpoint_stop(self, thread: lldb.SBThread) -> None:
+    def _handle_breakpoint_stop(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
         """处理断点停止"""
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
         if bp_id in self.tracer.breakpoint_seen:
             self._handle_lr_breakpoint(thread)
+        elif bp_id == self.tracer.pthread_create_breakpoint_id:
+            bp: lldb.SBBreakpoint = self.tracer.target.FindBreakpointByID(bp_id)
+            self.handle_pthread_create_breakpoint(process, thread)
+        elif bp_id == self.tracer.pthread_join_breakpoint_id:
+            self.logger.info("Hit pthread_join breakpoint, continuing execution")
+            thread.Resume()
         else:
             bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
             self.logger.info("Breakpoint ID: %d, Location: %d", bp_id, bp_loc_id)
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
             self.tracer.breakpoint_handler.handle_breakpoint(frame, bp_id)
+
+    def handle_pthread_create_breakpoint(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
+        """
+        Handle pthread_create breakpoint by setting a breakpoint at the thread entry point.
+        For ARM64, the thread function pointer is passed as the third argument (x2 register).
+        """
+        print("Handling pthread_create breakpoint")
+        frame = thread.GetFrameAtIndex(0)
+        # On ARM64, the thread function pointer is in x2 register
+        # (args are in x0, x1, x2, x3, etc. for the first few arguments)
+        thread_function_ptr = frame.FindRegister("x2").GetValueAsUnsigned()
+
+        if thread_function_ptr:
+            addr = self.tracer.target.ResolveLoadAddress(thread_function_ptr)
+            if not addr.IsValid():
+                self.logger.error(f"无法解析线程函数指针地址: 0x{thread_function_ptr:x}")
+                return
+            if addr.symbol.prologue_size > 0:
+                thread_function_ptr += addr.symbol.prologue_size
+            # Create a breakpoint at the thread entry point
+            bp = self.tracer.target.BreakpointCreateByAddress(thread_function_ptr)
+            if bp.IsValid():
+                bp_id = bp.GetID()
+                self.logger.info(f"在线程入口点创建断点: %s", bp)
+                # Add breakpoint ID to thread entry seen set
+                self.tracer.thread_breakpoint_seen.add(bp_id)
+            else:
+                self.logger.error(f"在线程入口点创建断点失败：0x{thread_function_ptr:x}")
+            # self.logger.info("%s\n", self.tracer.target.ResolveLoadAddress(thread_function_ptr))
+        # Continue execution
+        process.Continue()
 
     def _handle_lr_breakpoint(self, thread: lldb.SBThread) -> None:
         """处理LR断点"""

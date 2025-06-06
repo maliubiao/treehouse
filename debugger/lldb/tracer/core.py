@@ -63,8 +63,10 @@ class Tracer:
         self.step_handler: Optional[StepHandler] = None
         self.breakpoint_handler: Optional[BreakpointHandler] = None
         self.event_loop: Optional[EventLoop] = None
-
+        self.pthread_create_breakpoint_id: Optional[int] = None
+        self.pthread_join_breakpoint_id: Optional[int] = None
         self.lr_breakpoint_id: Optional[int] = None
+        self.thread_breakpoint_seen: set[int] = set()  # 用于跟踪已见断点ID
 
     def continue_to_main(self) -> None:
         while not self.entry_point_breakpoint_event.is_set():
@@ -110,16 +112,15 @@ class Tracer:
 
             # 设置断点
             self.install(self.target)
-
+            self.entry_point_breakpoint_event.set()
+            self.process.GetSelectedThread().StepInstruction(False)
+            # self.set_pthread_create_breakpoint()
+            # self.set_pthread_join_breakpoint()
             # 直接开始事件循环
             self.event_loop.run()
             self.cleanup()
             return True
 
-        # 修复过于宽泛的异常捕获
-        except lldb.SBError as e:
-            self.logger.error("LLDB error during attach: %s", str(e))
-            return False
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Unexpected error during attach: %s", str(e))
             return False
@@ -191,7 +192,6 @@ class Tracer:
         if not self.program_path:
             self.logger.error("No program path specified")
             return False
-
         self.target = self.debugger.CreateTarget(self.program_path)
         if not self.target or not self.target.IsValid():
             raise RuntimeError("Failed to create target for %s", self.program_path)  # 修复日志格式
@@ -203,6 +203,8 @@ class Tracer:
             self.log_manager.log_target_info(self.target)
 
         self.install(self.target)
+        self.set_pthread_create_breakpoint()
+        # self.set_pthread_join_breakpoint()
         error = lldb.SBError()
 
         # 获取环境变量配置
@@ -315,3 +317,32 @@ class Tracer:
         self.breakpoint = self.target.BreakpointCreateByLocation(file_path, line)
         self.breakpoint.SetOneShot(True)
         self.logger.info("Set source breakpoint at %s:%d", file_path, line)  # 修复日志格式
+
+    def set_pthread_create_breakpoint(self):
+        """设置pthread_create函数的断点"""
+
+        if not self.target:
+            self.logger.error("No valid target to set pthread_create breakpoint")
+            return
+        pthread_create_bp = self.target.BreakpointCreateByName("pthread_create")
+        if not pthread_create_bp.IsValid():
+            self.logger.error("Failed to create pthread_create breakpoint")
+            return
+        pthread_create_bp.SetOneShot(False)
+        self.pthread_create_breakpoint_id = pthread_create_bp.GetID()
+        self.logger.info(
+            "Set pthread_create breakpoint at %s", pthread_create_bp.GetLocationAtIndex(0).GetLoadAddress()
+        )  # 修复日志格式
+
+    def set_pthread_join_breakpoint(self):
+        """设置pthread_join函数的断点"""
+        if not self.target:
+            self.logger.error("No valid target to set pthread_join breakpoint")
+            return
+        pthread_join_bp = self.target.BreakpointCreateByName("pthread_join")
+        if not pthread_join_bp.IsValid():
+            self.logger.error("Failed to create pthread_join breakpoint")
+            return
+        pthread_join_bp.SetOneShot(False)
+        self.pthread_join_breakpoint_id = pthread_join_bp.GetID()
+        self.logger.info("Set pthread_join breakpoint at %s", pthread_join_bp.GetLocationAtIndex(0).GetLoadAddress())

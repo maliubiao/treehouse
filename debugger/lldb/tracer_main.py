@@ -16,6 +16,9 @@ def parse_args():
     parser.add_argument("--condition", help="Breakpoint condition expression")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument(
+        "--attach-pid", type=int, help="Attach to an existing process by PID instead of launching a new one"
+    )
+    parser.add_argument(
         "--dump-modules-for-skip", action="store_true", help="Dump module information and generate skip modules config"
     )
     parser.add_argument(
@@ -33,6 +36,7 @@ def main():
         program_args=args.program_args,
         logfile=args.logfile,
         config_file=args.config_file,
+        attach_pid=args.attach_pid,
     )
     if args.verbose:
         tracer.logger.setLevel(logging.DEBUG)

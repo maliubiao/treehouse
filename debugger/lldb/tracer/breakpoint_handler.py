@@ -22,6 +22,7 @@ class BreakpointHandler:
                 if self.tracer.config_manager.config.get("dump_source_files_for_skip"):
                     self.tracer.source_ranges.dump_source_files_for_skip()
                     sys.exit(0)
+
         file_spec = frame.GetLineEntry().GetFileSpec()
         line = frame.GetLineEntry().GetLine()
         self.logger.info("Break at %s:%d", file_spec.fullpath, line)

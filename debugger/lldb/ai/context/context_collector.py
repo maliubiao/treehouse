@@ -1,6 +1,7 @@
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional
+
 import lldb
-from typing import Dict, Any, Optional, List
 
 
 @dataclass
@@ -222,7 +223,7 @@ class ContextCollector:
             }
         elif var.GetType().IsAggregateType():
             children = {}
-            for child in var.GetChildren():
+            for child in getattr(var, "GetChildren", []):
                 children[child.GetName()] = self._get_structured_data(child, depth + 1)
             return {"type": var.GetType().GetName(), "value": var.GetValue(), "children": children}
         else:
