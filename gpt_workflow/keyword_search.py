@@ -1,13 +1,11 @@
 import argparse
 import base64
-import html
-import json
 import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -28,12 +26,12 @@ class KeywordExplainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if markdown package is available for HTML generation
+        self.has_markdown = False
         try:
             import markdown
 
             self.has_markdown = True
         except ImportError:
-            self.has_markdown = False
             console.print("[yellow]注意: 未安装'markdown'包，跳过HTML生成。请安装：pip install markdown[/yellow]")
 
     def _chunk_search_results(self, search_results: dict) -> List[dict]:
@@ -104,7 +102,7 @@ class KeywordExplainer:
             console.print(f"[cyan]处理块 {chunk_index + 1}/{total_chunks} (大小: {len(prompt)} 字符)[/cyan]")
             result = self.model_switch.query_for_text(self.model_name, prompt, stream=True)
             return chunk_index, result
-        except Exception as e:
+        except (ConnectionError, TimeoutError) as e:
             console.print(f"[red]查询块 {chunk_index} 时出错: {str(e)}[/red]")
             return chunk_index, f"## 查询错误\n```\n{str(e)}\n```"
 
@@ -119,7 +117,6 @@ class KeywordExplainer:
             with open(md_file, "r", encoding="utf-8") as f:
                 md_content = f.read()
                 base64_content = base64.b64encode(md_content.encode("utf-8")).decode("ascii")
-            # 安全转义Markdown内容
 
             # 基本HTML结构
             html_content = f"""<!DOCTYPE html>
@@ -128,36 +125,36 @@ class KeywordExplainer:
     <meta charset="utf-8">
     <title>关键词解释: {md_file.stem}</title>
     <style>
-        body {{ 
-            font-family: sans-serif; 
+        body{{
+            font-family: sans-serif;
             margin: 0;
             display: flex;
             flex-direction: column;
             height: 100vh;
             overflow: hidden;
         }}
-        header {{
+        header{{
             padding: 20px;
             background: #f5f5f5;
             border-bottom: 1px solid #ddd;
             position: relative;
         }}
-        #main-container {{
+        #main-container{{
             display: flex;
             flex: 1;
             overflow: hidden;
         }}
-        #sidebar {{
+        #sidebar{{
             width: 250px;
             background: #f8f8f8;
             border-right: 1px solid #ddd;
             overflow-y: auto;
             transition: all 0.3s ease;
         }}
-        #sidebar.collapsed {{
+        #sidebar.collapsed{{
             width: 40px;
         }}
-        #sidebar-toggle {{
+        #sidebar-toggle{{
             position: absolute;
             top: 10px;
             right: 10px;
@@ -167,11 +164,11 @@ class KeywordExplainer:
             cursor: pointer;
             z-index: 10;
         }}
-        #symbol-list {{
+        #symbol-list{{
             padding: 10px;
             padding-top: 40px;
         }}
-        .symbol-item {{
+        .symbol-item{{
             padding: 8px 12px;
             margin-bottom: 5px;
             border-radius: 4px;
@@ -180,69 +177,68 @@ class KeywordExplainer:
             overflow: hidden;
             text-overflow: ellipsis;
         }}
-        .symbol-item:hover {{
+        .symbol-item:hover{{
             background: #e9e9e9;
         }}
-        .symbol-item.active {{
+        .symbol-item.active{{
             background: #e0e0e0;
             font-weight: bold;
         }}
-        #content-area {{
+        #content-area{{
             flex: 1;
             display: flex;
             flex-direction: column;
             overflow: hidden;
         }}
-        #tab-buttons {{
+        #tab-buttons{{
             padding: 10px 20px;
             background: #f5f5f5;
             border-bottom: 1px solid #ddd;
             display: flex;
-            flex-wrap: nowrap;  /* 禁止换行 */
-            overflow-x: auto;   /* 横向滚动 */
-            overflow-y: hidden; /* 隐藏纵向滚动 */
-            height: 50px;       /* 固定高度 */
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            overflow-y: hidden;
+            height: 50px;
             align-items: center;
             gap: 5px;
         }}
-
-        .tab-button {{
+        .tab-button{{
             padding: 8px 16px;
             background: #eee;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            white-space: nowrap; /* 禁止文本换行 */
-            flex-shrink: 0;      /* 防止按钮被压缩 */
+            white-space: nowrap;
+            flex-shrink: 0;
         }}
-        .tab-button.active {{
+        .tab-button.active{{
             background: #ddd;
             font-weight: bold;
         }}
-        #tab-contents {{
+        #tab-contents{{
             flex: 1;
             padding: 20px;
             overflow-y: auto;
         }}
-        .tab-content {{
+        .tab-content{{
             display: none;
         }}
-        .tab-content.active {{
+        .tab-content.active{{
             display: block;
         }}
-        pre {{
+        pre{{
             background-color: #f5f5f5;
             padding: 15px;
             border-radius: 5px;
             overflow-x: auto;
         }}
-        code {{
+        code{{
             font-family: monospace;
         }}
-        .highlight {{ 
-            background-color: #f5f5f5; 
-            padding: 10px; 
-            border-radius: 5px; 
+        .highlight{{
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
         }}
     </style>
 </head>
@@ -265,17 +261,16 @@ class KeywordExplainer:
     
     <!-- 嵌入Markdown内容 -->
     <script>
-       function base64Decode(str) {{
-       try {{
-           // 使用TextDecoder处理UTF-8编码
+       function base64Decode(str){{
+       try{{
            const binString = atob(str);
            const bytes = new Uint8Array(binString.length);
-           for (let i = 0; i < binString.length; i++) {{
+           for(let i=0;i<binString.length;i++){{
                bytes[i] = binString.charCodeAt(i);
            }}
            return new TextDecoder('utf-8').decode(bytes);
-       }} catch (e) {{
-           console.error('Base64解码失败:', e);
+       }}catch(e){{
+           console.error('Base64解码失败:',e);
            return '';
        }}
        }}
@@ -287,35 +282,28 @@ class KeywordExplainer:
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     
     <script>
-        document.addEventListener('DOMContentLoaded', function() {{
-            // 侧边栏折叠/展开功能
+        document.addEventListener('DOMContentLoaded',function(){{
             const sidebar = document.getElementById('sidebar');
             const sidebarToggle = document.getElementById('sidebar-toggle');
             
-            // 恢复侧边栏状态
-            const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-            if (sidebarCollapsed) {{
+            const sidebarCollapsed = localStorage.getItem('sidebarCollapsed')==='true';
+            if(sidebarCollapsed){{
                 sidebar.classList.add('collapsed');
             }}
             
-            sidebarToggle.addEventListener('click', function(e) {{
+            sidebarToggle.addEventListener('click',function(e){{
                 e.stopPropagation();
                 sidebar.classList.toggle('collapsed');
-                localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
+                localStorage.setItem('sidebarCollapsed',sidebar.classList.contains('collapsed'));
             }});
             
-            try {{
-                // 将Markdown转换为HTML
+            try{{
                 const htmlContent = marked.parse(mdContent);
-                
-                // 创建临时容器存放转换后的HTML
                 const tempDiv = document.createElement('div');
                 tempDiv.innerHTML = htmlContent;
-                
-                // 提取所有h2标题作为tab
                 const headers = tempDiv.querySelectorAll('h2');
                 
-                if (headers.length === 0) {{
+                if(headers.length===0){{
                     const errorDiv = document.createElement('div');
                     errorDiv.className = 'error-message';
                     errorDiv.textContent = '未找到有效内容标题';
@@ -327,108 +315,91 @@ class KeywordExplainer:
                 const tabContents = document.getElementById('tab-contents');
                 const symbolList = document.getElementById('symbol-list');
                 
-                // 创建符号列表和tab
-                headers.forEach((header, index) => {{
-                    // 创建tab按钮
+                headers.forEach((header,index)=>{{
                     const button = document.createElement('button');
                     button.className = 'tab-button';
                     button.textContent = header.textContent;
                     button.dataset.index = index;
                     tabButtons.appendChild(button);
                     
-                    // 创建符号列表项
                     const symbolItem = document.createElement('div');
                     symbolItem.className = 'symbol-item';
                     symbolItem.dataset.index = index;
 
-                    // 提取文件名和符号名
                     const match = header.textContent.match(/^(.+?) \((.+)\)$/);
-                    if (match) {{
+                    if(match){{
                         const symbolName = match[1];
                         const filePath = match[2];
                         const fileName = filePath.split('/').pop();
                         symbolItem.textContent = `${{fileName}}: ${{symbolName}}`;
-                    }} else {{
+                    }}else{{
                         symbolItem.textContent = header.textContent;
                     }}
                     symbolList.appendChild(symbolItem);
                     
-                    // 创建内容容器
                     const contentDiv = document.createElement('div');
                     contentDiv.className = 'tab-content';
                     contentDiv.id = `content-${{index}}`;
                     
-                    // 添加内容
                     let nextElement = header.nextElementSibling;
-                    while(nextElement && nextElement.tagName !== 'H2') {{
+                    while(nextElement&&nextElement.tagName!=='H2'){{
                         contentDiv.appendChild(nextElement.cloneNode(true));
                         nextElement = nextElement.nextElementSibling;
                     }}
                     
                     tabContents.appendChild(contentDiv);
                     
-                    // 按钮点击事件 - 切换tab
-                    button.addEventListener('click', function() {{
-                        // 移除所有active类
-                        document.querySelectorAll('.tab-button').forEach(btn => {{
+                    button.addEventListener('click',function(){{
+                        document.querySelectorAll('.tab-button').forEach(btn=>{{
                             btn.classList.remove('active');
                         }});
-                        document.querySelectorAll('.tab-content').forEach(content => {{
+                        document.querySelectorAll('.tab-content').forEach(content=>{{
                             content.classList.remove('active');
                         }});
-                        document.querySelectorAll('.symbol-item').forEach(item => {{
+                        document.querySelectorAll('.symbol-item').forEach(item=>{{
                             item.classList.remove('active');
                         }});
                         
-                        // 激活当前tab
                         this.classList.add('active');
                         contentDiv.classList.add('active');
                         symbolItem.classList.add('active');
+                        localStorage.setItem('activeTab',index);
                         
-                        // 保存激活状态
-                        localStorage.setItem('activeTab', index);
-                        
-                        // 应用语法高亮
-                        setTimeout(() => {{
-                            document.querySelectorAll('pre code').forEach((block) => {{
+                        setTimeout(()=>{{
+                            document.querySelectorAll('pre code').forEach((block)=>{{
                                 hljs.highlightElement(block);
                             }});
-                        }}, 100);
+                        }},100);
                     }});
                     
-                    // 符号列表点击事件 - 切换tab
-                    symbolItem.addEventListener('click', function() {{
+                    symbolItem.addEventListener('click',function(){{
                         button.click();
                     }});
                 }});
                 
-                // 恢复激活的tab
                 const activeTabIndex = localStorage.getItem('activeTab');
-                if (activeTabIndex !== null && headers[activeTabIndex]) {{
+                if(activeTabIndex!==null&&headers[activeTabIndex]){{
                     document.querySelector(`.tab-button[data-index="${{activeTabIndex}}"]`).click();
-                }} else if (headers.length > 0) {{
-                    // 激活第一个tab
+                }}else if(headers.length>0){{
                     document.querySelector('.tab-button').click();
                 }}
                 
-                // 初始高亮
-                setTimeout(() => {{
-                    document.querySelectorAll('pre code').forEach((block) => {{
+                setTimeout(()=>{{
+                    document.querySelectorAll('pre code').forEach((block)=>{{
                         hljs.highlightElement(block);
                     }});
-                }}, 500);
+                }},500);
                 
-            }} catch (e) {{
+            }}catch(e){{
                 const errorDiv = document.createElement('div');
                 errorDiv.className = 'error-message';
-                errorDiv.textContent = '渲染内容时出错: ' + e.message;
+                errorDiv.textContent = '渲染内容时出错: '+e.message;
                 document.getElementById('content-area').appendChild(errorDiv);
                 console.error(e);
             }}
         }});
     </script>
     
-    <!-- 添加highlight.js语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
     <script>hljs.highlightAll();</script>
@@ -439,29 +410,14 @@ class KeywordExplainer:
             with open(output_html, "w", encoding="utf-8") as f:
                 f.write(html_content)
 
-        except Exception as e:
+        except (IOError, OSError) as e:
             console.print(f"[red]生成HTML时出错: {str(e)}[/red]")
 
     def explain_keywords(self, keywords: List[str], file_list: List[str] = None):
         """主函数：执行关键词解释流程"""
-        # 验证输入
         if not keywords or any(not k.strip() for k in keywords):
             raise ValueError("需要至少一个有效搜索关键词")
 
-        # 清理输出目录中旧的结果
-        for file in self.output_dir.glob("keyword-*.md"):
-            file.unlink()
-            console.print(f"[yellow]已删除旧结果文件: {file}[/yellow]")
-        for file in self.output_dir.glob("keyword-*.html"):
-            if file.exists():
-                file.unlink()
-                console.print(f"[yellow]已删除旧HTML文件: {file}[/yellow]")
-        for file in self.output_dir.glob("keyword-*.json"):
-            if file.exists():
-                file.unlink()
-                console.print(f"[yellow]已删除旧JSON文件: {file}[/yellow]")
-
-        # 执行搜索
         with console.status("[bold green]搜索代码库...[/bold green]", spinner="dots"):
             search_results = perform_search(
                 keywords,
@@ -476,19 +432,15 @@ class KeywordExplainer:
 
         console.print(f"[green]找到 {len(search_results)} 个相关符号[/green]")
 
-        # 分块处理结果
         chunks = self._chunk_search_results(search_results)
         console.print(f"[green]将结果分成 {len(chunks)} 个处理块[/green]")
 
-        # 生成安全的基础文件名
         safe_keywords = [self._sanitize_filename(k) for k in keywords]
         base_name = f"keyword-{'-'.join(safe_keywords)}"
         output_md = self.output_dir / f"{base_name}.md"
 
-        # 预先生成所有提示词
         prompts = [self._generate_prompt(chunk["symbols"]) for chunk in chunks]
 
-        # 并行处理分块
         results = []
         with Progress(
             SpinnerColumn(),
@@ -510,34 +462,26 @@ class KeywordExplainer:
                     results.append(future.result())
                     progress.update(task, advance=1)
 
-        # 按原始顺序排序结果
         results.sort(key=lambda x: x[0])
 
-        # 保存结果到单个Markdown文件
         with open(output_md, "w", encoding="utf-8") as f:
-            # 写入标题
             f.write(f"# 关键词解释: {', '.join(keywords)}\n\n")
-
-            # 写入解释结果
             f.write("## 解释结果\n\n")
             for chunk_index, result in results:
                 f.write(f"### Part {chunk_index + 1}\n\n")
                 f.write(result)
                 f.write("\n\n")
 
-            # 写入附录：原始提示词
             f.write("## 附录: 原始提示词\n\n")
             f.write("以下是发送给大模型的原始提示词，供参考:\n\n")
             for i, prompt in enumerate(prompts):
                 f.write(f"### Part {i + 1} Prompt\n\n")
                 f.write(f"```text\n{prompt}\n```\n\n")
 
-            # 添加生成时间
             f.write(f"---\n*生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}*\n")
 
         console.print(f"[bold green]结果已保存至: {output_md}[/bold green]")
 
-        # 生成HTML版本
         if self.has_markdown:
             output_html = self.output_dir / f"{base_name}.html"
             self._generate_html(output_md, output_html)
@@ -578,7 +522,7 @@ def read_file_list(file_path: str) -> List[str]:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return [line.strip() for line in f if line.strip()]
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, UnicodeDecodeError) as e:
         console.print(f"[red]读取文件列表错误: {str(e)}[/red]")
         return None
 
@@ -611,8 +555,13 @@ def main():
     explainer = KeywordExplainer(model_name=args.model, output_dir=args.output_dir)
     try:
         explainer.explain_keywords(args.keywords, file_list)
+    except (FileNotFoundError, PermissionError) as e:
+        console.print(f"[bold red]文件操作错误: {str(e)}[/bold red]")
+    except RuntimeError as e:
+        console.print(f"[bold red]运行时错误: {str(e)}[/bold red]")
     except Exception as e:
-        console.print(f"[bold red]错误: {str(e)}[/bold red]")
+        console.print(f"[bold red]未处理的错误: {str(e)}[/bold red]")
+        raise  # 重新抛出未知异常
 
 
 if __name__ == "__main__":

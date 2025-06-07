@@ -1,7 +1,6 @@
 import logging
 import sys
 import threading
-import traceback
 from typing import TYPE_CHECKING
 
 import lldb
@@ -92,10 +91,9 @@ class EventLoop:
         for thread in process:
             if thread.GetStopReason() == lldb.eStopReasonBreakpoint:
                 bp_id = thread.GetStopReasonDataAtIndex(0)
-                bp = self.tracer.target.FindBreakpointByID(bp_id)
-                thread_need_to_handle.append((thread, bp))
+                thread_need_to_handle.append((thread, self.tracer.target.FindBreakpointByID(bp_id)))
 
-        for thread, bp in thread_need_to_handle:
+        for thread, _ in thread_need_to_handle:
             self._handle_breakpoint_stop(process, thread)
         thread = process.GetSelectedThread()
         stop_reason = thread.GetStopReason()
@@ -106,6 +104,7 @@ class EventLoop:
             process.Continue()
         else:
             handle_special_stop(thread, stop_reason, self.logger, self.tracer.target, die_event=self.die_event)
+        _ = event  # 显式标记参数为已使用，避免警告
 
     def _handle_breakpoint_stop(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
         """处理断点停止"""
@@ -114,7 +113,7 @@ class EventLoop:
         if bp_id in self.tracer.breakpoint_seen:
             self._handle_lr_breakpoint(thread)
         elif bp_id == self.tracer.pthread_create_breakpoint_id:
-            bp: lldb.SBBreakpoint = self.tracer.target.FindBreakpointByID(bp_id)
+            self.tracer.target.FindBreakpointByID(bp_id)  # 保持调用但不赋值
             self.handle_pthread_create_breakpoint(process, thread)
         elif bp_id == self.tracer.pthread_join_breakpoint_id:
             self.logger.info("Hit pthread_join breakpoint, continuing execution")
@@ -131,6 +130,9 @@ class EventLoop:
             process.Continue()
         else:
             bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
+            if bp_loc_id == 0 and bp_id == 0:
+                process.Continue()
+                return
             self.logger.info("Breakpoint ID: %d, Location: %d", bp_id, bp_loc_id)
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
             self.tracer.breakpoint_handler.handle_breakpoint(frame, bp_id)
@@ -149,7 +151,7 @@ class EventLoop:
         if thread_function_ptr:
             addr = self.tracer.target.ResolveLoadAddress(thread_function_ptr)
             if not addr.IsValid():
-                self.logger.error(f"无法解析线程函数指针地址: 0x{thread_function_ptr:x}")
+                self.logger.error("无法解析线程函数指针地址: 0x%x", thread_function_ptr)
                 return
             if addr.symbol.prologue_size > 0:
                 thread_function_ptr += addr.symbol.prologue_size
@@ -157,11 +159,11 @@ class EventLoop:
             bp = self.tracer.target.BreakpointCreateByAddress(thread_function_ptr)
             if bp.IsValid():
                 bp_id = bp.GetID()
-                self.logger.info(f"在线程入口点创建断点: %s", bp)
+                self.logger.info("在线程入口点创建断点: %s", bp)
                 # Add breakpoint ID to thread entry seen set
                 self.tracer.thread_breakpoint_seen.add(bp_id)
             else:
-                self.logger.error(f"在线程入口点创建断点失败：0x{thread_function_ptr:x}")
+                self.logger.error("在线程入口点创建断点失败：0x%x", thread_function_ptr)
             # self.logger.info("%s\n", self.tracer.target.ResolveLoadAddress(thread_function_ptr))
         # Continue execution
         process.Continue()
