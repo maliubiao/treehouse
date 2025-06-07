@@ -94,10 +94,11 @@ class EventLoop:
                 bp_id = thread.GetStopReasonDataAtIndex(0)
                 bp = self.tracer.target.FindBreakpointByID(bp_id)
                 thread_need_to_handle.append((thread, bp))
-        thread = process.GetSelectedThread()
-        stop_reason = thread.GetStopReason()
+
         for thread, bp in thread_need_to_handle:
             self._handle_breakpoint_stop(process, thread)
+        thread = process.GetSelectedThread()
+        stop_reason = thread.GetStopReason()
         if stop_reason == lldb.eStopReasonPlanComplete:
             self._handle_plan_complete(thread)
         elif stop_reason == lldb.eStopReasonTrace:

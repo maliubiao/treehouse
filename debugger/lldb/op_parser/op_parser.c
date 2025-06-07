@@ -14,11 +14,21 @@ static int parse_hex(const char *str, uint64_t *value) {
   return (*endptr == '\0') ? 1 : 0;
 }
 
+static int parse_offset(const char *str, int *value) {
+  if (str == NULL || *str == '\0')
+    return 0;
+
+  char *endptr;
+  *value = (int)strtol(str, &endptr, 10);
+  return (*endptr == '\0') ? 1 : 0;
+}
+
 int parse_disassembly_line(const char *line, DisasmLine *disasm_line) {
   if (line == NULL || disasm_line == NULL)
     return 0;
 
   memset(disasm_line, 0, sizeof(DisasmLine));
+  disasm_line->offset = -1; // 初始化为-1表示未设置
 
   LineParseState state = LINE_STATE_START;
   int pos = 0;
@@ -67,11 +77,34 @@ int parse_disassembly_line(const char *line, DisasmLine *disasm_line) {
     case LINE_STATE_IN_FUNC:
       if (c == '>') {
         state = LINE_STATE_AFTER_FUNC;
+      } else if (c == '+' || c == '-') {
+        // 遇到偏移量符号，开始解析偏移量
+        state = LINE_STATE_IN_OFFSET;
+        buffer[buf_pos++] = c;
+      } else if (!isspace(c)) {
+        buffer[buf_pos++] = c;
+      }
+      break;
+
+    case LINE_STATE_IN_OFFSET:
+      if (c == '>') {
+        buffer[buf_pos] = '\0';
+        if (!parse_offset(buffer, &disasm_line->offset)) {
+          // 解析失败，重置为-1
+          disasm_line->offset = -1;
+        }
+        state = LINE_STATE_AFTER_FUNC;
+        buf_pos = 0;
+        memset(buffer, 0, sizeof(buffer));
+      } else if (isdigit(c)) {
+        buffer[buf_pos++] = c;
       }
       break;
 
     case LINE_STATE_AFTER_FUNC:
-      if (isalpha(c)) {
+      if (c == ':') {
+        state = LINE_STATE_AFTER_ADDR;
+      } else if (isalpha(c)) {
         state = LINE_STATE_IN_OPCODE;
         disasm_line->opcode[buf_pos++] = c;
       }

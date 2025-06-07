@@ -78,12 +78,16 @@ class Operand:
 class DisasmLine:
     def __init__(self, c_line):
         self.addr = c_line.addr
+        self.offset = c_line.offset  # 新增offset字段支持
         self.opcode = ffi.string(c_line.opcode).decode("utf-8")
         self.operands = [Operand(c_line.operands[i]) for i in range(c_line.operand_count)]
 
     def __repr__(self):
         operands_str = "\n  ".join(str(op) for op in self.operands)
-        return f"DisasmLine(addr=0x{self.addr:x}, opcode={self.opcode}, operands=[\n  {operands_str}\n])"
+        return (
+            f"DisasmLine(addr=0x{self.addr:x}, offset={self.offset}, "
+            f"opcode={self.opcode}, operands=[\n  {operands_str}\n])"
+        )
 
 
 def parse_operands(asm_str, max_ops=4):
@@ -162,7 +166,7 @@ if __name__ == "__main__":
     try:
         lines = parse_disassembly(disassembly)
         for line in lines:
-            print(f"Addr: 0x{line.addr:x}, Opcode: {line.opcode}")
+            print(f"Addr: 0x{line.addr:x}, Offset: {line.offset}, Opcode: {line.opcode}")
             for i, op in enumerate(line.operands):
                 print(f"  Operand {i + 1}: {op}")
                 print(f"    Type: {op.type.name}")

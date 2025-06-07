@@ -47,11 +47,13 @@ typedef enum {
   LINE_STATE_IN_FUNC,
   LINE_STATE_AFTER_FUNC,
   LINE_STATE_IN_OPCODE,
-  LINE_STATE_IN_OPERANDS
+  LINE_STATE_IN_OPERANDS,
+  LINE_STATE_IN_OFFSET
 } LineParseState;
 
 typedef struct {
   uint64_t addr;
+  int offset; // 地址偏移量，如 <+16> 中的16
   char opcode[32];
   Operand operands[4];
   int operand_count;

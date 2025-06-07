@@ -1,3 +1,4 @@
+import collections
 import fnmatch
 import logging
 import os
@@ -28,6 +29,9 @@ class StepHandler:
         self.function_range_cache = {}
         # 统一缓存格式: (symbol_name, module_path, symbol_type)
         self.addr_to_symbol_cache: Dict[int, tuple[str, str, int]] = {}
+        # 添加LRU缓存用于管理断点（地址 -> 断点ID）
+        self.breakpoint_lru = collections.OrderedDict()
+        self.max_lru_size = 100  # 最大缓存大小
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -328,6 +332,14 @@ class StepHandler:
         return self.tracer.target.GetAddressByteSize()
 
     def _set_return_breakpoint(self, lr_value: int) -> bool:
+        """设置返回地址断点，使用LRU缓存管理"""
+        # 检查是否已在缓存中
+        if lr_value in self.breakpoint_lru:
+            # 更新为最近使用
+            self.breakpoint_lru.move_to_end(lr_value)
+            return True
+
+        # 创建新断点
         bp: lldb.SBBreakpoint = self.tracer.target.BreakpointCreateByAddress(lr_value)
         if not bp.IsValid():
             self.logger.error("Failed to set breakpoint at address 0x%x", lr_value)
@@ -335,8 +347,27 @@ class StepHandler:
 
         bp.SetOneShot(False)
         self.logger.info("Set one-shot breakpoint at 0x%x for return address", lr_value)
-        self.tracer.breakpoint_table[lr_value] = bp.GetID()
-        self.tracer.breakpoint_seen.add(bp.GetID())
+        bp_id = bp.GetID()
+
+        # 加入全局表
+        self.tracer.breakpoint_table[lr_value] = bp_id
+        self.tracer.breakpoint_seen.add(bp_id)
+
+        # 加入LRU缓存
+        self.breakpoint_lru[lr_value] = bp_id
+
+        # 如果缓存满，淘汰最久未使用的断点
+        if len(self.breakpoint_lru) > self.max_lru_size:
+            old_addr, old_bp_id = self.breakpoint_lru.popitem(last=False)
+            # 删除断点
+            self.tracer.target.BreakpointDelete(old_bp_id)
+            # 从全局表中移除
+            if old_addr in self.tracer.breakpoint_table:
+                del self.tracer.breakpoint_table[old_addr]
+            if old_bp_id in self.tracer.breakpoint_seen:
+                self.tracer.breakpoint_seen.remove(old_bp_id)
+            self.logger.info("Removed LRU breakpoint at 0x%x", old_addr)
+
         return True
 
     def _get_address_info(self, addr: int) -> tuple[str, str, int]:
