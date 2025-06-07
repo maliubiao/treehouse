@@ -3450,7 +3450,6 @@ def prompt_words_search(words: List[str], args):
         sys.exit(1)
 
 
-@trace(target_files=["*.py"], report_name="ripgrep_searcher.html", enable_var_trace=True)
 def perform_search(
     words: List[str],
     config_path: str = LLM_PROJECT_CONFIG,

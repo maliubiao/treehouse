@@ -1744,7 +1744,6 @@ class RipgrepSearcher:
         patterns = f"*.{{{','.join(extensions)}}}"
         return patterns
 
-    @trace(target_files=["*.py"], report_name="ripgrep_searcher.html")
     def search(self, patterns: List[str], search_root: Path = None) -> List[SearchResult]:
         """Execute ripgrep search with multiple patterns
 

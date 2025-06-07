@@ -43,13 +43,6 @@ class Tracer:
         )
 
         self.listener: lldb.SBListener = lldb.SBListener("TracerListener")
-        self.listener.StartListeningForEventClass(
-            self.debugger,
-            lldb.SBProcess.GetBroadcasterClassName(),
-            lldb.SBProcess.eBroadcastBitStateChanged
-            | lldb.SBProcess.eBroadcastBitSTDOUT
-            | lldb.SBProcess.eBroadcastBitSTDERR,
-        )
 
         self.breakpoint: Optional[lldb.SBBreakpoint] = None
         self.target: Optional[lldb.SBTarget] = None
@@ -207,6 +200,23 @@ class Tracer:
         self.install(self.target)
         self.set_pthread_create_breakpoint()
         # self.set_pthread_join_breakpoint()
+        self.listener.StartListeningForEventClass(
+            self.debugger,
+            lldb.SBProcess.GetBroadcasterClassName(),
+            lldb.SBProcess.eBroadcastBitStateChanged
+            | lldb.SBProcess.eBroadcastBitSTDOUT
+            | lldb.SBProcess.eBroadcastBitSTDERR,
+        )
+        thread_event_mask = (
+            lldb.SBThread.eBroadcastBitStackChanged
+            | lldb.SBThread.eBroadcastBitThreadSuspended
+            | lldb.SBThread.eBroadcastBitThreadResumed
+            | lldb.SBThread.eBroadcastBitSelectedFrameChanged
+            | lldb.SBThread.eBroadcastBitThreadSelected
+        )
+        self.listener.StartListeningForEventClass(
+            self.debugger, lldb.SBThread.GetBroadcasterClassName(), thread_event_mask
+        )
         error = lldb.SBError()
 
         # 获取环境变量配置

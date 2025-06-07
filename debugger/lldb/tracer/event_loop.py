@@ -30,12 +30,15 @@ class EventLoop:
 
     def _process_event(self, event: lldb.SBEvent) -> None:
         """处理事件分发"""
-        if event.GetType() & lldb.SBProcess.eBroadcastBitSTDOUT:
-            self._handle_stdout_event(event)
-        elif event.GetType() & lldb.SBProcess.eBroadcastBitSTDERR:
-            self._handle_stderr_event(event)
-        elif event.GetType() & lldb.SBProcess.eBroadcastBitStateChanged:
-            self._handle_state_change_event(event)
+        if event.GetBroadcasterClass() == lldb.SBProcess.GetBroadcasterClassName():
+            if event.GetType() & lldb.SBProcess.eBroadcastBitSTDOUT:
+                self._handle_stdout_event(event)
+            elif event.GetType() & lldb.SBProcess.eBroadcastBitSTDERR:
+                self._handle_stderr_event(event)
+            elif event.GetType() & lldb.SBProcess.eBroadcastBitStateChanged:
+                self._handle_state_change_event(event)
+        else:
+            self.logger.warning("Unhandled event type: %s", event.GetBroadcasterClass())
 
     def _handle_stdout_event(self, event: lldb.SBEvent) -> None:
         """处理标准输出事件"""
@@ -85,11 +88,17 @@ class EventLoop:
 
     def _handle_stopped_state(self, process: lldb.SBProcess, event: lldb.SBEvent) -> None:
         """处理停止状态"""
+        thread_need_to_handle = []
+        for thread in process:
+            if thread.GetStopReason() == lldb.eStopReasonBreakpoint:
+                bp_id = thread.GetStopReasonDataAtIndex(0)
+                bp = self.tracer.target.FindBreakpointByID(bp_id)
+                thread_need_to_handle.append((thread, bp))
         thread = process.GetSelectedThread()
         stop_reason = thread.GetStopReason()
-        if stop_reason == lldb.eStopReasonBreakpoint:
+        for thread, bp in thread_need_to_handle:
             self._handle_breakpoint_stop(process, thread)
-        elif stop_reason == lldb.eStopReasonPlanComplete:
+        if stop_reason == lldb.eStopReasonPlanComplete:
             self._handle_plan_complete(thread)
         elif stop_reason == lldb.eStopReasonTrace:
             self.logger.info("hit trace, continue execution")
@@ -99,6 +108,7 @@ class EventLoop:
 
     def _handle_breakpoint_stop(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
         """处理断点停止"""
+
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
         if bp_id in self.tracer.breakpoint_seen:
             self._handle_lr_breakpoint(thread)
