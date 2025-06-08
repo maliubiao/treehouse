@@ -130,9 +130,6 @@ class EventLoop:
             process.Continue()
         else:
             bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
-            if bp_loc_id == 0 and bp_id == 0:
-                process.Continue()
-                return
             self.logger.info("Breakpoint ID: %d, Location: %d", bp_id, bp_loc_id)
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
             self.tracer.breakpoint_handler.handle_breakpoint(frame, bp_id)
@@ -184,10 +181,10 @@ class EventLoop:
             # self.logger.info("Step in detected")
             thread.StepInstruction(False)
         elif action == StepAction.SOURCE_STEP_IN:
-            thread.StepInto()
+            thread.StepInto(lldb.eOnlyDuringStepping)
             # self.logger.info("Source step in detected")
         elif action == StepAction.SOURCE_STEP_OVER:
-            thread.StepOver()
+            thread.StepOver(lldb.eOnlyDuringStepping)
             # self.logger.info("Source step over detected")
         elif action == StepAction.SOURCE_STEP_OUT:
             # self.logger.info("Step out detected")

@@ -211,3 +211,7 @@ class ConfigManager:
     def get_libc_functions(self):
         """获取要跟踪的libc函数列表"""
         return self.config.get("libc_functions", [])
+
+    def get_call_trace_file(self):
+        """获取调用跟踪文件路径"""
+        return self.config.get("call_trace_file", "call_trace.txt")

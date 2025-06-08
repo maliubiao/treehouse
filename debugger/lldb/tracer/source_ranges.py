@@ -53,7 +53,7 @@ class SourceRangeManager:
         """动态检查地址是否应跳过（使用缓存优化）"""
         # 检查地址缓存
         if address in self._address_decision_cache:
-            self.logger.debug(f"Address cache hit for 0x{address:x}: {self._address_decision_cache[address]}")
+            # self.logger.debug(f"Address cache hit for 0x{address:x}: {self._address_decision_cache[address]}")
             return self._address_decision_cache[address]
 
         # self.logger.debug(f"Address cache miss for 0x{address:x}, resolving...")

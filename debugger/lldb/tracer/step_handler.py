@@ -1,3 +1,4 @@
+import atexit
 import collections
 import fnmatch
 import logging
@@ -32,6 +33,11 @@ class StepHandler:
         # 添加LRU缓存用于管理断点（地址 -> 断点ID）
         self.breakpoint_lru = collections.OrderedDict()
         self.max_lru_size = 100  # 最大缓存大小
+        fn = self.tracer.config_manager.get_call_trace_file()
+        self.trace_logger_file = open(fn, "w+", encoding="utf-8")
+        close_it = lambda: self.trace_logger_file.close()
+        atexit.register(close_it)
+        self.frame_count = -1
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -98,8 +104,11 @@ class StepHandler:
             )
             for inst in instructions:
                 mnemonic: str = inst.GetMnemonic(self.tracer.target)
+                loaded_address: int = inst.GetAddress().GetFileAddress() + first_inst_offset
+                # if mnemonic.startswith("ret"):
+                #     self._set_return_breakpoint(loaded_address)
                 operands: str = inst.GetOperands(self.tracer.target)
-                self.instruction_info_cache[inst.GetAddress().GetFileAddress() + first_inst_offset] = (
+                self.instruction_info_cache[loaded_address] = (
                     mnemonic,
                     operands,
                     inst.size,
@@ -125,7 +134,7 @@ class StepHandler:
         if line_entry.IsValid():
             filepath: str = line_entry.GetFileSpec().fullpath
             if self.tracer.source_ranges.should_skip_source_file_by_path(filepath):
-                return StepAction.STEP_OVER
+                return StepAction.SOURCE_STEP_OVER
             line_num: int = int(line_entry.GetLine())
             source_info = f"{filepath}:{line_num}"
             lines: Optional[List[str]] = self._get_file_lines(filepath)
@@ -160,7 +169,10 @@ class StepHandler:
                 source_info,
                 ", ".join(debug_values),
             )
-
+        frames_count = frame.thread.GetNumFrames()
+        self.trace_logger_file.write("%s%s\n" % (frames_count * "  ", frame.symbol.name))
+        if frames_count != self.frame_count:
+            self.frame_count = frames_count
         return self._determine_step_action(mnemonic, parsed_operands, frame, no_line_entry, next_pc)
 
     def _capture_register_values(self, frame: lldb.SBFrame, mnemonic: str, parsed_operands) -> List[str]:
@@ -395,7 +407,7 @@ class StepHandler:
         """统一处理分支指令逻辑"""
         # 检查目标地址是否在当前函数内
         if self._is_address_in_current_function(frame, target_addr):
-            return StepAction.STEP_IN
+            return StepAction.SOURCE_STEP_IN
 
         # 获取地址信息
         symbol_name, module_fullpath, symbol_type = self._get_address_info(target_addr)
@@ -411,43 +423,50 @@ class StepHandler:
                 self.logger.info("%s Skipping jump to register value: %s", mnemonic, symbol_name)
                 if mnemonic in ("br", "braa", "brab"):
                     self._set_return_breakpoint(next_pc)
-                return StepAction.STEP_OVER
-
-            self.logger.info("%s Jumping to register value: %s, %s", mnemonic, symbol_name, frame.module)
-            return StepAction.STEP_IN
+                return StepAction.SOURCE_STEP_OVER
+            if mnemonic in ("blraa", "blr"):
+                self.logger.info(
+                    "%s CALL %s, %s",
+                    mnemonic,
+                    symbol_name,
+                    frame.module,
+                )
+            else:
+                self.logger.info("%s Jumping to register value: %s, %s", mnemonic, symbol_name, frame.module)
+            return StepAction.SOURCE_STEP_IN
 
         elif mnemonic == "b":
             if skip_address:
                 self.logger.info("%s Skipping branch to: %s", mnemonic, symbol_name)
-                return StepAction.STEP_OVER
+                return StepAction.SOURCE_STEP_OVER
 
             self._set_return_breakpoint(next_pc)
             self.logger.info("%s Branching to address: %s (%s)", mnemonic, hex(target_addr), symbol_name)
-            return StepAction.STEP_IN
+            return StepAction.SOURCE_STEP_IN
 
         elif mnemonic == "bl":
             if symbol_type == lldb.eSymbolTypeTrampoline or skip_address:
                 self._set_return_breakpoint(next_pc)
                 self.logger.info(
-                    "%s Skipping branch to: %s, %s %s",
+                    "%s CALL %s, %s %s",
                     mnemonic,
                     hex(target_addr),
                     symbol_name,
                     get_symbol_type_str(symbol_type),
                 )
-                return StepAction.STEP_OVER
+                return StepAction.SOURCE_STEP_OVER
 
             self.logger.info(
-                "%s Branching to: %s, %s, %s, %s",
+                "%s CALL %s, %s, %s, %s",
                 mnemonic,
                 hex(target_addr),
                 symbol_name,
                 frame.module,
                 get_symbol_type_str(symbol_type),
             )
-            return StepAction.STEP_IN
+            return StepAction.SOURCE_STEP_IN
 
-        return StepAction.STEP_IN
+        return StepAction.SOURCE_STEP_IN
 
     def _determine_step_action(
         self, mnemonic: str, parsed_operands, frame: lldb.SBFrame, no_line_entry: bool, next_pc: int
@@ -455,7 +474,6 @@ class StepHandler:
         # 处理分支指令
         if mnemonic in ("br", "braa", "brab", "blraa", "blr", "b", "bl"):
             target_addr = None
-
             # 寄存器分支指令
             if mnemonic in ("br", "braa", "brab", "blraa", "blr"):
                 if parsed_operands[0].type == OperandType.REGISTER:
@@ -472,7 +490,7 @@ class StepHandler:
                     target_addr = int(target_addr_str, 16)
                 except ValueError:
                     self.logger.error("Failed to parse target address: %s", target_addr_str)
-                    return StepAction.STEP_IN
+                    return StepAction.SOURCE_STEP_IN
 
             if target_addr is not None:
                 return self._handle_branch_instruction(mnemonic, target_addr, frame, next_pc)
@@ -480,13 +498,13 @@ class StepHandler:
         # 处理返回指令
         elif mnemonic.startswith("ret"):
             self.logger.info(
-                "%s Returning from function: %s %s",
+                "%s RETURN %s %s",
                 mnemonic,
                 frame.symbol.name if frame.symbol else "unknown",
                 frame.module,
             )
 
         # 默认执行单步进入
-        return StepAction.STEP_IN
+        return StepAction.SOURCE_STEP_IN
         # 如果启用源码级调试，可改为:
-        # return StepAction.SOURCE_STEP_IN if not no_line_entry else StepAction.STEP_IN
+        # return StepAction.SOURCE_SOURCE_STEP_IN if not no_line_entry else StepAction.SOURCE_STEP_IN

@@ -3,9 +3,10 @@ import base64
 import os
 import re
 import time
+import webbrowser  # 添加浏览器支持
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -80,8 +81,9 @@ class KeywordExplainer:
 请用专业但易懂的语言解释，并确保：
 - 包含必要的代码引用（使用 ``` 标记代码块）
 - 解释技术术语
+- 解析概念与概念之间的联系，以及一串外部命令或者写一小段程序作为核实方式
 - 说明可能的常见使用错误
-- 生成必要的术语表
+- 生成必要的术语表，以及写一个代码块作为术语关系的核实方式
 - 以中文回复
 
 代码片段：
@@ -409,11 +411,13 @@ class KeywordExplainer:
 
             with open(output_html, "w", encoding="utf-8") as f:
                 f.write(html_content)
+            return output_html  # 返回生成的HTML文件路径
 
         except (IOError, OSError) as e:
             console.print(f"[red]生成HTML时出错: {str(e)}[/red]")
+            return None
 
-    def explain_keywords(self, keywords: List[str], file_list: List[str] = None):
+    def explain_keywords(self, keywords: List[str], file_list: List[str] = None) -> Optional[Path]:
         """主函数：执行关键词解释流程"""
         if not keywords or any(not k.strip() for k in keywords):
             raise ValueError("需要至少一个有效搜索关键词")
@@ -428,7 +432,7 @@ class KeywordExplainer:
 
         if not search_results:
             console.print("[yellow]未找到匹配的符号[/yellow]")
-            return
+            return None
 
         console.print(f"[green]找到 {len(search_results)} 个相关符号[/green]")
 
@@ -482,23 +486,29 @@ class KeywordExplainer:
 
         console.print(f"[bold green]结果已保存至: {output_md}[/bold green]")
 
+        output_html = None
         if self.has_markdown:
             output_html = self.output_dir / f"{base_name}.html"
-            self._generate_html(output_md, output_html)
-            console.print(f"[bold green]HTML版本已生成: {output_html}[/bold green]")
-            console.print(
-                Markdown(
-                    f"# 关键词解释完成\n"
-                    f"- 查看Markdown结果: [file://{output_md.absolute()}](file://{output_md.absolute()})\n"
-                    f"- 查看HTML版本(带tab切换): [file://{output_html.absolute()}](file://{output_html.absolute()})"
+            html_file = self._generate_html(output_md, output_html)
+            if html_file:
+                console.print(f"[bold green]HTML版本已生成: {output_html}[/bold green]")
+                console.print(
+                    Markdown(
+                        f"# 关键词解释完成\n"
+                        f"- 查看Markdown结果: [file://{output_md.absolute()}](file://{output_md.absolute()})\n"
+                        f"- 查看HTML版本(带tab切换): [file://{output_html.absolute()}](file://{output_html.absolute()})"
+                    )
                 )
-            )
+            else:
+                output_html = None
         else:
             console.print(
                 Markdown(
                     f"# 关键词解释完成\n查看完整结果: [file://{output_md.absolute()}](file://{output_md.absolute()})"
                 )
             )
+
+        return output_html  # 返回HTML文件路径用于自动打开
 
 
 def parse_arguments():
@@ -509,7 +519,9 @@ def parse_arguments():
     parser.add_argument("keywords", nargs="+", help="要搜索的关键词列表")
     parser.add_argument("-f", "--file-list", type=str, help="包含要搜索的文件路径列表的文件（每行一个路径）")
     parser.add_argument("-m", "--model", type=str, default="deepseek-r1", help="使用的LLM模型名称")
-    parser.add_argument("-o", "--output-dir", type=str, default="doc", help="输出目录路径")
+    parser.add_argument(
+        "-o", "--output-dir", type=str, default=None, help="输出目录路径（默认使用$GPT_PATH/obsidian/keyword_search）"
+    )
     parser.add_argument("--clean", action="store_true", help="清理所有之前的搜索结果文件")
     return parser.parse_args()
 
@@ -527,12 +539,31 @@ def read_file_list(file_path: str) -> List[str]:
         return None
 
 
+def get_default_output_dir() -> Path:
+    """获取默认输出目录"""
+    # 尝试从环境变量获取GPT_PATH
+    gpt_path = os.environ.get("GPT_PATH")
+    if gpt_path:
+        default_dir = Path(gpt_path) / "obsidian" / "keyword_search"
+    else:
+        default_dir = Path("doc")
+
+    # 确保目录存在
+    default_dir.mkdir(parents=True, exist_ok=True)
+    return default_dir
+
+
 def main():
     args = parse_arguments()
 
+    # 确定输出目录
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = get_default_output_dir()
+
     # 清理旧结果（如果指定）
     if args.clean:
-        output_dir = Path(args.output_dir)
         if output_dir.exists():
             for file in output_dir.glob("keyword-*.md"):
                 file.unlink()
@@ -545,16 +576,28 @@ def main():
                 if file.exists():
                     file.unlink()
                     console.print(f"[yellow]已删除旧JSON文件: {file}[/yellow]")
-        console.print("[green]所有旧结果文件已清理[/green]")
+            console.print(f"[green]清理完成: {output_dir}[/green]")
+        else:
+            console.print(f"[yellow]输出目录不存在: {output_dir}[/yellow]")
         return
 
     # 读取文件列表
     file_list = read_file_list(args.file_list) if args.file_list else None
     ModelSwitch().select(args.model)
+
     # 执行解释
-    explainer = KeywordExplainer(model_name=args.model, output_dir=args.output_dir)
+    explainer = KeywordExplainer(model_name=args.model, output_dir=str(output_dir))
     try:
-        explainer.explain_keywords(args.keywords, file_list)
+        html_path = explainer.explain_keywords(args.keywords, file_list)
+
+        # 自动打开浏览器
+        if html_path and html_path.exists():
+            console.print(f"[bold green]正在浏览器中打开结果...[/bold green]")
+            try:
+                webbrowser.open(f"file://{html_path.absolute()}")
+            except Exception as e:
+                console.print(f"[yellow]无法打开浏览器: {str(e)}[/yellow]")
+                console.print(f"请手动打开文件: file://{html_path.absolute()}")
     except (FileNotFoundError, PermissionError) as e:
         console.print(f"[bold red]文件操作错误: {str(e)}[/bold red]")
     except RuntimeError as e:

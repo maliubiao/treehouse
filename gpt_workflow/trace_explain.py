@@ -117,21 +117,23 @@ class TraceAnalyzer:
             "## 任务说明",
             "你是一个高级软件分析专家，正在分析一段软件执行的trace日志。",
             "请完成以下任务：",
-            "1. 分析trace日志块的完整执行过程,包括函数调用关系",
+            "1. 分析trace日志块的完整执行过程,包括函数调用关系， 结合trace日志讲解源代码",
             "2. 解释每个关键步骤在做什么3. 生成mermaid流程图展示执行流程",
             "4. 所有分析使用中文",
             "5. 用通俗的的话解释其作用和目的",
             "",
-            "## Trace日志块",
-            "```",
-            log_chunk,
-            "```",
         ]
-
         # 添加用户额外目标
         if self.goals:
             base_prompt.extend(["", "## 额外分析目标", self.goals, ""])
-
+        base_prompt.extend(
+            [
+                "## Trace日志块",
+                "```",
+                log_chunk,
+                "```",
+            ]
+        )
         # 添加相关代码参考
         base_prompt.append("## 相关代码参考")
         added_symbols = set()
