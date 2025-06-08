@@ -34,10 +34,11 @@ class StepHandler:
         self.breakpoint_lru = collections.OrderedDict()
         self.max_lru_size = 100  # 最大缓存大小
         fn = self.tracer.config_manager.get_call_trace_file()
-        self.trace_logger_file = open(fn, "w+", encoding="utf-8")
-        close_it = lambda: self.trace_logger_file.close()
-        atexit.register(close_it)
+        # self.trace_logger_file = open(fn, "w+", encoding="utf-8")
+        # close_it = lambda: self.trace_logger_file.close()
+        # atexit.register(close_it)
         self.frame_count = -1
+        self.base_frame_count = -1
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -148,9 +149,23 @@ class StepHandler:
             source_info = ""
             source_line = ""
         self._last_source_key = current_source_key
+        frames_count = frame.thread.GetNumFrames()
+        if self.base_frame_count == -1:
+            indent = frames_count * "  "
+        else:
+            indent = (frames_count - self.base_frame_count) * "  "
+        if frames_count != self.frame_count:
+            action = "ENTER" if frames_count > self.frame_count else "LEAVE"
+            if action == "ENTER":
+                self.logger.info("%s%s %s// ; %s", indent, action, frame.symbol.name, source_info)
+            else:
+                self.logger.info("%sLEAVE", indent + "  ")
+            self.frame_count = frames_count
+
         if source_line:
             self.logger.info(
-                "0x%x <+%d> %s %s ; %s // %s; -> %s",
+                "%s0x%x <+%d> %s %s ; %s // %s; -> %s",
+                indent,
                 pc,
                 first_inst_offset,
                 mnemonic,
@@ -161,7 +176,8 @@ class StepHandler:
             )
         else:
             self.logger.info(
-                "0x%x <+%d> %s %s ; %s; -> %s",
+                "%s0x%x <+%d> %s %s ; %s; -> %s",
+                indent,
                 pc,
                 first_inst_offset,
                 mnemonic,
@@ -169,10 +185,7 @@ class StepHandler:
                 source_info,
                 ", ".join(debug_values),
             )
-        frames_count = frame.thread.GetNumFrames()
-        self.trace_logger_file.write("%s%s\n" % (frames_count * "  ", frame.symbol.name))
-        if frames_count != self.frame_count:
-            self.frame_count = frames_count
+
         return self._determine_step_action(mnemonic, parsed_operands, frame, no_line_entry, next_pc)
 
     def _capture_register_values(self, frame: lldb.SBFrame, mnemonic: str, parsed_operands) -> List[str]:

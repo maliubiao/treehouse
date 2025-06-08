@@ -1,10 +1,14 @@
 import sys
+from typing import TYPE_CHECKING
 
 import lldb
 
+if TYPE_CHECKING:
+    from .core import Tracer  # Avoid circular import issues
+
 
 class BreakpointHandler:
-    def __init__(self, tracer):
+    def __init__(self, tracer: "Tracer"):
         self.tracer = tracer
         self.logger = tracer.logger
         self.entry_point_breakpoint_event = tracer.entry_point_breakpoint_event
@@ -15,6 +19,7 @@ class BreakpointHandler:
             self.logger.info("Hit entry point breakpoint at %s", frame.GetFunctionName())
             if not self.entry_point_breakpoint_event.is_set():
                 self.entry_point_breakpoint_event.set()
+                self.tracer.step_handler.base_frame_count = frame.thread.GetNumFrames()
                 self.tracer.modules._build_skip_modules_ranges()
                 if self.tracer.config_manager.config.get("dump_modules_for_skip"):
                     self.tracer.modules.dump_modules_for_skip()
