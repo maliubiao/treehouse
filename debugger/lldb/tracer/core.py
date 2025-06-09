@@ -252,6 +252,7 @@ class Tracer:
     def install(self, target: lldb.SBTarget) -> None:
         self.target = target
         self.debugger.HandleCommand("command script import --allow-reload tracer")
+        self.debugger.HandleCommand("settings set target.use-fast-stepping true")
         bp_config = self.config_manager.config.get("start_breakpoint", {})
         bp_type = bp_config.get("type", "entry")
 

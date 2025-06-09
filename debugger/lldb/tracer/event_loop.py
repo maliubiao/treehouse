@@ -118,16 +118,16 @@ class EventLoop:
         elif bp_id == self.tracer.pthread_join_breakpoint_id:
             self.logger.info("Hit pthread_join breakpoint, continuing execution")
             process.Continue()
-        elif bp_id in get_libc_hooker().libc_breakpoint_entry_seen:
-            get_libc_hooker().handle_function_entry(
-                thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
-            )
-            process.Continue()
-        elif bp_id in get_libc_hooker().libc_breakpoint_return_seen:
-            get_libc_hooker().handle_function_return(
-                thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
-            )
-            process.Continue()
+        # elif bp_id in get_libc_hooker().libc_breakpoint_entry_seen:
+        #     get_libc_hooker().handle_function_entry(
+        #         thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
+        #     )
+        #     process.Continue()
+        # elif bp_id in get_libc_hooker().libc_breakpoint_return_seen:
+        #     get_libc_hooker().handle_function_return(
+        #         thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
+        #     )
+        #     process.Continue()
         else:
             bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
             self.logger.info("Breakpoint ID: %d, Location: %d", bp_id, bp_loc_id)

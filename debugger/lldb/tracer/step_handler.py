@@ -131,7 +131,6 @@ class StepHandler:
                 debug_values.append(f"args of {frame.symbol.name}")
                 for arg in frame.args:
                     debug_values.append(f"{arg.name}={arg.value}")
-        no_line_entry: bool = not line_entry.IsValid()
         if line_entry.IsValid():
             filepath: str = line_entry.GetFileSpec().fullpath
             if self.tracer.source_ranges.should_skip_source_file_by_path(filepath):
@@ -155,9 +154,8 @@ class StepHandler:
         else:
             indent = (frames_count - self.base_frame_count) * "  "
         if frames_count != self.frame_count:
-            action = "ENTER" if frames_count > self.frame_count else "LEAVE"
-            if action == "ENTER":
-                self.logger.info("%s%s %s// ; %s", indent, action, frame.symbol.name, source_info)
+            if frames_count > self.frame_count:
+                self.logger.info("%sENTER", indent)
             else:
                 self.logger.info("%sLEAVE", indent + "  ")
             self.frame_count = frames_count
@@ -186,7 +184,7 @@ class StepHandler:
                 ", ".join(debug_values),
             )
 
-        return self._determine_step_action(mnemonic, parsed_operands, frame, no_line_entry, next_pc)
+        return self._determine_step_action(mnemonic, parsed_operands, frame, next_pc, indent)
 
     def _capture_register_values(self, frame: lldb.SBFrame, mnemonic: str, parsed_operands) -> List[str]:
         """Capture register and memory values for logging"""
@@ -371,7 +369,7 @@ class StepHandler:
             return False
 
         bp.SetOneShot(False)
-        self.logger.info("Set one-shot breakpoint at 0x%x for return address", lr_value)
+        # self.logger.info("Set one-shot breakpoint at 0x%x for return address", lr_value)
         bp_id = bp.GetID()
 
         # 加入全局表
@@ -415,7 +413,7 @@ class StepHandler:
         return symbol_name, module_fullpath, symbol_type
 
     def _handle_branch_instruction(
-        self, mnemonic: str, target_addr: int, frame: lldb.SBFrame, next_pc: int
+        self, mnemonic: str, target_addr: int, frame: lldb.SBFrame, next_pc: int, indent: str
     ) -> StepAction:
         """统一处理分支指令逻辑"""
         # 检查目标地址是否在当前函数内
@@ -433,35 +431,37 @@ class StepHandler:
         # 根据指令类型处理
         if mnemonic in ("br", "braa", "brab", "blraa", "blr"):
             if skip_address:
-                self.logger.info("%s Skipping jump to register value: %s", mnemonic, symbol_name)
+                self.logger.info("%s%s Skipping jump to register value: %s", indent, mnemonic, symbol_name)
                 if mnemonic in ("br", "braa", "brab"):
                     self._set_return_breakpoint(next_pc)
                 return StepAction.SOURCE_STEP_OVER
             if mnemonic in ("blraa", "blr"):
                 self.logger.info(
-                    "%s CALL %s, %s",
+                    "%s%s CALL %s, %s",
+                    indent,
                     mnemonic,
                     symbol_name,
                     frame.module,
                 )
             else:
-                self.logger.info("%s Jumping to register value: %s, %s", mnemonic, symbol_name, frame.module)
+                self.logger.info("%s%s branching to register: %s, %s", indent, mnemonic, symbol_name, frame.module)
             return StepAction.SOURCE_STEP_IN
 
         elif mnemonic == "b":
             if skip_address:
-                self.logger.info("%s Skipping branch to: %s", mnemonic, symbol_name)
+                self.logger.info("%s%s skipping branch to: %s", indent, mnemonic, symbol_name)
                 return StepAction.SOURCE_STEP_OVER
 
             self._set_return_breakpoint(next_pc)
-            self.logger.info("%s Branching to address: %s (%s)", mnemonic, hex(target_addr), symbol_name)
+            self.logger.info("%s%s branching to address: %s (%s)", indent, mnemonic, hex(target_addr), symbol_name)
             return StepAction.SOURCE_STEP_IN
 
         elif mnemonic == "bl":
             if symbol_type == lldb.eSymbolTypeTrampoline or skip_address:
                 self._set_return_breakpoint(next_pc)
                 self.logger.info(
-                    "%s CALL %s, %s %s",
+                    "%s%s CALL %s, %s %s",
+                    indent,
                     mnemonic,
                     hex(target_addr),
                     symbol_name,
@@ -470,7 +470,8 @@ class StepHandler:
                 return StepAction.SOURCE_STEP_OVER
 
             self.logger.info(
-                "%s CALL %s, %s, %s, %s",
+                "%s%s CALL %s, %s, %s, %s",
+                indent,
                 mnemonic,
                 hex(target_addr),
                 symbol_name,
@@ -482,7 +483,7 @@ class StepHandler:
         return StepAction.SOURCE_STEP_IN
 
     def _determine_step_action(
-        self, mnemonic: str, parsed_operands, frame: lldb.SBFrame, no_line_entry: bool, next_pc: int
+        self, mnemonic: str, parsed_operands, frame: lldb.SBFrame, next_pc: int, indent: str
     ) -> StepAction:
         # 处理分支指令
         if mnemonic in ("br", "braa", "brab", "blraa", "blr", "b", "bl"):
@@ -506,12 +507,13 @@ class StepHandler:
                     return StepAction.SOURCE_STEP_IN
 
             if target_addr is not None:
-                return self._handle_branch_instruction(mnemonic, target_addr, frame, next_pc)
+                return self._handle_branch_instruction(mnemonic, target_addr, frame, next_pc, indent)
 
         # 处理返回指令
         elif mnemonic.startswith("ret"):
             self.logger.info(
-                "%s RETURN %s %s",
+                "%s%s RETURN %s %s",
+                indent,
                 mnemonic,
                 frame.symbol.name if frame.symbol else "unknown",
                 frame.module,

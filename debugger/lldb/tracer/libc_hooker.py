@@ -1,8 +1,11 @@
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import lldb
 
 from .libc.abi import ABI, LibcABI
+
+if TYPE_CHECKING:
+    from .core import Tracer  # 避免循环导入问题
 
 hooker: "LibcFunctionHooker" = None  # 全局hooker实例
 
@@ -11,10 +14,7 @@ def libc_breakpoint_callback(
     frame: lldb.SBFrame, bp_loc: lldb.SBBreakpointLocation, extra_args: Any, internal_dict: Dict[str, Any]
 ) -> bool:
     """Libc函数调用断点回调"""
-    import pdb
-
-    pdb.set_trace()
-    hooker._handle_function_entry(frame, bp_loc, extra_args, internal_dict)
+    hooker.handle_function_entry(frame, bp_loc, extra_args, internal_dict)
     frame.thread.GetProcess().Continue()  # 继续执行，允许函数调用完成
 
 
@@ -22,7 +22,7 @@ def libc_return_callback(
     frame: lldb.SBFrame, bp_loc: lldb.SBBreakpointLocation, extra_args: Any, internal_dict: Dict[str, Any]
 ) -> bool:
     """Libc函数返回断点回调"""
-    hooker._handle_function_return(frame, bp_loc, extra_args, internal_dict)
+    hooker.handle_function_return(frame, bp_loc, extra_args, internal_dict)
     frame.thread.GetProcess().Continue()  # 继续执行，允许函数返回完成
 
 
@@ -43,7 +43,7 @@ def get_libc_hooker() -> "LibcFunctionHooker":
 class LibcFunctionHooker:
     """处理libc函数调用和返回值的跟踪"""
 
-    def __init__(self, tracer):
+    def __init__(self, tracer: "Tracer"):
         self.tracer = tracer
         self.logger = tracer.logger
         self.target = tracer.target
@@ -55,6 +55,13 @@ class LibcFunctionHooker:
         self.async_callbacks: List[Callable] = []
         self.libc_breakpoint_entry_seen = set()
         self.libc_breakpoint_return_seen = set()
+        self.tracer.debugger.HandleCommand("script import tracer")
+        self.tracer.debugger.HandleCommand(
+            "script globals()['libc_breakpoint_callback'] = tracer.libc_hooker.libc_breakpoint_callback"
+        )
+        self.tracer.debugger.HandleCommand(
+            "script globals()['libc_return_callback'] = tracer.libc_hooker.libc_return_callback"
+        )
 
     def add_async_callback(self, callback: Callable):
         """添加异步回调函数"""
@@ -77,6 +84,7 @@ class LibcFunctionHooker:
             if not bp.IsValid():
                 self.logger.warning(f"Failed to set breakpoint for {func_name}")
                 continue
+            bp.SetScriptCallbackFunction("libc_breakpoint_callback")
             self.libc_breakpoint_entry_seen.add(bp.GetID())
             self.logger.info(f"Set breakpoint for libc function: {func_name} {bp.GetID()}")
 
@@ -98,6 +106,7 @@ class LibcFunctionHooker:
             self.logger.error(f"Failed to set return breakpoint for {func_name} at LR: 0x{lr_value:x}")
             return False
         return_bp.SetOneShot(True)
+        return_bp.SetScriptCallbackFunction("libc_return_callback")
         self.libc_breakpoint_return_seen.add(return_bp.GetID())
         # 保存函数调用上下文
         self.function_stacks[thread_id] = (func_name, lr_value)
