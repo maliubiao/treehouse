@@ -92,10 +92,13 @@ class EventLoop:
             if thread.GetStopReason() == lldb.eStopReasonBreakpoint:
                 bp_id = thread.GetStopReasonDataAtIndex(0)
                 thread_need_to_handle.append((thread, self.tracer.target.FindBreakpointByID(bp_id)))
-
+        handled_threads = set()
         for thread, _ in thread_need_to_handle:
             self._handle_breakpoint_stop(process, thread)
+            handled_threads.add(thread.GetThreadID())
         thread = process.GetSelectedThread()
+        if thread.GetThreadID() in handled_threads:
+            return
         stop_reason = thread.GetStopReason()
         if stop_reason == lldb.eStopReasonPlanComplete:
             self._handle_plan_complete(thread)
@@ -118,16 +121,6 @@ class EventLoop:
         elif bp_id == self.tracer.pthread_join_breakpoint_id:
             self.logger.info("Hit pthread_join breakpoint, continuing execution")
             process.Continue()
-        # elif bp_id in get_libc_hooker().libc_breakpoint_entry_seen:
-        #     get_libc_hooker().handle_function_entry(
-        #         thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
-        #     )
-        #     process.Continue()
-        # elif bp_id in get_libc_hooker().libc_breakpoint_return_seen:
-        #     get_libc_hooker().handle_function_return(
-        #         thread.GetFrameAtIndex(0), thread.GetStopReasonDataAtIndex(1), None, None
-        #     )
-        #     process.Continue()
         else:
             bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
             self.logger.info("Breakpoint ID: %d, Location: %d", bp_id, bp_loc_id)
