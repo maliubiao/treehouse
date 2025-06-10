@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import sys
 
 from tracer import Tracer
 
@@ -10,7 +11,13 @@ from tracer import Tracer
 def parse_args():
     parser = argparse.ArgumentParser(description="LLDB Tracer Tool")
     parser.add_argument("-e", "--program-path", required=True, help="Path to the debugged program")
-    parser.add_argument("-a", "--program-args", action="append", default=[], help="Program arguments (repeatable)")
+    parser.add_argument(
+        "-a",
+        "--program-args",
+        action="append",
+        default=[],
+        help="Program arguments (repeatable, deprecated - use '--' separator instead)",
+    )
     parser.add_argument("-l", "--logfile", help="Path to log output")
     parser.add_argument("-c", "--config-file", help="Path to config file")
     parser.add_argument("--condition", help="Breakpoint condition expression")
@@ -26,7 +33,22 @@ def parse_args():
         action="store_true",
         help="dump source files information and generate skip source files config",
     )
-    return parser.parse_args()
+
+    # 使用parse_known_args来处理--分隔符
+    args, remaining = parser.parse_known_args()
+
+    # 检查是否使用了--分隔符
+    if "--" in sys.argv:
+        separator_pos = sys.argv.index("--")
+        program_args = sys.argv[separator_pos + 1 :]
+
+        # 验证是否同时使用了--program-args和--分隔符
+        if args.program_args:
+            parser.error("Cannot use both --program-args and '--' separator")
+
+        args.program_args = program_args
+
+    return args
 
 
 def main():

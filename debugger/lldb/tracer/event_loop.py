@@ -19,6 +19,7 @@ class EventLoop:
         self.listener: lldb.SBListener = listener
         self.logger: logging.Logger = logger
         self.die_event: threading.Event = threading.Event()
+        self.threads = {}
 
     def run(self) -> None:
         event: lldb.SBEvent = lldb.SBEvent()
@@ -26,6 +27,12 @@ class EventLoop:
             ok: bool = self.listener.WaitForEvent(1, event)
             if ok:
                 self._process_event(event)
+            else:
+                self.resume_threads(event)
+
+    def resume_threads(self, event) -> None:
+        """ """
+        pass
 
     def _process_event(self, event: lldb.SBEvent) -> None:
         """处理事件分发"""
@@ -89,9 +96,16 @@ class EventLoop:
         """处理停止状态"""
         thread_need_to_handle = []
         for thread in process:
+            t: lldb.SBThread = thread
+            if not t.IsValid():
+                continue
+            self.threads[t.GetThreadID()] = t
             if thread.GetStopReason() == lldb.eStopReasonBreakpoint:
                 bp_id = thread.GetStopReasonDataAtIndex(0)
-                thread_need_to_handle.append((thread, self.tracer.target.FindBreakpointByID(bp_id)))
+                try:
+                    thread_need_to_handle.append((thread, self.tracer.target.FindBreakpointByID(bp_id)))
+                except BaseException as e:
+                    continue
         handled_threads = set()
         for thread, _ in thread_need_to_handle:
             self._handle_breakpoint_stop(process, thread)

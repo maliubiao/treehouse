@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import lldb
-from op_parser import OperandType, parse_operands
+from op_parser import OperandType, parse_disassembly_line, parse_operands
 
 from .events import StepAction
 from .utils import get_symbol_type_str
@@ -34,11 +34,10 @@ class StepHandler:
         self.breakpoint_lru = collections.OrderedDict()
         self.max_lru_size = 100  # 最大缓存大小
         fn = self.tracer.config_manager.get_call_trace_file()
-        # self.trace_logger_file = open(fn, "w+", encoding="utf-8")
-        # close_it = lambda: self.trace_logger_file.close()
-        # atexit.register(close_it)
         self.frame_count = -1
         self.base_frame_count = -1
+        self.previous_line = ["", 0]  # (filepath, line_num)
+        self.frame_variables = {}
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -93,9 +92,34 @@ class StepHandler:
                     expr_results.append(f"[EXPR] {expression} exception: {str(e)}")
         return expr_results
 
+    def dump_locals(self, frame: lldb.SBFrame, line: int) -> None:
+        variables = frame.GetVariables(True, True, True, True)
+        varaible_text = []
+
+        for var in variables:
+            if var.IsValid():
+                var_name = var.GetName()
+                var_value = var.GetSummary()
+                if not var_value:
+                    var_value = var.GetValue()
+                if not var_value:
+                    continue
+                if var_value.startswith("0x0"):
+                    try:
+                        var_value = int(var_value, 16)
+                        var_value = hex(var_value)
+                    except ValueError:
+                        pass
+                if var_name in self.frame_variables and self.frame_variables[var_name] == var_value:
+                    continue
+                self.frame_variables[var_name] = var_value
+                varaible_text.append(f"({var.GetType()}){var_name}={var_value}")
+        return varaible_text
+
     def on_step_hit(self, frame: lldb.SBFrame) -> StepAction:
         """Handle step events with detailed debug information."""
         pc: int = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
+        next_pc = frame.addr
         if pc not in self.instruction_info_cache:
             instructions: lldb.SBInstructions = frame.symbol.GetInstructions(self.tracer.target)
             self.function_start_addrs.add(frame.symbol.GetStartAddress().GetLoadAddress(self.tracer.target))
@@ -106,8 +130,6 @@ class StepHandler:
             for inst in instructions:
                 mnemonic: str = inst.GetMnemonic(self.tracer.target)
                 loaded_address: int = inst.GetAddress().GetFileAddress() + first_inst_offset
-                # if mnemonic.startswith("ret"):
-                #     self._set_return_breakpoint(loaded_address)
                 operands: str = inst.GetOperands(self.tracer.target)
                 self.instruction_info_cache[loaded_address] = (
                     mnemonic,
@@ -115,6 +137,8 @@ class StepHandler:
                     inst.size,
                     inst.GetAddress().file_addr - first_inst.GetAddress().file_addr,
                 )
+                # if mnemonic == "svc":
+                #     self.break_at_syscall(loaded_address)
         mnemonic, operands, size, first_inst_offset = self.instruction_info_cache[pc]
         next_pc = pc + size
         parsed_operands = parse_operands(operands, max_ops=4)
@@ -143,6 +167,8 @@ class StepHandler:
             # 执行表达式钩子并获取结果
             expr_results = self._execute_expression_hooks(filepath, line_num, frame)
             debug_values.extend(expr_results)
+            variables = self.dump_locals(frame, line_num)
+            debug_values.extend(variables)
         current_source_key: str = f"{source_info};{source_line}"
         if hasattr(self, "_last_source_key") and current_source_key == self._last_source_key:
             source_info = ""
@@ -154,6 +180,7 @@ class StepHandler:
         else:
             indent = (frames_count - self.base_frame_count) * "  "
         if frames_count != self.frame_count:
+            self.frame_variables = {}
             if frames_count > self.frame_count:
                 self.logger.info("%sENTER", indent)
             else:
@@ -416,6 +443,7 @@ class StepHandler:
         self, mnemonic: str, target_addr: int, frame: lldb.SBFrame, next_pc: int, indent: str
     ) -> StepAction:
         """统一处理分支指令逻辑"""
+
         # 检查目标地址是否在当前函数内
         if self._is_address_in_current_function(frame, target_addr):
             return StepAction.SOURCE_STEP_IN
