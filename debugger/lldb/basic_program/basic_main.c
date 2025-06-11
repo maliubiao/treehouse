@@ -165,14 +165,16 @@ int main() {
 
   // 创建线程
   pthread_t thread1, thread2, thread3;
-  pthread_create(&thread1, NULL, work_thread_main, &thread1_args);
+
+  // pthread_create(&thread1, NULL, work_thread_main, &thread1_args);
   pthread_create(&thread2, NULL, work_thread_counter, &thread2_args);
   pthread_create(&thread3, NULL, work_thread_math, &thread3_args);
+  work_thread_main(&thread1_args);
 
   printf("Main thread: Created 3 worker threads\n");
 
   // 主线程等待工作线程结束（实际上不会结束）
-  pthread_join(thread1, NULL);
+  // pthread_join(thread1, NULL);
   pthread_join(thread2, NULL);
   pthread_join(thread3, NULL);
 

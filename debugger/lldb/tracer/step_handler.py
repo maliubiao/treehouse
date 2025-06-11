@@ -542,7 +542,6 @@ class StepHandler:
             return False
 
         bp.SetOneShot(False)
-        # self.logger.info("Set one-shot breakpoint at 0x%x for return address", lr_value)
         bp_id = bp.GetID()
 
         # 加入全局表
