@@ -215,3 +215,9 @@ class ConfigManager:
     def get_call_trace_file(self):
         """获取调用跟踪文件路径"""
         return self.config.get("call_trace_file", "call_trace.txt")
+
+    def get_log_mode(self):
+        """获取日志模式配置"""
+        value = self.config.get("log_mode", "instruction")
+        assert value in ["source", "instruction"]
+        return value

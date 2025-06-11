@@ -38,6 +38,14 @@ class StepHandler:
         self.base_frame_count = -1
         self.previous_line = ["", 0]  # (filepath, line_num)
         self.frame_variables = {}
+        # 获取日志模式配置
+        self.log_mode = self.tracer.config_manager.get_log_mode()
+        # 编译单元行条目缓存
+        self.compile_unit_entries_cache: Dict[str, list] = {}
+        # 行条目排序缓存
+        self.sorted_line_entries_cache: Dict[str, list] = {}
+        # 行号到下一行条目映射缓存
+        self.line_to_next_line_cache: Dict[str, Dict[int, int]] = {}
 
     @lru_cache(maxsize=100)
     def _get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -51,6 +59,86 @@ class StepHandler:
         except (UnicodeDecodeError, IOError) as e:
             self.logger.error("Unexpected error reading file %s: %s", filepath, str(e))
             return None
+
+    def _get_compile_unit_line_entries(self, compile_unit: lldb.SBCompileUnit) -> List[lldb.SBLineEntry]:
+        """获取并缓存编译单元的行条目"""
+        cache_key = f"{compile_unit.GetFileSpec().fullpath}-{compile_unit.GetNumLineEntries()}"
+        if cache_key in self.compile_unit_entries_cache:
+            return self.compile_unit_entries_cache[cache_key]
+
+        entries = []
+        for i in range(compile_unit.GetNumLineEntries()):
+            entry = compile_unit.GetLineEntryAtIndex(i)
+            if entry.IsValid():
+                entries.append(entry)
+
+        # 缓存结果
+        self.compile_unit_entries_cache[cache_key] = entries
+        return entries
+
+    def _get_sorted_line_entries(self, frame, filepath: str) -> List[lldb.SBLineEntry]:
+        """获取按行号排序的行条目"""
+        if filepath in self.sorted_line_entries_cache:
+            return self.sorted_line_entries_cache[filepath]
+
+        # 获取所有编译单元的行条目并排序
+        all_entries = []
+
+        entries = self._get_compile_unit_line_entries(frame.compile_unit)
+        all_entries.extend(entries)
+
+        # 按行号排序
+        sorted_entries = sorted(all_entries, key=lambda e: e.GetLine())
+        self.sorted_line_entries_cache[filepath] = sorted_entries
+        return sorted_entries
+
+    def _build_line_to_next_line_cache(self, filepath: str, sorted_entries: List[lldb.SBLineEntry]) -> Dict[int, int]:
+        """构建行号到下一行条目的映射缓存"""
+        if filepath in self.line_to_next_line_cache:
+            return self.line_to_next_line_cache[filepath]
+
+        cache = {}
+        # 创建行号列表并排序
+        line_numbers = sorted(set(entry.GetLine() for entry in sorted_entries))
+
+        # 构建映射: 每行 -> 下一有效行号
+        for i in range(len(line_numbers) - 1):
+            current_line = line_numbers[i]
+            next_line = line_numbers[i + 1]
+            cache[current_line] = next_line
+
+        # 最后一行映射到自身
+        if line_numbers:
+            cache[line_numbers[-1]] = line_numbers[-1]
+
+        self.line_to_next_line_cache[filepath] = cache
+        return cache
+
+    def _get_source_code_range(self, frame: lldb.SBFrame, filepath: str, start_line: int) -> str:
+        """获取从起始行到下一行条目前的源代码"""
+        lines = self._get_file_lines(filepath)
+        if not lines or start_line <= 0:
+            return ""
+
+        # 尝试获取下一行号
+        sorted_entries = self._get_sorted_line_entries(frame, filepath)  # 使用None frame
+        line_cache = self._build_line_to_next_line_cache(filepath, sorted_entries)
+        end_line = line_cache.get(start_line, start_line)
+
+        # 单行情况
+        if start_line == end_line:
+            if start_line - 1 < len(lines):
+                return lines[start_line - 1].strip()
+            return ""
+
+        # 多行情况
+        source_lines = []
+        # 起始行到结束行-1 (因为结束行是下一语句的开始)
+        for line_num in range(start_line, end_line + 1):
+            if line_num - 1 < len(lines):
+                source_lines.append(lines[line_num - 1])
+
+        return " ".join(source_lines).strip()
 
     def _is_address_in_current_function(self, frame: lldb.SBFrame, addr: int) -> bool:
         """检查地址是否在当前函数范围内（带缓存优化）"""
@@ -93,7 +181,7 @@ class StepHandler:
         return expr_results
 
     def dump_locals(self, frame: lldb.SBFrame, line: int) -> None:
-        variables = frame.GetVariables(True, True, True, True)
+        variables = frame.GetVariables(True, True, False, True)
         varaible_text = []
 
         for var in variables:
@@ -112,9 +200,54 @@ class StepHandler:
                         pass
                 if var_name in self.frame_variables and self.frame_variables[var_name] == var_value:
                     continue
+                if var.GetDeclaration().line > line:
+                    continue
                 self.frame_variables[var_name] = var_value
-                varaible_text.append(f"({var.GetType()}){var_name}={var_value}")
+                varaible_text.append(f"({var.GetType().GetName()}){var_name}={var_value}")
         return varaible_text
+
+    def _log_source_mode(self, indent: str, source_info: str, source_line: str, debug_values: List[str]) -> None:
+        """Source mode日志输出 - 只显示源代码行和变量"""
+        if source_info:
+            self.logger.info(
+                "%s%s // %s, %s", indent, source_line, source_info, ", ".join(debug_values) if debug_values else ""
+            )
+
+    def _log_instruction_mode(
+        self,
+        indent: str,
+        pc: int,
+        first_inst_offset: int,
+        mnemonic: str,
+        operands: str,
+        source_info: str,
+        source_line: str,
+        debug_values: List[str],
+    ) -> None:
+        """Instruction mode日志输出 - 显示完整汇编指令"""
+        if source_line:
+            self.logger.info(
+                "%s0x%x <+%d> %s %s ; %s // %s; -> %s",
+                indent,
+                pc,
+                first_inst_offset,
+                mnemonic,
+                operands,
+                source_info,
+                source_line,
+                ", ".join(debug_values) if debug_values else "",
+            )
+        else:
+            self.logger.info(
+                "%s0x%x <+%d> %s %s ; %s; -> %s",
+                indent,
+                pc,
+                first_inst_offset,
+                mnemonic,
+                operands,
+                source_info,
+                ", ".join(debug_values) if debug_values else "",
+            )
 
     def on_step_hit(self, frame: lldb.SBFrame) -> StepAction:
         """Handle step events with detailed debug information."""
@@ -155,62 +288,62 @@ class StepHandler:
                 debug_values.append(f"args of {frame.symbol.name}")
                 for arg in frame.args:
                     debug_values.append(f"{arg.name}={arg.value}")
-        if line_entry.IsValid():
-            filepath: str = line_entry.GetFileSpec().fullpath
-            if self.tracer.source_ranges.should_skip_source_file_by_path(filepath):
-                return StepAction.SOURCE_STEP_OVER
-            line_num: int = int(line_entry.GetLine())
-            source_info = f"{filepath}:{line_num}"
-            lines: Optional[List[str]] = self._get_file_lines(filepath)
-            if lines and 0 < line_num <= len(lines):
-                source_line = lines[line_num - 1].strip()
-            # 执行表达式钩子并获取结果
-            expr_results = self._execute_expression_hooks(filepath, line_num, frame)
-            debug_values.extend(expr_results)
-            variables = self.dump_locals(frame, line_num)
-            debug_values.extend(variables)
-        current_source_key: str = f"{source_info};{source_line}"
-        if hasattr(self, "_last_source_key") and current_source_key == self._last_source_key:
-            source_info = ""
-            source_line = ""
-        self._last_source_key = current_source_key
         frames_count = frame.thread.GetNumFrames()
         if self.base_frame_count == -1:
             indent = frames_count * "  "
         else:
             indent = (frames_count - self.base_frame_count) * "  "
+        has_source = line_entry.IsValid()
+
+        if line_entry.IsValid():
+            filepath: str = line_entry.GetFileSpec().fullpath
+            if self.tracer.source_ranges.should_skip_source_file_by_path(filepath):
+                return StepAction.SOURCE_STEP_OVER
+            line_num: int = int(line_entry.GetLine())
+            column: int = line_entry.GetColumn()
+
+            # 构建源信息字符串
+            if line_num > 0:
+                source_info = f"{filepath}:{line_num}"
+                if column > 0:
+                    source_info += f":{column}"
+            else:
+                source_info = f"{filepath}:<no line>"
+
+            # 执行表达式钩子并获取结果
+            expr_results = self._execute_expression_hooks(filepath, line_num, frame)
+            debug_values.extend(expr_results)
+            # 获取源代码片段
+            source_line = self._get_source_code_range(frame, filepath, line_num)
+            # 只有在行号有效时才获取局部变量
+            if line_num > 0:
+                variables = self.dump_locals(frame, line_num)
+                debug_values.extend(variables)
+
+        current_source_key: str = f"{source_info};{source_line}"
+        if hasattr(self, "_last_source_key") and current_source_key == self._last_source_key:
+            source_info = ""
+            source_line = ""
+        self._last_source_key = current_source_key
+        write_leave_later = False
         if frames_count != self.frame_count:
             self.frame_variables = {}
-            if frames_count > self.frame_count:
-                self.logger.info("%sENTER", indent)
-            else:
-                self.logger.info("%sLEAVE", indent + "  ")
+            if has_source:
+                if frames_count > self.frame_count:
+                    if source_info:
+                        self.logger.info("%sENTER", indent)
+                else:
+                    write_leave_later = True
             self.frame_count = frames_count
-
-        if source_line:
-            self.logger.info(
-                "%s0x%x <+%d> %s %s ; %s // %s; -> %s",
-                indent,
-                pc,
-                first_inst_offset,
-                mnemonic,
-                operands,
-                source_info,
-                source_line,
-                ", ".join(debug_values),
+        # 根据日志模式选择输出格式
+        if self.log_mode == "source":
+            self._log_source_mode(indent, source_info, source_line, debug_values)
+        else:  # 默认使用instruction模式
+            self._log_instruction_mode(
+                indent, pc, first_inst_offset, mnemonic, operands, source_info, source_line, debug_values
             )
-        else:
-            self.logger.info(
-                "%s0x%x <+%d> %s %s ; %s; -> %s",
-                indent,
-                pc,
-                first_inst_offset,
-                mnemonic,
-                operands,
-                source_info,
-                ", ".join(debug_values),
-            )
-
+        if has_source and source_info and write_leave_later:
+            self.logger.info("%sLEAVE", indent + "  ")
         return self._determine_step_action(mnemonic, parsed_operands, frame, next_pc, indent)
 
     def _capture_register_values(self, frame: lldb.SBFrame, mnemonic: str, parsed_operands) -> List[str]:
@@ -416,8 +549,6 @@ class StepHandler:
                 del self.tracer.breakpoint_table[old_addr]
             if old_bp_id in self.tracer.breakpoint_seen:
                 self.tracer.breakpoint_seen.remove(old_bp_id)
-            self.logger.info("Removed LRU breakpoint at 0x%x", old_addr)
-
         return True
 
     def _get_address_info(self, addr: int) -> tuple[str, str, int]:
@@ -524,7 +655,6 @@ class StepHandler:
                         self.logger.warning("Failed to get register value: %s", parsed_operands[0].value)
                         return StepAction.CONTINUE
                     target_addr = reg_val.unsigned
-
             # 直接分支指令
             elif mnemonic in ("b", "bl"):
                 target_addr_str = parsed_operands[0].value
@@ -549,5 +679,3 @@ class StepHandler:
 
         # 默认执行单步进入
         return StepAction.SOURCE_STEP_IN
-        # 如果启用源码级调试，可改为:
-        # return StepAction.SOURCE_SOURCE_STEP_IN if not no_line_entry else StepAction.SOURCE_STEP_IN
