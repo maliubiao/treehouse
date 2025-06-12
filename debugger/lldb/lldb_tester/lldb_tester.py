@@ -74,11 +74,17 @@ class TestLoader:
             if base_name.startswith("test_") and base_name.endswith(".py"):
                 program_name = base_name[5:-3]
 
-                # 尝试两种命名格式：带test_前缀和不带前缀
-                possible_files = [
-                    os.path.join(programs_dir, f"{program_name}.c"),
-                    os.path.join(programs_dir, f"test_{program_name}.c"),
-                ]
+                # 尝试多种命名格式和扩展名
+                possible_files = []
+                # 不带前缀的.c/.cpp文件
+                possible_files.append(os.path.join(programs_dir, f"{program_name}.c"))
+                possible_files.append(os.path.join(programs_dir, f"{program_name}.cpp"))
+                # 带test_前缀的.c/.cpp文件
+                possible_files.append(os.path.join(programs_dir, f"test_{program_name}.c"))
+                possible_files.append(os.path.join(programs_dir, f"test_{program_name}.cpp"))
+                # 与测试脚本同名的.c/.cpp文件
+                possible_files.append(os.path.join(programs_dir, f"{base_name[:-3]}.c"))
+                possible_files.append(os.path.join(programs_dir, f"{base_name[:-3]}.cpp"))
 
                 # 查找存在的源文件
                 source_file = None
@@ -259,7 +265,7 @@ class LLDBTester:
         return results
 
     def compile_test_program(self, source_path):
-        """编译C测试程序并返回可执行文件路径"""
+        """编译C/C++测试程序并返回可执行文件路径"""
         if not os.path.exists(source_path):
             raise FileNotFoundError(f"Test program not found: {source_path}")
 
@@ -284,8 +290,13 @@ class LLDBTester:
             if os.path.exists(dsym_dir):
                 shutil.rmtree(dsym_dir)
 
+            # 根据文件扩展名选择编译器
+            compiler = "gcc"
+            if source_path.endswith(".cpp"):
+                compiler = "g++"
+
             # 编译程序
-            cmd = ["gcc", "-g", "-O0", source_path, "-o", executable]
+            cmd = [compiler, "-g", "-O0", source_path, "-o", executable]
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
 
             if result.returncode != 0:
@@ -340,7 +351,10 @@ class LLDBTester:
 
     def build_all_programs(self):
         """编译所有测试程序"""
-        test_programs = glob.glob(os.path.join(self.test_programs_dir, "*.c"))
+        # 同时查找.c和.cpp文件
+        test_programs = glob.glob(os.path.join(self.test_programs_dir, "*.c")) + glob.glob(
+            os.path.join(self.test_programs_dir, "*.cpp")
+        )
         if not test_programs:
             print("No test programs found to build", file=sys.stderr)
             return 1
@@ -366,7 +380,7 @@ class LLDBTester:
         for root, dirs, files in os.walk(self.test_programs_dir):
             # 删除可执行文件
             for file in files:
-                if not file.endswith(".c"):
+                if not (file.endswith(".c") or file.endswith(".cpp")):
                     file_path = os.path.join(root, file)
                     if os.access(file_path, os.X_OK):  # 检查是否是可执行文件
                         os.remove(file_path)

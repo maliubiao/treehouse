@@ -9,12 +9,14 @@
 - **每个测试函数使用独立的target和进程**
 - 支持多次执行被测函数
 - 自动编译测试程序（增量编译）
+- **支持C和C++测试程序**
 - 智能匹配测试脚本与测试程序
 - 测试结果统计和报告
 - 测试用例自动发现
 - 测试过滤和选择执行
 - 彩色输出显示
 - 值打印测试支持
+- **完善的C++标准库类型格式化测试**
 - 智能清理编译产物
 - 新增等待机制确保程序状态稳定
 
@@ -22,14 +24,14 @@
 
 ### 命名规范
 - 测试脚本：`test_<program_name>.py`
-- 测试程序：`<program_name>.c` 或 `test_<program_name>.c`
+- 测试程序：`<program_name>.c` 或 `<program_name>.cpp` 或 `test_<program_name>.c` 或 `test_<program_name>.cpp`
 - **测试函数**：
   - 以 `test_` 开头的函数（如 `test_example_function`）
   - 或名为 `run_test` 的函数
-  
+
 例如：
-- `test_example.py` 对应 `example.c` 或 `test_example.c`
-- `test_value_printing.py` 对应 `value_printing.c` 或 `test_value_printing.c`
+- `test_example.py` 对应 `example.c`、`example.cpp`、`test_example.c` 或 `test_example.cpp`
+- `test_value_printing.py` 对应 `value_printing.c`、`value_printing.cpp`、`test_value_printing.c` 或 `test_value_printing.cpp`
 
 ### 测试脚本编写指南
 在测试脚本中：
@@ -41,6 +43,18 @@
 6. **每个测试函数都会启动全新的程序实例**
 7. **每个测试函数使用独立的target和进程**
 
+### C++测试能力
+框架支持全面的C++标准库类型测试，包括：
+- 基本类型（int, float, char等）
+- 序列容器（vector, list, deque）
+- 关联容器（map, set, unordered_map, unordered_set）
+- 容器适配器（queue, stack）
+- 智能指针（shared_ptr, unique_ptr, weak_ptr）
+- 元组（tuple）
+- 原子类型（atomic）
+- 复杂嵌套类型
+- 自定义模板类
+
 ### 基本用法
 ```bash
 # 自动编译所有测试程序
@@ -50,7 +64,7 @@ python3 lldb_tester.py --build
 python3 lldb_tester.py
 
 # 运行指定测试
-python3 lldb_tester.py -t test_scripts/test_example.py
+python3 lldb_tester.py -t test_scripts/test_cpp_example.py
 
 # 使用通配符运行测试
 python3 lldb_tester.py -p "test_*.py"
@@ -64,7 +78,7 @@ python3 lldb_tester.py --clean
 
 ### 测试目录结构
 ```
-test_programs/    # 存放被测程序源代码(.c文件)
+test_programs/    # 存放被测程序源代码(.c/.cpp文件)
 test_scripts/     # 存放测试脚本(.py文件)
 ```
 
@@ -72,20 +86,23 @@ test_scripts/     # 存放测试脚本(.py文件)
 ```
 [PASSED] test_example.py (0.32s)
 [PASSED] test_value_printing.py (1.15s)
+[PASSED] test_cpp_example.py (2.41s)
 
 === Test Summary ===
-Total: 2, Passed: 2, Failed: 0, Skipped: 0
+Total: 3, Passed: 3, Failed: 0, Skipped: 0
 ```
 
 ### 注意事项
 1. 测试程序使用增量编译策略，仅当源文件更新时重新编译
-2. 使用`--clean`参数仅删除编译产物（可执行文件和dSYM目录），保留源代码
-3. 测试脚本必须在`test_scripts`目录下且遵循命名规范
-4. 确保LLDB Python绑定已正确安装
-5. 使用`--build`参数可预编译所有测试程序
-6. 测试程序文件名可以带或不带`test_`前缀
-7. 测试函数需命名为`run_test`或以`test_`开头
-8. 测试脚本中应使用`wait_for_stop()`确保程序状态
-9. **每个测试函数都会启动全新的程序实例**
-10. **避免在测试函数之间共享状态**
-11. **框架会为每个测试函数创建独立的target和进程**
+2. C程序使用gcc编译，C++程序使用g++编译
+3. 使用`--clean`参数仅删除编译产物（可执行文件和dSYM目录），保留源代码
+4. 测试脚本必须在`test_scripts`目录下且遵循命名规范
+5. 确保LLDB Python绑定已正确安装
+6. 使用`--build`参数可预编译所有测试程序
+7. 测试程序文件名可以带或不带`test_`前缀
+8. 测试函数需命名为`run_test`或以`test_`开头
+9. 测试脚本中应使用`wait_for_stop()`确保程序状态
+10. **每个测试函数都会启动全新的程序实例**
+11. **避免在测试函数之间共享状态**
+12. **框架会为每个测试函数创建独立的target和进程**
+13. **C++测试需要编译器支持C++11或更高版本**

@@ -29,6 +29,8 @@ def run_test(context):
     frame = thread.GetFrameAtIndex(0)
     function_name = frame.GetFunctionName()
     if "test_function" not in function_name:
-        raise AssertionError(f"Not stopped in test_function (stopped in {function_name})")
+        raise AssertionError(
+            f"Not stopped in test_function. Stopped in: {function_name if function_name else 'unknown function'}"
+        )
 
     print("Example test passed")

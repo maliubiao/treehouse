@@ -17,6 +17,12 @@ typedef union {
   char char_val;
 } SampleUnion;
 
+// 深层嵌套结构体
+typedef struct DeepStruct {
+  int id;
+  struct DeepStruct *child;
+} DeepStruct;
+
 int main() {
   // 基本类型
   int a = 42;
@@ -44,6 +50,14 @@ int main() {
 
   // 指针数组
   int *ptr_arr[3] = {&a, &a, &a};
+
+  // 深层嵌套结构体
+  DeepStruct deep1 = {1, NULL};
+  DeepStruct deep2 = {2, NULL};
+  DeepStruct deep3 = {3, NULL};
+  deep1.child = &deep2;
+  deep2.child = &deep3;
+  deep3.child = &deep1; // 循环引用
 
   // 打印所有变量以避免未使用警告
   printf("Basic types:\n");
@@ -74,6 +88,9 @@ int main() {
     printf("ptr_arr[%d] = %p, *ptr_arr[%d] = %d\n", i, (void *)ptr_arr[i], i,
            *ptr_arr[i]);
   }
+
+  printf("\nDeep structure:\n");
+  printf("deep1.id = %d\n", deep1.id);
 
   printf("\nAll variables initialized and printed\n");
   return 0;
