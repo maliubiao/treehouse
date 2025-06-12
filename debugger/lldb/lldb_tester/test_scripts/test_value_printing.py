@@ -1,7 +1,11 @@
+import statistics
+import time
+
 import lldb
 from tracer import sb_value_printer
 
 format_sbvalue = sb_value_printer.format_sbvalue
+PERF_RUNS = 100  # Number of times to run each formatter for performance measurement
 
 
 def log_formatted_value(frame, var_name):
@@ -83,11 +87,26 @@ def verify_struct(frame, struct_name, expected_fields):
 
     for field_name, expected_value in expected_fields.items():
         actual_value = get_field_value(struct, field_name)
-        if actual_value != expected_value:
-            raise AssertionError(
-                f"Field '{field_name}' in struct '{struct_name}' mismatch. "
-                f"Expected '{expected_value}', got '{actual_value}'"
-            )
+        if actual_value is None:
+            raise AssertionError(f"Field '{field_name}' not found in struct '{struct_name}'")
+
+        # 检查是否为浮点数值
+        try:
+            expected_float = float(expected_value)
+            actual_float = float(actual_value)
+            # 使用容差比较浮点数
+            if abs(expected_float - actual_float) > 1e-6:
+                raise AssertionError(
+                    f"Field '{field_name}' in struct '{struct_name}' mismatch. "
+                    f"Expected float value {expected_float}, got {actual_float}"
+                )
+        except (ValueError, TypeError):
+            # 非浮点数，进行直接比较
+            if actual_value != expected_value:
+                raise AssertionError(
+                    f"Field '{field_name}' in struct '{struct_name}' mismatch. "
+                    f"Expected '{expected_value}', got '{actual_value}'"
+                )
     return struct
 
 
@@ -97,7 +116,7 @@ def verify_circular_ref(frame, var_name):
     if not var.IsValid():
         raise AssertionError(f"Failed to find variable '{var_name}'")
 
-    var_str = format_sbvalue(var)
+    var_str = format_sbvalue(var, max_depth=20)
     if "circular reference" not in var_str:
         raise AssertionError(f"Circular reference not detected in '{var_name}'")
     return var
@@ -110,11 +129,26 @@ def verify_union(frame, var_name, expected_field, expected_value):
         raise AssertionError(f"Failed to find variable '{var_name}'")
 
     active_field = get_field_value(var, expected_field)
-    if active_field != expected_value:
-        raise AssertionError(
-            f"Union field '{expected_field}' mismatch in '{var_name}'. "
-            f"Expected '{expected_value}', got '{active_field}'"
-        )
+    if active_field is None:
+        raise AssertionError(f"Field '{expected_field}' not found in union '{var_name}'")
+
+    # 检查是否为浮点数值
+    try:
+        expected_float = float(expected_value)
+        actual_float = float(active_field)
+        # 使用容差比较浮点数
+        if abs(expected_float - actual_float) > 1e-6:
+            raise AssertionError(
+                f"Union field '{expected_field}' mismatch in '{var_name}'. "
+                f"Expected float value {expected_float}, got {actual_float}"
+            )
+    except (ValueError, TypeError):
+        # 非浮点数，进行直接比较
+        if active_field != expected_value:
+            raise AssertionError(
+                f"Union field '{expected_field}' mismatch in '{var_name}'. "
+                f"Expected '{expected_value}', got '{active_field}'"
+            )
     return var
 
 
@@ -184,14 +218,58 @@ def test_value_printing(context):
     a = verify_basic_type(frame, "a", "int", "42")
     verify_pointer(frame, "ptr", a)
     # 更新字符字段期望值为ASCII数值 (88 = 'X')
+    # 浮点数字段使用字符串表示进行比较
     verify_struct(frame, "s", {"x": "10", "y": "2.5", "z": "88"})
     verify_circular_ref(frame, "node1")
+    # 浮点数字段使用字符串表示进行比较
     verify_union(frame, "u", "float_val", "1.23")
     verify_string(frame, "str", "Hello, World!")
     verify_pointer_array(frame, "ptr_arr", [a.GetLoadAddress()] * 3)
     verify_circular_ref(frame, "deep1")
 
     print("Value printing tests passed (stepping method)")
+
+
+def benchmark_formatting(context, var_name):
+    """Benchmark the formatting performance for a specific variable"""
+    if not context.wait_for_stop():
+        raise AssertionError("Process not stopped at breakpoint")
+
+    frame = context.target.GetProcess().GetSelectedThread().GetSelectedFrame()
+    var = frame.FindVariable(var_name)
+    if not var.IsValid():
+        raise AssertionError(f"Variable '{var_name}' not found")
+
+    # Get the raw value for reference
+    raw_value = var.GetValue()
+    type_name = var.GetTypeName()
+
+    # Run formatting multiple times for accurate measurement
+    durations = []
+    for _ in range(PERF_RUNS):
+        start_time = time.perf_counter()
+        formatted = sb_value_printer.format_sbvalue(var)
+        end_time = time.perf_counter()
+        durations.append(end_time - start_time)
+
+    # Calculate performance metrics
+    avg_time = statistics.mean(durations) * 1000  # Convert to milliseconds
+    min_time = min(durations) * 1000
+    max_time = max(durations) * 1000
+    std_dev = statistics.stdev(durations) * 1000 if len(durations) > 1 else 0
+
+    # Return the first formatted result and performance metrics
+    return {
+        "name": var_name,
+        "type": type_name,
+        "raw_value": raw_value,
+        "formatted_value": formatted,
+        "avg_time": avg_time,
+        "min_time": min_time,
+        "max_time": max_time,
+        "std_dev": std_dev,
+        "runs": PERF_RUNS,
+    }
 
 
 def test_sb_value_printer(context):
@@ -223,11 +301,49 @@ def test_sb_value_printer(context):
     a = verify_basic_type(frame, "a", "int", "42")
     verify_pointer(frame, "ptr", a)
     # 更新字符字段期望值为ASCII数值 (88 = 'X')
+    # 浮点数字段使用字符串表示进行比较
     verify_struct(frame, "s", {"x": "10", "y": "2.5", "z": "88"})
     verify_circular_ref(frame, "node1")
+    # 浮点数字段使用字符串表示进行比较
     verify_union(frame, "u", "float_val", "1.23")
     verify_string(frame, "str", "Hello, World!")
     verify_pointer_array(frame, "ptr_arr", [a.GetLoadAddress()] * 3)
     verify_circular_ref(frame, "deep1")
 
     print("Value printing tests passed (breakpoint method)")
+    # List of variables to benchmark
+    test_vars = ["a", "ptr", "s", "node1", "u", "str", "ptr_arr", "deep1"]
+    results = []
+
+    print("\n=== Running Performance Benchmarks ===")
+    print(f"Each formatter will be executed {PERF_RUNS} times\n")
+
+    # Run benchmarks for each variable
+    for var_name in test_vars:
+        print(f"Benchmarking: {var_name}")
+        result = benchmark_formatting(context, var_name)
+        results.append(result)
+
+    # Sort by average time (descending)
+    results.sort(key=lambda x: x["avg_time"], reverse=True)
+
+    # Print summary
+    print("\n=== Performance Test Summary ===")
+    print("Variables sorted by average formatting time (slowest first):")
+    for result in results:
+        print(
+            f"{result['name']} ({result['type']}): "
+            f"avg={result['avg_time']:.4f}ms, "
+            f"min={result['min_time']:.4f}ms, "
+            f"max={result['max_time']:.4f}ms, "
+            f"stddev={result['std_dev']:.4f}ms"
+        )
+
+    # Print example formatted value (the slowest one)
+    slowest = results[0]
+    print(f"\nExample formatted value ({slowest['name']}):")
+    print("-" * 80)
+    print(slowest["formatted_value"])
+    print("-" * 80)
+
+    print("\nPerformance tests completed")

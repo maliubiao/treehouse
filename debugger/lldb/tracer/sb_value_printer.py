@@ -1,7 +1,7 @@
 import lldb
 
 # Debug flag - set to True to enable type class logging
-DEBUG_TYPECLASS = False
+DEBUG_TYPECLASS = True
 
 # Mapping from lldb type class enums to human-readable strings
 TYPECLASS_MAP = {
@@ -66,7 +66,7 @@ def get_type_info(value: lldb.SBValue):
     return (type_class, basic_type, type_name)
 
 
-def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=3, max_children=10):
+def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_children=10):
     """
     格式化SBValue对象为结构化字符串表示，使用C/C++风格的类型标注
     全面支持LLDB的类型系统
