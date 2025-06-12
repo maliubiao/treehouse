@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import lldb
 from op_parser import OperandType, parse_disassembly_line, parse_operands
 
+from . import sb_value_printer
 from .events import StepAction
 from .utils import get_symbol_type_str
 
@@ -215,6 +216,7 @@ class StepHandler:
                     continue
                 if var.GetDeclaration().line > line:
                     continue
+                var_value = sb_value_printer.format_sbvalue(var, shallow_aggregate=True)
                 self.frame_variables[var_name] = var_value
                 varaible_text.append(f"({var.GetType().GetName()}){var_name}={var_value}")
         return varaible_text

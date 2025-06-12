@@ -35,6 +35,9 @@ int main() {
   // 结构体
   SimpleStruct s = {10, 2.5f, 'X'};
 
+  // 结构体指针
+  SimpleStruct *s_ptr = &s;
+
   // 链表（带循环引用）
   Node node1 = {100, NULL};
   Node node2 = {200, NULL};
@@ -67,9 +70,12 @@ int main() {
 
   printf("\nPointers:\n");
   printf("ptr = %p\n", (void *)ptr);
+  printf("s_ptr = %p\n", (void *)s_ptr);
 
   printf("\nStructures:\n");
   printf("s.x = %d, s.y = %f, s.z = %c\n", s.x, s.y, s.z);
+  printf("s_ptr->x = %d, s_ptr->y = %f, s_ptr->z = %c\n", s_ptr->x, s_ptr->y,
+         s_ptr->z);
 
   printf("\nLinked list nodes:\n");
   printf("node1.value = %d, node1.next = %p\n", node1.value,

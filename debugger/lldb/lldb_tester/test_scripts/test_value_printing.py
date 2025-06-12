@@ -110,6 +110,51 @@ def verify_struct(frame, struct_name, expected_fields):
     return struct
 
 
+def verify_struct_pointer(frame, ptr_name, struct_name):
+    """验证结构体指针变量"""
+    ptr = frame.FindVariable(ptr_name)
+    if not ptr.IsValid():
+        raise AssertionError(f"Failed to find pointer '{ptr_name}'")
+
+    # 验证指针类型
+    if "SimpleStruct *" in ptr.GetTypeName().lower():
+        raise AssertionError(f"Expected pointer type for '{ptr_name}', got '{ptr.GetTypeName()}'")
+
+    # 验证指向的结构体
+    struct = frame.FindVariable(struct_name)
+    if not struct.IsValid():
+        raise AssertionError(f"Failed to find struct '{struct_name}'")
+
+    ptr_addr = ptr.GetValueAsUnsigned()
+    struct_addr = struct.GetLoadAddress()
+    if ptr_addr != struct_addr:
+        raise AssertionError(
+            f"Pointer address mismatch for '{ptr_name}'. Expected {hex(struct_addr)}, got {hex(ptr_addr)}"
+        )
+
+    # 验证解引用后的值
+    deref = ptr.Dereference()
+    if not deref.IsValid():
+        raise AssertionError(f"Failed to dereference pointer '{ptr_name}'")
+
+    # 比较结构体字段
+    for i in range(struct.GetNumChildren()):
+        field_name = struct.GetChildAtIndex(i).GetName()
+        if not field_name:
+            continue
+
+        expected_value = get_field_value(struct, field_name)
+        actual_value = get_field_value(deref, field_name)
+
+        if expected_value != actual_value:
+            raise AssertionError(
+                f"Field '{field_name}' mismatch for '{ptr_name}->{field_name}'. "
+                f"Expected '{expected_value}', got '{actual_value}'"
+            )
+
+    return ptr
+
+
 def verify_circular_ref(frame, var_name):
     """验证循环引用"""
     var = frame.FindVariable(var_name)
@@ -196,7 +241,7 @@ def test_value_printing(context):
         raise AssertionError("Process not stopped at breakpoint")
 
     # 设置断点并继续执行
-    context.run_command("b test_value_printing.c:66")
+    context.run_command("b test_value_printing.c:70")
     context.run_command("continue")
 
     # 获取当前帧
@@ -208,6 +253,7 @@ def test_value_printing(context):
     log_formatted_value(frame, "a")
     log_formatted_value(frame, "ptr")
     log_formatted_value(frame, "s")
+    log_formatted_value(frame, "s_ptr")
     log_formatted_value(frame, "node1")
     log_formatted_value(frame, "u")
     log_formatted_value(frame, "str")
@@ -219,7 +265,8 @@ def test_value_printing(context):
     verify_pointer(frame, "ptr", a)
     # 更新字符字段期望值为ASCII数值 (88 = 'X')
     # 浮点数字段使用字符串表示进行比较
-    verify_struct(frame, "s", {"x": "10", "y": "2.5", "z": "88"})
+    s = verify_struct(frame, "s", {"x": "10", "y": "2.5", "z": "88"})
+    verify_struct_pointer(frame, "s_ptr", "s")
     verify_circular_ref(frame, "node1")
     # 浮点数字段使用字符串表示进行比较
     verify_union(frame, "u", "float_val", "1.23")
@@ -277,7 +324,7 @@ def test_sb_value_printer(context):
     通过直接断点测试变量打印功能
     """
     # 设置断点并继续执行
-    context.run_command("b test_value_printing.c:66")
+    context.run_command("b test_value_printing.c:70")
     context.run_command("continue")
 
     # 确保程序已停止
@@ -291,6 +338,7 @@ def test_sb_value_printer(context):
     log_formatted_value(frame, "a")
     log_formatted_value(frame, "ptr")
     log_formatted_value(frame, "s")
+    log_formatted_value(frame, "s_ptr")
     log_formatted_value(frame, "node1")
     log_formatted_value(frame, "u")
     log_formatted_value(frame, "str")
@@ -302,7 +350,8 @@ def test_sb_value_printer(context):
     verify_pointer(frame, "ptr", a)
     # 更新字符字段期望值为ASCII数值 (88 = 'X')
     # 浮点数字段使用字符串表示进行比较
-    verify_struct(frame, "s", {"x": "10", "y": "2.5", "z": "88"})
+    s = verify_struct(frame, "s", {"x": "10", "y": "2.5", "z": "88"})
+    verify_struct_pointer(frame, "s_ptr", "s")
     verify_circular_ref(frame, "node1")
     # 浮点数字段使用字符串表示进行比较
     verify_union(frame, "u", "float_val", "1.23")
@@ -312,7 +361,7 @@ def test_sb_value_printer(context):
 
     print("Value printing tests passed (breakpoint method)")
     # List of variables to benchmark
-    test_vars = ["a", "ptr", "s", "node1", "u", "str", "ptr_arr", "deep1"]
+    test_vars = ["a", "ptr", "s", "s_ptr", "node1", "u", "str", "ptr_arr", "deep1"]
     results = []
 
     print("\n=== Running Performance Benchmarks ===")
