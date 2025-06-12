@@ -1,7 +1,7 @@
 import lldb
 
 # Debug flag - set to True to enable type class logging
-DEBUG_TYPECLASS = True
+DEBUG_TYPECLASS = False
 
 # Mapping from lldb type class enums to human-readable strings
 TYPECLASS_MAP = {
@@ -66,6 +66,173 @@ def get_type_info(value: lldb.SBValue):
     return (type_class, basic_type, type_name)
 
 
+def _handle_stl_and_smart_pointers(value, type_name):
+    """处理STL容器和智能指针类型"""
+    if is_stl_container(type_name):
+        return repr(value)
+
+    if is_smart_pointer(type_name):
+        pointee = value.Dereference()
+        addr = value.GetLoadAddress()
+        if pointee and pointee.IsValid():
+            pointee_str = format_sbvalue(pointee)
+            return f"({type_name}) -> {pointee_str}"
+        return f"({type_name}) <smart pointer at {hex(addr) if addr != lldb.LLDB_INVALID_ADDRESS else 'N/A'}>"
+
+    return None
+
+
+def _handle_pointer_types(value, visited, depth, max_depth, max_children):
+    """处理指针类型"""
+    addr = value.GetLoadAddress()
+    pointee = value.Dereference()
+
+    if not pointee.IsValid():
+        return f"({value.GetType().GetName()}){hex(addr)} -> <invalid>"
+
+    pointee_addr = pointee.GetLoadAddress()
+    pointee_type = pointee.GetType().GetName() or "<unknown type>"
+    pointee_key = (pointee_addr, pointee_type)
+
+    if pointee_addr != lldb.LLDB_INVALID_ADDRESS and pointee_key in visited:
+        return f"({value.GetType().GetName()}){hex(addr)} -> <circular reference @ {hex(pointee_addr)}, type: {pointee_type}>"
+
+    pointee_str = format_sbvalue(pointee, visited, depth + 1, max_depth, max_children)
+    return f"({value.GetType().GetName()}){hex(addr)} -> {pointee_str}"
+
+
+def _handle_reference_types(value, visited, depth, max_depth, max_children):
+    """处理引用类型"""
+    referenced = value.Dereference()
+
+    if not referenced.IsValid():
+        return f"({value.GetType().GetName()})& -> <invalid>"
+
+    ref_addr = referenced.GetLoadAddress()
+    ref_type = referenced.GetType().GetName() or "<unknown type>"
+    ref_key = (ref_addr, ref_type)
+
+    if ref_addr != lldb.LLDB_INVALID_ADDRESS and ref_key in visited:
+        return f"({value.GetType().GetName()})& -> <circular reference @ {hex(ref_addr)}, type: {ref_type}>"
+
+    ref_str = format_sbvalue(referenced, visited, depth + 1, max_depth, max_children)
+    return f"({value.GetType().GetName()})& -> {ref_str}"
+
+
+def _handle_char_types(value, type_class, elem_basic_type):
+    """处理字符类型"""
+    summary = value.GetSummary()
+    if not summary:
+        return None
+
+    type_name = value.GetType().GetName()
+    if type_class == lldb.eTypeClassPointer:
+        return f"({type_name}) {summary}"
+    if type_class == lldb.eTypeClassVector:
+        return f"({type_name}) <vector of characters>"
+    return f'({type_name}) "{summary}"'
+
+
+def _handle_basic_types(value, basic_type, type_name):
+    """处理基本类型"""
+    summary = value.GetSummary()
+    value_str = value.GetValue()
+    error = lldb.SBError()
+    value_data: lldb.SBData = value.GetData()
+
+    # 布尔类型特殊处理
+    if basic_type == lldb.eBasicTypeBool:
+        if value_data.GetByteSize() > 0:
+            bool_val = value_data.GetUnsignedInt8(error, 0)
+            if not error.Fail():
+                return f"(bool) {'true' if bool_val else 'false'}"
+        return f"(bool) {'true' if value_str == '1' else 'false'}"
+
+    # 字符类型特殊处理
+    char_types = {
+        lldb.eBasicTypeChar: "char",
+        lldb.eBasicTypeSignedChar: "signed char",
+        lldb.eBasicTypeUnsignedChar: "unsigned char",
+        lldb.eBasicTypeWChar: "wchar_t",
+        lldb.eBasicTypeSignedWChar: "signed wchar_t",
+        lldb.eBasicTypeUnsignedWChar: "unsigned wchar_t",
+        lldb.eBasicTypeChar16: "char16_t",
+        lldb.eBasicTypeChar32: "char32_t",
+        lldb.eBasicTypeChar8: "char8_t",
+    }
+
+    if basic_type in char_types:
+        if value_data.GetByteSize() > 0:
+            char_val = value_data.GetUnsignedInt8(error, 0)
+            if not error.Fail():
+                # 可打印字符处理
+                if 32 <= char_val <= 126:
+                    return f"({char_types[basic_type]}) '{chr(char_val)}'"
+                # 非打印字符处理
+                return f"({char_types[basic_type]}) '\\x{char_val:02x}'"
+
+    # 枚举类型特殊处理
+    type_class = value.GetType().GetTypeClass()
+    if type_class == lldb.eTypeClassEnumeration:
+        if summary:
+            return f"({type_name}) {summary}"
+        if value_str:
+            return f"({type_name}) {value_str}"
+        return f"({type_name}) <no value>"
+
+    # 浮点类型特殊处理
+    float_types = {
+        lldb.eBasicTypeHalf: "half",
+        lldb.eBasicTypeFloat: "float",
+        lldb.eBasicTypeDouble: "double",
+        lldb.eBasicTypeLongDouble: "long double",
+    }
+
+    if basic_type in float_types:
+        if value_str:
+            return f"({float_types[basic_type]}) {value_str}"
+        if summary:
+            return f"({float_types[basic_type]}) {summary}"
+
+    # 其他基本类型处理
+    if summary:
+        return f"({type_name}) {summary}"
+
+    if value_str:
+        return f"({type_name}) {value_str}"
+
+    return f"({type_name}) <no value>"
+
+
+def _handle_aggregate_types(value, visited, depth, max_depth, max_children, type_class, type_name):
+    """处理聚合类型"""
+    num_children = value.GetNumChildren()
+    max_children_display = min(num_children, max_children)
+    items = []
+
+    for i in range(max_children_display):
+        child = value.GetChildAtIndex(i)
+        if not child or not child.IsValid():
+            continue
+
+        name = child.GetName() or f"[{i}]"
+        child_str = format_sbvalue(child, visited, depth + 1, max_depth, max_children)
+
+        if type_class in (lldb.eTypeClassStruct, lldb.eTypeClassClass, lldb.eTypeClassUnion):
+            items.append(f"{name}: {child_str}")
+        else:
+            items.append(child_str)
+
+    if num_children > max_children:
+        items.append(f"... (+{num_children - max_children} more)")
+
+    if type_class == lldb.eTypeClassArray:
+        return f"({type_name}) [{', '.join(items)}]"
+    if type_class == lldb.eTypeClassVector:
+        return f"({type_name}) <{', '.join(items)}>"
+    return f"({type_name}) {{{', '.join(items)}}}"
+
+
 def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_children=10):
     """
     格式化SBValue对象为结构化字符串表示，使用C/C++风格的类型标注
@@ -101,21 +268,13 @@ def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_
             f"Depth: {depth} Value: {value}"
         )
 
-    # 处理STL容器类型 - 直接使用LLDB的默认格式化输出
-    if is_stl_container(type_name):
-        return repr(value)
-    # 处理智能指针类型
-    if is_smart_pointer(type_name):
-        pointee = value.Dereference()
-        if pointee and pointee.IsValid():
-            pointee_str = format_sbvalue(pointee, visited, depth, max_depth, max_children)
-            return f"({type_name}) -> {pointee_str}"
+    # 处理STL容器和智能指针类型
+    stl_result = _handle_stl_and_smart_pointers(value, type_name)
+    if stl_result is not None:
+        return stl_result
 
-        # 如果无法解析，返回基本表示
-        return f"({type_name}) <smart pointer at {hex(addr) if addr != lldb.LLDB_INVALID_ADDRESS else 'N/A'}>"
-
-    # 定义聚合类型集合
-    AGGREGATE_TYPES = (
+    # 定义聚合类型集合 (使用蛇形命名)
+    aggregate_types = (
         lldb.eTypeClassStruct,
         lldb.eTypeClassClass,
         lldb.eTypeClassUnion,
@@ -126,20 +285,17 @@ def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_
     )
 
     # 处理循环引用检测
-    obj_key = None
-
-    # 如果是聚合类型且地址有效，进行循环检测
-    if addr != lldb.LLDB_INVALID_ADDRESS and type_class in AGGREGATE_TYPES:
+    if addr != lldb.LLDB_INVALID_ADDRESS and type_class in aggregate_types:
         obj_key = (addr, type_name)
         if obj_key in visited:
             return f"<circular reference @ {hex(addr)}, type: {type_name}>"
         visited.add(obj_key)
 
-    # 检查深度限制（在循环引用检测之后）
+    # 检查深度限制
     if depth >= max_depth:
-        return f"<max depth reached>"
+        return "<max depth reached>"
 
-    # 特殊处理字符串类型 (char指针/数组)
+    # 特殊处理字符类型 (char指针/数组)
     if type_class in (lldb.eTypeClassPointer, lldb.eTypeClassArray, lldb.eTypeClassVector):
         # 获取元素类型
         if type_class == lldb.eTypeClassPointer:
@@ -165,47 +321,17 @@ def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_
         }
 
         if elem_basic_type in char_types:
-            summary = value.GetSummary()
-            if summary:
-                if type_class == lldb.eTypeClassPointer:
-                    return f"({type_name}) {summary}"
-                elif type_class == lldb.eTypeClassVector:
-                    return f"({type_name}) <vector of characters>"
-                else:  # 数组类型
-                    return f'({type_name}) "{summary}"'
+            char_result = _handle_char_types(value, type_class, elem_basic_type)
+            if char_result:
+                return char_result
 
-    # 特殊处理指针类型
+    # 处理指针类型
     if type_class == lldb.eTypeClassPointer:
-        pointee = value.Dereference()
-        if pointee.IsValid():
-            # 处理指针指向的聚合类型
-            pointee_addr = pointee.GetLoadAddress()
-            pointee_type = pointee.GetType().GetName() or "<unknown type>"
-            pointee_key = (pointee_addr, pointee_type)
-
-            # 检查指针指向的对象是否已访问
-            if pointee_addr != lldb.LLDB_INVALID_ADDRESS and pointee_key in visited:
-                return f"({type_name}){hex(addr)} -> <circular reference @ {hex(pointee_addr)}, type: {pointee_type}>"
-
-            # 递归格式化指针指向的对象
-            pointee_str = format_sbvalue(pointee, visited, depth + 1, max_depth, max_children)
-            return f"({type_name}){hex(addr)} -> {pointee_str}"
-        return f"({type_name}){hex(addr)} -> <invalid>"
+        return _handle_pointer_types(value, visited, depth, max_depth, max_children)
 
     # 处理引用类型
     if type_class == lldb.eTypeClassReference:
-        referenced = value.Dereference()
-        if referenced.IsValid():
-            ref_addr = referenced.GetLoadAddress()
-            ref_type = referenced.GetType().GetName() or "<unknown type>"
-            ref_key = (ref_addr, ref_type)
-
-            if ref_addr != lldb.LLDB_INVALID_ADDRESS and ref_key in visited:
-                return f"({type_name})& -> <circular reference @ {hex(ref_addr)}, type: {ref_type}>"
-
-            ref_str = format_sbvalue(referenced, visited, depth + 1, max_depth, max_children)
-            return f"({type_name})& -> {ref_str}"
-        return f"({type_name})& -> <invalid>"
+        return _handle_reference_types(value, visited, depth, max_depth, max_children)
 
     # 处理函数类型
     if type_class == lldb.eTypeClassFunction:
@@ -241,102 +367,7 @@ def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_
     # 处理基本类型(无子元素)
     num_children = value.GetNumChildren()
     if num_children == 0:
-        summary = value.GetSummary()
-        value_str = value.GetValue()
-        error = lldb.SBError()
-        value_data: lldb.SBData = value.GetData()
-
-        # 布尔类型特殊处理
-        if basic_type == lldb.eBasicTypeBool:
-            if value_data.GetByteSize() > 0:
-                bool_val = value_data.GetUnsignedInt8(error, 0)
-                if not error.Fail():
-                    return f"(bool) {'true' if bool_val else 'false'}"
-            return f"(bool) {'true' if value_str == '1' else 'false'}"
-
-        # 字符类型特殊处理
-        char_types = {
-            lldb.eBasicTypeChar: "char",
-            lldb.eBasicTypeSignedChar: "signed char",
-            lldb.eBasicTypeUnsignedChar: "unsigned char",
-            lldb.eBasicTypeWChar: "wchar_t",
-            lldb.eBasicTypeSignedWChar: "signed wchar_t",
-            lldb.eBasicTypeUnsignedWChar: "unsigned wchar_t",
-            lldb.eBasicTypeChar16: "char16_t",
-            lldb.eBasicTypeChar32: "char32_t",
-            lldb.eBasicTypeChar8: "char8_t",
-        }
-
-        if basic_type in char_types:
-            if value_data.GetByteSize() > 0:
-                char_val = value_data.GetUnsignedInt8(error, 0)
-                if not error.Fail():
-                    # 可打印字符处理
-                    if 32 <= char_val <= 126:
-                        return f"({char_types[basic_type]}) '{chr(char_val)}'"
-                    # 非打印字符处理
-                    return f"({char_types[basic_type]}) '\\x{char_val:02x}'"
-
-        # 枚举类型特殊处理
-        if type_class == lldb.eTypeClassEnumeration:
-            if summary:
-                return f"({type_name}) {summary}"
-            if value_str:
-                return f"({type_name}) {value_str}"
-            return f"({type_name}) <no value>"
-
-        # 浮点类型特殊处理
-        float_types = {
-            lldb.eBasicTypeHalf: "half",
-            lldb.eBasicTypeFloat: "float",
-            lldb.eBasicTypeDouble: "double",
-            lldb.eBasicTypeLongDouble: "long double",
-        }
-
-        if basic_type in float_types:
-            if value_str:
-                return f"({float_types[basic_type]}) {value_str}"
-            if summary:
-                return f"({float_types[basic_type]}) {summary}"
-
-        # 其他基本类型处理
-        if summary:
-            return f"({type_name}) {summary}"
-
-        if value_str:
-            return f"({type_name}) {value_str}"
-
-        return f"({type_name}) <no value>"
+        return _handle_basic_types(value, basic_type, type_name)
 
     # 处理聚合类型(结构体/数组/向量等)
-    items = []
-
-    # 限制大型结构体的子元素数量
-    display_count = min(num_children, max_children)
-    for i in range(display_count):
-        child = value.GetChildAtIndex(i)
-        # 处理空子元素
-        if not child or not child.IsValid():
-            continue
-
-        name = child.GetName() or f"[{i}]"
-        child_str = format_sbvalue(child, visited, depth + 1, max_depth, max_children)
-
-        # 对于结构体/类/联合体，使用字段名:值格式
-        if type_class in (lldb.eTypeClassStruct, lldb.eTypeClassClass, lldb.eTypeClassUnion):
-            items.append(f"{name}: {child_str}")
-        # 对于数组和向量，只显示值
-        else:
-            items.append(child_str)
-
-    # 添加省略号如果截断了子元素
-    if num_children > max_children:
-        items.append(f"... (+{num_children - max_children} more)")
-
-    # 紧凑格式输出
-    if type_class == lldb.eTypeClassArray:
-        return f"({type_name}) [{', '.join(items)}]"
-    elif type_class == lldb.eTypeClassVector:
-        return f"({type_name}) <{', '.join(items)}>"
-    else:
-        return f"({type_name}) {{{', '.join(items)}}}"
+    return _handle_aggregate_types(value, visited, depth, max_depth, max_children, type_class, type_name)
