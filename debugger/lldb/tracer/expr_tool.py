@@ -93,7 +93,7 @@ class ExpressionTool:
             // 复杂表达式
             a = p1.x + *ptr;
             p_ptr->y = 30;
-            *pptr = 50;
+            **pptr = 50;
 
             // 函数调用参数
             printf("Value: %d\\n", a);
@@ -151,8 +151,8 @@ class ExpressionTool:
             (ExprType.POINTER_DEREF, "*ptr"),
             (ExprType.ASSIGNMENT_TARGET, "p_ptr->y"),
             (ExprType.MEMBER_ACCESS, "p_ptr->y"),
-            (ExprType.ASSIGNMENT_TARGET, "*pptr"),
-            (ExprType.POINTER_DEREF, "*pptr"),
+            (ExprType.POINTER_DEREF, "**pptr"),
+            (ExprType.ASSIGNMENT_TARGET, "**pptr"),
             (ExprType.VARIABLE_ACCESS, "a"),  # printf参数中的a
             (ExprType.VARIABLE_ACCESS, "vec"),
             (ExprType.VARIABLE_ACCESS, "val"),

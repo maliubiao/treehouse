@@ -94,7 +94,21 @@ def _handle_stl_and_smart_pointers(value, type_name, visited, depth, max_depth, 
 
 def _handle_pointer_types(value, visited, depth, max_depth, max_children, shallow_aggregate):
     """处理指针类型"""
-    addr = value.GetLoadAddress()
+    # 使用GetValueAsUnsigned获取指针的真实数值
+    addr = value.GetValueAsUnsigned(lldb.LLDB_INVALID_ADDRESS)
+
+    # 检查无效地址 (全1或0)
+    if addr == 0 or addr == lldb.LLDB_INVALID_ADDRESS:
+        return f"({value.GetType().GetName()}){hex(addr)} -> <invalid>"
+
+    # 尝试识别函数指针
+    pointee_type = value.GetType().GetPointeeType()
+    if pointee_type.IsValid() and pointee_type.GetTypeClass() == lldb.eTypeClassFunction:
+        # 函数指针特殊处理 - 显示签名和函数名
+        func_signature = pointee_type.GetName() or "<function signature>"
+        func_name = value.GetName() or "<unnamed function>"
+        return f"({value.GetType().GetName()}){hex(addr)} -> function {func_signature} ({func_name})"
+
     pointee = value.Dereference()
 
     if not pointee.IsValid():
