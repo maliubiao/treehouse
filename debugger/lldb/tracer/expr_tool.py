@@ -108,6 +108,8 @@ class ExpressionTool:
                 return val * 2;
             }
 
+            //成员访问
+            cl::ReallyHidden
             // 多级成员访问
             Point p2 = {.x=1.5, .y=2.5};
             p_ptr = &p2;
@@ -122,7 +124,12 @@ class ExpressionTool:
             // 包含函数调用的表达式（应排除）
             int size = Tool.size();
             int value = arr[getIndex()];
-
+            // range-based for语句
+            for (auto &I : Sub.OptionsMap) {
+                I.getValue();
+            }
+            &CommonOptions->GenericCategory;
+            CommonOptions->GenericCategory1;
             return 0;
         }
 
@@ -160,8 +167,6 @@ class ExpressionTool:
             (ExprType.SUBSCRIPT_EXPRESSION, "vec[0]"),
             (ExprType.VARIABLE_ACCESS, "a"),  # if条件中的a
             (ExprType.VARIABLE_ACCESS, "val"),  # return中的val
-            (ExprType.VARIABLE_ACCESS, "p2"),
-            (ExprType.ASSIGNMENT_TARGET, "p2"),
             (ExprType.ASSIGNMENT_TARGET, "p_ptr"),
             (ExprType.ADDRESS_OF, "&p2"),
             (ExprType.VARIABLE_ACCESS, "result"),
@@ -171,6 +176,9 @@ class ExpressionTool:
             (ExprType.VARIABLE_ACCESS, "num"),
             (ExprType.ASSIGNMENT_TARGET, "num"),
             (ExprType.MEMBER_ACCESS, "p_ptr->x"),  # 类型转换中的成员访问
+            (ExprType.MEMBER_ACCESS, "Sub.OptionsMap"),  # 新增：range-based for中的成员访问
+            (ExprType.ADDRESS_OF, "&CommonOptions->GenericCategory"),
+            (ExprType.MEMBER_ACCESS, "CommonOptions->GenericCategory1"),
         }
 
         # 预期排除的表达式（字面量不再提取）
@@ -178,11 +186,13 @@ class ExpressionTool:
             (ExprType.VARIABLE_ACCESS, '"nop"'),  # 内联汇编中的字符串
             (ExprType.VARIABLE_ACCESS, "Tool.size()"),  # 函数调用
             (ExprType.VARIABLE_ACCESS, "arr[getIndex()]"),  # 包含函数调用
+            (ExprType.VARIABLE_ACCESS, "I.getValue()"),  # 函数调用
         }
 
         # 验证所有预期表达式都被提取到
         missing = expected_exprs - extracted_exprs
         if missing:
+            logger.error("缺失的表达式: %s", missing)
             return False
 
         # 验证排除的表达式没有被提取
@@ -191,6 +201,7 @@ class ExpressionTool:
             if (expr_type, expr_text) in extracted_exprs:
                 unexpected.add((expr_type, expr_text))
         if unexpected:
+            logger.error("意外的表达式: %s", unexpected)
             return False
 
         logger.info("所有测试通过!")

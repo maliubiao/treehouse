@@ -16,19 +16,20 @@ class NodeProcessor:
 
     def __init__(self, extractor: "ExpressionExtractor"):
         self.extractor = extractor
-
-    def process(self, node: Node, source: bytes) -> bool:
-        """处理节点并返回是否已处理"""
-        handlers = {
+        # 初始化处理器字典
+        self.handlers = {
             "declaration": self._handle_declaration,
             "expression_statement": self._handle_expression_statement,
             "assignment_expression": self._handle_assignment,
             "for_statement": self._handle_for_statement,
             "call_expression": self._handle_call_expression,
+            "range_based_for_statement": self._handle_range_based_for_statement,
         }
 
+    def process(self, node: Node, source: bytes) -> bool:
+        """处理节点并返回是否已处理"""
         # 首先检查特定节点类型
-        handler = handlers.get(node.type)
+        handler = self.handlers.get(node.type)
         if handler:
             handler(node, source)
             return True
@@ -43,24 +44,11 @@ class NodeProcessor:
 
     def _handle_expression_node(self, node: Node, source: bytes, expr_type: ExprType):
         """处理表达式节点"""
-        # 特殊处理pointer_expression：通过内容区分解引用和取地址
-        if node.type == "pointer_expression":
-            try:
-                expr_text = source[node.start_byte : node.end_byte].decode("utf8").strip()
-                if expr_text.startswith("&"):
-                    self._handle_address_of(node, source)
-                else:
-                    self._handle_pointer_deref(node, source)
-            except UnicodeDecodeError:
-                # 默认当作解引用处理
-                self._handle_pointer_deref(node, source)
-            return
-
         handlers = {
-            "address_expression": self._handle_address_of,
             "field_expression": self._handle_member_access,
             "subscript_expression": self._handle_subscript_expression,
             "template_instantiation": self._handle_template_instantiation,
+            "pointer_expression": self._handle_pointer_deref,  # 统一处理指针表达式
         }
 
         handler = handlers.get(node.type)
@@ -155,6 +143,18 @@ class NodeProcessor:
         if body_node:
             self.extractor._traverse(body_node, source)
 
+    def _handle_range_based_for_statement(self, node: Node, source: bytes):
+        """处理C++ range-based for语句"""
+        # 处理范围表达式
+        range_node = node.child_by_field_name("range")
+        if range_node:
+            self.extractor._traverse(range_node, source)
+
+        # 处理循环体
+        body_node = node.child_by_field_name("body")
+        if body_node:
+            self.extractor._traverse(body_node, source)
+
     def _handle_member_access(self, node: Node, source: bytes, is_target=False):
         """处理成员访问表达式"""
         # 总是添加成员访问类型
@@ -174,25 +174,24 @@ class NodeProcessor:
 
     def _handle_pointer_deref(self, node: Node, source: bytes, is_target=False):
         """处理指针解引用（支持多级）"""
-        # 总是添加指针解引用类型
-        self.extractor._add_expression(node, source, ExprType.POINTER_DEREF)
-
-        # 如果是赋值目标，额外添加目标类型
-        if is_target:
-            self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
-
-        operand = node.child_by_field_name("argument")
-        if operand:
-            self.extractor._traverse(operand, source)
-
-    def _handle_address_of(self, node: Node, source: bytes, is_target=False):
-        """处理取地址表达式"""
-        # 总是添加取地址类型
-        self.extractor._add_expression(node, source, ExprType.ADDRESS_OF)
-
-        # 如果是赋值目标，额外添加目标类型
-        if is_target:
-            self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
+        # 检查是否是取地址操作
+        try:
+            expr_text = source[node.start_byte : node.end_byte].decode("utf8").strip()
+            if expr_text.startswith("&"):
+                # 处理为取地址操作
+                self.extractor._add_expression(node, source, ExprType.ADDRESS_OF)
+                if is_target:
+                    self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
+            else:
+                # 处理为指针解引用
+                self.extractor._add_expression(node, source, ExprType.POINTER_DEREF)
+                if is_target:
+                    self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
+        except UnicodeDecodeError:
+            # 默认当作解引用处理
+            self.extractor._add_expression(node, source, ExprType.POINTER_DEREF)
+            if is_target:
+                self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
 
         operand = node.child_by_field_name("argument")
         if operand:

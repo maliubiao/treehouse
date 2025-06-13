@@ -71,7 +71,8 @@ class ExpressionExtractor:
         # 允许模板实例化中的尖括号，但过滤其他括号
         if expr_type != ExprType.TEMPLATE_INSTANCE:
             # 修改正则表达式：允许[]下标表达式，只过滤()函数调用和{}初始化
-            if re.search(r"[\(\)\{\}]", expr_text):
+            # 特别允许成员访问表达式（包含点或箭头操作符）
+            if re.search(r"[\(\)\{\}]", expr_text) and not re.search(r"\.|->", expr_text):
                 logger.debug(
                     "跳过包含函数调用的表达式: 行号=%d, 类型=%s, 内容='%s'",
                     node.start_point[0],
