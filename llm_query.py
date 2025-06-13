@@ -572,14 +572,18 @@ def _get_api_response(
         Generator: 流式响应生成器
     """
     client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
-    extra_body = {
-        "enable_thinking": True if kwargs.get("enable_thinking") else False,
-        "thinking_budget": kwargs.get("thinking_budget", 32 * 1024),
-    }
+    if "gemini" in model.lower():
+        extra_body = {}
+    else:
+        extra_body = {
+            "enable_thinking": True if kwargs.get("enable_thinking") else False,
+            "thinking_budget": kwargs.get("thinking_budget", 32 * 1024),
+        }
     try:
         return client.chat.completions.create(
             model=model,
             messages=history,
+            reasoning_effort="high",
             temperature=kwargs.get("temperature", 0.0),
             extra_body=extra_body,
             top_p=0.8,

@@ -1,13 +1,10 @@
-import atexit
 import collections
-import fnmatch
 import logging
-import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import lldb
-from op_parser import OperandType, parse_disassembly_line, parse_operands
+from op_parser import OperandType, parse_operands
 
 from . import sb_value_printer
 from .events import StepAction
