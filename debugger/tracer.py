@@ -364,6 +364,10 @@ def truncate_repr_value(value, keep_elements=10):
             preview = _truncate_sequence(value, keep_elements)
         elif isinstance(value, dict):
             preview = _truncate_dict(value, keep_elements)
+        elif hasattr(value, "__repr__") and value.__repr__ is not object.__repr__:
+            preview = repr(value)
+        elif hasattr(value, "__str__") and value.__str__ is not object.__str__:
+            preview = str(value)
         elif hasattr(value, "__dict__"):
             preview = _truncate_object(value, keep_elements)
         else:

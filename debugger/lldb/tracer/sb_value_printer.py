@@ -284,7 +284,7 @@ def _handle_aggregate_types(value, visited, depth, max_depth, max_children, type
     return f"({type_name}) {{{', '.join(items)}}}"
 
 
-def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_children=10, shallow_aggregate=False):
+def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_children=5, shallow_aggregate=False):
     """
     格式化SBValue对象为结构化字符串表示，使用C/C++风格的类型标注
     全面支持LLDB的类型系统
