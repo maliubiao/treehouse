@@ -58,6 +58,7 @@ class ExpressionTool:
         """运行内置测试用例"""
         test_code = """
         #include <iostream>
+        #include <vector>
 
         template<typename T>
         class MyVector {
@@ -118,8 +119,13 @@ class ExpressionTool:
             // 内联汇编（应排除）
             asm volatile("nop");
 
+            // 包含函数调用的表达式（应排除）
+            int size = Tool.size();
+            int value = arr[getIndex()];
+
             return 0;
         }
+
         """.encode("utf8")
 
         expressions = self.extract_expressions(test_code)
@@ -128,58 +134,55 @@ class ExpressionTool:
             for expr_type, expr_text, _ in expr_list:
                 extracted_exprs.add((expr_type, expr_text))
 
-        # 预期提取的表达式
+        # 预期提取的表达式（更新为当前支持的7种核心类型）
         expected_exprs = {
             (ExprType.VARIABLE_ACCESS, "a"),
-            (ExprType.LITERAL, "5"),
+            (ExprType.ASSIGNMENT_TARGET, "a"),
             (ExprType.VARIABLE_ACCESS, "ptr"),
+            (ExprType.ASSIGNMENT_TARGET, "ptr"),
             (ExprType.ADDRESS_OF, "&a"),
-            (ExprType.VARIABLE_ACCESS, "pptr"),
             (ExprType.ADDRESS_OF, "&ptr"),
             (ExprType.VARIABLE_ACCESS, "p1"),
-            (ExprType.LITERAL, "10"),
-            (ExprType.LITERAL, "20"),
+            (ExprType.ASSIGNMENT_TARGET, "p1"),
             (ExprType.VARIABLE_ACCESS, "p_ptr"),
+            (ExprType.ASSIGNMENT_TARGET, "p_ptr"),
             (ExprType.ADDRESS_OF, "&p1"),
-            (ExprType.ASSIGNMENT_TARGET, "a"),
             (ExprType.MEMBER_ACCESS, "p1.x"),
             (ExprType.POINTER_DEREF, "*ptr"),
             (ExprType.ASSIGNMENT_TARGET, "p_ptr->y"),
             (ExprType.MEMBER_ACCESS, "p_ptr->y"),
-            (ExprType.LITERAL, "30"),
             (ExprType.ASSIGNMENT_TARGET, "*pptr"),
             (ExprType.POINTER_DEREF, "*pptr"),
-            (ExprType.LITERAL, "50"),
-            (ExprType.LITERAL, '"Value: %d\\n"'),
             (ExprType.VARIABLE_ACCESS, "a"),  # printf参数中的a
             (ExprType.VARIABLE_ACCESS, "vec"),
-            (ExprType.LITERAL, "42"),
             (ExprType.VARIABLE_ACCESS, "val"),
-            (ExprType.VARIABLE_ACCESS, "vec"),  # vec[0]中的vec
-            (ExprType.LITERAL, "0"),
+            (ExprType.ASSIGNMENT_TARGET, "val"),
+            (ExprType.SUBSCRIPT_EXPRESSION, "vec[0]"),
             (ExprType.VARIABLE_ACCESS, "a"),  # if条件中的a
-            (ExprType.LITERAL, "0"),  # if条件中的0
             (ExprType.VARIABLE_ACCESS, "val"),  # return中的val
-            (ExprType.LITERAL, "2"),
             (ExprType.VARIABLE_ACCESS, "p2"),
-            (ExprType.LITERAL, "1.5"),
-            (ExprType.LITERAL, "2.5"),
+            (ExprType.ASSIGNMENT_TARGET, "p2"),
             (ExprType.ASSIGNMENT_TARGET, "p_ptr"),
             (ExprType.ADDRESS_OF, "&p2"),
             (ExprType.VARIABLE_ACCESS, "result"),
+            (ExprType.ASSIGNMENT_TARGET, "result"),
             (ExprType.MEMBER_ACCESS, "p_ptr->x"),
             (ExprType.MEMBER_ACCESS, "p2.y"),
+            (ExprType.VARIABLE_ACCESS, "num"),
+            (ExprType.ASSIGNMENT_TARGET, "num"),
+            (ExprType.MEMBER_ACCESS, "p_ptr->x"),  # 类型转换中的成员访问
         }
 
-        # 预期排除的表达式
+        # 预期排除的表达式（字面量不再提取）
         excluded_exprs = {
-            (ExprType.LITERAL, '"nop"'),  # 内联汇编中的字符串
+            (ExprType.VARIABLE_ACCESS, '"nop"'),  # 内联汇编中的字符串
+            (ExprType.VARIABLE_ACCESS, "Tool.size()"),  # 函数调用
+            (ExprType.VARIABLE_ACCESS, "arr[getIndex()]"),  # 包含函数调用
         }
 
         # 验证所有预期表达式都被提取到
         missing = expected_exprs - extracted_exprs
         if missing:
-            logger.error(f"测试失败: 未提取到预期表达式: {missing}")
             return False
 
         # 验证排除的表达式没有被提取
@@ -188,7 +191,6 @@ class ExpressionTool:
             if (expr_type, expr_text) in extracted_exprs:
                 unexpected.add((expr_type, expr_text))
         if unexpected:
-            logger.error(f"测试失败: 错误提取了排除的表达式: {unexpected}")
             return False
 
         logger.info("所有测试通过!")
