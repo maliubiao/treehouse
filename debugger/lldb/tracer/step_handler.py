@@ -112,17 +112,29 @@ class StepHandler:
         line_expressions = self.expression_cache[filepath].get(line_num - 1, [])
         if not line_expressions:
             return []
-        self.logger.debug(f"Evaluating expressions for {filepath}:{line_num}: {line_expressions}")
+        # self.logger.debug(f"Evaluating expressions for {filepath}:{line_num}: {line_expressions}")
         evaluated_values = []
+        mark_remove = []
         for _, expr_text, _ in line_expressions:
+            if not expr_text:
+                continue
             # 使用 LLDB 求值
             result: lldb.SBValue = frame.EvaluateExpression(expr_text)
-            if result.error.Success() and result.GetValue() is not None:
-                value_str = sb_value_printer.format_sbvalue(result, shallow_aggregate=True)
-                evaluated_values.append(f"{expr_text}={value_str}")
+            if result.error.Success():
+                if result.GetValue() is not None:
+                    value_str = sb_value_printer.format_sbvalue(result, shallow_aggregate=True)
+                    evaluated_values.append(f"{expr_text}={value_str}")
             else:
+                err = result.error.GetCString()
+                if "undeclared identifier" in err or "no member" in err:
+                    mark_remove.append(expr_text)
                 self.logger.debug(f"Failed to evaluate expression '{expr_text}': {result.error.GetCString()}")
-
+        if mark_remove:
+            # 如果有未声明的标识符，移除它们
+            for expr in mark_remove:
+                for i, (expr_type, expr_text, _) in enumerate(line_expressions):
+                    if expr_text == expr:
+                        line_expressions[i] = (None, None, None)
         return evaluated_values
 
     def _log_source_mode(self, indent: str, source_info: str, source_line: str, debug_values: List[str]) -> None:

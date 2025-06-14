@@ -175,6 +175,7 @@ class ExpressionTool:
                     std::cout << "Modified inner var: " << Inner::innerVar << std::endl;
                 }
             }
+            SubArchName.starts_with(a, 1);
             return 0;
         }
 

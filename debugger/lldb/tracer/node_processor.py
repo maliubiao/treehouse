@@ -254,13 +254,8 @@ class NodeProcessor:
 
     def _handle_call_expression(self, node: Node, source: bytes):
         """处理函数调用表达式"""
-        # 提取函数名部分（可能包含成员访问等复杂表达式）
-        function_node = node.child_by_field_name("function")
-        if function_node:
-            self.extractor._traverse(function_node, source)
-
         # 处理参数列表
-        argument_list = node.child_by_field_name("arguments")
+        argument_list = self.get_child_by_type(node, "argument_list")
         if argument_list:
             for arg in argument_list.children:
                 if arg.type not in ["(", ")", ","]:

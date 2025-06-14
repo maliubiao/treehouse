@@ -1,6 +1,7 @@
-python -m debugger.tracer_main --disable-html --enable-var-trace --watch-files="*/tree.py" --watch-files="*/tracer/*.py" tracer/expr_tool.py --source-comment /Users/richard/code/llvm-project/llvm/lib/Support/CommandLine.cpp
+file=../../a.cpp
 
-python ../../tree.py --debug-tree /Users/richard/code/llvm-project/llvm/lib/Support/CommandLine.cpp >sample.astlog
+python -m debugger.tracer_main --disable-html --enable-var-trace --watch-files="*/tree.py" --watch-files="*/tracer/*.py" tracer/expr_tool.py --source-comment $file
+python ../../tree.py --debug-tree $file >sample.astlog
 
 rg "$1" -C 30 sample.astlog | tail -n 200 >ast.log
 rm trace.log
