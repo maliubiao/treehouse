@@ -228,6 +228,17 @@ class ExpressionTool:
             (ExprType.SUBSCRIPT_EXPRESSION, "argv[i][0]"),
             (ExprType.VARIABLE_ACCESS, "i"),
             (ExprType.VARIABLE_ACCESS, "j"),
+            # 新增来自剪贴板的表达式
+            (ExprType.VARIABLE_ACCESS, "value"),
+            (ExprType.ASSIGNMENT_TARGET, "result"),
+            (ExprType.VARIABLE_ACCESS, "result"),
+            (ExprType.ASSIGNMENT_TARGET, "outerVar"),
+            (ExprType.ASSIGNMENT_TARGET, "innerVar"),
+            (ExprType.VARIABLE_ACCESS, "outerVar"),
+            (ExprType.VARIABLE_ACCESS, "innerVar"),
+            (ExprType.VARIABLE_ACCESS, "Inner::displayValues"),
+            (ExprType.ASSIGNMENT_TARGET, "Inner::innerVar"),
+            (ExprType.VARIABLE_ACCESS, "Inner::innerVar"),
         }
 
         # 预期排除的表达式（字面量不再提取, 循环变量不提取）

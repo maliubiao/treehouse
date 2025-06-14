@@ -29,7 +29,7 @@ class NodeProcessor:
             "for_range_loop": self._handle_for_range_statement,
             "call_expression": self._handle_call_expression,
             "function_declarator": self._handle_function_declarator,
-            "template_instantiation": self._handle_template_instantiation,  # 新增模板实例化处理器
+            "template_instantiation": self._handle_template_instantiation,
         }
 
     def get_child_by_type(self, node: Node, child_type: str) -> Node:

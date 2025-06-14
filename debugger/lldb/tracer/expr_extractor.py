@@ -69,7 +69,10 @@ class ExpressionExtractor:
             expr_text = str(source[node.start_byte : node.end_byte])
         if not expr_text:
             return
-
+        if "std::" in expr_text:
+            # 跳过包含 std:: 的表达式（可能是 C++ 标准库类型）
+            logger.debug("跳过包含 std:: 的表达式: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
+            return
         # 跳过全大写标识符（可能是宏）
         if expr_text.strip() and all(c.isupper() or c == "_" for c in expr_text.strip()):
             logger.debug("跳过全大写标识符（可能是宏）: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
