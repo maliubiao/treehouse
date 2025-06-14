@@ -109,16 +109,30 @@ class StepHandler:
                 self.expression_cache[filepath] = {}  # 缓存空结果以避免重试
                 return []
 
+        # 获取当前帧的本地变量
+        locals_map = {}
+        for local_var in frame.GetVariables(True, True, False, True):
+            if local_var.IsValid() and local_var.name:
+                locals_map[local_var.name] = local_var
+
         line_expressions = self.expression_cache[filepath].get(line_num - 1, [])
         if not line_expressions:
             return []
-        # self.logger.debug(f"Evaluating expressions for {filepath}:{line_num}: {line_expressions}")
+
         evaluated_values = []
         mark_remove = []
         for _, expr_text, _ in line_expressions:
             if not expr_text:
                 continue
-            # 使用 LLDB 求值
+
+            # 首先检查是否是简单的变量引用，可以直接从locals获取
+            if expr_text in locals_map:
+                value = locals_map[expr_text]
+                value_str = sb_value_printer.format_sbvalue(value, shallow_aggregate=True)
+                evaluated_values.append(f"{expr_text}={value_str}")
+                continue
+
+            # 对于复杂表达式，使用 LLDB 求值
             result: lldb.SBValue = frame.EvaluateExpression(expr_text)
             if result.error.Success():
                 if result.GetValue() is not None:
@@ -129,6 +143,7 @@ class StepHandler:
                 if "undeclared identifier" in err or "no member" in err:
                     mark_remove.append(expr_text)
                 self.logger.debug(f"Failed to evaluate expression '{expr_text}': {result.error.GetCString()}")
+
         if mark_remove:
             # 如果有未声明的标识符，移除它们
             for expr in mark_remove:
