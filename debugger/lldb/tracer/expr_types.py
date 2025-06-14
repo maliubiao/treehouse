@@ -26,7 +26,6 @@ class ExprTypeHandler:
         "field_expression": ExprType.MEMBER_ACCESS,
         "subscript_expression": ExprType.SUBSCRIPT_EXPRESSION,
         "assignment_expression": ExprType.ASSIGNMENT_TARGET,
-        "template_instantiation": ExprType.TEMPLATE_INSTANCE,
         "qualified_identifier": ExprType.VARIABLE_ACCESS,
     }
 

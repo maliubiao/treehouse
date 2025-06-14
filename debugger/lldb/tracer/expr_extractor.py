@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set
 
 from tree_sitter import Node
 
@@ -15,7 +15,7 @@ logger = logging.getLogger("ExpressionExtractor")
 
 class ExpressionExtractor:
     def __init__(self, language_mode: str = "c"):
-        self.current_line_exprs: Dict[int, List[Tuple[ExprType, str, Tuple[int, int, int, int]]]] = {}
+        self.current_line_exprs: Dict[int, List[Any]] = {}
         self.processed_nodes: Set[int] = set()
         self.added_nodes: Dict[int, Set[ExprType]] = {}
         self.node_processor = NodeProcessor(self)
@@ -67,10 +67,12 @@ class ExpressionExtractor:
             expr_text = source[node.start_byte : node.end_byte].decode("utf8")
         except UnicodeDecodeError:
             expr_text = str(source[node.start_byte : node.end_byte])
-
+        if not expr_text:
+            return
         # 防御层：过滤包含函数调用的表达式
         # 允许模板实例化中的尖括号，但过滤其他括号
-        if expr_type != ExprType.TEMPLATE_INSTANCE:
+        # 对于赋值目标类型，跳过函数调用过滤
+        if expr_type != ExprType.TEMPLATE_INSTANCE and expr_type != ExprType.ASSIGNMENT_TARGET:
             # 修改正则表达式：允许[]下标表达式，只过滤()函数调用和{}初始化
             # 特别允许成员访问表达式（包含点或箭头操作符）
             if re.search(r"[\(\)\{\}]", expr_text) and not re.search(r"\.|->", expr_text):

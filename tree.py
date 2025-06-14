@@ -1850,7 +1850,7 @@ def dump_tree(node, indent=0):
     prefix = "  " * indent
     node_text = node.text.decode("utf8") if node.text else ""
     # 或者根据 source_bytes 截取：node_text = source_bytes[node.start_byte:node.end_byte].decode('utf8')
-    print(f"{prefix}{node.type} [start:{node.start_byte}, end:{node.end_byte}] '{node_text}'")
+    print(f"{prefix}type={node.type} [start:{node.start_byte}, end:{node.end_byte}] '{node_text}'")
     for child in node.children:
         dump_tree(child, indent + 1)
 
@@ -4318,7 +4318,7 @@ def debug_tree_source_file(file_path: Path):
             # 获取节点文本内容
             node_text = node.text.decode("utf-8") if node.text else ""
             # 打印节点类型、位置和内容
-            print(" " * indent + f"{node.type} ({node.start_point} -> {node.end_point}): {node_text}")
+            print(" " * indent + f"type={node.type} ({node.start_point} -> {node.end_point}): {node_text}")
             for child in node.children:
                 print_tree(child, indent + 2)
 

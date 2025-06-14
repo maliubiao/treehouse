@@ -136,6 +136,45 @@ class ExpressionTool:
             &CommonOptions->GenericCategory;
             CommonOptions->GenericCategory1;
             argv[i][0];
+            // Simple C++ class example
+            class Calculator {
+            public:
+                Calculator() : result(0) {}
+                
+                void add(int value) {
+                    result += value;
+                }
+                
+                void subtract(int value) {
+                    result -= value;
+                }
+                
+                int getResult() const {
+                    return result;
+                }
+                
+            private:
+                int result;
+            };
+            // Nested namespaces example
+            namespace Outer {
+                int outerVar = 100;
+                
+                namespace Inner {
+                    int innerVar = 200;
+                    
+                    void displayValues() {
+                        std::cout << "Outer var: " << outerVar << std::endl;
+                        std::cout << "Inner var: " << innerVar << std::endl;
+                    }
+                }
+                
+                void accessInnerNamespace() {
+                    Inner::displayValues();
+                    Inner::innerVar += 50;
+                    std::cout << "Modified inner var: " << Inner::innerVar << std::endl;
+                }
+            }
             return 0;
         }
 

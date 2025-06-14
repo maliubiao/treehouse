@@ -112,7 +112,7 @@ class StepHandler:
         line_expressions = self.expression_cache[filepath].get(line_num - 1, [])
         if not line_expressions:
             return []
-
+        self.logger.debug(f"Evaluating expressions for {filepath}:{line_num}: {line_expressions}")
         evaluated_values = []
         for _, expr_text, _ in line_expressions:
             # 使用 LLDB 求值

@@ -2706,7 +2706,7 @@ class GPTContextProcessor:
     def process_text(self, text: str, ignore_text: bool = False, tokens_left: int = None) -> str:
         """处理文本并生成上下文提示"""
         if not tokens_left:
-            tokens_left = 128 * 1024
+            tokens_left = GLOBAL_MODEL_CONFIG.max_context_size
 
         nodes = self.parse_text_into_nodes(text.strip())
         self.processed_nodes = nodes.copy()
@@ -2743,7 +2743,6 @@ class GPTContextProcessor:
         if symbol_nodes:
             symbol_prompt = self.generate_symbol_patch_prompt(symbol_nodes, tokens_left - processed_parts_len)
             tokens_left -= len(symbol_prompt)
-
         return symbol_prompt + self._finalize_output(processed_parts_text, tokens_left)
 
     def generate_symbol_patch_prompt(self, symbol_nodes, tokens_left: int) -> str:
