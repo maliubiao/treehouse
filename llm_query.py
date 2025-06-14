@@ -583,7 +583,7 @@ def _get_api_response(
         return client.chat.completions.create(
             model=model,
             messages=history,
-            reasoning_effort="low",
+            reasoning_effort="medium",
             temperature=kwargs.get("temperature", 0.0),
             extra_body=extra_body,
             top_p=0.8,

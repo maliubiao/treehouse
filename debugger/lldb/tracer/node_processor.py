@@ -3,12 +3,16 @@ from typing import TYPE_CHECKING
 
 from tree_sitter import Node
 
+from tree import dump_tree
+
 from .expr_types import ExprType, ExprTypeHandler
 
 if TYPE_CHECKING:
     from .expr_extractor import ExpressionExtractor
 
 logger = logging.getLogger("ExpressionExtractor")
+
+DEBUG = False
 
 
 class NodeProcessor:
@@ -22,13 +26,20 @@ class NodeProcessor:
             "expression_statement": self._handle_expression_statement,
             "assignment_expression": self._handle_assignment,
             "for_statement": self._handle_for_statement,
+            "for_range_loop": self._handle_for_range_statement,
             "call_expression": self._handle_call_expression,
-            "range_based_for_statement": self._handle_range_based_for_statement,
         }
+
+    def get_child_by_type(self, node: Node, child_type: str) -> Node:
+        for child in node.children:
+            if child.type == child_type:
+                return child
 
     def process(self, node: Node, source: bytes) -> bool:
         """处理节点并返回是否已处理"""
         # 首先检查特定节点类型
+        if DEBUG:
+            dump_tree(node, 2)
         handler = self.handlers.get(node.type)
         if handler:
             handler(node, source)
@@ -125,33 +136,30 @@ class NodeProcessor:
         if right_node:
             self.extractor._traverse(right_node, source)
 
-    def _handle_for_statement(self, node: Node, source: bytes):
-        """处理for循环语句"""
-        init_node = node.child_by_field_name("initializer")
-        if init_node:
-            self.extractor._traverse(init_node, source)
+    def _handle_for_range_statement(self, node: Node, source: bytes):
+        assert self.get_child_by_type(node, "for")
 
-        condition_node = node.child_by_field_name("condition")
+        field_expr = self.get_child_by_type(node, "field_expression")
+        if field_expr:
+            self.extractor._traverse(field_expr, source)
+        compound_expr = self.get_child_by_type(node, "compound_expression")
+        if compound_expr:
+            self.extractor._traverse(compound_expr, source)
+
+    def _handle_for_statement(self, node: Node, source: bytes):
+        """处理for循环语句 (包括常规for和range-based for)"""
+        # 这是常规 for 循环
+        assert self.get_child_by_type(node, "for")
+
+        condition_node = node.child_by_field_name("binary_expression")
         if condition_node:
             self.extractor._traverse(condition_node, source)
 
-        update_node = node.child_by_field_name("update")
+        update_node = node.child_by_field_name("update_expression")
         if update_node:
             self.extractor._traverse(update_node, source)
 
-        body_node = node.child_by_field_name("body")
-        if body_node:
-            self.extractor._traverse(body_node, source)
-
-    def _handle_range_based_for_statement(self, node: Node, source: bytes):
-        """处理C++ range-based for语句"""
-        # 处理范围表达式
-        range_node = node.child_by_field_name("range")
-        if range_node:
-            self.extractor._traverse(range_node, source)
-
-        # 处理循环体
-        body_node = node.child_by_field_name("body")
+        body_node = node.child_by_field_name("compound_statement")
         if body_node:
             self.extractor._traverse(body_node, source)
 

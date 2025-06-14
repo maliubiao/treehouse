@@ -124,12 +124,18 @@ class ExpressionTool:
             // 包含函数调用的表达式（应排除）
             int size = Tool.size();
             int value = arr[getIndex()];
-            // range-based for语句
-            for (auto &I : Sub.OptionsMap) {
-                I.getValue();
+            // range-based for语句;
+            for (auto &abcd : Sub.OptionsMap) {
+                abcd.getValue();
+            }
+            for (auto &Cat1 : I.second->Categories) {
+            }
+            for(int i = 0; i < j; ++i) {
+                printf("Loop iteration: %d\\n", i);
             }
             &CommonOptions->GenericCategory;
             CommonOptions->GenericCategory1;
+            argv[i][0];
             return 0;
         }
 
@@ -175,18 +181,24 @@ class ExpressionTool:
             (ExprType.MEMBER_ACCESS, "p2.y"),
             (ExprType.VARIABLE_ACCESS, "num"),
             (ExprType.ASSIGNMENT_TARGET, "num"),
-            (ExprType.MEMBER_ACCESS, "p_ptr->x"),  # 类型转换中的成员访问
-            (ExprType.MEMBER_ACCESS, "Sub.OptionsMap"),  # 新增：range-based for中的成员访问
+            (ExprType.MEMBER_ACCESS, "p_ptr->x"),
+            (ExprType.MEMBER_ACCESS, "Sub.OptionsMap"),
+            (ExprType.MEMBER_ACCESS, "I.second->Categories"),
             (ExprType.ADDRESS_OF, "&CommonOptions->GenericCategory"),
             (ExprType.MEMBER_ACCESS, "CommonOptions->GenericCategory1"),
+            (ExprType.SUBSCRIPT_EXPRESSION, "argv[i][0]"),
+            (ExprType.VARIABLE_ACCESS, "i"),
+            (ExprType.VARIABLE_ACCESS, "j"),
         }
 
-        # 预期排除的表达式（字面量不再提取）
+        # 预期排除的表达式（字面量不再提取, 循环变量不提取）
         excluded_exprs = {
             (ExprType.VARIABLE_ACCESS, '"nop"'),  # 内联汇编中的字符串
             (ExprType.VARIABLE_ACCESS, "Tool.size()"),  # 函数调用
             (ExprType.VARIABLE_ACCESS, "arr[getIndex()]"),  # 包含函数调用
-            (ExprType.VARIABLE_ACCESS, "I.getValue()"),  # 函数调用
+            (ExprType.VARIABLE_ACCESS, "abcd.getValue()"),  # 函数调用
+            (ExprType.VARIABLE_ACCESS, "abcd"),  # range-based for 循环变量
+            (ExprType.VARIABLE_ACCESS, "Cat1"),  # range-based for 循环变量
         }
 
         # 验证所有预期表达式都被提取到

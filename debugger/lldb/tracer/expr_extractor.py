@@ -6,6 +6,7 @@ from tree_sitter import Node
 
 from tracer.expr_types import ExprType
 from tracer.node_processor import NodeProcessor
+from tree import dump_tree
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

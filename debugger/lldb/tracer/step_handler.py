@@ -120,8 +120,8 @@ class StepHandler:
             if result.error.Success() and result.GetValue() is not None:
                 value_str = sb_value_printer.format_sbvalue(result, shallow_aggregate=True)
                 evaluated_values.append(f"{expr_text}={value_str}")
-            # else:
-            #     self.logger.debug(f"Failed to evaluate expression '{expr_text}': {result.error.GetCString()}")
+            else:
+                self.logger.debug(f"Failed to evaluate expression '{expr_text}': {result.error.GetCString()}")
 
         return evaluated_values
 
