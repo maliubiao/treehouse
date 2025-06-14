@@ -74,6 +74,7 @@ SUPPORTED_LANGUAGES = {
     ".sh": SHELL_LANG,
     ".cpp": CPP_LANG,
     ".cc": CPP_LANG,
+    ".cxx": CPP_LANG,
 }
 
 # 各语言的查询语句映射

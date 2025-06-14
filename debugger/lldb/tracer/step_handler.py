@@ -48,7 +48,7 @@ class StepHandler:
         # Expression extraction tools
         self.parser_loader = ParserLoader()
         self.expression_extractor = ExpressionExtractor()
-        self.source_file_extensions = {".c", ".cpp", ".cxx"}
+        self.source_file_extensions = {".c", ".cpp", ".cxx", ".cc"}
 
     def _is_address_in_current_function(self, frame: lldb.SBFrame, addr: int) -> bool:
         """检查地址是否在当前函数范围内（带缓存优化）"""
@@ -216,6 +216,9 @@ class StepHandler:
                     inst.size,
                     inst.GetAddress().file_addr - first_inst.GetAddress().file_addr,
                 )
+        if pc not in self.instruction_info_cache:
+            self.logger.error("Instruction info not found for PC: 0x%x", pc)
+            return StepAction.SOURCE_STEP_IN
         mnemonic, operands, size, first_inst_offset = self.instruction_info_cache[pc]
         next_pc = pc + size
         parsed_operands = parse_operands(operands, max_ops=4)
@@ -227,6 +230,7 @@ class StepHandler:
             self.line_cache[pc] = line_entry
         source_info: str = ""
         source_line: str = ""
+        resolved_filepath: Optional[str] = None
         if pc in self.function_start_addrs:
             if frame.args:
                 debug_values.append(f"args of {frame.symbol.name}")
@@ -240,29 +244,51 @@ class StepHandler:
         has_source = line_entry.IsValid()
 
         if line_entry.IsValid():
-            filepath: str = line_entry.GetFileSpec().fullpath
-            if self.tracer.source_ranges.should_skip_source_file_by_path(filepath):
+            original_filepath: str = line_entry.GetFileSpec().fullpath
+            resolved_filepath = self.source_handler.resolve_source_path(original_filepath)
+            if resolved_filepath and self.tracer.source_ranges.should_skip_source_file_by_path(resolved_filepath):
                 return StepAction.SOURCE_STEP_OVER
             line_num: int = int(line_entry.GetLine())
             column: int = line_entry.GetColumn()
 
             # 构建源信息字符串
-            if line_num > 0:
-                source_info = f"{filepath}:{line_num}"
-                if column > 0:
-                    source_info += f":{column}"
+            if resolved_filepath:
+                if line_num > 0:
+                    source_info = f"{resolved_filepath}:{line_num}"
+                    if column > 0:
+                        source_info += f":{column}"
+                else:
+                    source_info = f"{resolved_filepath}:<no line>"
             else:
-                source_info = f"{filepath}:<no line>"
+                # 即使解析失败，也使用原始路径
+                if line_num > 0:
+                    source_info = f"{original_filepath}:{line_num}"
+                    if column > 0:
+                        source_info += f":{column}"
+                else:
+                    source_info = f"{original_filepath}:<no line>"
 
             # 执行表达式钩子并获取结果
-            expr_results = self._execute_expression_hooks(filepath, line_num, frame)
-            debug_values.extend(expr_results)
+            if resolved_filepath:
+                expr_results = self._execute_expression_hooks(resolved_filepath, line_num, frame)
+                debug_values.extend(expr_results)
+            else:
+                expr_results = []
+                self.logger.warning("Skipping expression hooks due to unresolved file path: %s", original_filepath)
+
             # 获取源代码片段
-            source_line = self.source_handler.get_source_code_range(frame, filepath, line_num)
-            # 只有在行号有效时才获取局部变量
-            if line_num > 0:
-                # NEW: Evaluate expressions from source code instead of dumping all locals
-                source_expr_values = self._evaluate_source_expressions(frame, filepath, line_num)
+            if resolved_filepath:
+                source_line = self.source_handler.get_source_code_range(frame, resolved_filepath, line_num)
+            else:
+                source_line = ""
+                self.logger.warning(
+                    "Skipping source code extraction due to unresolved file path: %s", original_filepath
+                )
+
+            # 只有在行号有效且路径已解析时才获取局部变量
+            if line_num > 0 and resolved_filepath:
+                # Evaluate expressions from source code
+                source_expr_values = self._evaluate_source_expressions(frame, resolved_filepath, line_num)
                 debug_values.extend(source_expr_values)
 
         current_source_key: str = f"{source_info};{source_line}"

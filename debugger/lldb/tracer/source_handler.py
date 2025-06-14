@@ -1,5 +1,7 @@
 import logging
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 import lldb
@@ -17,6 +19,9 @@ class SourceHandler:
         self.compile_unit_entries_cache: Dict[str, list] = {}
         self.sorted_line_entries_cache: Dict[str, list] = {}
         self.line_to_next_line_cache: Dict[str, Dict[int, tuple]] = {}
+        self.source_cache: Dict[str, List[str]] = {}
+        self._resolved_path_cache: Dict[str, Optional[str]] = {}
+        self._source_search_paths = self.tracer.config_manager.get_source_search_paths()
 
     @lru_cache(maxsize=100)
     def get_file_lines(self, filepath: str) -> Optional[List[str]]:
@@ -92,6 +97,10 @@ class SourceHandler:
 
     def get_source_code_range(self, frame: lldb.SBFrame, filepath: str, start_line: int) -> str:
         """获取从起始行到下一行条目前的源代码，考虑列信息"""
+        resolved_path = self.resolve_source_path(filepath)
+        if not resolved_path:
+            return ""
+        filepath = resolved_path
         lines = self.get_file_lines(filepath)
         if not lines or start_line <= 0:
             return ""
@@ -123,3 +132,40 @@ class SourceHandler:
                 source_lines.append(lines[line_num - 1])
 
         return " ".join(source_lines).strip()
+
+    def resolve_source_path(self, original_path: str) -> Optional[str]:
+        """解析源文件路径，处理相对路径和搜索路径"""
+        # 检查缓存
+        if original_path in self._resolved_path_cache:
+            return self._resolved_path_cache[original_path]
+
+        resolved_path = None
+
+        # 如果是绝对路径且存在
+        if os.path.isabs(original_path) and os.path.exists(original_path):
+            resolved_path = original_path
+        # 如果是相对路径
+        elif not os.path.isabs(original_path):
+            # 尝试在搜索路径中查找
+            for base_path in self._source_search_paths:
+                candidate = os.path.join(base_path, original_path)
+                if os.path.exists(candidate):
+                    resolved_path = candidate
+                    break
+            # 如果搜索路径中未找到，尝试在当前工作目录查找
+            if not resolved_path:
+                candidate = os.path.abspath(original_path)
+                if os.path.exists(candidate):
+                    resolved_path = candidate
+
+        # 如果仍未找到，记录警告
+        if not resolved_path:
+            self.logger.warning(
+                "Source file not found: %s (searched in: %s)",
+                original_path,
+                ", ".join(self._source_search_paths) if self._source_search_paths else "current directory",
+            )
+        resolved_path = str(Path(resolved_path).resolve())
+        # 更新缓存
+        self._resolved_path_cache[original_path] = resolved_path
+        return resolved_path

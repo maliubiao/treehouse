@@ -27,6 +27,7 @@ class ConfigManager:
             "forward_stdin": True,
             "expression_hooks": [],
             "libc_functions": [],  # 新增libc函数跟踪配置
+            "source_search_paths": [],  # 新增源代码搜索路径
         }
         self.config_file = config_file
         if config_file:
@@ -106,6 +107,26 @@ class ConfigManager:
                     self.config["libc_functions"] = [
                         str(func) for func in config["libc_functions"] if isinstance(func, (str, int, float))
                     ]
+
+            # 处理source_search_paths配置
+            if "source_search_paths" in config:
+                if not isinstance(config["source_search_paths"], list):
+                    self.logger.error("Invalid source_search_paths config: must be list")
+                    self.config["source_search_paths"] = []
+                else:
+                    # 将相对路径转换为绝对路径
+                    resolved_paths = []
+                    for path in config["source_search_paths"]:
+                        if not isinstance(path, str):
+                            self.logger.warning("Skipping invalid path in source_search_paths: %s", path)
+                            continue
+                        if not os.path.isabs(path):
+                            abs_path = os.path.abspath(path)
+                            self.logger.info("Converted source search path to absolute: %s -> %s", path, abs_path)
+                            resolved_paths.append(abs_path)
+                        else:
+                            resolved_paths.append(path)
+                    self.config["source_search_paths"] = resolved_paths
 
     def _load_skip_symbols(self):
         """加载符号配置文件"""
@@ -211,6 +232,10 @@ class ConfigManager:
     def get_libc_functions(self):
         """获取要跟踪的libc函数列表"""
         return self.config.get("libc_functions", [])
+
+    def get_source_search_paths(self):
+        """获取源代码搜索路径列表"""
+        return self.config.get("source_search_paths", [])
 
     def get_call_trace_file(self):
         """获取调用跟踪文件路径"""
