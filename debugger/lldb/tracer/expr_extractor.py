@@ -59,34 +59,44 @@ class ExpressionExtractor:
         if node_id in self.added_nodes and expr_type in self.added_nodes[node_id]:
             return
 
+        # 添加节点到已处理集合
         if node_id not in self.added_nodes:
             self.added_nodes[node_id] = set()
         self.added_nodes[node_id].add(expr_type)
 
+        # 提取表达式文本
         try:
             expr_text = source[node.start_byte : node.end_byte].decode("utf8")
         except UnicodeDecodeError:
             expr_text = str(source[node.start_byte : node.end_byte])
+
+        # 空表达式检查
         if not expr_text:
             return
-        if "std::" in expr_text:
-            # 跳过包含 std:: 的表达式（可能是 C++ 标准库类型）
-            logger.debug("跳过包含 std:: 的表达式: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
-            return
-        if "(" in expr_text and ")" in expr_text:
-            # 跳过包含括号的表达式（可能是函数调用）
-            logger.debug("跳过包含括号的表达式: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
-            return
-        # 跳过全大写标识符（可能是宏）
-        if expr_text.strip() and all(c.isupper() or c == "_" for c in expr_text.strip()):
-            logger.debug("跳过全大写标识符（可能是宏）: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
-            return
-        # 跳过包含斜杠的表达式
-        if "/" in expr_text:
-            logger.debug("跳过包含斜杠的表达式: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
-            return
 
-        # 跳过标准类型
+        start_row, start_col = node.start_point
+
+        # 过滤规则列表 - 每个元素是(条件, 消息)的元组
+        filters = [
+            ("std::" in expr_text, "跳过包含 std:: 的表达式"),
+            ("(" in expr_text and ")" in expr_text, "跳过包含括号的表达式"),
+            (any(op in expr_text for op in ["++", "--", "="]), "跳过包含自增自减操作符的表达式"),
+            (
+                expr_text.strip() and all(c.isupper() or c == "_" for c in expr_text.strip()),
+                "跳过全大写标识符（可能是宏）",
+            ),
+            ("/" in expr_text, "跳过包含斜杠的表达式"),
+            ("<" in expr_text and ">" in expr_text, "跳过模板实例表达式"),
+            (
+                expr_type != ExprType.TEMPLATE_INSTANCE
+                and expr_type != ExprType.ASSIGNMENT_TARGET
+                and re.search(r"[\(\)]", expr_text)
+                and not re.search(r"\.|->|\[", expr_text),
+                "跳过包含函数调用的表达式",
+            ),
+        ]
+
+        # 标准类型和关键字列表
         std_types = {
             # C 基本类型
             "int",
@@ -210,31 +220,19 @@ class ExpressionExtractor:
             "xor_eq",
             "assert",
         }
+
+        # 检查是否是标准类型
         if expr_text.strip() in std_types:
-            logger.debug("跳过标准类型: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
+            logger.debug("跳过标准类型: 行号=%d, 内容='%s'", start_row, expr_text)
             return
 
-        # 过滤模板实例化表达式
-        if "<" in expr_text and ">" in expr_text:
-            logger.debug("跳过模板实例表达式: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
-            return
-
-        # 防御层：过滤包含函数调用的表达式
-        # 允许模板实例化中的尖括号，但过滤其他括号
-        # 对于赋值目标类型，跳过函数调用过滤
-        if expr_type != ExprType.TEMPLATE_INSTANCE and expr_type != ExprType.ASSIGNMENT_TARGET:
-            # 修改正则表达式：允许[]下标表达式和{}初始化，只过滤()函数调用
-            # 特别允许成员访问表达式（包含点或箭头操作符）和下标表达式
-            if re.search(r"[\(\)]", expr_text) and not re.search(r"\.|->|\[", expr_text):
-                logger.debug(
-                    "跳过包含函数调用的表达式: 行号=%d, 类型=%s, 内容='%s'",
-                    node.start_point[0],
-                    expr_type.name,
-                    expr_text,
-                )
+        # 应用过滤规则
+        for condition, message in filters:
+            if condition:
+                logger.debug(f"{message}: 行号=%d, 内容='%s'", start_row, expr_text)
                 return
 
-        start_row, start_col = node.start_point
+        # 提取位置信息
         end_row, end_col = node.end_point
         pos = (start_row, start_col, end_row, end_col)
 
@@ -242,7 +240,7 @@ class ExpressionExtractor:
         if start_row not in self.current_line_exprs:
             self.current_line_exprs[start_row] = []
 
-        # 去重检查：同一行中相同内容的表达式只记录一次
+        # 去重检查
         existing_exprs = {(et, text) for et, text, _ in self.current_line_exprs[start_row]}
         if (expr_type, expr_text) in existing_exprs:
             logger.debug("跳过重复表达式: 行号=%d, 类型=%s, 内容='%s'", start_row, expr_type.name, expr_text)

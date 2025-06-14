@@ -176,6 +176,7 @@ class ExpressionTool:
                 }
             }
             SubArchName.starts_with(a, 1);
+            *--CurPtr = hexdigit(x, !Upper);
             return 0;
         }
 
