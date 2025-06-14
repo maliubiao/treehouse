@@ -69,13 +69,78 @@ class ExpressionExtractor:
             expr_text = str(source[node.start_byte : node.end_byte])
         if not expr_text:
             return
+
+        # 跳过全大写标识符（可能是宏）
+        if expr_text.strip() and all(c.isupper() or c == "_" for c in expr_text.strip()):
+            logger.debug("跳过全大写标识符（可能是宏）: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
+            return
+        # 跳过包含斜杠的表达式
+        if "/" in expr_text:
+            logger.debug("跳过包含斜杠的表达式: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
+            return
+
+        # 跳过标准类型
+        std_types = {
+            # C 基本类型
+            "int",
+            "char",
+            "float",
+            "double",
+            "void",
+            "bool",
+            "short",
+            "long",
+            "unsigned",
+            "signed",
+            "size_t",
+            "ptrdiff_t",
+            "wchar_t",
+            "nullptr_t",
+            # 有符号类型
+            "int8_t",
+            "int16_t",
+            "int32_t",
+            "int64_t",
+            # 无符号类型
+            "uint8_t",
+            "uint16_t",
+            "uint32_t",
+            "uint64_t",
+            # 类型修饰符组合
+            "unsigned int",
+            "unsigned char",
+            "unsigned long",
+            "unsigned short",
+            "signed int",
+            "signed char",
+            "signed long",
+            "signed short",
+            "long int",
+            "long long",
+            "long double",
+            "unsigned long long",
+            # C++ 标准类型
+            "string",
+            "wstring",
+            "nullptr",
+            "byte",
+        }
+        if expr_text.strip() in std_types:
+            logger.debug("跳过标准类型: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
+            return
+
+        # 过滤模板实例化表达式
+        if "<" in expr_text and ">" in expr_text:
+            logger.debug("跳过模板实例表达式: 行号=%d, 内容='%s'", node.start_point[0], expr_text)
+            return
+
         # 防御层：过滤包含函数调用的表达式
         # 允许模板实例化中的尖括号，但过滤其他括号
         # 对于赋值目标类型，跳过函数调用过滤
         if expr_type != ExprType.TEMPLATE_INSTANCE and expr_type != ExprType.ASSIGNMENT_TARGET:
-            # 修改正则表达式：允许[]下标表达式，只过滤()函数调用和{}初始化
-            # 特别允许成员访问表达式（包含点或箭头操作符）
-            if re.search(r"[\(\)\{\}]", expr_text) and not re.search(r"\.|->", expr_text):
+            # 修改正则表达式：允许[]下标表达式和{}初始化，只过滤()函数调用
+            # 特别允许成员访问表达式（包含点或箭头操作符）和下标表达式
+            if re.search(r"[\(\)]", expr_text) and not re.search(r"\.|->|\[", expr_text):
                 logger.debug(
                     "跳过包含函数调用的表达式: 行号=%d, 类型=%s, 内容='%s'",
                     node.start_point[0],

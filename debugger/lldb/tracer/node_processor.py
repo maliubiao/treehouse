@@ -29,6 +29,7 @@ class NodeProcessor:
             "for_range_loop": self._handle_for_range_statement,
             "call_expression": self._handle_call_expression,
             "function_declarator": self._handle_function_declarator,
+            "template_instantiation": self._handle_template_instantiation,  # 新增模板实例化处理器
         }
 
     def get_child_by_type(self, node: Node, child_type: str) -> Node:
@@ -38,7 +39,6 @@ class NodeProcessor:
 
     def process(self, node: Node, source: bytes) -> bool:
         """处理节点并返回是否已处理"""
-        # 首先检查特定节点类型
         if DEBUG:
             dump_tree(node, 2)
 
@@ -74,6 +74,15 @@ class NodeProcessor:
         else:
             # 默认处理：添加表达式
             self.extractor._add_expression(node, source, expr_type)
+
+    def _handle_template_instantiation(self, node: Node, source: bytes):
+        """处理模板实例化节点：跳过整个节点及其子节点"""
+        # 标记节点已处理，避免递归子节点
+        self.extractor.processed_nodes.add(id(node))
+        # 跳过所有子节点
+        for child in node.children:
+            self.extractor.processed_nodes.add(id(child))
+        logger.debug("跳过模板实例化节点: %s", node)
 
     def _handle_declaration(self, node: Node, source: bytes):
         """处理声明语句中的初始化表达式"""
@@ -125,12 +134,40 @@ class NodeProcessor:
             self.extractor._traverse(right_node, source)
 
     def _handle_for_range_statement(self, node: Node, source: bytes):
-        assert self.get_child_by_type(node, "for")
+        """处理范围for循环"""
+        # 标记循环变量节点，避免被当作变量访问提取
+        for child in node.children:
+            # 处理引用声明符中的变量
+            if child.type == "reference_declarator":
+                # 在reference_declarator中查找标识符
+                for subchild in child.children:
+                    if subchild.type == "identifier":
+                        # 标记节点避免后续处理
+                        self.extractor.processed_nodes.add(id(subchild))
+            # 处理指针声明符中的变量
+            elif child.type == "pointer_declarator":
+                # 在pointer_declarator中查找标识符
+                for subchild in child.children:
+                    if subchild.type == "identifier":
+                        self.extractor.processed_nodes.add(id(subchild))
+            # 处理直接标识符声明
+            elif child.type == "identifier":
+                self.extractor.processed_nodes.add(id(child))
 
-        field_expr = self.get_child_by_type(node, "field_expression")
-        if field_expr:
-            self.extractor._traverse(field_expr, source)
-        compound_expr = self.get_child_by_type(node, "compound_expression")
+        # 处理循环容器和循环体
+        # 查找容器表达式（可能是field_expression或pointer_expression）
+        container_expr = None
+        for child in node.children:
+            if child.type in ["field_expression", "pointer_expression"]:
+                container_expr = child
+                break
+
+        if container_expr:
+            # 处理容器表达式
+            self.extractor._traverse(container_expr, source)
+
+        # 处理循环体
+        compound_expr = self.get_child_by_type(node, "compound_statement")
         if compound_expr:
             self.extractor._traverse(compound_expr, source)
 
@@ -139,7 +176,7 @@ class NodeProcessor:
         # 遍历for语句的所有子节点
         for child in node.children:
             # 处理初始化部分 (声明或表达式)
-            if child.type in ["declaration", "expression_statement"]:
+            if child.type == "expression_statement":
                 self.extractor._traverse(child, source)
             # 处理条件部分 (二元表达式)
             elif child.type == "binary_expression":
@@ -160,13 +197,16 @@ class NodeProcessor:
         if is_target:
             self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
 
-        field = node.child_by_field_name("field")
-        if field and field.type == "field_identifier":
-            self.extractor.processed_nodes.add(id(field))
-
+        # 递归处理对象节点
         object_node = node.child_by_field_name("object")
         if object_node:
+            # 处理对象节点（可能是复杂表达式）
             self.extractor._traverse(object_node, source)
+
+        # 跳过字段标识符节点
+        field_identifier = node.child_by_field_name("property")
+        if field_identifier:
+            self.extractor.processed_nodes.add(id(field_identifier))
 
     def _handle_pointer_deref(self, node: Node, source: bytes, is_target=False):
         """处理指针解引用（支持多级）"""
@@ -189,7 +229,10 @@ class NodeProcessor:
             if is_target:
                 self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
 
-        # 不再递归遍历操作数，确保整个指针表达式作为单一表达式处理
+        # 递归处理操作数以支持多级指针
+        operand = node.child_by_field_name("operand")
+        if operand:
+            self.extractor._traverse(operand, source)
 
     def _handle_subscript_expression(self, node: Node, source: bytes, is_target=False):
         """处理下标访问表达式"""
@@ -200,22 +243,41 @@ class NodeProcessor:
         if is_target:
             self.extractor._add_expression(node, source, ExprType.ASSIGNMENT_TARGET)
 
-        # 不再递归遍历子节点，避免重复提取内部表达式
-        # 使用 node type 判断代替 field name
+        # 递归处理数组和索引表达式
+        array_node = node.child_by_field_name("array")
+        index_node = node.child_by_field_name("index")
+
+        if array_node:
+            self.extractor._traverse(array_node, source)
+        if index_node:
+            self.extractor._traverse(index_node, source)
 
     def _handle_call_expression(self, node: Node, source: bytes):
         """处理函数调用表达式"""
-        argument_list = self.get_child_by_type(node, "argument_list")
-        for i in argument_list.children:
-            if i.type not in ["(", ")", ","]:
-                self.extractor._traverse(i, source)
+        # 提取函数名部分（可能包含成员访问等复杂表达式）
+        function_node = node.child_by_field_name("function")
+        if function_node:
+            self.extractor._traverse(function_node, source)
+
+        # 处理参数列表
+        argument_list = node.child_by_field_name("arguments")
+        if argument_list:
+            for arg in argument_list.children:
+                if arg.type not in ["(", ")", ","]:
+                    # 递归处理参数表达式（不再显式添加，依赖递归处理自动提取）
+                    self.extractor._traverse(arg, source)
 
     def _handle_function_declarator(self, node: Node, source: bytes):
         """处理函数定义"""
-        # 处理函数名
+        # 处理函数名：标记为已处理，避免提取
+        declarator = node.child_by_field_name("declarator")
+        if declarator:
+            # 将函数名节点标记为已处理
+            self.extractor.processed_nodes.add(id(declarator))
+
         parameter_list = self.get_child_by_type(node, "parameter_list")
-        for i in parameter_list.children:
-            self.extractor._traverse(i, source)
+        if parameter_list:
+            self.extractor._traverse(parameter_list, source)
 
         compond_statement = self.get_child_by_type(node, "compound_statement")
         if compond_statement:
