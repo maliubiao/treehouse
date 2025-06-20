@@ -8,47 +8,45 @@
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug
 make
+cd ..
 
-# 启动调试
-lldb ./basic_program
-(lldb) b so1_test_arguments
-(lldb) b so2_test_arguments
-(lldb) b test_argument_passing
-(lldb) run
+# 启动LLDB测试
+lldb --batch -o "b so1_test_arguments" \
+          -o "b so2_test_arguments" \
+          -o "b test_argument_passing" \
+          -o "run" \
+          -o "frame variable" \
+          -o "register read -f float" \
+          -o "continue" \
+          -o "exit" \
+          ./build/basic_program
+
+echo "复杂参数传递测试完成"
 ```
 
-### 调试参数传递
+## SO4复杂返回值调试
+
+### 调试示例
 ```lldb
-# 查看整型参数
-frame variable counter
+# 设置复杂返回值断点
+b so4_return_struct
+b so4_return_nested
+b so4_return_float_array
 
-# 查看浮点参数
-frame variable f1
-frame variable d1
+# 查看返回值
+# 结构体返回值存储在x0寄存器指向的内存
+frame variable *((ComplexReturn *)x0)
+frame variable *((NestedReturn *)x0)
+frame variable *((FloatArrayReturn *)x0)
 
-# 查看字符串
-frame variable str
+# 浮点返回值存储在s0寄存器
+register read -f float s0
 
-# 查看结构体
-frame variable struct_val
-frame variable *struct_ptr
+# 双精度返回值存储在d0寄存器
+register read -f float d0
 
-# 查看嵌套结构体
-frame variable nested
-
-# 查看浮点数组结构体
-frame variable floats
-
-# 查看浮点寄存器
-register read -f float s0 d0 s1 d1
-
-# 查看通用寄存器
-register read x0 x1 x2 x3
-```
-
-### 测试脚本
-```bash
-./test_argument_passing.sh
+# 字符串返回值存储在x0寄存器
+memory read -s1 -c32 -f A x0
 ```
 
 ## 文件IO调试功能
@@ -99,4 +97,22 @@ typedef struct {
     float f_arr[2];
     double d_arr[2];
 } FloatStruct;
+
+// SO4复杂返回值类型
+typedef struct {
+    int int_val;
+    float float_val;
+    double double_val;
+    const char *str_val;
+} ComplexReturn;
+
+typedef struct {
+    ComplexReturn base;
+    int array[3];
+} NestedReturn;
+
+typedef struct {
+    float f_arr[2];
+    double d_arr[2];
+} FloatArrayReturn;
 ```

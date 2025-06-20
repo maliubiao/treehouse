@@ -94,27 +94,14 @@ class EventLoop:
 
     def _handle_stopped_state(self, process: lldb.SBProcess, event: lldb.SBEvent) -> None:
         """处理停止状态"""
-        thread_need_to_handle = []
-        for thread in process:
-            t: lldb.SBThread = thread
-            if not t.IsValid():
-                continue
-            self.threads[t.GetThreadID()] = t
-            if thread.GetStopReason() == lldb.eStopReasonBreakpoint:
-                bp_id = thread.GetStopReasonDataAtIndex(0)
-                try:
-                    thread_need_to_handle.append((thread, self.tracer.target.FindBreakpointByID(bp_id)))
-                except BaseException as e:
-                    continue
-        handled_threads = set()
-        for thread, _ in thread_need_to_handle:
-            self._handle_breakpoint_stop(process, thread)
-            handled_threads.add(thread.GetThreadID())
-        thread = process.GetSelectedThread()
-        if thread.GetThreadID() in handled_threads:
+        thread: lldb.SBThread = process.GetSelectedThread()
+        if self.tracer.main_thread_id > 0 and thread.GetThreadID() != self.tracer.main_thread_id:
+            thread.StepOut()
             return
         stop_reason = thread.GetStopReason()
-        if stop_reason == lldb.eStopReasonPlanComplete:
+        if stop_reason == lldb.eStopReasonBreakpoint:
+            self._handle_breakpoint_stop(process, thread)
+        elif stop_reason == lldb.eStopReasonPlanComplete:
             self._handle_plan_complete(thread)
         elif stop_reason == lldb.eStopReasonTrace:
             self.logger.info("hit trace, continue execution")
@@ -176,7 +163,7 @@ class EventLoop:
         """处理LR断点"""
         # self.logger.info("Hit LR breakpoint, continuing execution")
         frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
-        action: StepAction = self.tracer.step_handler.on_step_hit(frame)
+        action: StepAction = self.tracer.step_handler.on_step_hit(frame, "lr_breakpoint")
         self.action_handle(action, thread)
 
     def action_handle(self, action: StepAction, thread: lldb.SBThread) -> None:
@@ -201,7 +188,7 @@ class EventLoop:
         """处理计划完成"""
         if self.tracer.entry_point_breakpoint_event.is_set():
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
-            action: StepAction = self.tracer.step_handler.on_step_hit(frame)
+            action: StepAction = self.tracer.step_handler.on_step_hit(frame, "threadplan")
             self.action_handle(action, thread)
 
     def _handle_termination_state(self, process: lldb.SBProcess, state: int) -> None:

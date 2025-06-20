@@ -13,10 +13,13 @@ class BreakpointHandler:
         self.logger = tracer.logger
         self.entry_point_breakpoint_event = tracer.entry_point_breakpoint_event
 
-    def handle_breakpoint(self, frame, bp_loc):
+    def handle_breakpoint(self, frame: lldb.SBFrame, bp_loc):
         # 验证断点位置信息
         if self.tracer.breakpoint.GetID() == bp_loc:
-            self.logger.info("Hit entry point breakpoint at %s", frame.GetFunctionName())
+            self.tracer.main_thread_id = frame.thread.id
+            self.logger.info(
+                "Hit entry point breakpoint at %s, thread_id %d", frame.GetFunctionName(), self.tracer.main_thread_id
+            )
             if not self.entry_point_breakpoint_event.is_set():
                 self.entry_point_breakpoint_event.set()
                 self.tracer.step_handler.base_frame_count = frame.thread.GetNumFrames()

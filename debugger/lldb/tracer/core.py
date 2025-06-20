@@ -60,8 +60,9 @@ class Tracer:
         self.pthread_create_breakpoint_id: Optional[int] = None
         self.pthread_join_breakpoint_id: Optional[int] = None
         self.lr_breakpoint_id: Optional[int] = None
-        self.thread_breakpoint_seen: set[int] = set()  # 用于跟踪已见断点ID
-        self.return_breakpoint_seen: set[int] = set()  # 用于跟踪返回断点ID
+        self.thread_breakpoint_seen: set[int] = set()
+        self.return_breakpoint_seen: set[int] = set()
+        self.main_thread_id: Optional[int] = -1
 
     def continue_to_main(self) -> None:
         while not self.entry_point_breakpoint_event.is_set():
