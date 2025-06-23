@@ -1,29 +1,6 @@
 # LLDB Tracer
 
-高级LLDB调试工具，提供增强的调试功能和可视化界面。
-
-## 新架构说明
-
-项目已重构为模块化结构：
-
-```
-tracer/
-├── __init__.py         # 包入口
-├── core.py             # Tracer核心类
-├── config.py           # 配置管理
-├── logging.py          # 日志管理
-├── symbols.py          # 符号处理和渲染
-├── utils.py            # 工具函数
-├── events.py           # 事件处理
-└── breakpoints.py      # 断点相关
-tracer_main.py          # 主入口脚本
-```
-
-## 安装
-
-```bash
-pip install -r requirements.txt
-```
+高级LLDB调试工具，提供源代码行级变量跟踪，提供汇编级指令跟踪及寄存器内存使用跟踪
 
 ## 使用示例
 
@@ -54,6 +31,8 @@ environment:
   CUSTOM_SETTING: "special_value"
 ```
 
+环境变量将以`KEY=VALUE`格式传递给被调试程序，支持变量扩展（如`$PATH`）。
+
 ### 模块跳过配置
 使用`--dump-modules-for-skip`生成配置，工具会交互式显示所有模块并让用户选择保留的模块，其余模块将被跳过。
 
@@ -65,35 +44,30 @@ step_action:
   "/another/source/file.py": [[5, 15], "source_step_in"]
 ```
 
-- 格式：`文件路径: [[起始行号, 结束行号], "步进策略"]`
-- 支持策略：`step_in`, `step_over`, `step_out`, `source_step_in`, `source_step_over`
+- **格式**：`文件路径: [[起始行号, 结束行号], "步进策略"]`
+- **支持策略**：
+  - `step_in`：单步进入函数调用
+  - `step_over`：单步跳过函数调用
+  - `step_out`：单步跳出当前函数
+  - `source_step_in`：源码级单步进入
+  - `source_step_over`：源码级单步跳过
 
 ### 循环检测
 为避免在循环中无限步进，工具会检测以下情况：
 1. 当同一行代码被命中超过10次时，自动执行`step_out`退出当前帧
 2. 当同一分支目标地址被命中超过10次时，自动跳出循环
 
-阈值可通过修改`BRANCH_MAX_TOLERANCE`常量调整
+阈值可通过修改`BRANCH_MAX_TOLERANCE`常量（位于`tracer/step_handler.py`）调整：
+```python
+# 默认循环检测阈值
+BRANCH_MAX_TOLERANCE = 10
+```
 
 ### 符号可视化
-运行后会生成`symbols.html`文件，在浏览器中打开可查看交互式符号信息。
-
-## 测试
-
-运行测试脚本：
-```bash
-./test_tracer.sh
-```
-
-测试环境变量功能：
-```bash
-./test_env_vars.sh
-```
-
-测试步进策略配置：
-```bash
-./test_step_actions.sh
-```
+运行后会生成`symbols.html`文件，在浏览器中打开可查看交互式符号信息，包括：
+- 函数调用关系
+- 变量值变化
+- 内存地址映射
 
 ## libc函数参数自动跟踪功能
 
@@ -103,11 +77,8 @@ step_action:
 3. 在函数返回时记录返回值
 4. 只需要配置函数名列表即可工作
 
-### 实现方案
-
-#### 1. 配置扩展
-在config.yaml中添加`libc_functions`配置项，包含要跟踪的函数名列表：
-
+### 配置方法
+在`tracer_config.yaml`中添加`libc_functions`配置项：
 ```yaml
 libc_functions:
   - fopen
@@ -118,24 +89,20 @@ libc_functions:
   - free
 ```
 
-#### 2. 参数解析器
-根据平台ABI规范解析参数：
-- ARM64: 使用x0-x7寄存器传递前8个参数
-- x86_64: 使用rdi, rsi, rdx, rcx, r8, r9寄存器传递前6个参数
-- 栈参数通过frame.FindVariable()获取
+### 实现原理
+- **ARM64架构**：使用x0-x7寄存器传递前8个参数
+- **x86_64架构**：使用rdi, rsi, rdx, rcx, r8, r9寄存器传递前6个参数
+- **栈参数**：通过`frame.FindVariable()`获取
+- **返回值处理**：存储在x0/rax寄存器中
 
-#### 3. 返回值处理
-- 在函数入口设置断点时，同时设置返回地址断点
-- 返回值通常存储在x0/rax寄存器中
-
-#### 4. 日志格式
+### 日志格式
 函数调用日志示例：
 ```
-[time] CALL fopen(path="/etc/passwd", mode="r") 
-[time] RET fopen => 0x1234 (FILE*)
+[时间戳] CALL fopen(path="/etc/passwd", mode="r") 
+[时间戳] RET fopen => 0x1234 (FILE*)
 ```
 
-### 调试优化
+## 调试优化
 - 改进了无效行条目的处理逻辑，默认继续跟踪
 - 增强源代码表达式评估的健壮性
 - 优化调试信息处理流程，整合源代码表达式评估
