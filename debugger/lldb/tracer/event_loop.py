@@ -114,18 +114,20 @@ class EventLoop:
         """处理断点停止"""
 
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
-        if bp_id in self.tracer.breakpoint_seen:
+        pc = thread.frame[0].GetPC()
+        if pc in self.tracer.breakpoint_seen:
             self._handle_lr_breakpoint(thread)
         elif bp_id == self.tracer.pthread_create_breakpoint_id:
-            self.tracer.target.FindBreakpointByID(bp_id)  # 保持调用但不赋值
+            # 保持调用但不赋值
             self.handle_pthread_create_breakpoint(process, thread)
         elif bp_id == self.tracer.pthread_join_breakpoint_id:
             self.logger.info("Hit pthread_join breakpoint, continuing execution")
             process.Continue()
         else:
-            bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
-            self.logger.info("Breakpoint ID: %d, Location: %d", bp_id, bp_loc_id)
+            # bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
+            bp = self.tracer.target.FindBreakpointByID(bp_id)
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
+            self.logger.info("Breakpoint %s hit at PC: 0x%x, frame: %s, thread %s", bp, pc, frame, thread)
             self.tracer.breakpoint_handler.handle_breakpoint(frame, bp_id)
 
     def handle_pthread_create_breakpoint(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
@@ -168,6 +170,7 @@ class EventLoop:
 
     def action_handle(self, action: StepAction, thread: lldb.SBThread) -> None:
         """处理特定的步进动作"""
+        # self.logger.info("Handling action: %s", action.name)
         if action == StepAction.STEP_OVER:
             # self.logger.info("Step over detected")
             thread.StepInstruction(True)

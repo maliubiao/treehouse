@@ -69,7 +69,7 @@ class SourceRangeManager:
         line_entry = sb_addr.GetLineEntry()
         if not line_entry or not line_entry.IsValid():
             self.logger.debug(f"No valid line entry found for address 0x{address:x}")
-            self._address_decision_cache[address] = True
+            self._address_decision_cache[address] = False
             return False
 
         file_spec = line_entry.GetFileSpec()

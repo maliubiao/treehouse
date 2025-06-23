@@ -254,6 +254,7 @@ class Tracer:
         self.target = target
         self.debugger.HandleCommand("command script import --allow-reload tracer")
         self.debugger.HandleCommand("settings set target.use-fast-stepping true")
+        self.debugger.HandleCommand("settings set target.process.follow-fork-mode parent")
         bp_config = self.config_manager.config.get("start_breakpoint", {})
         bp_type = bp_config.get("type", "entry")
 

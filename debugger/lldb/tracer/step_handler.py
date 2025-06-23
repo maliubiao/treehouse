@@ -38,8 +38,6 @@ class StepHandler:
         self.function_start_addrs = set()
         self.function_range_cache = {}
         self.addr_to_symbol_cache: Dict[int, tuple[str, str, int]] = {}
-        self.breakpoint_lru = collections.OrderedDict()
-        self.max_lru_size = 100
         self.expression_cache: Dict[str, Dict[int, list]] = {}
 
         # State
@@ -256,11 +254,12 @@ class StepHandler:
                 self.current_frame_line_counter[cfa_addr] = defaultdict(int)
             self.current_frame_line_counter[cfa_addr][line_entry.GetLine()] += 1
             if self.current_frame_line_counter[cfa_addr][line_entry.GetLine()] > BRANCH_MAX_TOLERANCE:
-                self.logger.warning(
-                    "Line %d in frame %s has been hit more than 20 times, get out of this frame",
-                    line_entry.GetLine(),
-                    frame.GetFunctionName() or "unknown function",
-                )
+                # self.logger.warning(
+                #     "Line %d in frame %s has been hit more than %s times, get out of this frame",
+                #     line_entry.GetLine(),
+                #     frame.GetFunctionName() or "unknown function",
+                #     BRANCH_MAX_TOLERANCE,
+                # )
                 return self.step_out
         debug_values = self._process_debug_info(frame, mnemonic, operands, resolved_filepath)
         if resolved_filepath and self.tracer.source_ranges.should_skip_source_file_by_path(resolved_filepath):
@@ -298,8 +297,11 @@ class StepHandler:
     def _process_debug_info(self, frame: lldb.SBFrame, mnemonic: str, operands: str, resolved_path: str) -> List[str]:
         """处理调试信息"""
         parsed_operands = parse_operands(operands, max_ops=4)
-        debug_values = self.debug_info_handler.capture_register_values(frame, mnemonic, parsed_operands)
-        debug_values.extend(self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine()))
+        if self.insutruction_mode:
+            debug_values = self.debug_info_handler.capture_register_values(frame, mnemonic, parsed_operands)
+            debug_values.extend(self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine()))
+        else:
+            debug_values = self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine())
         return debug_values
 
     def _get_line_entry(self, frame: lldb.SBFrame, pc: int) -> lldb.SBLineEntry:
@@ -368,15 +370,10 @@ class StepHandler:
                 self.tracer.target.BreakpointDelete(bp_id)
                 del self.tracer.breakpoint_table[addr]
                 self.tracer.breakpoint_seen.remove(bp_id)
-                self.breakpoint_lru.pop(addr, None)  # 从LRU缓存中移除
 
     def _update_lru_breakpoint(self, lr_value: int) -> bool:
         """设置返回地址断点，使用LRU缓存管理"""
-        # 检查是否已在缓存中
-        if lr_value in self.breakpoint_lru:
-            # 更新为最近使用
-            self.breakpoint_lru.move_to_end(lr_value)
-            return True
+
         self.logger.info("Setting breakpoint at LR: 0x%x", lr_value)
         # 创建新断点
         bp: lldb.SBBreakpoint = self.tracer.target.BreakpointCreateByAddress(lr_value)
@@ -384,26 +381,12 @@ class StepHandler:
             self.logger.error("Failed to set breakpoint at address 0x%x", lr_value)
             return False
 
-        bp.SetOneShot(False)
+        bp.SetOneShot(True)
         bp_id = bp.GetID()
-
+        self.logger.info("Created breakpoint with ID: %d at address 0x%x", bp_id, lr_value)
         # 加入全局表
-        self.tracer.breakpoint_table[lr_value] = bp_id
-        self.tracer.breakpoint_seen.add(bp_id)
-
-        # 加入LRU缓存
-        self.breakpoint_lru[lr_value] = bp_id
-
-        # 如果缓存满，淘汰最久未使用的断点
-        if len(self.breakpoint_lru) > self.max_lru_size:
-            old_addr, old_bp_id = self.breakpoint_lru.popitem(last=False)
-            # 删除断点
-            self.tracer.target.BreakpointDelete(old_bp_id)
-            # 从全局表中移除
-            if old_addr in self.tracer.breakpoint_table:
-                del self.tracer.breakpoint_table[old_addr]
-            if old_bp_id in self.tracer.breakpoint_seen:
-                self.tracer.breakpoint_seen.remove(old_bp_id)
+        self.tracer.breakpoint_table[lr_value] = lr_value
+        self.tracer.breakpoint_seen.add(lr_value)
         return True
 
     def _get_address_info(self, addr: int) -> tuple[str, str, int]:

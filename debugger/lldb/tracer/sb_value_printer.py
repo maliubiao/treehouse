@@ -328,6 +328,9 @@ def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_
 
     # 获取详细类型信息
     type_class, basic_type, type_name = get_type_info(value)
+    if "iterator" in type_name:
+        # 特殊处理迭代器类型
+        return f"({type_name}) <iterator>"
     addr = value.GetLoadAddress()
 
     # 调试日志：打印类型信息
@@ -352,17 +355,6 @@ def format_sbvalue(value: lldb.SBValue, visited=None, depth=0, max_depth=5, max_
     )
     if stl_result is not None:
         return stl_result
-
-    # 定义聚合类型集合 (使用蛇形命名)
-    aggregate_types = (
-        lldb.eTypeClassStruct,
-        lldb.eTypeClassClass,
-        lldb.eTypeClassUnion,
-        lldb.eTypeClassArray,
-        lldb.eTypeClassVector,
-        lldb.eTypeClassTypedef,
-        lldb.eTypeClassPointer,
-    )
 
     # 特殊处理字符类型 (char指针/数组)
     if type_class in (lldb.eTypeClassPointer, lldb.eTypeClassArray, lldb.eTypeClassVector):
