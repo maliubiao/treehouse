@@ -18,6 +18,8 @@ from .utils import get_symbol_type_str
 if TYPE_CHECKING:
     from .core import Tracer
 
+BRANCH_MAX_TOLERANCE = 10
+
 
 class StepHandler:
     def __init__(self, tracer: "Tracer", bind_thread_id=None) -> None:
@@ -56,6 +58,7 @@ class StepHandler:
         self.source_file_extensions = {".c", ".cpp", ".cxx", ".cc"}
         self.branch_trace_info = {}
         self.current_frame_branch_counter = {}
+        self.current_frame_line_counter = {}
         self.bind_thread_id = bind_thread_id
 
     def _is_address_in_current_function(self, frame: lldb.SBFrame, addr: int) -> bool:
@@ -248,6 +251,17 @@ class StepHandler:
                         line_entry.GetLine(),
                     )
                     return self.step_action_str_to_enum(action)
+            cfa_addr = frame.GetCFA()
+            if cfa_addr not in self.current_frame_line_counter:
+                self.current_frame_line_counter[cfa_addr] = defaultdict(int)
+            self.current_frame_line_counter[cfa_addr][line_entry.GetLine()] += 1
+            if self.current_frame_line_counter[cfa_addr][line_entry.GetLine()] > BRANCH_MAX_TOLERANCE:
+                self.logger.warning(
+                    "Line %d in frame %s has been hit more than 20 times, get out of this frame",
+                    line_entry.GetLine(),
+                    frame.GetFunctionName() or "unknown function",
+                )
+                return self.step_out
         debug_values = self._process_debug_info(frame, mnemonic, operands, resolved_filepath)
         if resolved_filepath and self.tracer.source_ranges.should_skip_source_file_by_path(resolved_filepath):
             return self.step_over
@@ -499,7 +513,9 @@ class StepHandler:
     def before_new_frame(self, frame: lldb.SBFrame):
         cfa_addr = frame.GetCFA()
         if cfa_addr in self.current_frame_branch_counter:
-            self.current_frame_branch_counter[frame.GetCFA()].clear()
+            self.current_frame_branch_counter[cfa_addr].clear()
+        if cfa_addr in self.current_frame_line_counter:
+            self.current_frame_line_counter[cfa_addr].clear()
 
     def _determine_step_action(
         self, mnemonic: str, parsed_operands, frame: lldb.SBFrame, pc: int, next_pc: int, indent: str
@@ -552,7 +568,7 @@ class StepHandler:
                 self.current_frame_branch_counter[cfa_addr] = defaultdict(int)
 
             self.current_frame_branch_counter[cfa_addr][next_pc] += 1
-            if self.current_frame_branch_counter[cfa_addr][next_pc] > 20:
+            if self.current_frame_branch_counter[cfa_addr][next_pc] > BRANCH_MAX_TOLERANCE:
                 self._handle_excessive_branches(frame, start_addr, end_addr, offset, pc, mnemonic, indent)
                 return True
         return False
