@@ -200,7 +200,7 @@ class Tracer:
             self.log_manager.log_target_info(self.target)
 
         self.install(self.target)
-        self.set_pthread_create_breakpoint()
+        # self.set_pthread_create_breakpoint()
         # self.set_pthread_join_breakpoint()
         self.listener.StartListeningForEventClass(
             self.debugger,

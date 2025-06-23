@@ -57,6 +57,17 @@ environment:
 ### 模块跳过配置
 使用`--dump-modules-for-skip`生成配置，工具会交互式显示所有模块并让用户选择保留的模块，其余模块将被跳过。
 
+### 步进策略配置
+针对特定源代码文件指定步进策略：
+```yaml
+step_action:
+  "/path/to/source/file.c": [[10, 20], "step_over"]
+  "/another/source/file.py": [[5, 15], "source_step_in"]
+```
+
+- 格式：`文件路径: [[起始行号, 结束行号], "步进策略"]`
+- 支持策略：`step_in`, `step_over`, `step_out`, `source_step_in`, `source_step_over`
+
 ### 符号可视化
 运行后会生成`symbols.html`文件，在浏览器中打开可查看交互式符号信息。
 
@@ -70,6 +81,11 @@ environment:
 测试环境变量功能：
 ```bash
 ./test_env_vars.sh
+```
+
+测试步进策略配置：
+```bash
+./test_step_actions.sh
 ```
 
 ## libc函数参数自动跟踪功能
@@ -111,3 +127,9 @@ libc_functions:
 [time] CALL fopen(path="/etc/passwd", mode="r") 
 [time] RET fopen => 0x1234 (FILE*)
 ```
+
+### 调试优化
+- 改进了无效行条目的处理逻辑，默认继续跟踪
+- 增强源代码表达式评估的健壮性
+- 优化调试信息处理流程，整合源代码表达式评估
+- 支持在步进策略中指定特定行范围的调试行为

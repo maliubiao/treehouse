@@ -45,6 +45,8 @@ class StepHandler:
         self.frame_count = -1
         self.base_frame_count = -1
         self.log_mode = self.tracer.config_manager.get_log_mode()
+        self.step_action = self.tracer.config_manager.get_step_action()
+        self.insutruction_mode = self.log_mode == "instruction"
         self.step_in = StepAction.STEP_IN if self.log_mode == "instruction" else StepAction.SOURCE_STEP_IN
         self.step_over = StepAction.STEP_OVER if self.log_mode == "instruction" else StepAction.SOURCE_STEP_OVER
         self.step_out = StepAction.SOURCE_STEP_OUT
@@ -98,7 +100,7 @@ class StepHandler:
 
     def _evaluate_source_expressions(self, frame: lldb.SBFrame, filepath: str, line_num: int) -> List[str]:
         """Extract and evaluate expressions from the current source line."""
-        if not any(filepath.endswith(ext) for ext in self.source_file_extensions):
+        if not filepath or not any(filepath.endswith(ext) for ext in self.source_file_extensions):
             return []
 
         # 获取或初始化缓存
@@ -196,10 +198,31 @@ class StepHandler:
                 ", ".join(debug_values) if debug_values else "",
             )
 
+    def step_action_str_to_enum(self, action_str: str) -> StepAction:
+        """将步进动作字符串转换为枚举类型"""
+        action_str = action_str.lower()
+        if action_str == "step_in":
+            return StepAction.STEP_IN
+        elif action_str == "step_over":
+            return StepAction.STEP_OVER
+        elif action_str == "step_out":
+            return StepAction.STEP_OUT
+        elif action_str == "source_step_in":
+            return StepAction.SOURCE_STEP_IN
+        elif action_str == "source_step_over":
+            return StepAction.SOURCE_STEP_OVER
+        else:
+            self.logger.error("Unknown step action: %s", action_str)
+            return StepAction.STEP_IN
+
     def on_step_hit(self, frame: lldb.SBFrame, reason: str) -> StepAction:
         """Handle step events with detailed debug information."""
         pc = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
         self.last_pc = pc
+
+        if self.tracer.modules.should_skip_address(pc, frame.module.file.fullpath):
+            self.logger.info("get out of module: %s", frame.module.file.fullpath)
+            return self.step_out
 
         if pc not in self.instruction_info_cache:
             self._cache_instruction_info(frame, pc)
@@ -211,11 +234,21 @@ class StepHandler:
 
         mnemonic, operands, size, first_inst_offset = instruction_info
         next_pc = pc + size
-        debug_values = self._process_debug_info(frame, mnemonic, operands)
-
         line_entry = self._get_line_entry(frame, pc)
         source_info, source_line, resolved_filepath = self._process_source_info(frame, line_entry)
-
+        if line_entry.IsValid():
+            step_config = self.step_action.get(resolved_filepath)
+            if step_config:
+                [start, end], action = step_config
+                if start <= line_entry.GetLine() < end:
+                    self.logger.info(
+                        "Using step action from config: %s for %s at line %d",
+                        action,
+                        resolved_filepath,
+                        line_entry.GetLine(),
+                    )
+                    return self.step_action_str_to_enum(action)
+        debug_values = self._process_debug_info(frame, mnemonic, operands, resolved_filepath)
         if resolved_filepath and self.tracer.source_ranges.should_skip_source_file_by_path(resolved_filepath):
             return self.step_over
 
@@ -248,16 +281,11 @@ class StepHandler:
                 inst.GetAddress().file_addr - first_inst.GetAddress().file_addr,
             )
 
-    def _process_debug_info(self, frame: lldb.SBFrame, mnemonic: str, operands: str) -> List[str]:
+    def _process_debug_info(self, frame: lldb.SBFrame, mnemonic: str, operands: str, resolved_path: str) -> List[str]:
         """处理调试信息"""
         parsed_operands = parse_operands(operands, max_ops=4)
         debug_values = self.debug_info_handler.capture_register_values(frame, mnemonic, parsed_operands)
-
-        if frame.args:
-            debug_values.append(f"args of {frame.symbol.name}")
-            for arg in frame.args:
-                debug_values.append(f"{arg.name}={arg.value}")
-
+        debug_values.extend(self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine()))
         return debug_values
 
     def _get_line_entry(self, frame: lldb.SBFrame, pc: int) -> lldb.SBLineEntry:

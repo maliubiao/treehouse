@@ -246,3 +246,13 @@ class ConfigManager:
         value = self.config.get("log_mode", "instruction")
         assert value in ["source", "instruction"]
         return value
+
+    def get_step_action(self):
+        """获取步过操作配置"""
+        value = self.config.get("step_action", {})
+        for path, number_range in value.items():
+            [a, b], action = number_range
+            assert isinstance(a, int) and isinstance(b, int), f"Invalid step_over_action range: {number_range}"
+            assert a <= b, f"Step over range start must be less than or equal to end: {number_range}"
+            assert os.path.isabs(path), f"Path must be absolute: {path}"
+        return value
