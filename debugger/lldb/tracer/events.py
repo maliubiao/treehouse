@@ -21,18 +21,18 @@ class StepAction(Enum):
 
 def handle_special_stop(thread, stop_reason, logger, target=None, die_event=False):
     """Handle various stop reasons with enhanced information and actions."""
-    frame = thread.GetFrameAtIndex(0) if thread.GetNumFrames() > 0 else None
-    process = thread.GetProcess()
 
-    # Get current location if frame is available
-    location_info = ""
-    if frame and frame.IsValid():
+    def _get_location_info(frame):
+        """Helper to get location info from frame."""
+        if not frame or not frame.IsValid():
+            return ""
         file_spec = frame.GetLineEntry().GetFileSpec()
         line = frame.GetLineEntry().GetLine()
         func_name = frame.GetFunctionName() or "unknown function"
-        location_info = " at %s:%d in %s" % (file_spec.GetFilename(), line, func_name)
+        return f" at {file_spec.GetFilename()}:{line} in {func_name}"
 
-    if stop_reason == lldb.eStopReasonWatchpoint:
+    def _handle_watchpoint(thread, target, location_info):
+        """Handle watchpoint stop reason."""
         wp_id = thread.GetStopReasonDataAtIndex(0)
         watchpoint = target.FindWatchpointByID(wp_id) if target else None
         if watchpoint and watchpoint.IsValid():
@@ -44,16 +44,15 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
                 watchpoint.GetWatchSize(),
             )
 
-    elif stop_reason == lldb.eStopReasonSignal:
+    def _handle_signal(thread, process, location_info):
+        """Handle signal stop reason."""
         signal_num = thread.GetStopReasonDataAtIndex(0)
         signal_name = process.GetUnixSignals().GetSignalAsCString(signal_num)
         logger.info("Received signal %d (%s)%s", signal_num, signal_name, location_info)
 
-        # For common signals like SIGSEGV, provide more context
         if signal_num == 11:  # SIGSEGV
             logger.error("Segmentation fault%s", location_info)
-            if frame and frame.IsValid():
-                # Attempt to get more context about the crash
+            if thread.GetNumFrames() > 0:
                 logger.info("Stack trace at crash point:")
                 for i in range(min(5, thread.GetNumFrames())):
                     f = thread.GetFrameAtIndex(i)
@@ -64,51 +63,61 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
                         f.GetLineEntry().GetFileSpec().GetFilename(),
                         f.GetLineEntry().GetLine(),
                     )
-        # SIGSTOP
-        if signal_num == 17:
+        elif signal_num == 17:  # SIGSTOP
             logger.info("Process stopped by SIGSTOP%s", location_info)
             thread.process.Continue()
-    elif stop_reason == lldb.eStopReasonException:
+
+    def _handle_exception(thread, stop_desc, die_event):
+        """Handle exception stop reason."""
         exc_desc = ""
         if thread.GetStopReasonDataCount() >= 2:
             exc_type = thread.GetStopReasonDataAtIndex(0)
             exc_addr = thread.GetStopReasonDataAtIndex(1)
-            exc_desc = " type=0x%x, address=0x%x" % (exc_type, exc_addr)
-        stop_desc = thread.GetStopDescription(1024)
+            exc_desc = f" type=0x{exc_type:x}, address=0x{exc_addr:x}"
+
         if "EXC_BREAKPOINT" in stop_desc:
             logger.info("Process hit a breakpoint: %s", stop_desc)
-            return
+            return True
+
         logger.info("Exception occurred%s %s", exc_desc, stop_desc)
         target.process.Stop()
         if die_event:
             logger.info("Process will exit due to exception stop reason.")
             die_event.set()
-    elif stop_reason in (
-        lldb.eStopReasonExec,
-        lldb.eStopReasonFork,
-        lldb.eStopReasonVFork,
-        lldb.eStopReasonVForkDone,
-        lldb.eStopReasonThreadExiting,
-        lldb.eStopReasonInstrumentation,
-        lldb.eStopReasonTrace,
-    ):
-        reason_str = {
-            lldb.eStopReasonExec: "Exec",
-            lldb.eStopReasonFork: "Process forked, child PID: %d",
-            lldb.eStopReasonVFork: "Process vforked, child PID: %d",
-            lldb.eStopReasonVForkDone: "VFork done",
-            lldb.eStopReasonThreadExiting: "Thread %d is exiting",
-            lldb.eStopReasonInstrumentation: "Instrumentation event",
-            lldb.eStopReasonTrace: "Trace event",
-        }[stop_reason]
+        return False
 
-        if stop_reason in (lldb.eStopReasonFork, lldb.eStopReasonVFork):
-            child_pid = thread.GetStopReasonDataAtIndex(0)
-            logger.info(reason_str + location_info, child_pid)
-        elif stop_reason == lldb.eStopReasonThreadExiting:
-            logger.info(reason_str + location_info, thread.GetThreadID())
-        else:
-            logger.info(reason_str + location_info)
+    def _handle_special_events(thread, stop_reason, location_info):
+        """Handle special process events."""
+        reason_handlers = {
+            lldb.eStopReasonExec: lambda: "Exec",
+            lldb.eStopReasonFork: lambda: f"Process forked, child PID: {thread.GetStopReasonDataAtIndex(0)}",
+            lldb.eStopReasonVFork: lambda: f"Process vforked, child PID: {thread.GetStopReasonDataAtIndex(0)}",
+            lldb.eStopReasonVForkDone: lambda: "VFork done",
+            lldb.eStopReasonThreadExiting: lambda: f"Thread {thread.GetThreadID()} is exiting",
+            lldb.eStopReasonInstrumentation: lambda: "Instrumentation event",
+            lldb.eStopReasonTrace: lambda: "Trace event",
+        }
+
+        if stop_reason in reason_handlers:
+            logger.info(reason_handlers[stop_reason]() + location_info)
+            return True
+        return False
+
+    # Main function logic
+    frame = thread.GetFrameAtIndex(0) if thread.GetNumFrames() > 0 else None
+    location_info = _get_location_info(frame)
+    process = thread.GetProcess()
+
+    if stop_reason == lldb.eStopReasonWatchpoint:
+        _handle_watchpoint(thread, target, location_info)
+    elif stop_reason == lldb.eStopReasonSignal:
+        _handle_signal(thread, process, location_info)
+    elif stop_reason == lldb.eStopReasonException:
+        stop_desc = thread.GetStopDescription(1024)
+        if _handle_exception(thread, stop_desc, die_event):
+            return
+    elif _handle_special_events(thread, stop_reason, location_info):
+        pass
     else:
         logger.info(
             "Unhandled stop reason:%s %s %s %s",
@@ -117,8 +126,4 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
             location_info,
             str(thread),
         )
-        # thread.StepInstruction(False)
-        import pdb
-
-        pdb.set_trace()
         thread.process.Continue()

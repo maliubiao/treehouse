@@ -20,10 +20,10 @@ if TYPE_CHECKING:
 BRANCH_MAX_TOLERANCE = 10
 
 
-def plt_step_over_callback(frame: lldb.SBFrame, *args):
+def plt_step_over_callback(frame: lldb.SBFrame, *_args):
     print("plt_step_over_callback called")
     frame.thread.StepInstruction(False)
-    print("current frame: %s" % frame)
+    print(f"current frame: {frame}")
     return True
 
 
@@ -121,7 +121,7 @@ class StepHandler:
                 tree = parse_code_file(filepath, parser)
                 self.expression_cache[filepath] = self.expression_extractor.extract(tree.root_node, source_code)
             except (IOError, SyntaxError) as e:
-                self.logger.warning(f"Failed to parse {filepath} for expressions: {e}")
+                self.logger.warning(f"Failed to parse {filepath} for expressions: {str(e)}")
                 self.expression_cache[filepath] = {}
                 return []
 
@@ -166,10 +166,9 @@ class StepHandler:
 
     def _log_source_mode(self, indent: str, source_info: str, source_line: str, debug_values: List[str]) -> None:
         """Source mode日志输出 - 只显示源代码行和变量"""
-        if source_info:
-            self.logger.info(
-                "%s%s // %s, %s", indent, source_line, source_info, ", ".join(debug_values) if debug_values else ""
-            )
+        self.logger.info(
+            "%s%s // %s, %s", indent, source_line, source_info, ", ".join(debug_values) if debug_values else ""
+        )
 
     def _log_instruction_mode(
         self,
@@ -212,19 +211,19 @@ class StepHandler:
         action_str = action_str.lower()
         if action_str == "step_in":
             return StepAction.STEP_IN
-        elif action_str == "step_over":
+        if action_str == "step_over":
             return StepAction.STEP_OVER
-        elif action_str == "step_out":
+        if action_str == "step_out":
             return StepAction.STEP_OUT
-        elif action_str == "source_step_in":
+        if action_str == "source_step_in":
             return StepAction.SOURCE_STEP_IN
-        elif action_str == "source_step_over":
+        if action_str == "source_step_over":
             return StepAction.SOURCE_STEP_OVER
-        else:
-            self.logger.error("Unknown step action: %s", action_str)
-            return StepAction.STEP_IN
 
-    def on_step_hit(self, frame: lldb.SBFrame, reason: str) -> StepAction:
+        self.logger.error("Unknown step action: %s", action_str)
+        return StepAction.STEP_IN
+
+    def on_step_hit(self, frame: lldb.SBFrame, _reason: str) -> StepAction:
         """Handle step events with detailed debug information."""
         pc = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
 
@@ -241,6 +240,15 @@ class StepHandler:
         next_pc = pc + size
         line_entry = self._get_line_entry(frame, pc)
         source_info, source_line, resolved_filepath = self._process_source_info(frame, line_entry)
+
+        indent = ""
+        frames_count = frame.thread.GetNumFrames()
+        if frames_count != 0:
+            if self.base_frame_count == -1:
+                indent = frames_count * "  "
+            else:
+                indent = (frames_count - self.base_frame_count) * "  "
+
         if line_entry.IsValid():
             step_config = self.step_action.get(resolved_filepath)
             if step_config:
@@ -263,29 +271,23 @@ class StepHandler:
                 if self.current_frame_line_counter[cfa_addr][line_entry.GetLine()] > BRANCH_MAX_TOLERANCE:
                     self.before_get_out = True
                     return self.step_out
+
         debug_values = self._process_debug_info(frame, mnemonic, parsed_operands, resolved_filepath)
         if resolved_filepath and self.tracer.source_ranges.should_skip_source_file_by_path(resolved_filepath):
             return self.step_over
 
-        frames_count = frame.thread.GetNumFrames()
-        if frames_count != 0:
-            if self.base_frame_count == -1:
-                indent = frames_count * "  "
-            else:
-                indent = (frames_count - self.base_frame_count) * "  "
         self._log_step_info(indent, mnemonic, operands, first_inst_offset, pc, source_info, source_line, debug_values)
         return self._determine_step_action(mnemonic, parsed_operands, frame, pc, next_pc, indent)
 
-    def create_plt_breakpoint(self, frame: lldb.SBFrame, pc: int) -> None:
+    def create_plt_breakpoint(self, _frame: lldb.SBFrame, pc: int) -> None:
         """create a breakpoint, with a callback, with stepi 3 times to jump to br"""
-
         bp = self.tracer.target.BreakpointCreateByAddress(pc)
         assert bp.IsValid(), f"Failed to create breakpoint at address 0x{pc:x}"
         bp.SetOneShot(False)
         self.logger.info("Created PLT breakpoint at address: 0x%x", pc)
         bp.SetScriptCallbackFunction("plt_step_over_callback")
 
-    def _cache_instruction_info(self, frame: lldb.SBFrame, pc: int) -> None:
+    def _cache_instruction_info(self, frame: lldb.SBFrame, _pc: int) -> None:
         """缓存指令信息"""
         instructions = frame.symbol.GetInstructions(self.tracer.target)
         first_inst_loaded_addr = frame.symbol.GetStartAddress().GetLoadAddress(self.tracer.target)
@@ -312,7 +314,7 @@ class StepHandler:
             operands = parsed_operands
             if operands[0].type == OperandType.ADDRESS:
                 addr = int(operands[0].value, 16)
-                symbol_name, module_fullpath, symbol_type = self._get_address_info(addr)
+                _, _, symbol_type = self._get_address_info(addr)
                 if symbol_type == lldb.eSymbolTypeTrampoline:
                     self.create_plt_breakpoint(frame, addr + 8)
 
@@ -377,7 +379,7 @@ class StepHandler:
         debug_values: List[str],
     ) -> None:
         """记录步骤信息"""
-        if self.log_mode == "source":
+        if self.log_mode == "source" and source_info:
             self._log_source_mode(indent, source_info, source_line, debug_values)
         else:
             self._log_instruction_mode(
@@ -387,18 +389,14 @@ class StepHandler:
     def _update_lru_breakpoint(self, lr_value: int, oneshot: bool = True) -> bool:
         """设置返回地址断点，使用LRU缓存管理"""
         if lr_value in self.tracer.breakpoint_seen and not oneshot:
-            return
-        # self.logger.info("Setting breakpoint at LR: 0x%x", lr_value)
-        # 创建新断点
+            return False
+
         bp: lldb.SBBreakpoint = self.tracer.target.BreakpointCreateByAddress(lr_value)
         if not bp.IsValid():
             self.logger.error("Failed to set breakpoint at address 0x%x", lr_value)
             return False
 
         bp.SetOneShot(oneshot)
-        # bp_id = bp.GetID()
-        # self.logger.info("Created breakpoint with ID: %d at address 0x%x", bp_id, lr_value)
-        # 加入全局表
         self.tracer.breakpoint_table[lr_value] = lr_value
         self.tracer.breakpoint_seen.add(lr_value)
         return True
@@ -423,17 +421,14 @@ class StepHandler:
         return symbol_name, module_fullpath, symbol_type
 
     def should_skip_address(self, target_addr: int) -> bool:
-        # 获取地址信息
-        symbol_name, module_fullpath, symbol_type = self._get_address_info(target_addr)
-
-        # 检查是否应该跳过该地址
-        skip_address = self.tracer.modules.should_skip_address(
+        """检查是否应该跳过该地址"""
+        _, module_fullpath, _ = self._get_address_info(target_addr)
+        return self.tracer.modules.should_skip_address(
             target_addr, module_fullpath
         ) or self.tracer.source_ranges.should_skip_source_address_dynamic(target_addr)
-        return skip_address
 
     def _handle_branch_instruction(
-        self, mnemonic: str, target_addr: int, frame: lldb.SBFrame, pc: int, next_pc: int, indent: str
+        self, mnemonic: str, target_addr: int, frame: lldb.SBFrame, _pc: int, next_pc: int, indent: str
     ) -> StepAction:
         """统一处理分支指令逻辑"""
         if self._is_address_in_current_function(frame, target_addr):
@@ -574,7 +569,7 @@ class StepHandler:
         return None
 
     def _handle_excessive_branches(
-        self, frame: lldb.SBFrame, start_addr: int, end_addr: int, offset: int, pc: int, mnemonic: str, indent: str
+        self, frame: lldb.SBFrame, _start_addr: int, _end_addr: int, offset: int, pc: int, mnemonic: str, indent: str
     ) -> None:
         """处理过多的分支情况"""
         self.logger.warning(
