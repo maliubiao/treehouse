@@ -8,6 +8,7 @@ from .utils import get_stop_reason_str
 class StepAction(Enum):
     """Enumeration for step action decisions"""
 
+    INVALID = auto()
     STEP_OVER = auto()
     STEP_IN = auto()
     CONTINUE = auto()
@@ -15,6 +16,7 @@ class StepAction(Enum):
     SOURCE_STEP_OVER = auto()
     SOURCE_STEP_OUT = auto()
     STEP_OUT = auto()
+    STEP_INTO_THUNK = auto()
 
 
 def handle_special_stop(thread, stop_reason, logger, target=None, die_event=False):
@@ -62,7 +64,10 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
                         f.GetLineEntry().GetFileSpec().GetFilename(),
                         f.GetLineEntry().GetLine(),
                     )
-
+        # SIGSTOP
+        if signal_num == 17:
+            logger.info("Process stopped by SIGSTOP%s", location_info)
+            thread.process.Continue()
     elif stop_reason == lldb.eStopReasonException:
         exc_desc = ""
         if thread.GetStopReasonDataCount() >= 2:
@@ -106,10 +111,14 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
             logger.info(reason_str + location_info)
     else:
         logger.info(
-            "Unhandled stop reason:s%s %s %s %s",
+            "Unhandled stop reason:%s %s %s %s",
             stop_reason,
             get_stop_reason_str(stop_reason),
             location_info,
             str(thread),
         )
+        # thread.StepInstruction(False)
+        import pdb
+
+        pdb.set_trace()
         thread.process.Continue()

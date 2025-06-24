@@ -121,6 +121,24 @@ class Tracer:
             self.logger.error("Unexpected error during attach: %s", str(e))
             return False
 
+    def run_cmd(self, cmd: str) -> None:
+        """执行LLDB命令"""
+        if not self.debugger:
+            self.logger.error("Debugger is not initialized")
+            return
+        if not cmd:
+            self.logger.warning("Empty command provided")
+            return
+        self.logger.info("Running LLDB command: %s", cmd)
+        command_interpreter = self.debugger.GetCommandInterpreter()
+        result = lldb.SBCommandReturnObject()
+        command_interpreter.HandleCommand(cmd, result)
+        if result.Succeeded():
+            self.logger.info("Command output: %s", result.GetOutput())
+            return result
+        self.logger.error("Command failed: %s", result.GetError())
+        raise ValueError(f"Command failed: {result.GetError()}")  # 修复日志格式
+
     def _start_stdin_forwarding(self):
         """启动标准输入转发线程"""
         if not self.process or not self.process.IsValid():
@@ -252,9 +270,9 @@ class Tracer:
 
     def install(self, target: lldb.SBTarget) -> None:
         self.target = target
-        self.debugger.HandleCommand("command script import --allow-reload tracer")
-        self.debugger.HandleCommand("settings set target.use-fast-stepping true")
-        self.debugger.HandleCommand("settings set target.process.follow-fork-mode parent")
+        self.run_cmd("command script import --allow-reload tracer")
+        self.run_cmd("settings set target.use-fast-stepping true")
+        self.run_cmd("settings set target.process.follow-fork-mode child")
         bp_config = self.config_manager.config.get("start_breakpoint", {})
         bp_type = bp_config.get("type", "entry")
 
@@ -264,26 +282,15 @@ class Tracer:
             bp_config["symbol"] = "main"
             self.logger.info("Using 'main' symbol as entry point in attach mode")
 
-        if bp_type == "module":
-            self._set_module_breakpoint(bp_config)
-        elif bp_type == "symbol":
-            self._set_symbol_breakpoint(bp_config)
-        elif bp_type == "source":
-            self._set_source_breakpoint(bp_config)
-        else:  # 默认入口点断点
-            self._set_entrypoint_breakpoint()
+        self._set_entrypoint_breakpoint()
         if self.config_manager.config.get("log_breakpoint_details"):
             self.log_manager.log_breakpoint_info(self.breakpoint)
 
     def _set_entrypoint_breakpoint(self):
         """设置默认入口点断点"""
-        bps = set_entrypoint_breakpoints(self.debugger)
-        if len(bps) > 1:
-            self.logger.info(
-                "Found multiple entry points, using first one: %s",
-                ", ".join([f"{name} (ID: {bp.GetID()})" for name, bp in bps]),
-            )  # 修复日志格式
-        name, bp = bps[0]
+        bp = self.target.BreakpointCreateByName("main", os.path.basename(self.program_path))
+        assert bp.IsValid(), "Failed to create entry point breakpoint"  # 修复日志格式
+        self.logger.info("Set entry point breakpoint at %s", bp)
         bp.SetOneShot(True)
         self.breakpoint = bp
 
@@ -317,9 +324,63 @@ class Tracer:
             self.logger.warning("Invalid symbol breakpoint config, using default entry point")
             return self._set_entrypoint_breakpoint()
 
-        self.breakpoint = self.target.BreakpointCreateByName(symbol_name)
-        self.breakpoint.SetOneShot(True)
-        self.logger.info("Set symbol breakpoint on: %s", symbol_name)  # 修复日志格式
+        module = config.get("module", "")
+        if not module:
+            module = self.program_path
+
+        # Find all matching symbols
+        symbol_list: lldb.SBSymbolContextList = None
+        if module:
+            module_obj: lldb.SBModule = self.target.FindModule(lldb.SBFileSpec(module))
+            if module_obj:
+                symbol_list = module_obj.FindFunctions(symbol_name)
+
+        # If no symbols found in specified module, search in all modules
+        if symbol_list.GetSize() == 0:
+            symbol_list = self.target.FindFunctions(symbol_name)
+
+        # Interactive selection if multiple symbols found
+        if symbol_list.GetSize() > 1:
+            print("\nMultiple symbols found. Please select one:")
+            symbols = []
+            for i in range(symbol_list.GetSize()):
+                symbol: lldb.SBSymbol = symbol_list.symbols[i]
+                # addr = symbol.GetStartAddress().GetLoadAddress(self.target)
+                module_name = symbol.addr.module.file.fullpath
+                # details = f"[{i}] {symbol_name} at 0x{addr:x} in {module_name}"
+                symbols.append(symbol)
+                # print(details)
+
+            while True:
+                try:
+                    choice = input("\nEnter selection number: ")
+                    idx = int(choice)
+                    if 0 <= idx < len(symbols):
+                        selected_symbol: lldb.SBSymbol = symbols[idx]
+                        self.breakpoint = self.target.BreakpointCreateByName(
+                            selected_symbol.name, selected_symbol.addr.module.file.fullpath
+                        )
+                        self.breakpoint.SetOneShot(True)
+                        self.logger.info(f"Set symbol breakpoint for %s", selected_symbol.name)  # 修复日志格式
+                        return
+                    else:
+                        print(f"Invalid selection. Please enter a number between 0 and {len(symbols) - 1}")
+                except ValueError:
+                    print("Please enter a valid number")
+
+        elif symbol_list.GetSize() == 1:
+            # If only one symbol found, use it directly
+            symbol = symbol_list.symbols[0]
+            self.breakpoint = self.target.BreakpointCreateByName(symbol.name, symbol.addr.module.file.fullpath)
+            self.breakpoint.SetOneShot(True)
+            self.logger.info(f"Set symbol breakpoint for %s", symbol.name)  # 修复日志格式
+            return
+        else:
+            # Fall back to simple name-based breakpoint
+            module_name = os.path.basename(self.program_path)
+            self.breakpoint = self.target.BreakpointCreateByName(symbol_name, module_name)
+            self.breakpoint.SetOneShot(True)
+            self.logger.info(f"Set symbol breakpoint on: %s in %s", symbol_name, module_name)  # 修复日志格式
 
     def _set_source_breakpoint(self, config):
         """设置源代码行号断点"""

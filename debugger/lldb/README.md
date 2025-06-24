@@ -107,3 +107,43 @@ libc_functions:
 - 增强源代码表达式评估的健壮性
 - 优化调试信息处理流程，整合源代码表达式评估
 - 支持在步进策略中指定特定行范围的调试行为
+
+
+`step`指令跳过关键函数调用（如`RUN_ALL_TESTS()`），而`stepi`（指令级单步）能正确进入。以下是根本原因和解决方案：
+
+---
+
+### **问题原因**
+1. **代码优化干扰调试**
+   - 编译器优化（如内联函数）导致源码与汇编指令不对应。`RUN_ALL_TESTS()`被内联或通过PLT跳转表调用，`step`基于源码行号单步，无法追踪优化后的跳转逻辑。
+   - 示例：`bl 0x1089f419c`调用`RUN_ALL_TESTS()(.thunk.0)`，实际是PLT跳转（`adrp`+`add`+`br`组合），`step`无法识别此跳转。
+
+2. **Thunk函数干扰**
+   - 函数调用被重定向到Thunk封装（如`RUN_ALL_TESTS() (.thunk.0)`），调试器`step`可能跳过Thunk层，直接停在目标函数后。
+
+3. **调试器局限性**
+   - `step`依赖源码符号表，在优化代码中易失效；`stepi`直接跟踪机器指令，不受源码结构影响。
+
+
+### 寻找正确的断点
+attach进去, bt , thread list , 挨个检查   
+
+### lldb的api bug
+如果process.threads为0， 这是个错误，api 错误，它内部其试一次获取锁，如果一次失败，会获取到空值，去掉这个锁，重编译，其实循环在一秒内，通常能获取到正常的内容, 如果不是立刻的话，GetStopReason特别这个api，如果不等到它的正确结果，不知道进程为什么停止   
+```cpp
+SBThread SBProcess::GetThreadAtIndex(size_t index) {
+  LLDB_INSTRUMENT_VA(this, index);
+
+  SBThread sb_thread;
+  ThreadSP thread_sp;
+  ProcessSP process_sp(GetSP());
+  if (process_sp) {
+    Process::StopLocker stop_locker; //删除
+    if (stop_locker.TryLock(&process_sp->GetRunLock())) { //删除
+      std::lock_guard<std::recursive_mutex> guard(
+          process_sp->GetTarget().GetAPIMutex());
+      thread_sp = process_sp->GetThreadList().GetThreadAtIndex(index, false);
+      sb_thread.SetThread(thread_sp);
+    } //删除
+  }
+```

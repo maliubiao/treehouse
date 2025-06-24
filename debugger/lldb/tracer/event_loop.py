@@ -1,6 +1,7 @@
 import logging
 import sys
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import lldb
@@ -27,12 +28,6 @@ class EventLoop:
             ok: bool = self.listener.WaitForEvent(1, event)
             if ok:
                 self._process_event(event)
-            else:
-                self.resume_threads(event)
-
-    def resume_threads(self, event) -> None:
-        """ """
-        pass
 
     def _process_event(self, event: lldb.SBEvent) -> None:
         """处理事件分发"""
@@ -96,7 +91,23 @@ class EventLoop:
         """处理停止状态"""
         thread: lldb.SBThread = process.GetSelectedThread()
         if self.tracer.main_thread_id > 0 and thread.GetThreadID() != self.tracer.main_thread_id:
+            self.logger.info(
+                "Thread %s stopped, but main thread is %s, continuing execution",
+                thread.GetThreadID(),
+                self.tracer.main_thread_id,
+            )
             thread.StepOut()
+            return
+        count = 0
+        while thread.GetStopReason() == lldb.eStopReasonNone and count < 10:
+            # 线程还没有停止，等待一段时间，reason获取不到
+            time.sleep(0.1)
+            count += 1
+        if count >= 10:
+            for i in process.threads:
+                if i.GetStopReason() != lldb.eStopReasonNone:
+                    self.logger.info("thread stopped: %s, process continue", i)
+                    process.Continue()
             return
         stop_reason = thread.GetStopReason()
         if stop_reason == lldb.eStopReasonBreakpoint:
@@ -112,7 +123,9 @@ class EventLoop:
 
     def _handle_breakpoint_stop(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
         """处理断点停止"""
-
+        while thread.GetStopReasonDataAtIndex(0) == 0xFFFFFFFFFFFFFFFF:
+            # 等待线程停止数据更新
+            time.sleep(0.1)
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
         pc = thread.frame[0].GetPC()
         if pc in self.tracer.breakpoint_seen:
@@ -135,7 +148,6 @@ class EventLoop:
         Handle pthread_create breakpoint by setting a breakpoint at the thread entry point.
         For ARM64, the thread function pointer is passed as the third argument (x2 register).
         """
-        print("Handling pthread_create breakpoint")
         frame = thread.GetFrameAtIndex(0)
         # On ARM64, the thread function pointer is in x2 register
         # (args are in x0, x1, x2, x3, etc. for the first few arguments)
@@ -173,10 +185,16 @@ class EventLoop:
         # self.logger.info("Handling action: %s", action.name)
         if action == StepAction.STEP_OVER:
             # self.logger.info("Step over detected")
-            thread.StepInstruction(True)
+            err = lldb.SBError()
+            thread.StepInstruction(True, err)
+            if err.Fail():
+                self.logger.error("Step instruction failed: %s", err.GetCString())
         elif action == StepAction.STEP_IN:
             # self.logger.info("Step in detected")
-            thread.StepInstruction(False)
+            err = lldb.SBError()
+            thread.StepInstruction(False, err)
+            if err.Fail():
+                self.logger.error("Step instruction failed: %s", err.GetCString())
         elif action == StepAction.SOURCE_STEP_IN:
             thread.StepInto(lldb.eOnlyDuringStepping)
             # self.logger.info("Source step in detected")

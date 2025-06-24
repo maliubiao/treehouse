@@ -68,13 +68,13 @@ class SourceRangeManager:
         # 使用行信息获取文件信息
         line_entry = sb_addr.GetLineEntry()
         if not line_entry or not line_entry.IsValid():
-            self.logger.debug(f"No valid line entry found for address 0x{address:x}")
+            # self.logger.debug(f"No valid line entry found for address 0x{address:x}")
             self._address_decision_cache[address] = False
             return False
 
         file_spec = line_entry.GetFileSpec()
         if not file_spec:
-            self.logger.debug(f"No file specification found for address 0x{address:x}")
+            # self.logger.debug(f"No file specification found for address 0x{address:x}")
             self._address_decision_cache[address] = False
             return False
 
