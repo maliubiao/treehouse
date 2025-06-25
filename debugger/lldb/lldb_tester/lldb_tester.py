@@ -114,7 +114,7 @@ class TestContext:
         """执行LLDB命令（可选，推荐直接使用LLDB API）"""
         ret = lldb.SBCommandReturnObject()
         self.debugger.GetCommandInterpreter().HandleCommand(command, ret)
-        return ret
+        return ret.GetOutput()
 
     def wait_for_stop(self, timeout_sec: float = 5.0) -> bool:
         """等待进程进入停止状态"""

@@ -127,6 +127,7 @@ class EventLoop:
             # 等待线程停止数据更新
             time.sleep(0.1)
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
+        print("Hit breakpoint ID: %d" % bp_id)
         pc = thread.frame[0].GetPC()
         if pc in self.tracer.breakpoint_seen:
             self._handle_lr_breakpoint(thread)
@@ -138,6 +139,7 @@ class EventLoop:
             process.Continue()
         else:
             # bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
+
             bp = self.tracer.target.FindBreakpointByID(bp_id)
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
             self.logger.info("Breakpoint %s hit at PC: 0x%x, frame: %s, thread %s", bp, pc, frame, thread)

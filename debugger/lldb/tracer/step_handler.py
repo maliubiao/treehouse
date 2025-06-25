@@ -182,9 +182,11 @@ class StepHandler:
         debug_values: List[str],
     ) -> None:
         """Instruction mode日志输出 - 显示完整汇编指令"""
+        debug_part = f" -> {', '.join(debug_values)}" if debug_values else ""
+
         if source_line:
             self.logger.info(
-                "%s0x%x <+%d> %s %s ; %s // %s; -> %s",
+                "%s0x%x <+%d> %s %s ; %s // %s%s",
                 indent,
                 pc,
                 first_inst_offset,
@@ -192,18 +194,18 @@ class StepHandler:
                 operands,
                 source_info,
                 source_line,
-                ", ".join(debug_values) if debug_values else "",
+                debug_part,
             )
         else:
             self.logger.info(
-                "%s0x%x <+%d> %s %s ; %s; -> %s",
+                "%s0x%x <+%d> %s %s ; %s%s",
                 indent,
                 pc,
                 first_inst_offset,
                 mnemonic,
                 operands,
                 source_info,
-                ", ".join(debug_values) if debug_values else "",
+                debug_part,
             )
 
     def step_action_str_to_enum(self, action_str: str) -> StepAction:
@@ -226,7 +228,10 @@ class StepHandler:
     def on_step_hit(self, frame: lldb.SBFrame, _reason: str) -> StepAction:
         """Handle step events with detailed debug information."""
         pc = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
-
+        skip = self.tracer.modules.should_skip_address(pc, frame.module.file.fullpath)
+        if skip:
+            if self.go_back_to_normal_frame(frame):
+                return
         if pc not in self.instruction_info_cache:
             self._cache_instruction_info(frame, pc)
 
@@ -379,12 +384,12 @@ class StepHandler:
         debug_values: List[str],
     ) -> None:
         """记录步骤信息"""
-        if self.log_mode == "source" and source_info:
-            self._log_source_mode(indent, source_info, source_line, debug_values)
-        else:
-            self._log_instruction_mode(
-                indent, pc, first_inst_offset, mnemonic, operands, source_info, source_line, debug_values
-            )
+        # if self.log_mode == "source" and source_info:
+        #     self._log_source_mode(indent, source_info, source_line, debug_values)
+        # else:
+        self._log_instruction_mode(
+            indent, pc, first_inst_offset, mnemonic, operands, source_info, source_line, debug_values
+        )
 
     def _update_lru_breakpoint(self, lr_value: int, oneshot: bool = True) -> bool:
         """设置返回地址断点，使用LRU缓存管理"""
@@ -426,6 +431,29 @@ class StepHandler:
         return self.tracer.modules.should_skip_address(
             target_addr, module_fullpath
         ) or self.tracer.source_ranges.should_skip_source_address_dynamic(target_addr)
+
+    def go_back_to_normal_frame(self, frame: lldb.SBFrame) -> None:
+        num_frames = frame.GetThread().GetNumFrames()
+        if num_frames == 1:
+            frame.thread.StepOut()
+            return True
+        prev_frame = None
+        for i in range(num_frames):
+            frame: lldb.SBFrame = frame.GetThread().GetFrameAtIndex(i)
+            skip = self.tracer.modules.should_skip_address(
+                frame.GetPCAddress().GetLoadAddress(self.tracer.target), frame.module.file.fullpath
+            )
+            if not skip:
+                err = lldb.SBError()
+                frame.GetThread().StepOutOfFrame(prev_frame, err)
+                if err.Fail():
+                    self.logger.error("Failed to step out of frame: %s", err.GetCString())
+                else:
+                    self.logger.info("Stepped out to frame %d: %s", i, frame)
+                return True
+            prev_frame = frame
+
+        return False
 
     def _handle_branch_instruction(
         self, mnemonic: str, target_addr: int, frame: lldb.SBFrame, _pc: int, next_pc: int, indent: str
