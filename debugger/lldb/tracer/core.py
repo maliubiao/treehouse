@@ -261,8 +261,12 @@ class Tracer:
 
         if self.config_manager.config.get("forward_stdin", True):
             self._start_stdin_forwarding()
-        assert self.process.GetState() == lldb.eStateStopped
+        from .lldb_console import show_console
 
+        self.run_cmd("settings set use-color true")
+        show_console(self.debugger)
+        self.run_cmd("settings set use-color false")
+        assert self.process.GetState() == lldb.eStateStopped
         threading.Thread(target=self.continue_to_main, daemon=True).start()
         self.event_loop.run()
         self.cleanup()

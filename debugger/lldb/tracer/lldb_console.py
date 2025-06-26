@@ -7,6 +7,7 @@ from typing import List, Optional
 import lldb
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import HTML, FormattedText  # 新增导入
 from prompt_toolkit.key_binding import KeyBindings
 
 try:
@@ -30,6 +31,8 @@ class LLDBCompleter(Completer):
         self.custom_commands = custom_commands
         # Pre-compiled regex for finding the start of the word to complete
         self._word_boundary_re = re.compile(r"[\s=:]+")
+        # 添加命令后缀空格模式
+        self._command_pattern = re.compile(r"^\w+$")  # 简单匹配命令单词
 
     def _get_current_word_start(self, text: str, cursor_pos: int) -> int:
         """Find the start of the word at the cursor."""
@@ -65,40 +68,66 @@ class LLDBCompleter(Completer):
         for i in range(matches.GetSize()):
             match = matches.GetStringAtIndex(i)
             description = descriptions.GetStringAtIndex(i) if i < descriptions.GetSize() else ""
-            yield Completion(match, start_position=-len(word_to_complete), display_meta=description or "Argument")
+
+            # 修复：返回完整匹配项而不是后缀
+            if match.startswith(word_to_complete):
+                # 判断是否是命令补全（简单通过描述文本判断）
+                is_command = "Command" in description or self._command_pattern.match(match)
+
+                # 命令补全添加空格后缀，参数补全不加
+                display = match + (" " if is_command else "")
+
+                # 设置start_position为负的当前词长度，确保完整替换
+                yield Completion(display, start_position=-len(word_to_complete), display_meta=description or "Argument")
 
         # Add custom commands
         for cmd in self.custom_commands:
             if cmd.startswith(word_to_complete):
-                yield Completion(cmd, start_position=-len(word_to_complete), display_meta="Custom Command")
+                # 自定义命令也返回完整命令
+                # 自定义命令也添加空格后缀
+                yield Completion(cmd + " ", start_position=-len(word_to_complete), display_meta="Custom Command")
 
 
-def show_console(
-    debugger: lldb.SBDebugger,
-    python_line: Optional[int] = None,
-    python_traceback_str: Optional[str] = None,
-    initial_message: str = "Entering LLDB interactive shell due to an event.",
-    prompt: str = "(lldb-shell) ",
-):
+def show_console(debugger: lldb.SBDebugger):
     """
-    Launches an interactive LLDB console.
+    Launches an interactive LLDB console with fixed default messages.
 
     Args:
         debugger: The active lldb.SBDebugger instance.
-        python_line: The Python line number where the event occurred (if applicable).
-        python_traceback_str: The Python traceback string (if applicable).
-        initial_message: A message to display when the console starts.
-        prompt: The prompt string for the interactive shell.
     """
+    initial_message = "Entering LLDB interactive shell due to an event."
+    prompt = "(lldb-shell) "
+
     print(f"\n{Fore.CYAN}{Style.BRIGHT}--- LLDB Interactive Console ---{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}{initial_message}{Style.RESET_ALL}")
 
-    if python_line is not None:
-        print(f"{Fore.MAGENTA}Python execution paused at line: {python_line}{Style.RESET_ALL}")
-    if python_traceback_str:
+    # Automatically determine call location and stack trace
+    try:
+        # Get the frame that called this function (skip show_console frame)
+        frame = sys._getframe(1)
+        python_line = frame.f_lineno
+        python_file = frame.f_code.co_filename
+
+        # Format stack trace excluding this function's frame
+        stack_trace = []
+        while frame:
+            # Skip internal frames of the debugger itself
+            if "__name__" in frame.f_globals and frame.f_globals["__name__"] == __name__:
+                frame = frame.f_back
+                continue
+
+            stack_trace.append(f'  File "{frame.f_code.co_filename}", line {frame.f_lineno}, in {frame.f_code.co_name}')
+            frame = frame.f_back
+
+        python_traceback_str = "\n".join(reversed(stack_trace))
+
+        print(f"{Fore.MAGENTA}Python execution paused at: {python_file}:{python_line}{Style.RESET_ALL}")
         print(f"{Fore.MAGENTA}Python Traceback:\n{python_traceback_str}{Style.RESET_ALL}")
 
-    ci = debugger.GetCommandInterpreter()
+    except Exception as e:
+        print(f"{Fore.RED}Could not determine call location: {e}{Style.RESET_ALL}")
+
+    ci: lldb.SBCommandInterpreter = debugger.GetCommandInterpreter()
     if not ci.IsValid():
         print(f"{Fore.RED}Error: Could not get a valid LLDB command interpreter.{Style.RESET_ALL}")
         return
@@ -126,11 +155,19 @@ def show_console(
         """Handle Ctrl+L to clear the screen."""
         event.app.renderer.clear()
 
+    # 使用FormattedText处理样式
+    prompt_text = FormattedText(
+        [
+            ("#0080ff", prompt)  # 蓝色提示符
+        ]
+    )
+
     session = PromptSession(key_bindings=bindings, completer=completer, complete_while_typing=True)
 
     while True:
         try:
-            command_line = session.prompt(f"{Fore.BLUE}{prompt}{Style.RESET_ALL}").strip()
+            # 使用FormattedText而不是原始ANSI序列
+            command_line = session.prompt(prompt_text).strip()
             if not command_line:
                 continue
 
@@ -142,7 +179,7 @@ def show_console(
                 os.system("clear")
                 continue
 
-            result = lldb.SBCommandReturnObject()
+            result: lldb.SBCommandReturnObject = lldb.SBCommandReturnObject()
             ci.HandleCommand(command_line, result)
 
             if result.Succeeded():
