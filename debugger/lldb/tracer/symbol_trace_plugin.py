@@ -2,12 +2,11 @@ import json
 import os
 import random
 import re
-import sys
 import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import lldb
 from rich.console import Console
@@ -222,7 +221,7 @@ class SymbolTrace:
 
         return bp
 
-    def register_symbols(self, module_name, symbol_regex):
+    def register_symbols(self, module_name, symbol_regex, auto_confirm=False):
         """注册要跟踪的符号"""
         # 查找模块
         module_spec = lldb.SBFileSpec(module_name)
@@ -251,7 +250,18 @@ class SymbolTrace:
                 return 0
 
             # 收集匹配的符号
-            symbol_names = self._find_matching_symbols(module, pattern)
+            with Progress(
+                TextColumn("[bold blue]{task.description}", justify="right"),
+                BarColumn(bar_width=None),
+                "[progress.percentage]{task.percentage:>3.0f}%",
+                MofNCompleteColumn(),
+                TimeRemainingColumn(),
+                transient=True,
+            ) as progress:
+                find_task = progress.add_task(
+                    f"[cyan]Finding matching symbols in [bold]{module_name}[/bold]...", total=module.GetNumSymbols()
+                )
+                symbol_names = self._find_matching_symbols(module, pattern, progress, find_task)
 
             # 缓存结果
             self.regex_cache[cache_key] = list(symbol_names)
@@ -263,31 +273,32 @@ class SymbolTrace:
             return 0
 
         # Ask user for confirmation if symbol count is high or low
-        symbols_to_display = []
-        if count < 10:
-            symbols_to_display = sorted(list(symbol_names))
-            self.console.print(
-                f"\n[bold yellow]Found {count} symbols matching '[/bold yellow][cyan]{symbol_regex}[/cyan][bold yellow]' in '[/bold yellow][cyan]{module_name}[/cyan][bold yellow]':[/bold yellow]"
-            )
-            for i, sym in enumerate(symbols_to_display):
-                self.console.print(f"  [cyan]{i + 1}.[/cyan] {sym}")
-            self.console.print("\n")
-            if not Confirm.ask("[bold green]Do you want to set breakpoints for all these symbols?[/bold green]"):
-                self.tracer.logger.info("User cancelled breakpoint setting.")
-                return 0
-        else:
-            symbols_to_display = random.sample(list(symbol_names), 10)
-            self.console.print(
-                f"\n[bold yellow]Found {count} symbols matching '[/bold yellow][cyan]{symbol_regex}[/cyan][bold yellow]' in '[/bold yellow][cyan]{module_name}[/cyan][bold yellow]'. Displaying 10 random samples:[/bold yellow]"
-            )
-            for i, sym in enumerate(symbols_to_display):
-                self.console.print(f"  [cyan]{i + 1}.[/cyan] {sym}")
-            self.console.print("\n")
-            if not Confirm.ask(
-                f"[bold green]Do you want to set breakpoints for all {count} matching symbols?[/bold green]"
-            ):
-                self.tracer.logger.info("User cancelled breakpoint setting.")
-                return 0
+        if not auto_confirm:
+            symbols_to_display = []
+            if count < 10:
+                symbols_to_display = sorted(list(symbol_names))
+                self.console.print(
+                    f"\n[bold yellow]Found {count} symbols matching '[/bold yellow][cyan]{symbol_regex}[/cyan][bold yellow]' in '[/bold yellow][cyan]{module_name}[/cyan][bold yellow]':[/bold yellow]"
+                )
+                for i, sym in enumerate(symbols_to_display):
+                    self.console.print(f"  [cyan]{i + 1}.[/cyan] {sym}")
+                self.console.print("\n")
+                if not Confirm.ask("[bold green]Do you want to set breakpoints for all these symbols?[/bold green]"):
+                    self.tracer.logger.info("User cancelled breakpoint setting.")
+                    return 0
+            else:
+                symbols_to_display = random.sample(list(symbol_names), 10)
+                self.console.print(
+                    f"\n[bold yellow]Found {count} symbols matching '[/bold yellow][cyan]{symbol_regex}[/cyan][bold yellow]' in '[/bold yellow][cyan]{module_name}[/cyan][bold yellow]'. Displaying 10 random samples:[/bold yellow]"
+                )
+                for i, sym in enumerate(symbols_to_display):
+                    self.console.print(f"  [cyan]{i + 1}.[/cyan] {sym}")
+                self.console.print("\n")
+                if not Confirm.ask(
+                    f"[bold green]Do you want to set breakpoints for all {count} matching symbols?[/bold green]"
+                ):
+                    self.tracer.logger.info("User cancelled breakpoint setting.")
+                    return 0
 
         # 使用 rich 显示进度
         valid_bp_count = 0
