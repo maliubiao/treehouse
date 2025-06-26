@@ -147,3 +147,24 @@ SBThread SBProcess::GetThreadAtIndex(size_t index) {
     } //删除
   }
 ```
+
+### 符号追踪 (Symbol Tracing)
+除了行级追踪，还支持对特定函数符号的进入和退出进行追踪，这对于理解程序执行流程和性能分析非常有用。
+通过配置 `tracer_config.yaml` 文件中的以下选项来启用和定制符号追踪：
+
+```yaml
+# tracer_config.yaml 示例
+enable_symbol_trace: true # 启用符号追踪功能
+symbol_trace_patterns:    # 定义要追踪的符号模式列表
+  - module: "your_executable_name" # 模块名，通常是可执行文件名或动态库名
+    regex: "function_prefix.*" # 匹配函数名的正则表达式，例如 "main|my_func_.*"
+  - module: "libc.so.6" # 示例：追踪libc库中的函数
+    regex: "malloc|free"
+# symbol_trace_cache_file: "symbol_cache.json" # 可选：符号信息缓存文件路径，默认为空
+```
+- `enable_symbol_trace`: 布尔值，设置为 `true` 启用符号追踪。
+- `symbol_trace_patterns`: 列表，每个元素是一个字典，包含 `module` 和 `regex` 字段。
+  - `module`: 字符串，指定要追踪的模块名（例如，可执行文件名称或动态库名称）。
+  - `regex`: 字符串，一个正则表达式，用于匹配模块内要追踪的函数符号名称。
+- `symbol_trace_cache_file`: 字符串，可选，指定一个文件路径用于缓存已匹配的符号信息，以加速后续启动。
+

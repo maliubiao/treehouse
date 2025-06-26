@@ -5,7 +5,8 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import lldb
 
@@ -34,6 +35,19 @@ def _on_return_breakpoint_wrapper(frame, bp_loc, extra_args, _):
         return False
     _SYMBOL_TRACE_INSTANCE._on_return_breakpoint(frame, bp_loc)
     return False
+
+
+@dataclass
+class SymbolTraceEvent:
+    """Represents a symbol trace event with all relevant information."""
+
+    frame: lldb.SBFrame  # lldb.SBFrame
+    symbol: str
+    module: str
+    thread_id: int
+    timestamp: float
+    duration: float = 0.0  # Only used for leave events
+    depth: int = 0
 
 
 def register_global_callbacks(run_cmd, logger=None):
@@ -298,12 +312,11 @@ class SymbolTrace:
             self.thread_stacks[thread_id].append(
                 {"symbol": symbol_name, "module": module_name, "enter_time": time.time(), "return_bps": return_bps}
             )
-
-        # 触发通知
-        if hasattr(self.notify, "symbol_enter"):
-            self.notify.symbol_enter(
-                {"symbol": symbol_name, "module": module_name, "thread_id": thread_id, "timestamp": time.time()}
-            )
+        # Create event object and notify
+        event = SymbolTraceEvent(
+            frame=frame, symbol=symbol_name, module=module_name, thread_id=thread_id, timestamp=time.time()
+        )
+        self.notify.symbol_enter(event)
 
         return False  # 不停止执行
 
@@ -389,16 +402,15 @@ class SymbolTrace:
                 del self.thread_stacks[thread_id]
 
         # 触发通知
-        if hasattr(self.notify, "symbol_leave"):
-            self.notify.symbol_leave(
-                {
-                    "symbol": symbol_name,
-                    "module": module_name,
-                    "thread_id": thread_id,
-                    "duration": duration,
-                    "timestamp": time.time(),
-                }
-            )
+        event = SymbolTraceEvent(
+            frame=frame,
+            symbol=symbol_name,
+            module=module_name,
+            thread_id=thread_id,
+            timestamp=time.time(),
+            duration=duration,
+        )
+        self.notify.symbol_leave(event)
 
         return False  # 不停止执行
 

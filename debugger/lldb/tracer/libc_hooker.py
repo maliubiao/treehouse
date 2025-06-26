@@ -15,7 +15,7 @@ def libc_breakpoint_callback(
 ) -> bool:
     """Libc函数调用断点回调"""
     hooker.handle_function_entry(frame, bp_loc, extra_args, internal_dict)
-    frame.thread.GetProcess().Continue()  # 继续执行，允许函数调用完成
+    return False
 
 
 def libc_return_callback(
@@ -23,7 +23,7 @@ def libc_return_callback(
 ) -> bool:
     """Libc函数返回断点回调"""
     hooker.handle_function_return(frame, bp_loc, extra_args, internal_dict)
-    frame.thread.GetProcess().Continue()  # 继续执行，允许函数返回完成
+    return False
 
 
 def prepare_hooker(tracer):

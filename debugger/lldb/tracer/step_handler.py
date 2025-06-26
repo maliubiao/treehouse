@@ -7,15 +7,17 @@ from op_parser import OperandType, parse_operands
 
 from tree import ParserLoader, parse_code_file
 
-from . import sb_value_printer
+from . import sb_value_printer  # Keep existing import
 from .debug_info_handler import DebugInfoHandler
 from .events import StepAction
 from .expr_extractor import ExpressionExtractor
 from .source_handler import SourceHandler
+from .symbol_trace_plugin import SymbolTraceEvent  # Import SymbolTraceEvent
 from .utils import get_symbol_type_str
 
 if TYPE_CHECKING:
     from .core import Tracer
+from enum import Enum, auto
 
 BRANCH_MAX_TOLERANCE = 10
 
@@ -25,6 +27,37 @@ def plt_step_over_callback(frame: lldb.SBFrame, *_args):
     frame.thread.StepInstruction(False)
     print(f"current frame: {frame}")
     return True
+
+
+def step_action_str_to_enum(action_str: str) -> StepAction:
+    """将步进动作字符串转换为枚举类型"""
+    action_str = action_str.lower()
+    if action_str == "step_in":
+        return StepAction.STEP_IN
+    if action_str == "step_over":
+        return StepAction.STEP_OVER
+    if action_str == "step_out":
+        return StepAction.STEP_OUT
+    if action_str == "source_step_in":
+        return StepAction.SOURCE_STEP_IN
+    if action_str == "source_step_over":
+        return StepAction.SOURCE_STEP_OVER
+
+    return StepAction.STEP_IN
+
+
+class SymbolHookMode(Enum):
+    """
+    Enum representing different modes for symbol hooks.
+
+    SYMBOL_ENTER - Called when entering a symbol/function
+    SYMBOL_LEAVE - Called when leaving a symbol/function
+    NONE - No hook is triggered
+    """
+
+    NONE = "none"
+    SYMBOL_ENTER = "symbol_enter"
+    SYMBOL_LEAVE = "symbol_leave"
 
 
 class StepHandler:
@@ -64,7 +97,6 @@ class StepHandler:
         self.bind_thread_id = bind_thread_id
         self.tracer.run_cmd("script import tracer")
         self.tracer.run_cmd("script globals()['plt_step_over_callback'] = tracer.step_handler.plt_step_over_callback")
-
         self.before_get_out = False
 
     def _is_address_in_current_function(self, frame: lldb.SBFrame, addr: int) -> bool:
@@ -208,23 +240,6 @@ class StepHandler:
                 debug_part,
             )
 
-    def step_action_str_to_enum(self, action_str: str) -> StepAction:
-        """将步进动作字符串转换为枚举类型"""
-        action_str = action_str.lower()
-        if action_str == "step_in":
-            return StepAction.STEP_IN
-        if action_str == "step_over":
-            return StepAction.STEP_OVER
-        if action_str == "step_out":
-            return StepAction.STEP_OUT
-        if action_str == "source_step_in":
-            return StepAction.SOURCE_STEP_IN
-        if action_str == "source_step_over":
-            return StepAction.SOURCE_STEP_OVER
-
-        self.logger.error("Unknown step action: %s", action_str)
-        return StepAction.STEP_IN
-
     def on_step_hit(self, frame: lldb.SBFrame, _reason: str) -> StepAction:
         """Handle step events with detailed debug information."""
         pc = frame.GetPCAddress().GetLoadAddress(self.tracer.target)
@@ -265,7 +280,7 @@ class StepHandler:
                         resolved_filepath,
                         line_entry.GetLine(),
                     )
-                    return self.step_action_str_to_enum(action)
+                    return step_action_str_to_enum(action)
 
             if not self.insutruction_mode:
                 cfa_addr = frame.GetCFA()
@@ -312,16 +327,31 @@ class StepHandler:
                 inst.GetAddress().file_addr - first_inst.GetAddress().file_addr,
             )
 
-    def lookup_plt_call(self, frame: lldb.SBFrame, mnemonic: str, parsed_operands) -> None:
-        """处理PLT调用"""
-        if mnemonic.startswith("bl"):
-            # plt step in
-            operands = parsed_operands
-            if operands[0].type == OperandType.ADDRESS:
-                addr = int(operands[0].value, 16)
-                _, _, symbol_type = self._get_address_info(addr)
-                if symbol_type == lldb.eSymbolTypeTrampoline:
-                    self.create_plt_breakpoint(frame, addr + 8)
+    def symbol_enter(self, symbol_info):
+        """当进入符号时调用"""
+        frame: lldb.SBFrame = symbol_info.frame
+        self.logger.info(
+            "Entering symbol: %s in module: %s (Thread ID: %d, Depth: %d)",
+            symbol_info.symbol,
+            symbol_info.module,
+            symbol_info.thread_id,
+            symbol_info.depth,
+        )
+        action = self.on_step_hit(frame, SymbolHookMode.SYMBOL_ENTER)
+        if action:
+            self.tracer.event_loop.action_handle(action, frame.thread)
+
+    def symbol_leave(self, symbol_info):
+        """当离开符号时调用"""
+        frame: lldb.SBFrame = symbol_info.frame
+        self.logger.info(
+            "Leaving symbol: %s in module: %s (Thread ID: %d, Duration: %.4f s)",
+            symbol_info.symbol,
+            symbol_info.module,
+            symbol_info.thread_id,
+            symbol_info.duration,
+        )
+        self.on_step_hit(frame, SymbolHookMode.SYMBOL_LEAVE)
 
     def _process_debug_info(
         self, frame: lldb.SBFrame, mnemonic: str, parsed_operands: str, resolved_path: str
@@ -616,7 +646,6 @@ class StepHandler:
             register = parsed_operands[0].value if parsed_operands else "x0"
             return_register = frame.FindRegister(register)
             sb_value = return_register.Cast(frame.function.GetType().GetFunctionReturnType())
-
             if sb_value.IsValid():
                 value_str = sb_value_printer.format_sbvalue(sb_value, shallow_aggregate=True)
                 self.logger.info(

@@ -11,7 +11,6 @@ class ConfigManager:
         self.logger = logger or logging.getLogger(__name__)
         self.config = {
             "max_steps": 100,
-            "enable_jit": False,
             "log_target_info": True,
             "log_module_info": True,
             "log_breakpoint_details": True,
@@ -26,8 +25,8 @@ class ConfigManager:
             "attach_pid": None,
             "forward_stdin": True,
             "expression_hooks": [],
-            "libc_functions": [],  # 新增libc函数跟踪配置
-            "source_search_paths": [],  # 新增源代码搜索路径
+            "libc_functions": [],
+            "source_search_paths": [],
         }
         self.config_file = config_file
         if config_file:

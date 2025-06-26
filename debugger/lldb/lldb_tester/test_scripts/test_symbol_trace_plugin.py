@@ -5,7 +5,7 @@ import threading
 import time
 
 import lldb
-from tracer.symbol_trace_plugin import NotifyClass, SymbolTrace, register_global_callbacks
+from tracer.symbol_trace_plugin import NotifyClass, SymbolTrace, SymbolTraceEvent, register_global_callbacks
 
 
 class TraceNotify(NotifyClass):
@@ -27,41 +27,37 @@ class TraceNotify(NotifyClass):
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
 
-    def symbol_enter(self, symbol_info):
+    def symbol_enter(self, event: SymbolTraceEvent):
         """重写进入符号通知方法"""
         with self.lock:
-            thread_id = symbol_info["thread_id"]
+            thread_id = event.thread_id
             self.enter_count += 1
 
             # 初始化线程调用栈
             if thread_id not in self.thread_stacks:
                 self.thread_stacks[thread_id] = []
-
+            event.depth = len(self.thread_stacks[thread_id])
             # 记录调用深度
-            depth = len(self.thread_stacks[thread_id])
-            symbol_info["depth"] = depth
-            self.thread_stacks[thread_id].append(symbol_info["symbol"])
-
+            self.thread_stacks[thread_id].append(event.symbol)
             # 记录事件
-            self.events.append(("enter", symbol_info))
+            self.events.append(("enter", event))
 
-    def symbol_leave(self, symbol_info):
+    def symbol_leave(self, event: SymbolTraceEvent):
         """重写离开符号通知方法"""
         with self.lock:
-            thread_id = symbol_info["thread_id"]
+            thread_id = event.thread_id
             self.leave_count += 1
 
+            depth = 0
             if thread_id in self.thread_stacks and self.thread_stacks[thread_id]:
                 # 验证调用栈一致性
-                if self.thread_stacks[thread_id][-1] == symbol_info["symbol"]:
+                if self.thread_stacks[thread_id][-1] == event.symbol:
                     self.thread_stacks[thread_id].pop()
 
                 # 记录当前深度
                 depth = len(self.thread_stacks[thread_id])
-                symbol_info["depth"] = depth
-
-            # 记录事件
-            self.events.append(("leave", symbol_info))
+            event.depth = depth
+            self.events.append(("leave", event))
 
     def validate_stacks(self):
         """验证所有线程调用栈是否为空"""
@@ -154,11 +150,11 @@ def test_symbol_trace(context):
         main_thread_events = []
 
         for event_type, info in notify.events:
-            thread_id = info["thread_id"]
+            thread_id = info.thread_id
 
             # 只处理主线程事件
             if thread_id == 1:
-                main_thread_events.append((event_type, info["symbol"], info["depth"]))
+                main_thread_events.append((event_type, info.symbol, info.depth))
 
         # 验证主线程调用顺序
         expected_main_sequence = [
