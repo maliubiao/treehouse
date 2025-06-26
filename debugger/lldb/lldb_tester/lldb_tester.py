@@ -114,7 +114,7 @@ class TestContext:
         """执行LLDB命令（可选，推荐直接使用LLDB API）"""
         ret = lldb.SBCommandReturnObject()
         self.debugger.GetCommandInterpreter().HandleCommand(command, ret)
-        return ret.GetOutput()
+        return ret
 
     def wait_for_stop(self, timeout_sec: float = 5.0) -> bool:
         """等待进程进入停止状态"""
@@ -214,7 +214,7 @@ class LLDBTester:
 
                 try:
                     # 为每个测试函数创建全新的target
-                    target = self._create_target(test_program)
+                    target: lldb.SBTarget = self._create_target(test_program)
 
                     # 启动新进程
                     logging.info("Launching program for test: %s", full_test_name)
@@ -235,6 +235,7 @@ class LLDBTester:
                     result = self._execute_test_function(test_func, context, full_test_name)
                     results.append(result)
 
+                    target.process.Stop()
                 except Exception as e:
                     error_result = TestResult(
                         name=full_test_name,

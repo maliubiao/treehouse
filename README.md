@@ -423,7 +423,9 @@ export GPT_SYMBOL_API_URL=http://127.0.0.1:9060/;
 
 
 ### 高级调试器
-支持对python程序进行bytecode级别的line trace, 输出执行了哪一行，变量的改变，而且性能足够好，不至于卡住
+支持对python程序进行bytecode级别的line trace, 输出执行了哪一行，变量的改变，而且性能还行，不至于太慢     
+python3.12,13,14 版本不需要c扩展，使用标准库trace功能    
+python3.11及以下使用了一个c扩展    
 
 #### 编译
 ```bash

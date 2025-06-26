@@ -76,6 +76,22 @@ def test_symbol_trace(context):
     """
     测试符号追踪功能
     """
+    """主测试函数"""
+    # 设置main函数入口断点
+    context.run_command("breakpoint set --name main")
+    context.run_command("process launch --no-stdin")
+    register_global_callbacks(context.run_command)
+
+    # 等待程序停在main函数
+    start_time = time.time()
+    while time.time() - start_time < 5:
+        process = context.target.GetProcess()
+        if process.GetState() == lldb.eStateStopped:
+            break
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("Failed to stop at main function")
+
     # 创建临时缓存文件
     cache_file = tempfile.NamedTemporaryFile(delete=False).name
 
@@ -188,25 +204,3 @@ def test_symbol_trace(context):
         # 删除临时缓存文件
         if os.path.exists(cache_file):
             os.remove(cache_file)
-
-
-# 框架要求的测试函数
-def run_test(context):
-    """主测试函数"""
-    # 设置main函数入口断点
-    context.run_command("breakpoint set --name main")
-    context.run_command("run")
-    register_global_callbacks(context.run_command)
-
-    # 等待程序停在main函数
-    start_time = time.time()
-    while time.time() - start_time < 5:
-        process = context.target.GetProcess()
-        if process.GetState() == lldb.eStateStopped:
-            break
-        time.sleep(0.1)
-    else:
-        raise RuntimeError("Failed to stop at main function")
-
-    # 运行符号追踪测试
-    test_symbol_trace(context)
