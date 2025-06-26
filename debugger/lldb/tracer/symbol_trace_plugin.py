@@ -5,8 +5,13 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 import lldb
+
+if TYPE_CHECKING:
+    # 避免循环导入问题
+    from .core import Tracer  # noqa: F401
 
 # 全局回调注册状态
 _CALLBACKS_REGISTERED = False
@@ -65,30 +70,31 @@ def register_global_callbacks(run_cmd, logger=None):
 
 
 class SymbolTrace:
-    def __init__(self, target, notify_class, run_cmd, symbol_info_cache_file=None):
+    def __init__(self, tracer: "Tracer", notify_class, symbol_info_cache_file=None):
         """
         初始化符号追踪器
 
         参数:
-            target: LLDB SBTarget 对象
+            tracer: Tracer 对象
             notify_class: 通知处理类
-            run_cmd: 执行LLDB命令的函数
             symbol_info_cache_file: 符号缓存文件路径(可选)
         """
         global _SYMBOL_TRACE_INSTANCE
-        self.target = target
+        self.tracer = tracer
+
         self.notify = notify_class
-        self.run_cmd = run_cmd
         self.symbol_info_cache_file = symbol_info_cache_file
         self.regex_cache = {}  # 正则匹配结果缓存
         self.enter_breakpoints = {}
         self.thread_stacks = defaultdict(list)
         self.lock = threading.Lock()
         _SYMBOL_TRACE_INSTANCE = self
-        run_cmd("script globals()['_symbol_trace_instance'] = tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE")
+        self.tracer.run_cmd(
+            "script globals()['_symbol_trace_instance'] = tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE"
+        )
         # 注册全局回调
-        if not register_global_callbacks(run_cmd):
-            self.notify.log_error("SymbolTrace initialization failed due to callback registration failure")
+        if not register_global_callbacks(self.tracer.run_cmd, self.tracer.logger):
+            self.tracer.logger.error("SymbolTrace initialization failed due to callback registration failure")
             raise RuntimeError("Failed to register global callbacks")
 
         # 加载缓存
@@ -109,7 +115,7 @@ class SymbolTrace:
             # 空文件或无效JSON时忽略
             self.regex_cache = {}
         except Exception as e:
-            self.notify.log_error(f"Failed to load regex cache: {str(e)}")
+            self.tracer.logger.error(f"Failed to load regex cache: {str(e)}")
             self.regex_cache = {}
 
     def _save_regex_cache(self):
@@ -121,14 +127,14 @@ class SymbolTrace:
             with open(self.symbol_info_cache_file, "w", encoding="utf-8") as f:
                 json.dump(self.regex_cache, f, indent=2)
         except (IOError, TypeError, ValueError) as e:
-            self.notify.log_error(f"Failed to save regex cache: {str(e)}")
+            self.tracer.logger.error(f"Failed to save regex cache: {str(e)}")
 
     def _compile_regex_pattern(self, symbol_regex):
         """编译正则表达式模式"""
         try:
             return re.compile(symbol_regex)
         except re.error as e:
-            self.notify.log_error(f"Invalid regex pattern: {symbol_regex} - {str(e)}")
+            self.tracer.logger.error(f"Invalid regex pattern: {symbol_regex} - {str(e)}")
             return None
 
     def _find_matching_symbols(self, module, pattern):
@@ -161,14 +167,14 @@ class SymbolTrace:
         if uuid_str:
             return f"UUID:{uuid_str}"
         # 如果没有UUID，回退到模块名（不推荐）
-        self.notify.log_warning(f"Module {module.GetFileSpec().GetFilename()} has no UUID")
+        self.tracer.logger.warning(f"Module {module.GetFileSpec().GetFilename()} has no UUID")
         return module.GetFileSpec().GetFilename()
 
     def _create_breakpoint(self, symbol_name, module_name):
         """为符号创建断点"""
-        bp = self.target.BreakpointCreateByName(symbol_name, module_name)
+        bp = self.tracer.target.BreakpointCreateByName(symbol_name, module_name)
         if not bp.IsValid():
-            self.notify.log_error(f"Failed to create breakpoint for symbol: {symbol_name}")
+            self.tracer.logger.error(f"Failed to create breakpoint for symbol: {symbol_name}")
             return None
 
         bp.SetOneShot(False)
@@ -181,7 +187,7 @@ class SymbolTrace:
         data.SetFromJSON(json.dumps(args))
         sb_error = bp.SetScriptCallbackFunction("_on_enter_breakpoint_wrapper", data)
         if sb_error.Fail():
-            self.notify.log_error(f"Failed to set script callback for breakpoint {bp}: {sb_error.GetCString()}")
+            self.tracer.logger.error(f"Failed to set script callback for breakpoint {bp}: {sb_error.GetCString()}")
             return None
 
         return bp
@@ -190,13 +196,13 @@ class SymbolTrace:
         """注册要跟踪的符号"""
         # 查找模块
         module_spec = lldb.SBFileSpec(module_name)
-        module = self.target.FindModule(module_spec)
+        module = self.tracer.target.FindModule(module_spec)
         if not module.IsValid():
-            self.notify.log_error(f"Module not found: {module_name}")
-            self.notify.log_error("Available modules:")
-            for idx in range(self.target.GetNumModules()):
-                mod = self.target.GetModuleAtIndex(idx)
-                self.notify.log_error(f"  - {mod.GetFileSpec().GetFilename()} ({mod.GetFileSpec().GetFullPath()})")
+            self.tracer.logger.error(f"Module not found: {module_name}")
+            self.tracer.logger.error("Available modules:")
+            for idx in range(self.tracer.target.GetNumModules()):
+                mod = self.tracer.target.GetModuleAtIndex(idx)
+                self.tracer.logger.error(f"  - {mod.GetFileSpec().GetFilename()} ({mod.GetFileSpec().GetFullPath()})")
             return 0
 
         # 获取缓存键
@@ -205,7 +211,9 @@ class SymbolTrace:
         # 检查缓存
         if cache_key in self.regex_cache:
             symbol_names = set(self.regex_cache[cache_key])
-            self.notify.log_info(f"Using cached symbols for {module_name}:{symbol_regex} ({len(symbol_names)} symbols)")
+            self.tracer.logger.info(
+                f"Using cached symbols for {module_name}:{symbol_regex} ({len(symbol_names)} symbols)"
+            )
         else:
             # 编译正则表达式
             pattern = self._compile_regex_pattern(symbol_regex)
@@ -221,11 +229,11 @@ class SymbolTrace:
 
         count = len(symbol_names)
         if count == 0:
-            self.notify.log_error(f"No symbols found matching: {symbol_regex}")
+            self.tracer.logger.error(f"No symbols found matching: {symbol_regex}")
             return 0
 
         # 显示进度
-        self.notify.log_info(f"Found {count} symbols. Setting breakpoints...")
+        self.tracer.logger.info(f"Found {count} symbols. Setting breakpoints...")
 
         # 为每个符号设置进入断点
         progress_interval = max(1, count // 10)  # 每10%显示一次进度
@@ -240,9 +248,9 @@ class SymbolTrace:
             processed_count += 1
             # 更新进度
             if processed_count % progress_interval == 0:
-                self.notify.log_info(f"Progress: {processed_count}/{count} breakpoints set")
+                self.tracer.logger.info(f"Progress: {processed_count}/{count} breakpoints set")
 
-        self.notify.log_info(f"Successfully set {valid_bp_count} breakpoints")
+        self.tracer.logger.info(f"Successfully set {valid_bp_count} breakpoints")
         return valid_bp_count
 
     def _on_enter_breakpoint(self, frame, bp_loc):
@@ -255,7 +263,7 @@ class SymbolTrace:
         # 获取符号信息
         symbol_info = self.enter_breakpoints.get(bp_id)
         if not symbol_info:
-            self.notify.log_error(f"Breakpoint info not found for breakpoint id: {bp_id}")
+            self.tracer.logger.error(f"Breakpoint info not found for breakpoint id: {bp_id}")
             return False
 
         symbol_name = symbol_info["symbol"]
@@ -264,7 +272,7 @@ class SymbolTrace:
         # 获取函数返回地址
         return_addresses = self._get_return_addresses(symbol_name)
         if not return_addresses:
-            self.notify.log_error(f"No return addresses found for symbol: {symbol_name}")
+            self.tracer.logger.error(f"No return addresses found for symbol: {symbol_name}")
             return False
 
         # 为当前调用实例创建返回断点
@@ -274,7 +282,7 @@ class SymbolTrace:
             if addr <= 0:
                 continue
 
-            bp = self.target.BreakpointCreateByAddress(addr)
+            bp = self.tracer.target.BreakpointCreateByAddress(addr)
             if not bp.IsValid():
                 continue
 
@@ -302,10 +310,10 @@ class SymbolTrace:
     def _get_return_addresses(self, symbol_name):
         """获取函数的所有返回指令地址"""
         # 查找符号 - 使用基础名称匹配
-        context_list = self.target.FindFunctions(symbol_name, lldb.eFunctionNameTypeBase)
+        context_list = self.tracer.target.FindFunctions(symbol_name, lldb.eFunctionNameTypeBase)
         if context_list.GetSize() == 0:
             # 尝试自动匹配模式
-            context_list = self.target.FindFunctions(symbol_name, lldb.eFunctionNameTypeAuto)
+            context_list = self.tracer.target.FindFunctions(symbol_name, lldb.eFunctionNameTypeAuto)
             if context_list.GetSize() == 0:
                 return []
 
@@ -315,9 +323,9 @@ class SymbolTrace:
 
         # 优先使用函数获取指令
         if function and function.IsValid():
-            instructions = function.GetInstructions(self.target)
+            instructions = function.GetInstructions(self.tracer.target)
         elif symbol and symbol.IsValid():
-            instructions = symbol.GetInstructions(self.target)
+            instructions = symbol.GetInstructions(self.tracer.target)
         else:
             return []
 
@@ -326,17 +334,17 @@ class SymbolTrace:
 
         # 获取函数结束地址
         if function and function.IsValid():
-            function_end_addr = function.GetEndAddress().GetLoadAddress(self.target)
+            function_end_addr = function.GetEndAddress().GetLoadAddress(self.tracer.target)
 
         for i in range(instructions.GetSize()):
             inst = instructions.GetInstructionAtIndex(i)
-            addr = inst.GetAddress().GetLoadAddress(self.target)
+            addr = inst.GetAddress().GetLoadAddress(self.tracer.target)
 
             # 如果函数结束地址有效，检查是否超出范围
             if function_end_addr > 0 and addr > function_end_addr:
                 break
 
-            mnemonic = inst.GetMnemonic(self.target)
+            mnemonic = inst.GetMnemonic(self.tracer.target)
 
             # 检查是否为返回指令
             if mnemonic and mnemonic.lower().startswith("ret"):
@@ -371,9 +379,9 @@ class SymbolTrace:
             # 清理其他返回断点
             for bp_id in return_bps:
                 # 确保断点存在再删除
-                bp_obj = self.target.FindBreakpointByID(bp_id)
+                bp_obj = self.tracer.target.FindBreakpointByID(bp_id)
                 if bp_obj and bp_obj.IsValid():
-                    self.target.BreakpointDelete(bp_id)
+                    self.tracer.target.BreakpointDelete(bp_id)
 
             # 从调用栈中移除
             stack.pop()
@@ -398,18 +406,18 @@ class SymbolTrace:
         """清理资源"""
         # 删除所有进入断点
         for bp_id in list(self.enter_breakpoints.keys()):
-            bp = self.target.FindBreakpointByID(bp_id)
+            bp = self.tracer.target.FindBreakpointByID(bp_id)
             if bp and bp.IsValid():
-                self.target.BreakpointDelete(bp_id)
+                self.tracer.target.BreakpointDelete(bp_id)
         self.enter_breakpoints.clear()
 
         # 清理所有返回断点
         for stack in list(self.thread_stacks.values()):
             for call in stack:
                 for bp_id in call["return_bps"]:
-                    bp = self.target.FindBreakpointByID(bp_id)
+                    bp = self.tracer.target.FindBreakpointByID(bp_id)
                     if bp and bp.IsValid():
-                        self.target.BreakpointDelete(bp_id)
+                        self.tracer.target.BreakpointDelete(bp_id)
         self.thread_stacks.clear()
 
         # 保存正则匹配缓存
@@ -424,15 +432,3 @@ class NotifyClass:
 
     def symbol_leave(self, symbol_info):
         """当离开符号时调用"""
-
-    def log_error(self, message):
-        """记录错误消息"""
-        print(f"Error: {message}", file=sys.stderr)
-
-    def log_info(self, message):
-        """记录信息消息"""
-        print(f"Info: {message}")
-
-    def log_warning(self, message):
-        """记录警告消息"""
-        print(f"Warning: {message}")

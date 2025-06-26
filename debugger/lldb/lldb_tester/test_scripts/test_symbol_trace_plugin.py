@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 import threading
@@ -17,12 +18,14 @@ class TraceNotify(NotifyClass):
         self.leave_count = 0
         self.lock = threading.Lock()
         self.thread_stacks = {}
-        self.logger = None  # 禁用日志输出
 
-    def log_error(self, message):
-        """安全地记录错误，即使logger为None"""
-        # 测试环境中不需要实际记录错误
-        pass
+        # Initialize a standard logger from stdlib
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
 
     def symbol_enter(self, symbol_info):
         """重写进入符号通知方法"""
@@ -76,14 +79,25 @@ def test_symbol_trace(context):
     # 创建临时缓存文件
     cache_file = tempfile.NamedTemporaryFile(delete=False).name
 
+    class FakeTracer:
+        """模拟的tracer类，用于测试"""
+
+        def __init__(self):
+            self.target = context.target
+            self.logger = logging.getLogger(__name__)
+            self.logger.setLevel(logging.INFO)
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.run_cmd = context.run_command
+
     try:
         # 创建通知实例
         notify = TraceNotify()
 
         # 初始化符号追踪器
-        symbol_trace = SymbolTrace(
-            target=context.target, notify_class=notify, run_cmd=context.run_command, symbol_info_cache_file=cache_file
-        )
+        symbol_trace = SymbolTrace(tracer=FakeTracer(), notify_class=notify, symbol_info_cache_file=cache_file)
 
         # 获取可执行文件名作为模块名
         executable = context.target.GetExecutable()
