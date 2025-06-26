@@ -226,3 +226,8 @@ A read only property that returns the target triple (arch-vendor-os) for this mo
 uuid
 
 A read only property that returns a standard python uuid.UUID object that represents the UUID of this module.
+
+
+#新增加
+cache需要做的是缓存搜索到的符号，如何模块uuid, 匹配re不变的情况下，这个如果有几十万的话挺慢
+不许缓存return adddress, 因为每次都变

@@ -9,26 +9,25 @@ from collections import defaultdict
 import lldb
 
 # 全局回调注册状态
-_callbacks_registered = False
+_CALLBACKS_REGISTERED = False
+_SYMBOL_TRACE_INSTANCE = None
 
-_symbol_trace_instance = None
 
-
-def _on_enter_breakpoint_wrapper(frame, bp_loc, extra_args, internal_dict):
+def _on_enter_breakpoint_wrapper(frame, bp_loc, extra_args, _):
     """全局入口断点回调分发器"""
     print("on_enter_breakpoint_wrapper called: ", frame)
     if not extra_args.IsValid():
         return False
-    _symbol_trace_instance._on_enter_breakpoint(frame, bp_loc)
+    _SYMBOL_TRACE_INSTANCE._on_enter_breakpoint(frame, bp_loc)
     return False
 
 
-def _on_return_breakpoint_wrapper(frame, bp_loc, extra_args, internal_dict):
+def _on_return_breakpoint_wrapper(frame, bp_loc, extra_args, _):
     """全局返回断点回调分发器"""
     print("on_return_breakpoint_wrapper called: ", frame)
     if not extra_args.IsValid():
         return False
-    _symbol_trace_instance._on_return_breakpoint(frame, bp_loc)
+    _SYMBOL_TRACE_INSTANCE._on_return_breakpoint(frame, bp_loc)
     return False
 
 
@@ -40,23 +39,24 @@ def register_global_callbacks(run_cmd, logger=None):
         run_cmd: 执行LLDB命令的函数
         logger: 可选的日志记录器
     """
-    global _callbacks_registered
-    if _callbacks_registered:
+    global _CALLBACKS_REGISTERED
+    if _CALLBACKS_REGISTERED:
         if logger:
             logger.info("Global callbacks already registered")
         return True
     try:
         # 导入当前模块
-        out = run_cmd("script import tracer")
+        _ = run_cmd("script import tracer")
         # 注册入口回调
-        out = run_cmd(
+        _ = run_cmd(
             "script globals()['_on_enter_breakpoint_wrapper'] = tracer.symbol_trace_plugin._on_enter_breakpoint_wrapper"
         )
         # 注册返回回调
-        out = run_cmd(
-            "script globals()['_on_return_breakpoint_wrapper'] = tracer.symbol_trace_plugin._on_return_breakpoint_wrapper"
+        _ = run_cmd(
+            "script globals()['_on_return_breakpoint_wrapper'] = "
+            "tracer.symbol_trace_plugin._on_return_breakpoint_wrapper"
         )
-        _callbacks_registered = True
+        _CALLBACKS_REGISTERED = True
         return True
     except Exception as e:
         if logger:
@@ -75,73 +75,64 @@ class SymbolTrace:
             run_cmd: 执行LLDB命令的函数
             symbol_info_cache_file: 符号缓存文件路径(可选)
         """
-        global _symbol_trace_instance
+        global _SYMBOL_TRACE_INSTANCE
         self.target = target
         self.notify = notify_class
         self.run_cmd = run_cmd
         self.symbol_info_cache_file = symbol_info_cache_file
-        self.cache = {}
+        self.regex_cache = {}  # 正则匹配结果缓存
         self.enter_breakpoints = {}
         self.thread_stacks = defaultdict(list)
         self.lock = threading.Lock()
-        _symbol_trace_instance = self
-        print(run_cmd("script globals()['_symbol_trace_instance'] = tracer.symbol_trace_plugin._symbol_trace_instance"))
+        _SYMBOL_TRACE_INSTANCE = self
+        run_cmd("script globals()['_symbol_trace_instance'] = tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE")
         # 注册全局回调
         if not register_global_callbacks(run_cmd):
             self.notify.log_error("SymbolTrace initialization failed due to callback registration failure")
             raise RuntimeError("Failed to register global callbacks")
 
         # 加载缓存
-        self._load_cache()
+        self._load_regex_cache()
 
-    def _load_cache(self):
-        """从文件加载符号缓存"""
+    def _load_regex_cache(self):
+        """从文件加载正则匹配缓存"""
         if not self.symbol_info_cache_file or not os.path.exists(self.symbol_info_cache_file):
+            self.regex_cache = {}
             return
 
         try:
-            with open(self.symbol_info_cache_file, "r") as f:
+            with open(self.symbol_info_cache_file, "r", encoding="utf-8") as f:
                 # 确保缓存键是字符串
-                self.cache = {str(k): v for k, v in json.load(f).items()}
-        except json.JSONDecodeError:
-            # 空文件或无效JSON时忽略
-            self.cache = {}
-        except Exception as e:
-            self.notify.log_error(f"Failed to load cache: {str(e)}")
+                self.regex_cache = json.load(f)
 
-    def _save_cache(self):
-        """保存符号缓存到文件"""
+        except (FileNotFoundError, json.JSONDecodeError):
+            # 空文件或无效JSON时忽略
+            self.regex_cache = {}
+        except Exception as e:
+            self.notify.log_error(f"Failed to load regex cache: {str(e)}")
+            self.regex_cache = {}
+
+    def _save_regex_cache(self):
+        """保存正则匹配缓存到文件"""
         if not self.symbol_info_cache_file:
             return
 
         try:
-            with open(self.symbol_info_cache_file, "w") as f:
-                json.dump(self.cache, f, indent=2)
-        except Exception as e:
-            self.notify.log_error(f"Failed to save cache: {str(e)}")
+            with open(self.symbol_info_cache_file, "w", encoding="utf-8") as f:
+                json.dump(self.regex_cache, f, indent=2)
+        except (IOError, TypeError, ValueError) as e:
+            self.notify.log_error(f"Failed to save regex cache: {str(e)}")
 
-    def register_symbols(self, module_name, symbol_regex):
-        """注册要跟踪的符号"""
-        # 查找模块
-        module_spec = lldb.SBFileSpec(module_name)
-        module = self.target.FindModule(module_spec)
-        if not module.IsValid():
-            # 增加详细错误信息
-            self.notify.log_error(f"Module not found: {module_name}")
-            self.notify.log_error(f"Available modules:")
-            for idx in range(self.target.GetNumModules()):
-                mod = self.target.GetModuleAtIndex(idx)
-                self.notify.log_error(f"  - {mod.GetFileSpec().GetFilename()} ({mod.GetFileSpec().GetFullPath()})")
-            return 0
-
-        # 编译正则表达式
+    def _compile_regex_pattern(self, symbol_regex):
+        """编译正则表达式模式"""
         try:
-            pattern = re.compile(symbol_regex)
+            return re.compile(symbol_regex)
         except re.error as e:
             self.notify.log_error(f"Invalid regex pattern: {symbol_regex} - {str(e)}")
-            return 0
+            return None
 
-        # 收集匹配的符号
+    def _find_matching_symbols(self, module, pattern):
+        """查找匹配正则表达式的符号"""
         symbol_names = set()
         num_symbols = module.GetNumSymbols()
 
@@ -162,14 +153,75 @@ class SymbolTrace:
             if pattern.search(name):
                 symbol_names.add(name)
 
+        return symbol_names
+
+    def _get_cache_key(self, module):
+        """获取模块的缓存键"""
+        uuid_str = module.GetUUIDString()
+        if uuid_str:
+            return f"UUID:{uuid_str}"
+        # 如果没有UUID，回退到模块名（不推荐）
+        self.notify.log_warning(f"Module {module.GetFileSpec().GetFilename()} has no UUID")
+        return module.GetFileSpec().GetFilename()
+
+    def _create_breakpoint(self, symbol_name, module_name):
+        """为符号创建断点"""
+        bp = self.target.BreakpointCreateByName(symbol_name, module_name)
+        if not bp.IsValid():
+            self.notify.log_error(f"Failed to create breakpoint for symbol: {symbol_name}")
+            return None
+
+        bp.SetOneShot(False)
+        bp_id = bp.GetID()
+        self.enter_breakpoints[bp_id] = {"symbol": symbol_name, "module": module_name}
+
+        # 设置回调
+        args = {}
+        data = lldb.SBStructuredData()
+        data.SetFromJSON(json.dumps(args))
+        sb_error = bp.SetScriptCallbackFunction("_on_enter_breakpoint_wrapper", data)
+        if sb_error.Fail():
+            self.notify.log_error(f"Failed to set script callback for breakpoint {bp}: {sb_error.GetCString()}")
+            return None
+
+        return bp
+
+    def register_symbols(self, module_name, symbol_regex):
+        """注册要跟踪的符号"""
+        # 查找模块
+        module_spec = lldb.SBFileSpec(module_name)
+        module = self.target.FindModule(module_spec)
+        if not module.IsValid():
+            self.notify.log_error(f"Module not found: {module_name}")
+            self.notify.log_error("Available modules:")
+            for idx in range(self.target.GetNumModules()):
+                mod = self.target.GetModuleAtIndex(idx)
+                self.notify.log_error(f"  - {mod.GetFileSpec().GetFilename()} ({mod.GetFileSpec().GetFullPath()})")
+            return 0
+
+        # 获取缓存键
+        cache_key = f"{self._get_cache_key(module)}|{symbol_regex}"
+
+        # 检查缓存
+        if cache_key in self.regex_cache:
+            symbol_names = set(self.regex_cache[cache_key])
+            self.notify.log_info(f"Using cached symbols for {module_name}:{symbol_regex} ({len(symbol_names)} symbols)")
+        else:
+            # 编译正则表达式
+            pattern = self._compile_regex_pattern(symbol_regex)
+            if pattern is None:
+                return 0
+
+            # 收集匹配的符号
+            symbol_names = self._find_matching_symbols(module, pattern)
+
+            # 缓存结果
+            self.regex_cache[cache_key] = list(symbol_names)
+            self._save_regex_cache()
+
         count = len(symbol_names)
         if count == 0:
             self.notify.log_error(f"No symbols found matching: {symbol_regex}")
-            self.notify.log_error(f"Available symbols in module:")
-            for idx in range(num_symbols):
-                symbol = module.GetSymbolAtIndex(idx)
-                if symbol.IsValid() and symbol.GetType() == lldb.eSymbolTypeCode:
-                    self.notify.log_error(f"  - {symbol.GetName()}")
             return 0
 
         # 显示进度
@@ -181,24 +233,10 @@ class SymbolTrace:
         processed_count = 0
 
         for symbol_name in symbol_names:
-            # 设置进入断点 - 修正参数顺序
+            bp = self._create_breakpoint(symbol_name, module_name)
+            if bp is not None:
+                valid_bp_count += 1
 
-            bp: lldb.SBBreakpoint = self.target.BreakpointCreateByName(symbol_name, module_name)
-            if not bp.IsValid():
-                self.notify.log_error(f"Failed to create breakpoint for symbol: {symbol_name}")
-                continue
-            bp.SetOneShot(False)
-            bp_id = bp.GetID()
-            self.enter_breakpoints[bp_id] = {"symbol": symbol_name, "module": module_name}
-            valid_bp_count += 1
-            # 设置回调
-            args = {}
-            data = lldb.SBStructuredData()
-            data.SetFromJSON(json.dumps(args))
-            sb_error = bp.SetScriptCallbackFunction("_on_enter_breakpoint_wrapper", data)
-            if sb_error.Fail():
-                self.notify.log_error(f"Failed to set script callback for breakpoint {bp}: {sb_error.GetCString()}")
-                continue
             processed_count += 1
             # 更新进度
             if processed_count % progress_interval == 0:
@@ -223,19 +261,8 @@ class SymbolTrace:
         symbol_name = symbol_info["symbol"]
         module_name = symbol_info["module"]
 
-        # 获取模块UUID
-        module_spec = lldb.SBFileSpec(module_name)
-        module = self.target.FindModule(module_spec)
-        if not module.IsValid():
-            self.notify.log_error(f"Module not found: {module_name}")
-            return False
-
-        module_uuid = module.GetUUIDString()
-        if not module_uuid:
-            module_uuid = "unknown"
-
         # 获取函数返回地址
-        return_addresses = self._get_return_addresses(module, symbol_name, module_uuid)
+        return_addresses = self._get_return_addresses(symbol_name)
         if not return_addresses:
             self.notify.log_error(f"No return addresses found for symbol: {symbol_name}")
             return False
@@ -272,14 +299,8 @@ class SymbolTrace:
 
         return False  # 不停止执行
 
-    def _get_return_addresses(self, module, symbol_name, module_uuid):
+    def _get_return_addresses(self, symbol_name):
         """获取函数的所有返回指令地址"""
-        cache_key = f"{module_uuid}:{symbol_name}"
-
-        # 检查缓存
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-
         # 查找符号 - 使用基础名称匹配
         context_list = self.target.FindFunctions(symbol_name, lldb.eFunctionNameTypeBase)
         if context_list.GetSize() == 0:
@@ -325,12 +346,9 @@ class SymbolTrace:
         if not return_addresses and function_end_addr > 0:
             return_addresses.append(function_end_addr)
 
-        # 缓存结果
-        self.cache[cache_key] = return_addresses
-        self._save_cache()  # 立即保存缓存
         return return_addresses
 
-    def _on_return_breakpoint(self, frame, bp_loc):
+    def _on_return_breakpoint(self, frame, _):
         """处理离开符号事件"""
         thread = frame.GetThread()
         thread_id = thread.GetThreadID()
@@ -386,7 +404,7 @@ class SymbolTrace:
         self.enter_breakpoints.clear()
 
         # 清理所有返回断点
-        for thread_id, stack in list(self.thread_stacks.items()):
+        for stack in list(self.thread_stacks.values()):
             for call in stack:
                 for bp_id in call["return_bps"]:
                     bp = self.target.FindBreakpointByID(bp_id)
@@ -394,8 +412,8 @@ class SymbolTrace:
                         self.target.BreakpointDelete(bp_id)
         self.thread_stacks.clear()
 
-        # 保存缓存
-        self._save_cache()
+        # 保存正则匹配缓存
+        self._save_regex_cache()
 
 
 class NotifyClass:
@@ -403,11 +421,9 @@ class NotifyClass:
 
     def symbol_enter(self, symbol_info):
         """当进入符号时调用"""
-        pass
 
     def symbol_leave(self, symbol_info):
         """当离开符号时调用"""
-        pass
 
     def log_error(self, message):
         """记录错误消息"""
@@ -416,3 +432,7 @@ class NotifyClass:
     def log_info(self, message):
         """记录信息消息"""
         print(f"Info: {message}")
+
+    def log_warning(self, message):
+        """记录警告消息"""
+        print(f"Warning: {message}")
