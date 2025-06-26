@@ -67,7 +67,7 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
             logger.info("Process stopped by SIGSTOP%s", location_info)
             thread.process.Continue()
 
-    def _handle_exception(thread, stop_desc, die_event):
+    def _handle_exception(thread, stop_desc, die_event, debugger):
         """Handle exception stop reason."""
         exc_desc = ""
         if thread.GetStopReasonDataCount() >= 2:
@@ -76,7 +76,11 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
             exc_desc = f" type=0x{exc_type:x}, address=0x{exc_addr:x}"
 
         if "EXC_BREAKPOINT" in stop_desc:
-            logger.info("Process hit a breakpoint: %s", stop_desc)
+            logger.info("Breakpoint encountered: %s", stop_desc)
+            # 在断点处启动交互式控制台
+            from .lldb_console import show_console
+
+            show_console(debugger)
             return True
 
         logger.info("Exception occurred%s %s", exc_desc, stop_desc)

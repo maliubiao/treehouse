@@ -1,0 +1,124 @@
+
+[Example 0: 修改说明]
+[overwrite whole symbol]: 本文件/新增说明段落
+[start]
+# 修改操作类型说明:
+# 1. 使用`overwrite whole file`时必须输出文件完整内容，包含所有未修改的原始代码
+# 2. 当仅修改局部符号时，必须使用`overwrite whole symbol`定位并输出新代码片段
+# 3. 混合使用两种修改方式会导致符号级修改被文件级修改覆盖
+[end]
+
+[Example 1: 多文件修改]
+[overwrite whole file]: debugger/examples/sample.go
+[start]
+package main
+
+type User struct {
+    Name string
+}
+
+func (u User) GetName() string {
+    return u.Name
+}
+
+var handler = func() {
+    fmt.Println("near example")
+}
+[end]
+
+[overwrite whole file]: debugger/examples/sample.cpp
+[start]
+namespace AI {
+    class Robot {
+    public:
+        void speak(const std::string& msg);
+    };
+
+    void reboot() { /*...*/ }
+}
+[end]
+
+[Example 2: 符号级修改]
+[overwrite whole symbol]: debugger/examples/sample.go/main.User.GetName
+[start]
+func (u User) GetName() string {
+    return fmt.Sprintf("[User] %s", u.Name)  // 修改方法实现
+}
+[end]
+
+[overwrite whole symbol]: debugger/examples/sample.cpp/AI.Robot.speak
+[start]
+void speak(const std::string& msg) {
+    std::cout << "[Robot] " << msg << std::endl;
+}
+[end]
+
+[Example 3: 行号标识符]
+[overwrite whole file]: debugger/examples/error.py/near_6
+[start]
+def outegr():
+    def inner():  # 嵌套函数无法生成符号
+        print("inner")
+
+    # 匿名lambda
+    fn = lambda x: x+1
+[end]
+
+[overwrite whole symbol]: debugger/examples/error.py/at_3
+[start]
+    def inner():  # 第3行所处的嵌套函数
+        print("[Modified] inner")
+[end]
+
+[Example 8: 类多方法批量修改]
+[overwrite whole symbol]: debugger/examples/calculator.py/Calculator.add
+[start]
+    def add(self, a: int | float, b: int | float) -> int | float:
+        """执行加法运算并记录日志"""
+        print(f"Adding {a} + {b}")
+        return a + b
+[end]
+
+[overwrite whole symbol]: debugger/examples/calculator.py/Calculator.subtract
+[start]
+    def subtract(self, a: int | float, b: int | float) -> int | float:
+        """执行减法运算并记录日志"""
+        print(f"Subtracting {a} - {b}")
+        return a - b
+[end]
+
+[Example 9: TypeScript接口多方法优化]
+[overwrite whole symbol]: debugger/examples/service.ts/UserService.fetchUsers
+[start]
+    async fetchUsers(filter: string): Promise<User[]> {
+        console.log(`Fetching users with filter: ${filter}`);
+        const response = await api.get<User[]>('/users', {params: {filter}});
+        return response.data;
+    }
+[end]
+
+[overwrite whole symbol]: debugger/examples/service.ts/UserService.createUser
+[start]
+    async createUser(userData: Partial<User>): Promise<User> {
+        console.log('Creating new user:', userData);
+        const response = await api.post<User>('/users', userData);
+        return response.data;
+    }
+[end]
+
+[Example 10: Go语言结构体多方法增强]
+[overwrite whole symbol]: debugger/examples/db.go/UserRepository.FindByID
+[start]
+func (r *UserRepository) FindByID(id uint) (*User, error) {
+    log.Printf("Querying user by ID: %d", id)
+    return r.db.QueryRow("SELECT * FROM users WHERE id = ?", id), nil
+}
+[end]
+
+[overwrite whole symbol]: debugger/examples/db.go/UserRepository.Update
+[start]
+func (r *UserRepository) Update(user *User) error {
+    log.Printf("Updating user ID: %d", user.ID)
+    _, err := r.db.Exec("UPDATE users SET name = ? WHERE id = ?", user.Name, user.ID)
+    return err
+}

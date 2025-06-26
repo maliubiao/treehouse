@@ -1602,6 +1602,7 @@ class CodeMapBuilder:
         code_map: dict,
         locations: list[tuple[int, int]],
         max_context_size: int = 16 * 1024,
+        include_class_context: bool = False,
     ) -> dict[str, dict]:
         """批量处理位置并返回符号名到符号信息的映射"""
         sorted_symbols = sorted(
@@ -1637,27 +1638,27 @@ class CodeMapBuilder:
                 ):
                     current_symbol = symbol_path
                     break
+
             if current_symbol:
-                locations.append((line, col, current_symbol))
+                # 类上下文处理开关
+                if include_class_context:
+                    symbol_info = code_map[current_symbol]
+                    # 仅处理函数类型且包含命名空间的符号
+                    if symbol_info.get("type") == "function":
+                        parts = current_symbol.split(".")
+                        if len(parts) > 1:
+                            class_path = ".".join(parts[:-1])
+                            # 确保类符号存在且未处理
+                            if class_path in code_map and class_path not in processed_symbols:
+                                class_info = code_map[class_path]
+                                class_code_length = len(class_info.get("code", ""))
+                                # 检查类上下文是否超过限制
+                                if total_code_size + class_code_length <= max_context_size:
+                                    processed_symbols[class_path] = class_info.copy()
+                                    total_code_size += class_code_length
+
+                # 处理当前符号
                 symbol_info = code_map[current_symbol]
-                if symbol_info.get("type") == "function":
-                    parts = current_symbol.split(".")
-                    if len(parts) > 1:
-                        class_path = ".".join(parts[:-1])
-                        if class_path in processed_symbols:
-                            locations.append((line, col, class_path))
-                            continue
-                        if class_path in code_map:
-                            class_info = code_map[class_path]
-                            class_code_length = len(class_info.get("code", ""))
-                            if (
-                                class_path not in processed_symbols
-                                and total_code_size + class_code_length <= max_context_size
-                            ):
-                                current_symbol = class_path
-                                symbol_info = class_info
-                                code_length = class_code_length
-                                locations.append((line, col, current_symbol))
                 if current_symbol not in processed_symbols:
                     code_length = len(symbol_info.get("code", ""))
                     if total_code_size + code_length > max_context_size:
@@ -1665,6 +1666,7 @@ class CodeMapBuilder:
                         break
                     processed_symbols[current_symbol] = symbol_info.copy()
                     total_code_size += code_length
+                locations.append((line, col, current_symbol))
             else:
                 symbol_info = self.build_near_symbol_info_at_line(line)
                 if not symbol_info:
@@ -1678,12 +1680,15 @@ class CodeMapBuilder:
                 total_code_size += code_length
             if total_code_size >= max_context_size:
                 break
+
         for line, col, symbol in locations:
             if symbol not in symbol_locations:
                 symbol_locations[symbol] = []
             symbol_locations[symbol].append((line, col))
+
         for symbol in processed_symbols:
-            processed_symbols[symbol]["locations"] = symbol_locations[symbol]
+            processed_symbols[symbol]["locations"] = symbol_locations.get(symbol, [])
+
         return processed_symbols
 
 
