@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import sys
 import threading
@@ -9,6 +10,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import lldb
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeRemainingColumn,
+)
+from rich.prompt import Confirm
 
 if TYPE_CHECKING:
     # 避免循环导入问题
@@ -102,6 +112,7 @@ class SymbolTrace:
         self.enter_breakpoints = {}
         self.thread_stacks = defaultdict(list)
         self.lock = threading.Lock()
+        self.console = Console()
         _SYMBOL_TRACE_INSTANCE = self
         self.tracer.run_cmd(
             "script globals()['_symbol_trace_instance'] = tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE"
@@ -151,27 +162,32 @@ class SymbolTrace:
             self.tracer.logger.error(f"Invalid regex pattern: {symbol_regex} - {str(e)}")
             return None
 
-    def _find_matching_symbols(self, module, pattern):
+    def _find_matching_symbols(self, module, pattern, progress, task):
         """查找匹配正则表达式的符号"""
         symbol_names = set()
         num_symbols = module.GetNumSymbols()
+        progress.update(task, total=num_symbols)
 
         for idx in range(num_symbols):
             symbol = module.GetSymbolAtIndex(idx)
             if not symbol.IsValid():
+                progress.update(task, advance=1)
                 continue
 
             # 只处理函数符号
             if symbol.GetType() != lldb.eSymbolTypeCode:
+                progress.update(task, advance=1)
                 continue
 
             name = symbol.GetName()
             if not name:
+                progress.update(task, advance=1)
                 continue
 
             # 检查是否匹配正则表达式
             if pattern.search(name):
                 symbol_names.add(name)
+            progress.update(task, advance=1)
 
         return symbol_names
 
@@ -246,25 +262,52 @@ class SymbolTrace:
             self.tracer.logger.error(f"No symbols found matching: {symbol_regex}")
             return 0
 
-        # 显示进度
-        self.tracer.logger.info(f"Found {count} symbols. Setting breakpoints...")
+        # Ask user for confirmation if symbol count is high or low
+        symbols_to_display = []
+        if count < 10:
+            symbols_to_display = sorted(list(symbol_names))
+            self.console.print(
+                f"\n[bold yellow]Found {count} symbols matching '[/bold yellow][cyan]{symbol_regex}[/cyan][bold yellow]' in '[/bold yellow][cyan]{module_name}[/cyan][bold yellow]':[/bold yellow]"
+            )
+            for i, sym in enumerate(symbols_to_display):
+                self.console.print(f"  [cyan]{i + 1}.[/cyan] {sym}")
+            self.console.print("\n")
+            if not Confirm.ask("[bold green]Do you want to set breakpoints for all these symbols?[/bold green]"):
+                self.tracer.logger.info("User cancelled breakpoint setting.")
+                return 0
+        else:
+            symbols_to_display = random.sample(list(symbol_names), 10)
+            self.console.print(
+                f"\n[bold yellow]Found {count} symbols matching '[/bold yellow][cyan]{symbol_regex}[/cyan][bold yellow]' in '[/bold yellow][cyan]{module_name}[/cyan][bold yellow]'. Displaying 10 random samples:[/bold yellow]"
+            )
+            for i, sym in enumerate(symbols_to_display):
+                self.console.print(f"  [cyan]{i + 1}.[/cyan] {sym}")
+            self.console.print("\n")
+            if not Confirm.ask(
+                f"[bold green]Do you want to set breakpoints for all {count} matching symbols?[/bold green]"
+            ):
+                self.tracer.logger.info("User cancelled breakpoint setting.")
+                return 0
 
-        # 为每个符号设置进入断点
-        progress_interval = max(1, count // 10)  # 每10%显示一次进度
+        # 使用 rich 显示进度
         valid_bp_count = 0
-        processed_count = 0
+        with Progress(
+            TextColumn("[bold blue]{task.description}", justify="right"),
+            BarColumn(bar_width=None),
+            "[progress.percentage]{task.percentage:>3.0f}%",
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            transient=True,
+        ) as progress:
+            task = progress.add_task(f"[cyan]Setting breakpoints for [bold]{module_name}[/bold]...", total=count)
+            for symbol_name in symbol_names:
+                bp = self._create_breakpoint(symbol_name, module_name)
+                if bp is not None:
+                    valid_bp_count += 1
+                progress.update(task, advance=1)
 
-        for symbol_name in symbol_names:
-            bp = self._create_breakpoint(symbol_name, module_name)
-            if bp is not None:
-                valid_bp_count += 1
+        self.tracer.logger.info(f"Successfully set {valid_bp_count} breakpoints for {count} symbols in {module_name}")
 
-            processed_count += 1
-            # 更新进度
-            if processed_count % progress_interval == 0:
-                self.tracer.logger.info(f"Progress: {processed_count}/{count} breakpoints set")
-
-        self.tracer.logger.info(f"Successfully set {valid_bp_count} breakpoints")
         return valid_bp_count
 
     def _on_enter_breakpoint(self, frame, bp_loc):

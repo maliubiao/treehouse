@@ -28,6 +28,9 @@ class EventLoop:
             ok: bool = self.listener.WaitForEvent(1, event)
             if ok:
                 self._process_event(event)
+            else:
+                # 如果在超时时间内没有收到事件，则记录当前调试器状态
+                self._log_current_debugger_status()
 
     def _process_event(self, event: lldb.SBEvent) -> None:
         """处理事件分发"""
@@ -123,11 +126,10 @@ class EventLoop:
 
     def _handle_breakpoint_stop(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
         """处理断点停止"""
-        while thread.GetStopReasonDataAtIndex(0) == 0xFFFFFFFFFFFFFFFF:
+        while thread.GetStopReasonDataAtIndex(0) > 0xFFFFFFFF:
             # 等待线程停止数据更新
             time.sleep(0.1)
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
-        print("Hit breakpoint ID: %d" % bp_id)
         pc = thread.frame[0].GetPC()
         if pc in self.tracer.breakpoint_seen:
             self._handle_lr_breakpoint(thread)
@@ -139,7 +141,6 @@ class EventLoop:
             process.Continue()
         else:
             # bp_loc_id: int = thread.GetStopReasonDataAtIndex(1)
-
             bp = self.tracer.target.FindBreakpointByID(bp_id)
             frame: lldb.SBFrame = thread.GetFrameAtIndex(0)
             self.logger.info("Breakpoint %s hit at PC: 0x%x, frame: %s, thread %s", bp, pc, frame, thread)
@@ -224,3 +225,41 @@ class EventLoop:
         elif state == lldb.eStateDetached:
             self.logger.info("Process detached")
         self.die_event.set()
+
+    def _log_current_debugger_status(self) -> None:
+        """
+        当没有收到事件时，记录当前调试器状态（进程、线程、栈帧）。
+        使用 tracer 的 run_cmd 来获取状态。
+        """
+        process = self.tracer.process
+        if process and process.IsValid():
+            state = process.GetState()
+            if state == lldb.eStateStopped:
+                self.logger.info("--- Debugger Status (No Event Received) ---")
+                self.logger.info("Process State: %s", get_state_str(state))
+
+                try:
+                    # 获取进程状态（包含通用信息）
+                    # tracer.run_cmd 会将命令输出记录到 logger
+                    result = self.tracer.run_cmd("process status")
+                    if not (result and result.Succeeded()):
+                        self.logger.warning("Failed to get process status.")
+
+                    # 获取线程列表（包含当前栈帧信息）
+                    result = self.tracer.run_cmd("thread list")
+                    if not (result and result.Succeeded()):
+                        self.logger.warning("Failed to get thread list.")
+
+                    # 显式获取当前选定线程的栈帧信息
+                    result = self.tracer.run_cmd("frame info")
+                    if not (result and result.Succeeded()):
+                        self.logger.warning("Failed to get current frame info.")
+                except ValueError as e:
+                    self.logger.error("Error running LLDB command for status check: %s", e)
+                self.logger.info("--- End Debugger Status ---")
+            else:
+                self.logger.info(
+                    "Process is not stopped (current state: %s). Skipping detailed status log.", get_state_str(state)
+                )
+        else:
+            self.logger.info("No valid process to log status.")

@@ -22,11 +22,15 @@ class ConfigManager:
             "use_source_cache": True,
             "cache_dir": "cache",
             "environment": {},
+            "enable_symbol_trace": False,
+            "symbol_trace_patterns": [],
             "attach_pid": None,
             "forward_stdin": True,
             "expression_hooks": [],
             "libc_functions": [],
             "source_search_paths": [],
+            "symbol_trace_cache_file": None,
+            "source_base_dir": "",  # New option for shortening source paths
         }
         self.config_file = config_file
         if config_file:
@@ -40,92 +44,22 @@ class ConfigManager:
 
     def _load_config(self, filepath):
         with open(filepath, encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-            self.config.update(config)
-            self.logger.info("Loaded config from %s: %s", filepath, config)
+            loaded_config = yaml.safe_load(f)
+            self.config.update(loaded_config)
+            self.logger.info("Loaded config from %s: %s", filepath, loaded_config)
 
-            # 验证expression_hooks配置
-            if "expression_hooks" in config:
-                valid_hooks = []
-                invalid_count = 0
-                for i, hook in enumerate(config["expression_hooks"]):
-                    if not isinstance(hook, dict):
-                        self.logger.error("Invalid expression_hooks[%d]: must be dict, got %s", i, type(hook))
-                        invalid_count += 1
-                        continue
-
-                    # 验证path字段
-                    if "path" not in hook or not isinstance(hook["path"], str):
-                        self.logger.error(
-                            "Invalid expression_hooks[%d]: missing or invalid 'path' field (must be string)", i
-                        )
-                        invalid_count += 1
-                        continue
-
-                    # 将path转换为绝对路径
-                    original_path = hook["path"]
-                    if not os.path.isabs(original_path):
-                        hook["path"] = os.path.abspath(original_path)
-                        self.logger.info(
-                            "Converted expression_hooks[%d] path to absolute: %s -> %s", i, original_path, hook["path"]
-                        )
-
-                    # 验证line字段
-                    if "line" not in hook or not isinstance(hook["line"], int):
-                        self.logger.error(
-                            "Invalid expression_hooks[%d]: missing or invalid 'line' field (must be integer)", i
-                        )
-                        invalid_count += 1
-                        continue
-
-                    # 验证expr字段
-                    if "expr" not in hook or not isinstance(hook["expr"], str) or not hook["expr"].strip():
-                        self.logger.error(
-                            "Invalid expression_hooks[%d]: missing or empty 'expr' field (must be non-empty string)", i
-                        )
-                        invalid_count += 1
-                        continue
-
-                    valid_hooks.append(hook)
-
-                if invalid_count > 0:
-                    self.logger.warning(
-                        "Discarded %d invalid expression hooks, using %d valid entries",
-                        invalid_count,
-                        len(valid_hooks),
-                    )
-                self.config["expression_hooks"] = valid_hooks
-
-            # 验证libc_functions配置
-            if "libc_functions" in config:
-                if not isinstance(config["libc_functions"], list):
-                    self.logger.error("Invalid libc_functions config: must be list")
-                    self.config["libc_functions"] = []
-                else:
-                    # 确保所有条目都是字符串
-                    self.config["libc_functions"] = [
-                        str(func) for func in config["libc_functions"] if isinstance(func, (str, int, float))
-                    ]
-
-            # 处理source_search_paths配置
-            if "source_search_paths" in config:
-                if not isinstance(config["source_search_paths"], list):
-                    self.logger.error("Invalid source_search_paths config: must be list")
-                    self.config["source_search_paths"] = []
-                else:
-                    # 将相对路径转换为绝对路径
-                    resolved_paths = []
-                    for path in config["source_search_paths"]:
-                        if not isinstance(path, str):
-                            self.logger.warning("Skipping invalid path in source_search_paths: %s", path)
-                            continue
-                        if not os.path.isabs(path):
-                            abs_path = os.path.abspath(path)
-                            self.logger.info("Converted source search path to absolute: %s -> %s", path, abs_path)
-                            resolved_paths.append(abs_path)
-                        else:
-                            resolved_paths.append(path)
-                    self.config["source_search_paths"] = resolved_paths
+            self.config["expression_hooks"] = self._validate_expression_hooks(self.config.get("expression_hooks"))
+            self.config["libc_functions"] = self._validate_libc_functions(self.config.get("libc_functions"))
+            self.config["source_search_paths"] = self._validate_source_search_paths(
+                self.config.get("source_search_paths")
+            )
+            self.config["symbol_trace_patterns"] = self._validate_symbol_trace_patterns(
+                self.config.get("symbol_trace_patterns")
+            )
+            self.config["source_base_dir"] = self._validate_source_base_dir(self.config.get("source_base_dir"))
+            self.config["symbol_trace_cache_file"] = self._validate_symbol_trace_cache_file(
+                self.config.get("symbol_trace_cache_file")
+            )
 
     def _load_skip_symbols(self):
         """加载符号配置文件"""
@@ -211,6 +145,121 @@ class ConfigManager:
         except (yaml.YAMLError, OSError) as e:
             self.logger.error("Error saving skip source files: %s", str(e))
 
+    def _validate_expression_hooks(self, hooks_config):
+        """验证并清理 expression_hooks 配置"""
+        if not isinstance(hooks_config, list):
+            self.logger.error("Invalid expression_hooks config: must be a list")
+            return []
+
+        valid_hooks = []
+        invalid_count = 0
+        for i, hook in enumerate(hooks_config):
+            if not isinstance(hook, dict):
+                self.logger.error("Invalid expression_hooks[%d]: must be dict, got %s", i, type(hook))
+                invalid_count += 1
+                continue
+
+            if "path" not in hook or not isinstance(hook["path"], str):
+                self.logger.error("Invalid expression_hooks[%d]: missing or invalid 'path' field (must be string)", i)
+                invalid_count += 1
+                continue
+
+            original_path = hook["path"]
+            if not os.path.isabs(original_path):
+                hook["path"] = os.path.abspath(original_path)
+                self.logger.info(
+                    "Converted expression_hooks[%d] path to absolute: %s -> %s", i, original_path, hook["path"]
+                )
+
+            if "line" not in hook or not isinstance(hook["line"], int):
+                self.logger.error("Invalid expression_hooks[%d]: missing or invalid 'line' field (must be integer)", i)
+                invalid_count += 1
+                continue
+
+            if "expr" not in hook or not isinstance(hook["expr"], str) or not hook["expr"].strip():
+                self.logger.error(
+                    "Invalid expression_hooks[%d]: missing or empty 'expr' field (must be non-empty string)", i
+                )
+                invalid_count += 1
+                continue
+
+            valid_hooks.append(hook)
+
+        if invalid_count > 0:
+            self.logger.warning(
+                "Discarded %d invalid expression hooks, using %d valid entries", invalid_count, len(valid_hooks)
+            )
+        return valid_hooks
+
+    def _validate_libc_functions(self, libc_funcs_config):
+        """验证并清理 libc_functions 配置"""
+        if not isinstance(libc_funcs_config, list):
+            self.logger.error("Invalid libc_functions config: must be a list")
+            return []
+        # 确保所有条目都是字符串
+        return [str(func) for func in libc_funcs_config if isinstance(func, (str, int, float))]
+
+    def _validate_source_search_paths(self, paths_config):
+        """验证并清理 source_search_paths 配置"""
+        if not isinstance(paths_config, list):
+            self.logger.error("Invalid source_search_paths config: must be a list")
+            return []
+
+        resolved_paths = []
+        for path in paths_config:
+            if not isinstance(path, str):
+                self.logger.warning("Skipping invalid path in source_search_paths: %s", path)
+                continue
+            if not os.path.isabs(path):
+                abs_path = os.path.abspath(path)
+                self.logger.info("Converted source search path to absolute: %s -> %s", path, abs_path)
+                resolved_paths.append(abs_path)
+            else:
+                resolved_paths.append(path)
+        return resolved_paths
+
+    def _validate_symbol_trace_patterns(self, patterns_config):
+        """验证并清理 symbol_trace_patterns 配置"""
+        if not isinstance(patterns_config, list):
+            self.logger.error("Invalid symbol_trace_patterns config: must be a list")
+            return []
+
+        valid_patterns = []
+        for i, pattern in enumerate(patterns_config):
+            if not isinstance(pattern, dict):
+                self.logger.error("Invalid symbol_trace_patterns[%d]: must be dict, got %s", i, type(pattern))
+                continue
+            if "module" not in pattern or not isinstance(pattern["module"], str):
+                self.logger.error(
+                    "Invalid symbol_trace_patterns[%d]: missing or invalid 'module' field (must be string)", i
+                )
+                continue
+            if "regex" not in pattern or not isinstance(pattern["regex"], str):
+                self.logger.error(
+                    "Invalid symbol_trace_patterns[%d]: missing or invalid 'regex' field (must be string)", i
+                )
+                continue
+            valid_patterns.append(pattern)
+        return valid_patterns
+
+    def _validate_symbol_trace_cache_file(self, cache_file_config):
+        """验证并清理 symbol_trace_cache_file 配置"""
+        if cache_file_config is not None and not isinstance(cache_file_config, str):
+            self.logger.error("Invalid symbol_trace_cache_file config: must be a string or None")
+            return None
+        return cache_file_config
+
+    def _validate_source_base_dir(self, base_dir_config):
+        """验证并清理 source_base_dir 配置"""
+        if not isinstance(base_dir_config, str):
+            self.logger.error("Invalid source_base_dir config: must be a string")
+            return ""
+        if base_dir_config and not os.path.isabs(base_dir_config):
+            abs_path = os.path.abspath(base_dir_config)
+            self.logger.info("Converted source_base_dir to absolute: %s -> %s", base_dir_config, abs_path)
+            return abs_path
+        return base_dir_config
+
     def get_environment(self):
         """获取环境变量字典"""
         return self.config.get("environment", {})
@@ -255,3 +304,7 @@ class ConfigManager:
             assert a <= b, f"Step over range start must be less than or equal to end: {number_range}"
             assert os.path.isabs(path), f"Path must be absolute: {path}"
         return value
+
+    def get_source_base_dir(self):
+        """获取源代码基础目录配置"""
+        return self.config.get("source_base_dir", "")

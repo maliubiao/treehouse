@@ -5,6 +5,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 import lldb
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
 if TYPE_CHECKING:
     from .core import Tracer
@@ -42,11 +49,32 @@ class SourceHandler:
         if cache_key in self.compile_unit_entries_cache:
             return self.compile_unit_entries_cache[cache_key]
 
+        num_entries = compile_unit.GetNumLineEntries()
         entries = []
-        for i in range(compile_unit.GetNumLineEntries()):
-            entry = compile_unit.GetLineEntryAtIndex(i)
-            if entry.IsValid():
-                entries.append(entry)
+
+        # Only show progress bar for a significant number of entries
+        if num_entries > 100:
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("•"),
+                TimeRemainingColumn(),
+                transient=True,
+            ) as progress:
+                task = progress.add_task(
+                    f"Processing line entries for {compile_unit.GetFileSpec().GetFilename()}", total=num_entries
+                )
+                for i in range(num_entries):
+                    entry = compile_unit.GetLineEntryAtIndex(i)
+                    if entry.IsValid():
+                        entries.append(entry)
+                    progress.update(task, advance=1)
+        else:
+            for i in range(num_entries):
+                entry = compile_unit.GetLineEntryAtIndex(i)
+                if entry.IsValid():
+                    entries.append(entry)
 
         # 缓存结果
         self.compile_unit_entries_cache[cache_key] = entries

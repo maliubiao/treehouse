@@ -273,7 +273,7 @@ class Tracer:
         self.run_cmd("command script import --allow-reload tracer")
         self.run_cmd("settings set target.use-fast-stepping true")
         self.run_cmd("settings set target.process.follow-fork-mode child")
-        self.run_cmd("settings set terminal.ansi false")
+        self.run_cmd("settings set use-color false")
         bp_config = self.config_manager.config.get("start_breakpoint", {})
         bp_type = bp_config.get("type", "entry")
 

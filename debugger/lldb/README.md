@@ -107,6 +107,15 @@ libc_functions:
 - 增强源代码表达式评估的健壮性
 - 优化调试信息处理流程，整合源代码表达式评估
 - 支持在步进策略中指定特定行范围的调试行为
+- 支持在步进策略中指定特定行范围的调试行为
+
+### 源代码基础目录 (source_base_dir)
+- **目的**: 用于缩短日志中显示的源代码路径。当源代码路径较长时，可以指定一个基础目录，日志中将显示相对于该基础目录的路径。
+- **配置方法**: 在 `tracer_config.yaml` 中设置 `source_base_dir` 为你的项目根目录或源代码的公共父目录。
+```yaml
+source_base_dir: "/path/to/your/project/src" # 例如：/Users/richard/code/terminal-llm
+```
+- **效果**: 如果 `source_base_dir` 设置为 `/Users/richard/code/terminal-llm`，那么 `/Users/richard/code/terminal-llm/debugger/lldb/tracer/step_handler.py` 将显示为 `debugger/lldb/tracer/step_handler.py`。
 
 
 `step`指令跳过关键函数调用（如`RUN_ALL_TESTS()`），而`stepi`（指令级单步）能正确进入。以下是根本原因和解决方案：

@@ -1,4 +1,5 @@
 import logging
+import os
 from collections import defaultdict
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
@@ -357,11 +358,12 @@ class StepHandler:
         self, frame: lldb.SBFrame, mnemonic: str, parsed_operands: str, resolved_path: str
     ) -> List[str]:
         """处理调试信息"""
+        debug_values = []
         if self.insutruction_mode:
             debug_values = self.debug_info_handler.capture_register_values(frame, mnemonic, parsed_operands)
-            debug_values.extend(self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine()))
-        else:
-            debug_values = self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine())
+            # debug_values.extend(self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine()))
+        # else:
+        #     debug_values = self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine())
         return debug_values
 
     def _get_line_entry(self, frame: lldb.SBFrame, pc: int) -> lldb.SBLineEntry:
@@ -389,7 +391,13 @@ class StepHandler:
 
     def _build_source_info_string(self, original_path: str, resolved_path: str, line_num: int, column: int) -> str:
         """构建源信息字符串"""
-        filepath = resolved_path or original_path
+
+        source_base_dir = self.tracer.config_manager.get_source_base_dir()
+        if source_base_dir and resolved_path and resolved_path.startswith(source_base_dir):
+            # Make path relative to source_base_dir for shorter output
+            filepath = os.path.relpath(resolved_path, source_base_dir)
+        else:
+            filepath = resolved_path or original_path
         if line_num <= 0:
             return f"{filepath}:<no line>"
         return f"{filepath}:{line_num}:{column}" if column > 0 else f"{filepath}:{line_num}"
