@@ -7,9 +7,8 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -19,7 +18,7 @@ from llm_query import ModelSwitch
 console = Console()
 
 MAIN_PROMPT = """
-你需要根据用户的需求，决定要搜索什么，以搜索满足需要的上下文，你可能需要多次搜索逼近目标。
+你需要根据用户的需求，决定要执行什么命令处理日志，以获取需要的上下文，你可能需要执行多次命令逼近目标。
 有一份很大的trace log, 包括程序每一行执行了什么东西， 你需要搜索这个tracelog, 获取上下文，满足用户的需求，
 获取的上下文不能太大，以免超过你的上下文总长度。
 每次返回一个的命令过来，请求用正则表达式搜索日志，然后这个命令的执行结果会在下一次反馈给你。
@@ -118,19 +117,27 @@ class ModelResponse:
 
 
 class TraceLogSearcher:
-    def __init__(self, model_name: str = "tracelog", log_path: str = "trace_report.log", max_rounds: int = 8):
+    def __init__(
+        self,
+        model_name: str = "tracelog",
+        log_path: str = "trace_report.log",
+        max_rounds: int = 8,
+        auto_confirm: bool = False,
+    ):
         self.model_name = model_name
         self.model_switch = ModelSwitch()
         self.log_path = Path(log_path)
         self.max_rounds = max_rounds
         self.state: Optional[SearchState] = None
         self.model_switch.select(model_name)
+        self.auto_confirm = auto_confirm
+        self.allowed_commands = ["rg", "awk", "sed", "head", "tail"]
         if not self.log_path.exists():
             raise FileNotFoundError(f"Trace log not found: {self.log_path}")
 
     def _build_prompt(self, user_query: str) -> str:
         """构建包含历史信息的完整提示词"""
-        prompt = f"# 用户需求\n{self.state.user_query}\n\n"
+        prompt = f"# 用户需求\n{user_query}\n\n"  # 使用传入的user_query参数
 
         if self.state.round == 0:
             try:
@@ -139,11 +146,14 @@ class TraceLogSearcher:
                     if len(lines) > 200:
                         head = "".join(lines[:100])
                         tail = "".join(lines[-100:])
-                        initial_context = f"## 日志文件预览 ({self.log_path.name})\n\n### 文件开头\n```\n{head}\n```\n\n### 文件结尾\n```\n{tail}\n```\n"
+                        preview_title = f"## 日志文件预览 ({self.log_path.name})"
+                        file_start = f"\n\n### 文件开头\n```\n{head}\n```"
+                        file_end = f"\n\n### 文件结尾\n```\n{tail}\n```\n"
+                        initial_context = preview_title + file_start + file_end
                         prompt += initial_context
                     else:
                         prompt += f"## 日志文件 ({self.log_path.name})\n```\n{''.join(lines)}\n```\n"
-            except Exception as e:
+            except (IOError, UnicodeDecodeError) as e:  # 更具体的异常捕获
                 prompt += f"无法读取日志文件预览: {e}\n"
 
         if self.state.round > 0:
@@ -215,8 +225,49 @@ class TraceLogSearcher:
 
         return ModelResponse(why_search=why_search, command=command, solved=solved, conclusion=conclusion)
 
+    def _is_command_allowed(self, command: str) -> bool:
+        """
+        Check if all parts of a piped command are in the whitelist.
+        This version correctly handles pipes within quoted arguments.
+        """
+        try:
+            tokens = shlex.split(command)
+            current_segment_tokens = []
+
+            for token in tokens:
+                if token == "|":
+                    if not current_segment_tokens:
+                        # This means we have something like `| command` or `command || command`
+                        return False
+
+                    # Check the command in the completed segment
+                    cmd_executable = current_segment_tokens[0]
+                    if cmd_executable not in self.allowed_commands:
+                        return False
+
+                    # Reset for the next segment
+                    current_segment_tokens = []
+                else:
+                    current_segment_tokens.append(token)
+
+            # Check the last (or only) segment
+            if not current_segment_tokens:
+                # This could happen if the command ends with a pipe `command |`
+                return False
+
+            cmd_executable = current_segment_tokens[0]
+            if cmd_executable not in self.allowed_commands:
+                return False
+
+            return True
+        except ValueError:
+            # shlex.split can fail on unclosed quotes (e.g., "rg 'hello")
+            return False
+
     def _execute_shell_command(self, command: str) -> Tuple[bool, str, float]:
         """安全地执行单行shell命令并返回结果"""
+        if not self._is_command_allowed(command):
+            return False, f"错误: 命令 '{command}' 包含不允许的程序。只允许: {self.allowed_commands}", 0.0
         try:
             start_time = time.time()
 
@@ -251,8 +302,10 @@ class TraceLogSearcher:
             return True, output.strip(), end_time - start_time
         except FileNotFoundError:
             return False, "错误: 'bash' 命令未找到。请确保bash shell已安装并在您的 PATH 中。", 0.0
-        except Exception as e:
-            return False, f"未知错误: {str(e)}", 0.0
+        except subprocess.SubprocessError as e:
+            return False, f"子进程执行错误: {str(e)}", 0.0
+        except OSError as e:
+            return False, f"系统操作错误: {str(e)}", 0.0
 
     def _update_state(self, model_response: ModelResponse, command: str, result: str, duration: float):
         """更新搜索状态"""
@@ -316,13 +369,14 @@ class TraceLogSearcher:
             if not command:
                 console.print("[red]No command entered, aborting search.[/red]")
                 return None
-            return ModelResponse(why_search="User manual input", command=command, solved=False)
-        elif action == "r":
+            return ModelResponse(
+                why_search="User manual input", command=command, solved=False, conclusion="User provided manual command"
+            )
+        if action == "r":
             console.print("[yellow]Retrying...[/yellow]")
             return "retry"
-        else:
-            console.print("[red]Aborting search.[/red]")
-            return None
+        console.print("[red]Aborting search.[/red]")
+        return None
 
     def _get_and_parse_model_response(self) -> Optional[Union[ModelResponse, str]]:
         """Queries the model, parses the response, and handles retries."""
@@ -334,8 +388,8 @@ class TraceLogSearcher:
                 model_response = self._parse_model_response(response_text)
                 if model_response.command or model_response.solved:
                     return model_response
-            except Exception:
-                pass
+            except (ValueError, json.JSONDecodeError) as e:  # 更具体的异常类型
+                print(f"Failed to parse model response: {e}")
 
             user_choice = self._handle_unparseable_response(response_text)
             if user_choice == "retry":
@@ -345,20 +399,21 @@ class TraceLogSearcher:
     def _execute_and_update(self, model_response: ModelResponse) -> bool:
         """Executes the command, updates state, and prints info. Returns True to continue."""
         command = model_response.command
-        console.print(f"\n[bold cyan]Model suggests executing:[/bold cyan]")
+        console.print("\n[bold cyan]Model suggests executing:[/bold cyan]")
         console.print(f"[yellow]{command}[/yellow]")
-        confirm = console.input("Execute? ([y]/n/e)dit): ").lower().strip()
+        if not self.auto_confirm:
+            confirm = console.input("Execute? ([y]/n/e)dit): ").lower().strip()
 
-        if confirm == "n":
-            console.print("[red]User cancelled execution. Aborting.[/red]")
-            return False
-        elif confirm == "e":
-            command = console.input("Enter new command: ").strip()
+            if confirm == "n":
+                console.print("[red]User cancelled execution. Aborting.[/red]")
+                return False
+            if confirm == "e":
+                command = console.input("Enter new command: ").strip()
 
         if not command:
             console.print("[red]No command to execute. Aborting.[/red]")
             return False
-        success, result, duration = self._execute_shell_command(command)
+        _, result, duration = self._execute_shell_command(command)
 
         self._update_state(model_response, command, result, duration)
 
@@ -367,11 +422,11 @@ class TraceLogSearcher:
 
     def _print_round_info(self, round_result: SearchRoundResult):
         """Prints the information for a completed search round."""
-        console.print(f"\n[bold cyan]Round {round_result.round} Search[/bold cyan]")
-        console.print(f"[yellow]Reason:[/yellow] {round_result.why_search}")
-        console.print(f"[yellow]Duration:[/yellow] {round_result.duration:.2f}s")
-        console.print(f"[yellow]Command:[/yellow] {round_result.command}")
-        console.print(f"[yellow]Result:[/yellow]")
+        console.print("\n[bold cyan]Round {round} Search[/bold cyan]".format(round=round_result.round))
+        console.print("[yellow]Reason:[/yellow] {why_search}".format(why_search=round_result.why_search))
+        console.print("[yellow]Duration:[/yellow] {duration:.2f}s".format(duration=round_result.duration))
+        console.print("[yellow]Command:[/yellow] {command}".format(command=round_result.command))
+        console.print("[yellow]Result:[/yellow]")
         result_summary = round_result.result[:1000]
         if len(round_result.result) > 1000:
             result_summary += "\n..."
@@ -420,7 +475,7 @@ class TraceLogSearcher:
             output_path = Path(output_path)
 
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write(f"# Trace Log 搜索报告\n\n")
+            f.write("# Trace Log 搜索报告\n\n")
             f.write(f"**用户需求**: {self.state.user_query}\n\n")
             f.write(
                 f"**解决状态**: {'已解决' if self.state.solved else f'未解决（达到最大轮次 {self.max_rounds}）'}\n\n"
@@ -462,6 +517,7 @@ def parse_arguments():
     parser.add_argument("-l", "--log-path", type=str, default="trace_report.log", help="trace log文件路径")
     parser.add_argument("-r", "--max-rounds", type=int, default=8, help="最大搜索轮次")
     parser.add_argument("-o", "--output", type=str, default=None, help="报告输出路径")
+    parser.add_argument("--auto-confirm", action="store_true", help="自动确认并执行建议的命令。")
     return parser.parse_args()
 
 
@@ -471,7 +527,9 @@ def main():
 
     try:
         # 初始化搜索器
-        searcher = TraceLogSearcher(model_name=args.model, log_path=args.log_path, max_rounds=args.max_rounds)
+        searcher = TraceLogSearcher(
+            model_name=args.model, log_path=args.log_path, max_rounds=args.max_rounds, auto_confirm=args.auto_confirm
+        )
 
         # 执行搜索
         results = searcher.search(user_query)
