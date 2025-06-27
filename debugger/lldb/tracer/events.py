@@ -118,7 +118,7 @@ def handle_special_stop(thread, stop_reason, logger, target=None, die_event=Fals
         _handle_signal(thread, process, location_info)
     elif stop_reason == lldb.eStopReasonException:
         stop_desc = thread.GetStopDescription(1024)
-        if _handle_exception(thread, stop_desc, die_event):
+        if _handle_exception(thread, stop_desc, die_event, thread.GetProcess().GetTarget().GetDebugger()):
             return
     elif _handle_special_events(thread, stop_reason, location_info):
         pass

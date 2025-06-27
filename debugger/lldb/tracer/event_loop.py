@@ -126,9 +126,11 @@ class EventLoop:
 
     def _handle_breakpoint_stop(self, process: lldb.SBProcess, thread: lldb.SBThread) -> None:
         """处理断点停止"""
-        while thread.GetStopReasonDataAtIndex(0) > 0xFFFFFFFF:
+        count = 0
+        while thread.GetStopReasonDataAtIndex(0) > 0xFFFFFFFFFFFFFF and count < 20:
             # 等待线程停止数据更新
             time.sleep(0.1)
+            count += 1
         bp_id: int = thread.GetStopReasonDataAtIndex(0)
         pc = thread.frame[0].GetPC()
         if pc in self.tracer.breakpoint_seen:

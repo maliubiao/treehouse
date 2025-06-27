@@ -3,7 +3,6 @@
 Main translation workflow implementation
 """
 
-import concurrent.futures
 import json
 import threading
 from pathlib import Path
@@ -29,6 +28,7 @@ class TranslationWorkflow:
         self.translation_log = []
         self.lock = threading.Lock()
         self.model_switch = ModelSwitch()
+        self.model_switch.select("translate")
 
     def _test_gap_translation(self):
         """Test gap line translation and indentation preservation with actual translation"""

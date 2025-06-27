@@ -361,9 +361,9 @@ class StepHandler:
         debug_values = []
         if self.insutruction_mode:
             debug_values = self.debug_info_handler.capture_register_values(frame, mnemonic, parsed_operands)
-            # debug_values.extend(self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine()))
-        # else:
-        #     debug_values = self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine())
+            debug_values.extend(self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine()))
+        else:
+            debug_values = self._evaluate_source_expressions(frame, resolved_path, frame.GetLineEntry().GetLine())
         return debug_values
 
     def _get_line_entry(self, frame: lldb.SBFrame, pc: int) -> lldb.SBLineEntry:
