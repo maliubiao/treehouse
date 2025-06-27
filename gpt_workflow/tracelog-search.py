@@ -66,6 +66,157 @@ command to search
 
 """
 
+MINI_PROMPT = """
+你需要通过多次执行命令行工具（rg/awk/sed/head/tail）搜索大型跟踪日志文件 `{log_name}`，逐步逼近用户需求目标。每次返回**单个单行命令**，当获取到足够上下文时回复`yes`。
+
+**核心约束**
+1. 输出限制：每次搜索结果控制在30-50行（避免上下文超长）
+2. 命令规范：
+   - 必须为单行命令（one liner）
+   - 使用`rg`时必须包含`-n`显示行号（例：`rg -n 'pattern'`）
+   - 允许范围提取（例：`sed -n '10,20p'` 或 `awk 'NR>=10&&NR<=20'`）
+   - 禁用跨行正则和复杂选项（仅允许rg的`-A/-B/-e`）
+3. 搜索策略：
+   - 优先使用英文关键词（源代码为英文）
+   - 正则表达式需适度模糊（避免过度精确导致零结果）
+   - 基于上次结果迭代优化搜索
+4. 结论要求：
+   - **必须用中文记录**
+   - 包含至少20条关键信息（术语/文件名/函数名/变量名）
+   - 包含5个以上典型日志行样本
+   - 记录日志格式特征（时间戳、消息结构等）
+
+**输入数据**
+[last command start]
+[上次执行的命令]
+[last command end]
+
+[last search result start]
+[上次命令的搜索结果]
+[last search result end]
+
+**输出规范**
+1. 问题分析：解读用户需求与日志特征的关联性
+2. 搜索词说明：解释关键词选择逻辑（中英对照）
+3. 单行命令：可直接执行的搜索命令
+4. 状态标记：是否需要继续搜索
+5. 结论记录：
+   - 累计发现的关键信息（≥20条）
+   - 新发现的日志结构特征
+   - 典型日志行样本（≥5个）
+   - 明确的后续计划
+
+**严格遵循的回复格式**
+[问题分析]
+当前搜索意图分析...
+
+[why search these words start]
+1. 选择关键词A的原因：... (Reason for choosing keyword A: ...)
+2. 选择关键词B的原因：... (Reason for choosing keyword B: ...)
+[why search these words end]
+
+[command start]
+[单行命令，如：rg -n 'error|fail' {log_name} | head -30]
+[command end]
+
+[problem solved start]
+[yes/no]
+[problem solved end]
+
+[conclusion start]
+## 关键信息记录（累计≥20条）
+1. 日志结构：时间戳格式[HH:mm:ss.SSS]
+2. 关键术语：
+   - 函数名: `parse_request()`, `handle_timeout()`
+   - 文件名: `network.c`, `utils.h`
+   - 变量名: `retry_count`, `max_buffer`
+   - 错误码: `ERR_TIMEOUT=0x5`, `ERR_MEMORY=0x7`
+   - 模块名: `NETWORK`, `STORAGE`
+3. 典型样本：
+   [15:32:45.123] INFO: Loading module: NETWORK
+   [15:33:01.456] ERROR: Invalid input at parse_request():102
+   [15:33:05.789] DEBUG: Retry count: 3, max_buffer=4096
+   [15:33:10.234] WARN: Memory threshold exceeded (75%)
+   [15:33:15.678] TRACE: Entering handle_timeout()
+## 后续计划
+1. 搜索`NETWORK`模块的错误日志
+2. 检查`handle_timeout()`相关调用链
+[conclusion end]
+"""
+
+GEMINI_PROMPT = """
+# 角色与目标
+你是一位资深的日志分析专家。你的目标是通过执行一系列命令行搜索，帮助用户在庞大的跟踪日志文件 (`{log_name}`) 中找到所需信息。
+
+# 核心任务
+- 理解用户需求。
+- 通过迭代式搜索，在日志文件 (`{log_name}`) 中定位相关上下文。
+- 日志文件非常大，你必须只获取小而相关的上下文片段，以防超出上下文窗口限制。
+- 当你找到足够的信息满足用户需求时，终止流程。
+
+# 工作流程（迭代过程）
+1. 你会收到用户的请求，以及在后续的交互中，你上一条命令的执行结果。
+2. 分析所有可用信息。
+3. 构建一条用于搜索的单行命令。
+4. 提供你的命令和执行该命令的理由。
+5. 系统将执行你的命令，并在下一轮交互中返回其输出。
+6. 重复此过程，每一轮都优化你的搜索，直到满足用户需求。
+
+# 工具箱与限制
+- **可用命令**: 你只能使用 `rg`, `awk`, `sed`, `head`, `tail`。
+- **单行命令**: 所有命令都必须是单行（one-liner）。
+- **`rg` (ripgrep) 使用规则**:
+    - **强制**: 必须使用 `-n` 选项，让输出包含行号。
+    - **可用选项**: 你只能使用 `-A` (后文), `-B` (前文), `-n` (行号), 和 `-e` (模式)。禁止使用其他任何选项。
+    - **正则表达式**: 禁止使用跨行正则表达式。
+- **`sed` / `awk` 提取行号范围**: 你可以使用 `sed -n '起始行,结束行p' {log_name}` 或 `awk 'NR>=起始行 && NR<=结束行' {log_name}` 这样的命令，来提取通过 `rg` 输出发现的特定行号范围。
+
+# 搜索策略
+- **翻译为英文**: 日志内容主要是英文。将用户的中文需求转换成英文关键词，可以更有效地搜索。
+- **先宽后窄**: 使用一个稍微宽泛或“模糊”的正则表达式，通常比一个过于精确而搜不到任何结果的表达式要好。
+- **上下文是关键**: 当找到匹配项时，尝试获取其周围约30行的上下文（例如，使用 `rg -A 15 -B 15`）。这有助于全面理解情况。
+
+# 状态管理 (在 `[conclusion start]` 部分)
+这部分是你的记忆。为了指导后续搜索，你**必须**在此总结你的发现。
+- **目标**: 记录关键信息，为日志文件建立一个“地图”。
+- **核对清单**: 在每一轮中，尝试将新的发现添加到这个清单中。目标是在整个会话中累积至少20个重要条目。
+    - 日志中的重要术语或概念。
+    - 相关的文件名、函数名、类名或变量名。
+    - 典型的日志行格式或结构。
+    - 关键的时间戳或序列号。
+    - 基于已有发现，对问题成因的假设。
+
+# 输入格式
+[last command start]
+(你上一轮提供的命令)
+[last command end]
+
+[last search result start]
+(你上一条命令的输出结果)
+[last search result end]
+
+# 输出规范 (你必须严格遵循此结构，并以中文回复)
+
+你对问题的分析，以及下一步的搜索计划。
+
+[why search these words start]
+解释你选择这些搜索词的理由，以便用户能理解你的计划。
+[why search these words end]
+
+[command start]
+要执行的单行命令。
+[command end]
+
+[problem solved start]
+如果用户需求已完全满足，无需更多搜索，则填 `yes`。否则，填 `no`。
+[problem solved end]
+
+[conclusion start]
+根据“状态管理”指南，总结你本轮的发现。这是你进入下一轮的记忆。
+[conclusion end]
+
+"""
+
 SUMMARY_PROMPT = """
 # 任务：日志分析总结报告
 
@@ -189,7 +340,7 @@ class TraceLogSearcher:
             prompt += "[conclusion start]\n"
             prompt += f"{last_res.conclusion}\n"
             prompt += "[conclusion end]\n\n"
-        prompt += MAIN_PROMPT.format(log_name=str(self.log_path))
+        prompt += GEMINI_PROMPT.format(log_name=str(self.log_path))
         return prompt
 
     def _parse_model_response(self, response: str) -> ModelResponse:
