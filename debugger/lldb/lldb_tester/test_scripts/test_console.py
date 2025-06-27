@@ -1,6 +1,10 @@
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import FormattedText
-from tracer.lldb_console import LLDBCompleter
+
+try:
+    from tracer.lldb_console import LLDBCompleter
+except ImportError:
+    pass
 
 
 def extract_meta_text(display_meta):
@@ -58,6 +62,8 @@ def test_console_completions(context):
     This test is executed by lldb_tester.py, which provides a 'context'
     object with a live debugger session stopped at the 'main' function
     of the test program.
+
+    Note: Command completions include trailing space for better UX
     """
     ci = context.debugger.GetCommandInterpreter()
     if not ci.IsValid():
@@ -70,49 +76,48 @@ def test_console_completions(context):
     print("\n--- Running lldb_console.py completion tests ---")
 
     # --- Test Case 1: Base command completion ---
-    # Test with a command that definitely exists in all LLDB versions
+    # Commands include trailing space for better UX
     doc = Document("hel", cursor_position=3)
-    completions = completer.get_completions(doc, None)  # LLDB now provides descriptions, not fixed "LLDB Command"
-    _assert_completions_contain(completions, ["help"], None)
-    print("[+] PASSED: Base command completion ('hel' -> 'help')")
+    completions = completer.get_completions(doc, None)
+    _assert_completions_contain(completions, ["help "], None)  # Note trailing space
+    print("[+] PASSED: Base command completion ('hel' -> 'help ')")
 
     # --- Test Case 2: Sub-command completion ---
-    # Test with a common subcommand that exists in all LLDB versions
+    # Subcommands include trailing space
     doc = Document("breakpoint ", cursor_position=11)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(
-        completions, ["set", "delete", "list"]
-    )  # Meta can be 'subcommand' or something else from LLDB
-    print("[+] PASSED: Sub-command completion ('breakpoint ' -> multiple options)")
+    _assert_completions_contain(completions, ["set ", "delete ", "list "])
+    print("[+] PASSED: Sub-command completion ('breakpoint ' -> multiple options with spaces)")
 
     # --- Test Case 3: Custom command completion ---
-    # Test the custom 'clear' command
+    # Custom commands include trailing space
     doc = Document("cle", cursor_position=3)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["clear"], "Custom Command")
-    print("[+] PASSED: Custom command completion ('cle' -> 'clear')")
+    _assert_completions_contain(completions, ["clear "], "Custom Command")
+    print("[+] PASSED: Custom command completion ('cle' -> 'clear ')")
 
     # --- Test Case 4: Alias completion ---
-    # Test common aliases that exist in all LLDB versions
+    # Aliases include trailing space
     doc = Document("q", cursor_position=1)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["q"], None)  # LLDB 返回 'q' 代表 'quit'
-    print("[+] PASSED: Alias completion ('q' -> 'q', 'quit')")
+    _assert_completions_contain(completions, ["q "], None)  # Note trailing space
+    print("[+] PASSED: Alias completion ('q' -> 'q ')")
 
     # --- Test Case 5: Variable completion (if context available) ---
     try:
-        # The test program has a function named 'main'
+        # Variables/functions do NOT include trailing space
         doc = Document("b ma", cursor_position=4)
         completions = completer.get_completions(doc, None)
-        _assert_completions_contain(completions, ["main"])
+        _assert_completions_contain(completions, ["main"])  # No trailing space
         print("[+] PASSED: Function name completion ('b ma' -> 'main')")
     except AssertionError:
         print("[-] SKIPPED: Function name completion (no debug context available)")
 
     # --- Test Case 6: Multiple command matches ---
+    # Commands include trailing space
     doc = Document("br", cursor_position=2)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["breakpoint"], None)  # LLDB now provides descriptions, not fixed "LLDB"
-    print("[+] PASSED: Multiple command matches ('br' -> multiple options)")
+    _assert_completions_contain(completions, ["breakpoint "], None)  # Note trailing space
+    print("[+] PASSED: Multiple command matches ('br' -> 'breakpoint ')")
 
     print("\nAll console completion tests passed!")
