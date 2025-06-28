@@ -2706,6 +2706,8 @@ class GPTContextProcessor:
     def process_text(self, text: str, ignore_text: bool = False, tokens_left: int = None) -> str:
         """处理文本并生成上下文提示"""
         if not tokens_left:
+            if not GLOBAL_MODEL_CONFIG:
+                raise ValueError("模型配置未初始化")
             tokens_left = GLOBAL_MODEL_CONFIG.max_context_size
 
         nodes = self.parse_text_into_nodes(text.strip())
@@ -3571,6 +3573,7 @@ class ModelSwitch:
         self._config_cache = None  # 新增配置缓存
         self.current_config: Optional[ModelConfig] = None
         self.workflow = import_relative("gpt_workflow")
+        self.model_name = ""
 
     def models(self) -> list[str]:
         """
@@ -3756,6 +3759,7 @@ class ModelSwitch:
             return
 
         self.current_config = self._get_model_config(model_name)
+        self.model_name = model_name
         globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
     def query_for_text(self, model_name: str, prompt: str, **kwargs) -> dict:

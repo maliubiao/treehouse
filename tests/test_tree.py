@@ -378,7 +378,7 @@ class TestSymbolPaths(TestParserUtil):
             class MyClass:
                 def my_method(self):
                     pass
-                    
+
             """
         )
         path = self.create_temp_file(code)
@@ -696,7 +696,7 @@ class TestCppSymbolPaths(TestParserUtil):
             class TemplateScope {
             public:
                 static void template_method() {}
-                
+
                 class Inner {
                 public:
                     static void template_inner_method() {}
@@ -1403,9 +1403,9 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
 
     def test_go_type_struct_definition(self):
         code = dedent(
-            """  
-            package main  
-  
+            """
+            package main
+
             type MyStruct struct {
                 Field1 string
                 Field2 int
@@ -1426,19 +1426,19 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
     def test_go_commented_function_extraction(self):
         """测试带注释的Go函数符号提取"""
         code = dedent(
-            """  
-            package main  
-  
-            // Function1的注释  
-            func Function1() {}  
-  
-            /* 
-            Function2的多行注释 
-            */  
-            func Function2() int { return 0 }  
-  
-            // 带参数的函数注释  
-            func Function3(param string) {}  
+            """
+            package main
+
+            // Function1的注释
+            func Function1() {}
+
+            /*
+            Function2的多行注释
+            */
+            func Function2() int { return 0 }
+
+            // 带参数的函数注释
+            func Function3(param string) {}
         """
         )
         path = self.create_temp_file(code, suffix=".go")
@@ -1451,7 +1451,7 @@ class TestGoTypeAndFunctionAndMethod(TestParserUtil):
 
         # 验证注释包含在代码块中
         self.assertIn("// Function1的注释", code_map["main.Function1"]["code"])
-        self.assertIn("/* \nFunction2的多行注释 \n*/", code_map["main.Function2"]["code"])
+        self.assertIn("/*\nFunction2的多行注释\n*/", code_map["main.Function2"]["code"])
         self.assertIn("// 带参数的函数注释", code_map["main.Function3"]["code"])
 
         # 验证函数体完整性
@@ -1640,10 +1640,10 @@ class TestCallAnalysis(TestParserUtil):
         code = dedent(
             """
             from typing import List, Optional
-            
+
             class MyType:
                 pass
-            
+
             def example(
                 a: int,
                 b: MyType,
@@ -1765,7 +1765,7 @@ class TestCallAnalysis(TestParserUtil):
 
             def use_callback(callback):
                 callback()
-                
+
             use_callback(lambda x: x+1)
             """
         )
@@ -1813,14 +1813,14 @@ class TestCallAnalysis(TestParserUtil):
             *[get_position_info("lambda: None")[:2] for _ in range(2)],  # 测试匿名函数位置
         ]
 
-        symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations)
+        symbols = self.parser_util.find_symbols_for_locations(code_map, test_locations, include_class_context=True)
 
         expected_symbols = {
             "Alpha": code_map["Alpha"],
             "Beta": code_map["Beta"],
             "with_callback": code_map["with_callback"],  # 匿名回调应该返回父函数
         }
-        self.assertEqual(symbols.keys(), expected_symbols.keys())
+        self.assertEqual(set(symbols.keys()), set(expected_symbols.keys()))
 
         os.unlink(path)
 

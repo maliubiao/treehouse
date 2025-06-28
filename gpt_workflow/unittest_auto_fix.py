@@ -235,7 +235,95 @@ def parse_args():
         help="Lookup reference information for specific file and line number",
     )
     parser.add_argument("--user-requirement", help="User's specific requirements to be added to the prompt", default="")
+    parser.add_argument(
+        "--model",
+        default="deepseek-r1",
+        help="Specify the language model to use (e.g., deepseek-r1, gpt-4, etc.)",
+    )
+    parser.add_argument(
+        "--direct-fix",
+        action="store_true",
+        help="Directly generate a fix without the interactive explanation step.",
+    )
     return parser.parse_args()
+
+
+def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch: ModelSwitch, user_req: str):
+    """
+    Performs a direct, one-step fix by analyzing the tracer log and generating a patch.
+    """
+    print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
+
+    if not user_req:
+        user_req = "分析并解决用户遇到的问题，修复test_*符号中的错误"
+
+    tokens_left = model_switch.current_config.max_tokens
+
+    prompt_content = f"""
+请根据以下tracer的报告, 分析问题原因并直接修复testcase相关问题。请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据。
+用户的要求: {user_req}
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+    """
+
+    GPT_FLAGS[GPT_FLAG_PATCH] = True
+    p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=tokens_left)
+    p.process_search_results(symbol_result)
+    prompt = p.build(user_requirement=prompt_content)
+
+    print(Fore.YELLOW + "正在生成修复方案...")
+    text = model_switch.query_for_text(model_switch.model_name, prompt, stream=True)
+    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+
+
+def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch: ModelSwitch, user_req: str):
+    """
+    Performs an interactive, two-step fix: first explains the issue, then generates a patch.
+    """
+    print(Fore.YELLOW + "正在生成问题原因解释...")
+    tokens_left = model_switch.current_config.max_tokens
+
+    # Step 1: Explanation
+    explain_prompt_template = (Path(__file__).parent.parent / "prompts/python-tracer").read_text(encoding="utf-8")
+    explain_prompt_content = f"""
+{explain_prompt_template}
+请根据以下tracer的报告, 按照分析要求，解释问题的原因, 请以中文回复
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+"""
+    p_explain = PatchPromptBuilder(use_patch=False, symbols=[], tokens_left=tokens_left)
+    p_explain.process_search_results(symbol_result)
+    prompt_explain = p_explain.build(user_requirement=explain_prompt_content)
+    explain_text = model_switch.query_for_text(model_switch.model_name, prompt_explain, stream=True)
+
+    # Step 2: Fix
+    user_req_for_fix = user_req
+    if not user_req_for_fix:
+        user_req_for_fix = input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
+
+    if not user_req_for_fix:
+        user_req_for_fix = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
+
+    fix_prompt_content = f"""
+请根据以下tracer的报告, 修复testcase相关问题, 请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据
+技术专家的分析:
+{explain_text}
+用户的要求: {user_req_for_fix}
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+    """
+
+    GPT_FLAGS[GPT_FLAG_PATCH] = True
+    p_fix = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=tokens_left)
+    p_fix.process_search_results(symbol_result)
+    prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
+
+    print(Fore.YELLOW + "正在根据分析生成修复方案...")
+    text = model_switch.query_for_text(model_switch.model_name, prompt_fix, stream=True)
+    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
 def main():
@@ -246,63 +334,45 @@ def main():
         file_path, line = args.lookup
         try:
             line_num = int(line)
-            auto_fix = TestAutoFix({})
+            auto_fix = TestAutoFix({}, user_requirement=args.user_requirement)
             auto_fix.lookup_reference(file_path, line_num)
         except ValueError:
             print(Fore.RED + "Error: LINE must be a valid integer")
             sys.exit(1)
+        return
+
+    test_results = TestAutoFix.run_tests(args.testcase)
+    auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
+    auto_fix.display_errors()
+
+    if not auto_fix.uniq_references:
+        print(Fore.GREEN + "\nNo references found for the test issues.")
+        return
+
+    symbol_result = auto_fix.get_symbol_info_for_references([], list(auto_fix.uniq_references))
+
+    model_switch = ModelSwitch()
+    model_switch.select(args.model)
+
+    if args.direct_fix:
+        _perform_direct_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
     else:
-        test_results = TestAutoFix.run_tests(args.testcase)
-        auto_fix = TestAutoFix(test_results)
-        auto_fix.display_errors()
-        if not auto_fix.uniq_references:
-            print(Fore.GREEN + "\nNo references found for the test issues.")
-            return
-        symbol_result = auto_fix.get_symbol_info_for_references([], list(auto_fix.uniq_references))
+        print(Fore.YELLOW + "\n请选择操作：")
+        print(Fore.CYAN + "1. 解释并修复 (两步)")
+        print(Fore.CYAN + "2. 直接修复 (一步)")
+        print(Fore.CYAN + "3. 退出")
+        choice = input(Fore.GREEN + "请选择 (1/2/3): ").strip()
 
-        # 用户交互界面
-        print(Fore.YELLOW + "\n是否继续生成修复建议？")
-        print(Fore.CYAN + "1. 解释问题的原因")
-        print(Fore.CYAN + "2. 放弃并退出")
-        choice = input(Fore.GREEN + "请选择 (1/2): ").strip()
-        if choice == "2":
-            print(Fore.RED + "退出程序")
+        if choice == "1":
+            _perform_two_step_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
+        elif choice == "2":
+            _perform_direct_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
+        elif choice == "3":
+            print(Fore.RED + "已退出。")
             return
-        elif choice != "1":
-            print(Fore.RED + "无效的选择，退出程序")
+        else:
+            print(Fore.RED + "无效选择，退出。")
             return
-        print(Fore.YELLOW + "正在生成修复建议...")
-        user_requirement = (Path(__file__).parent.parent / "prompts/python-tracer").read_text(encoding="utf-8")
-        user_requirement += f"""
-请根据以下tracer的报告, 按照分析要求，解释问题的原因, 请以中文回复
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-"""
-        p = PatchPromptBuilder(use_patch=False, symbols=[], tokens_left=64 * 1024)
-        p.process_search_results(symbol_result)
-        prompt = p.build(user_requirement=user_requirement)
-        explain_text = ModelSwitch().query_for_text("deepseek-r1", prompt, stream=True)
-        user_requirement = input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
-
-        if not user_requirement:
-            user_requirement = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
-        GPT_FLAGS[GPT_FLAG_PATCH] = True
-        p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=64 * 1024)
-        p.process_search_results(symbol_result)
-        prompt_content = f"""
-请根据以下tracer的报告, 修复testcase相关问题, 请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据
-技术专家的分析:
-{explain_text}
-用户的要求: {user_requirement}
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-        """
-
-        prompt = p.build(user_requirement=prompt_content)
-        text = ModelSwitch().query_for_text("deepseek-r1", prompt, stream=True)
-        process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
 if __name__ == "__main__":

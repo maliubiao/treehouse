@@ -673,6 +673,7 @@ class ParserUtil:
         """获取文件的根节点"""
         parser, _, lang_name = self.parser_loader.get_parser(file_path)
         self.node_processor.lang_spec = find_spec_for_lang(lang_name)
+        self.code_map_builder.lang = lang_name
         with open(file_path, "rb") as f:
             source_code = f.read()
         self._source_code = source_code
@@ -708,9 +709,15 @@ class ParserUtil:
         code_map: dict,
         locations: list[tuple[int, int]],
         max_context_size: int = 16 * 1024,
+        include_class_context: bool = False,
     ) -> dict[str, dict]:
         """批量处理位置并返回符号名到符号信息的映射"""
-        return self.code_map_builder.find_symbols_for_locations(code_map, locations, max_context_size)
+        return self.code_map_builder.find_symbols_for_locations(
+            code_map,
+            locations,
+            max_context_size=max_context_size,
+            include_class_context=include_class_context,
+        )
 
     def symbol_at_line(self, line: int) -> dict:
         return self.code_map_builder.build_symbol_info_at_line(line)
@@ -1620,7 +1627,9 @@ class CodeMapBuilder:
         symbol_locations = {}
         total_code_size = 0
 
-        locations = []
+        # 存储处理后的位置信息 (line, col, symbol_path)
+        processed_locations_with_symbols = []
+
         for line, col in sorted_locations:
             current_symbol = None
             for symbol_path, symbol_info in sorted_symbols:
@@ -1640,48 +1649,59 @@ class CodeMapBuilder:
                     break
 
             if current_symbol:
-                # 类上下文处理开关
+                symbol_to_process = current_symbol
+
+                # 类上下文处理开关: 如果开启，尝试将符号从方法“升级”到其父类
                 if include_class_context:
                     symbol_info = code_map[current_symbol]
-                    # 仅处理函数类型且包含命名空间的符号
-                    if symbol_info.get("type") == "function":
+                    # 仅处理函数类型且包含命名空间的符号 (e.g., "MyClass.my_method")
+                    if symbol_info.get("type") == "function" and "." in current_symbol:
                         parts = current_symbol.split(".")
                         if len(parts) > 1:
                             class_path = ".".join(parts[:-1])
-                            # 确保类符号存在且未处理
-                            if class_path in code_map and class_path not in processed_symbols:
+                            if class_path in code_map:
+                                # 找到了一个父类。现在决定是否使用它。
                                 class_info = code_map[class_path]
                                 class_code_length = len(class_info.get("code", ""))
-                                # 检查类上下文是否超过限制
-                                if total_code_size + class_code_length <= max_context_size:
-                                    processed_symbols[class_path] = class_info.copy()
-                                    total_code_size += class_code_length
 
-                # 处理当前符号
-                symbol_info = code_map[current_symbol]
-                if current_symbol not in processed_symbols:
+                                # 如果类已经被处理，或者尚未处理但可以容纳在上下文中，
+                                # 我们就选择用类来代替方法。
+                                if class_path in processed_symbols or (
+                                    total_code_size + class_code_length <= max_context_size
+                                ):
+                                    symbol_to_process = class_path
+
+                # 处理选定的符号（类或原始方法）
+                symbol_info = code_map[symbol_to_process]
+                if symbol_to_process not in processed_symbols:
                     code_length = len(symbol_info.get("code", ""))
                     if total_code_size + code_length > max_context_size:
                         logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
                         break
-                    processed_symbols[current_symbol] = symbol_info.copy()
+                    processed_symbols[symbol_to_process] = symbol_info.copy()
                     total_code_size += code_length
-                locations.append((line, col, current_symbol))
+
+                processed_locations_with_symbols.append((line, col, symbol_to_process))
             else:
+                # 未找到完全包含该位置的符号，则查找临近符号
                 symbol_info = self.build_near_symbol_info_at_line(line)
                 if not symbol_info:
                     continue
+
+                symbol_path = near_symbol_at_line(line)
                 code_length = len(symbol_info.get("code", ""))
                 if total_code_size + code_length > max_context_size:
                     logging.warning(f"Context size exceeded {max_context_size} bytes, stopping symbol collection")
                     break
-                locations.append((line, col, near_symbol_at_line(line)))
-                processed_symbols[near_symbol_at_line(line)] = symbol_info
-                total_code_size += code_length
+                processed_locations_with_symbols.append((line, col, symbol_path))
+                if symbol_path not in processed_symbols:
+                    processed_symbols[symbol_path] = symbol_info
+                    total_code_size += code_length
+
             if total_code_size >= max_context_size:
                 break
 
-        for line, col, symbol in locations:
+        for line, col, symbol in processed_locations_with_symbols:
             if symbol not in symbol_locations:
                 symbol_locations[symbol] = []
             symbol_locations[symbol].append((line, col))
