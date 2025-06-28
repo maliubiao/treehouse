@@ -15,6 +15,7 @@ from .logger import LogManager
 from .modules import ModuleManager
 from .source_ranges import SourceRangeManager
 from .step_handler import StepHandler
+from .symbol_trace_plugin import SymbolTrace, register_global_callbacks
 from .utils import get_platform_stdin_listener
 
 
@@ -283,10 +284,19 @@ class Tracer:
         show_console(self.debugger)
         self.run_cmd("settings set use-color false")
         assert self.process.GetState() == lldb.eStateStopped
+
+        if self.config_manager.get_symbol_trace_patterns:
+            self.use_symbol_trace()
         threading.Thread(target=self.continue_to_main, daemon=True).start()
         self.event_loop.run()
         self.cleanup()
         return True
+
+    def use_symbol_trace(self):
+        register_global_callbacks(self.run_cmd, self.logger)
+        self.symbol_trace = SymbolTrace(self, self.step_handler, self.config_manager.get_symbol_trace_cache_file())
+        for source_pattern in self.config_manager.get_symbol_trace_patterns():
+            self.symbol_trace.register_symbols(source_pattern.module, source_pattern.regex, False)
 
     def install(self, target: lldb.SBTarget) -> None:
         self.target = target

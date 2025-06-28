@@ -13,7 +13,7 @@ from .debug_info_handler import DebugInfoHandler
 from .events import StepAction
 from .expr_extractor import ExpressionExtractor
 from .source_handler import SourceHandler
-from .symbol_trace_plugin import SymbolTraceEvent  # Import SymbolTraceEvent
+from .symbol_trace_plugin import SymbolTraceEvent
 from .utils import get_symbol_type_str
 
 if TYPE_CHECKING:

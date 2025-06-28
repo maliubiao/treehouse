@@ -2,8 +2,23 @@ import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 import yaml
+
+
+@dataclass
+class SymbolTracePattern:
+    """Represents a symbol trace pattern configuration.
+
+    Attributes:
+        module: The module name to trace symbols in
+        regex: Regular expression pattern to match symbol names
+    """
+
+    module: str
+    regex: str
 
 
 class ConfigManager:
@@ -31,6 +46,8 @@ class ConfigManager:
             "source_search_paths": [],
             "symbol_trace_cache_file": None,
             "source_base_dir": "",  # New option for shortening source paths
+            "symbol_trace_enabled": False,  # Added: global enable/disable flag
+            "show_console": False,  # 新增：是否显示LLDB控制台
         }
         self.config_file = config_file
         if config_file:
@@ -221,8 +238,12 @@ class ConfigManager:
                 resolved_paths.append(path)
         return resolved_paths
 
-    def _validate_symbol_trace_patterns(self, patterns_config):
-        """验证并清理 symbol_trace_patterns 配置"""
+    def _validate_symbol_trace_patterns(self, patterns_config) -> List[SymbolTracePattern]:
+        """验证并清理 symbol_trace_patterns 配置
+
+        返回:
+            SymbolTracePattern 对象列表
+        """
         if not isinstance(patterns_config, list):
             self.logger.error("Invalid symbol_trace_patterns config: must be a list")
             return []
@@ -242,7 +263,8 @@ class ConfigManager:
                     "Invalid symbol_trace_patterns[%d]: missing or invalid 'regex' field (must be string)", i
                 )
                 continue
-            valid_patterns.append(pattern)
+            # 创建强类型对象
+            valid_patterns.append(SymbolTracePattern(module=pattern["module"], regex=pattern["regex"]))
         return valid_patterns
 
     def _validate_symbol_trace_cache_file(self, cache_file_config):
@@ -263,42 +285,60 @@ class ConfigManager:
             return abs_path
         return base_dir_config
 
-    def get_environment(self):
+    # ====== Symbol Trace Configuration Getters ======
+    def is_symbol_trace_enabled(self) -> bool:
+        """检查符号追踪是否启用"""
+        return self.config.get("symbol_trace_enabled", False)
+
+    def get_symbol_trace_patterns(self) -> List[SymbolTracePattern]:
+        """获取符号追踪模式配置
+
+        返回:
+            SymbolTracePattern 对象列表
+        """
+        return self.config.get("symbol_trace_patterns", [])
+
+    def get_symbol_trace_cache_file(self) -> Optional[str]:
+        """获取符号追踪缓存文件路径"""
+        return self.config.get("symbol_trace_cache_file")
+
+    # ====== Other Configuration Getters ======
+    def get_environment(self) -> Dict[str, str]:
         """获取环境变量字典"""
         return self.config.get("environment", {})
 
-    def get_environment_list(self):
+    def get_environment_list(self) -> List[str]:
         """获取环境变量列表（格式：["KEY=value", ...]）"""
         env_dict = self.get_environment()
         return [f"{key}={value}" for key, value in env_dict.items()]
 
-    def get_attach_pid(self):
+    def get_attach_pid(self) -> Optional[int]:
         """获取附加PID配置"""
         return self.config.get("attach_pid")
 
-    def get_expression_hooks(self):
+    def get_expression_hooks(self) -> List[Dict[str, Any]]:
         """获取表达式钩子配置"""
         return self.config.get("expression_hooks", [])
 
-    def get_libc_functions(self):
+    def get_libc_functions(self) -> List[str]:
         """获取要跟踪的libc函数列表"""
         return self.config.get("libc_functions", [])
 
-    def get_source_search_paths(self):
+    def get_source_search_paths(self) -> List[str]:
         """获取源代码搜索路径列表"""
         return self.config.get("source_search_paths", [])
 
-    def get_call_trace_file(self):
+    def get_call_trace_file(self) -> str:
         """获取调用跟踪文件路径"""
         return self.config.get("call_trace_file", "call_trace.txt")
 
-    def get_log_mode(self):
+    def get_log_mode(self) -> str:
         """获取日志模式配置"""
         value = self.config.get("log_mode", "instruction")
         assert value in ["source", "instruction"]
         return value
 
-    def get_step_action(self):
+    def get_step_action(self) -> Dict[str, Any]:
         """获取步过操作配置"""
         value = self.config.get("step_action", {})
         for path, number_range in value.items():
@@ -308,6 +348,10 @@ class ConfigManager:
             assert os.path.isabs(path), f"Path must be absolute: {path}"
         return value
 
-    def get_source_base_dir(self):
+    def get_source_base_dir(self) -> str:
         """获取源代码基础目录配置"""
         return self.config.get("source_base_dir", "")
+
+    def should_show_console(self) -> bool:
+        """检查是否应显示控制台"""
+        return self.config.get("show_console", False)
