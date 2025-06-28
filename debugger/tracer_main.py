@@ -9,6 +9,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from debugger.tracer import TraceConfig, color_wrap, start_trace
 
@@ -28,7 +30,8 @@ def execute_script(target: Path, args: List[str]) -> None:
     # 准备执行环境
     globals_dict = main_module.__dict__
     globals_dict.update({"__name__": "__main__", "__file__": str(target), "__package__": None})
-    sys.path.append(os.path.dirname(str(target)))
+    # 将目标脚本所在目录添加到 sys.path
+    sys.path.insert(0, os.path.dirname(str(target)))
     try:
         compiled_code = compile(code, str(target), "exec")
         # 使用更安全的执行方式
@@ -39,16 +42,40 @@ def execute_script(target: Path, args: List[str]) -> None:
     except Exception:
         traceback.print_exc()
         raise
+    finally:
+        # 恢复 sys.path
+        if sys.path[0] == os.path.dirname(str(target)):
+            sys.path.pop(0)
 
 
-def parse_args(argv: List[str]) -> Dict[str, Any]:
-    """解析命令行参数并返回配置字典"""
-    parser = ArgumentParser(description="Python调试跟踪工具")
-    parser.add_argument("target", type=Path, help="要调试的Python脚本路径")
+def create_parser() -> ArgumentParser:
+    """创建命令行参数解析器"""
+    epilog = (
+        "示例:\n"
+        "  python -m debugger.tracer_main script.py\n"
+        "  python -m debugger.tracer_main --config my_config.yaml script.py\n"
+        "  python -m debugger.tracer_main --watch-files='src/*.py' script.py\n"
+        "  python -m debugger.tracer_main --capture-vars='x' --capture-vars='y.z' script.py\n"
+        "  python -m debugger.tracer_main --line-ranges='test.py:10-20' script.py\n"
+        "  python -m debugger.tracer_main --start-function='main.py:5' script.py arg1 --arg2"
+    )
+    parser = ArgumentParser(
+        description="Python脚本调试跟踪工具",
+        usage="python -m debugger.tracer_main [选项] <脚本> [脚本参数]",
+        formatter_class=RawDescriptionHelpFormatter,
+        epilog=epilog,
+        add_help=False,  # We add our own help argument for custom text
+    )
+    # Redefine help argument to provide custom help text in Chinese
+    parser.add_argument("-h", "--help", action="help", help="显示此帮助信息并退出")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="从YAML文件加载配置",
+    )
     parser.add_argument(
         "--watch-files",
         action="append",
-        default=[],
         help="监控匹配的文件模式(支持通配符，可多次指定)",
     )
     parser.add_argument(
@@ -64,13 +91,11 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
     parser.add_argument(
         "--capture-vars",
         action="append",
-        default=[],
         help="要捕获的变量表达式(可多次指定)",
     )
     parser.add_argument(
         "--exclude-functions",
         action="append",
-        default=[],
         help="要排除的函数名(可多次指定)",
     )
     parser.add_argument(
@@ -81,7 +106,7 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
     parser.add_argument(
         "--enable-var-trace",
         action="store_true",
-        help="启用变量操作跟踪",
+        help="启用变量操作跟踪 (可能影响性能)",
     )
     parser.add_argument(
         "--disable-html",
@@ -91,8 +116,7 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
     parser.add_argument(
         "--report-name",
         type=str,
-        help="自定义报告文件名(不含扩展名)",
-        default="trace_report.html",
+        help="自定义报告文件名 (例如: my_report.html)",
     )
     parser.add_argument(
         "--include-system",
@@ -100,26 +124,63 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
         help="包含系统路径和第三方库的跟踪",
     )
     parser.add_argument(
-        "--start-function",
-        type=str,
-        help="指定开始跟踪的函数，格式为'文件名:行号'",
+        "--trace-self",
+        action="store_true",
+        help="包含跟踪器自身的代码执行 (用于调试跟踪器)",
     )
     parser.add_argument(
-        "script_args",
-        nargs="*",
-        help="传递给目标脚本的参数",
+        "--start-function",
+        type=str,
+        help="指定开始跟踪的函数，格式为'文件路径:行号'",
     )
+    parser.add_argument(
+        "--source-base-dir",
+        type=Path,
+        help="源代码的根目录，用于在报告中显示相对路径",
+    )
+    return parser
 
-    split_index = 0
-    for i, arg in enumerate(argv):
-        if arg.endswith(".py") and Path(arg).exists():
-            split_index = i
-            break
 
-    if split_index == 0 and not argv:
-        return parser.parse_args([])
+def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
+    """
+    解析命令行参数，支持配置文件，并稳健地分离目标脚本及其参数。
 
-    args = parser.parse_args(argv[: split_index + 1])
+    处理顺序:
+    1. 查找 --config 参数并加载配置文件作为默认值。
+    2. 解析调试器自身的参数。
+    3. 将剩余的参数视为目标脚本及其参数。
+    """
+    parser = create_parser()
+
+    # 早期解析，只为获取配置文件路径
+    config_parser = ArgumentParser(add_help=False)
+    config_parser.add_argument("--config", type=Path)
+    config_args, remaining_argv = config_parser.parse_known_args(argv)
+
+    # 加载配置文件
+    config_from_file = {}
+    if config_args.config:
+        if not config_args.config.exists():
+            raise FileNotFoundError(f"配置文件不存在: {config_args.config}")
+        with open(config_args.config, "r", encoding="utf-8") as f:
+            try:
+                config_from_file = yaml.safe_load(f) or {}
+            except yaml.YAMLError as e:
+                raise ValueError(f"配置文件解析失败: {e}") from e
+
+    # 将配置文件中的值设置为默认值
+    # 命令行参数将覆盖配置文件中的值
+    parser.set_defaults(**config_from_file)
+
+    # 解析剩余的参数
+    # parse_known_args will exit if -h or --help is present
+    args, script_argv = parser.parse_known_args(remaining_argv)
+
+    if not script_argv:
+        raise ValueError("未指定目标Python脚本。请在选项后提供脚本路径。")
+
+    target_script = Path(script_argv[0])
+    script_args = script_argv[1:]
 
     # 解析行号范围
     line_ranges = {}
@@ -138,75 +199,52 @@ def parse_args(argv: List[str]) -> Dict[str, Any]:
         start_function = (filename, int(lineno))
 
     return {
-        "target": args.target,
-        "watch_files": args.watch_files,
+        "target": target_script,
+        "watch_files": args.watch_files or [],
         "open_report": args.open_report,
         "verbose": args.verbose,
-        "capture_vars": args.capture_vars,
-        "exclude_functions": args.exclude_functions,
+        "capture_vars": args.capture_vars or [],
+        "exclude_functions": args.exclude_functions or [],
         "line_ranges": line_ranges,
         "enable_var_trace": args.enable_var_trace,
         "disable_html": args.disable_html,
         "report_name": args.report_name,
         "ignore_system_paths": not args.include_system,
+        "ignore_self": not args.trace_self,
         "start_function": start_function,
-        "script_args": argv[split_index + 1 :],
+        "source_base_dir": args.source_base_dir,
+        "script_args": script_args,
     }
 
 
-def open_trace_report() -> None:
-    """打开跟踪报告HTML文件"""
-    report_path = Path(__file__).parent / "logs" / "trace_report.html"
+def open_trace_report(report_path: Path) -> None:
+    """打开指定的跟踪报告HTML文件"""
     if not report_path.exists():
         print(color_wrap(f"❌ 跟踪报告文件 {report_path} 不存在", "error"))
         return
 
+    report_uri = f"file://{report_path.resolve()}"
     try:
-        if sys.platform == "win32":
-            os.startfile(report_path)
-        elif sys.platform == "darwin":
-            webbrowser.open(f"file://{report_path}")
-        else:
-            webbrowser.open(f"file://{report_path}")
+        webbrowser.open(report_uri)
     except (OSError, webbrowser.Error) as e:
         print(color_wrap(f"❌ 无法打开跟踪报告: {str(e)}", "error"))
 
 
 def debug_main(argv: Optional[List[str]] = None) -> int:
     """调试器主入口，可被其他模块调用"""
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # 如果没有提供任何参数，则显示帮助信息并退出。
+    # argparse将在解析时自动处理 -h/--help。
+    if not argv:
+        create_parser().print_help()
+        return 0
+
     try:
-        if argv is None:
-            argv = sys.argv[1:]
-
-        if not argv:
-            print(
-                color_wrap(
-                    "Python脚本调试跟踪工具\n\n"
-                    "用法: python -m debugger.tracer_main [选项] <脚本> [脚本参数]\n\n"
-                    "选项:\n"
-                    "  --watch-files=PATTERN   监控匹配的文件模式(可多次指定)\n"
-                    "  --capture-vars=EXPR     要捕获的变量表达式(可多次指定)\n"
-                    "  --exclude-functions=NAME 要排除的函数名(可多次指定)\n"
-                    "  --line-ranges=FILE:START-END 要跟踪的行号范围(可逗号分隔多个)\n"
-                    "  --enable-var-trace      启用变量操作跟踪\n"
-                    "  --disable-html         禁用HTML报告生成\n"
-                    "  --report-name=NAME     自定义报告文件名(不含扩展名)\n"
-                    "  --include-system       包含系统路径和第三方库的跟踪\n"
-                    "  --start-function=FILE:LINE 指定开始跟踪的函数\n"
-                    "  --open-report          调试完成后自动打开HTML报告\n"
-                    "  --verbose              显示详细调试信息\n\n"
-                    "示例:\n"
-                    "  python -m debugger.tracer_main script.py\n"
-                    "  python -m debugger.tracer_main --watch-files='src/*.py' script.py\n"
-                    "  python -m debugger.tracer_main --capture-vars='x' --capture-vars='y.z' script.py\n"
-                    "  python -m debugger.tracer_main --line-ranges='test.py:10-20,test.py:30-40' script.py\n"
-                    "  python -m debugger.tracer_main --start-function='main.py:5' script.py\n",
-                    "call",
-                )
-            )
-            return 1
-
-        args = parse_args(argv)
+        # parse_cli_args 会在内部调用 create_parser()
+        # 如果用户提供了 -h 或 --help，argparse 会自动处理并退出，不会执行到这里。
+        args = parse_cli_args(argv)
         target = args["target"].resolve()
         if not target.exists():
             print(color_wrap(f"❌ 目标文件 {target} 不存在", "error"))
@@ -226,45 +264,48 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             print(color_wrap(f"📝 行号范围: {args['line_ranges']}", "var"))
         if args["start_function"]:
             print(color_wrap(f"📝 起始函数: {args['start_function'][0]}:{args['start_function'][1]}", "var"))
+        if args["source_base_dir"]:
+            print(color_wrap(f"📝 源码根目录: {args['source_base_dir'].resolve()}", "var"))
+
+        # 创建 TraceConfig 实例
+        config = TraceConfig(
+            target_files=args["watch_files"] + [f"*{target.stem}.py"],
+            capture_vars=args["capture_vars"],
+            line_ranges=args["line_ranges"],
+            exclude_functions=args["exclude_functions"],
+            enable_var_trace=args["enable_var_trace"],
+            disable_html=args["disable_html"],
+            report_name=args["report_name"],
+            ignore_system_paths=args["ignore_system_paths"],
+            ignore_self=args["ignore_self"],
+            start_function=args["start_function"],
+            source_base_dir=args["source_base_dir"],
+        )
+
+        log_dir = Path(__file__).parent / "logs"
+        report_path = log_dir / config.report_name
 
         print(color_wrap("\n📝 调试功能:", "line"))
         print(color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
-        print(color_wrap(f"  ✓ {'包含' if not args['ignore_system_paths'] else '跳过'}标准库和第三方库", "call"))
-        print(color_wrap("  ✓ 变量变化检测", "var") if args["enable_var_trace"] else None)
+        print(color_wrap(f"  ✓ {'包含' if not config.ignore_system_paths else '跳过'}标准库和第三方库", "call"))
+        print(color_wrap(f"  ✓ {'包含' if not config.ignore_self else '跳过'}跟踪器自身的代码", "call"))
+        if config.enable_var_trace:
+            print(color_wrap("  ✓ 变量变化检测", "var"))
         print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
-        print(color_wrap(f"\n📂 调试日志路径: {Path(__file__).parent / 'logs/debug.log'}", "line"))
-        report_name = args.get("report_name", "trace_report") + ".html"
-        print(
-            color_wrap(
-                f"📂 报告文件路径: {Path(__file__).parent / 'logs' / report_name}\n",
-                "line",
-            )
-        )
+        print(color_wrap(f"\n📂 调试日志路径: {log_dir / 'debug.log'}", "line"))
+        print(color_wrap(f"📂 报告文件路径: {report_path}\n", "line"))
 
         original_argv = sys.argv.copy()
         exit_code = 0
-
         tracer = None
+
         try:
-            # 创建匹配当前调试目标的TraceConfig
-            target_patterns = args["watch_files"] + [f"*{target.stem}.py"]
-            config = TraceConfig(
-                target_files=target_patterns,
-                capture_vars=args["capture_vars"],
-                line_ranges=args["line_ranges"],
-                exclude_functions=args["exclude_functions"],
-                enable_var_trace=args["enable_var_trace"],
-                disable_html=args["disable_html"],
-                report_name=args.get("report_name", "trace_report.html"),
-                ignore_system_paths=args["ignore_system_paths"],
-                start_function=args["start_function"],
-            )
             tracer = start_trace(target, config=config)
             execute_script(target, args["script_args"])
         except KeyboardInterrupt:
             print(color_wrap("\n🛑 用户中断调试过程", "error"))
             exit_code = 130
-        except (SystemExit, RuntimeError) as e:
+        except Exception as e:
             print(color_wrap(f"❌ 执行错误: {str(e)}", "error"))
             logging.error("执行错误: %s\n%s", str(e), traceback.format_exc())
             exit_code = 3
@@ -272,18 +313,25 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             if tracer:
                 tracer.stop()
             sys.argv = original_argv
-            print_debug_summary()
-            if args["open_report"]:
-                open_trace_report()
+            print_debug_summary(report_path)
+            if args["open_report"] and not config.disable_html:
+                open_trace_report(report_path)
 
         return exit_code
-    except (SystemExit, RuntimeError) as e:
+    except (ValueError, FileNotFoundError) as e:
+        print(color_wrap(f"❌ 参数错误: {str(e)}", "error"))
+        # Show help for value errors like missing script
+        if "未指定目标Python脚本" in str(e):
+            print("-" * 20)
+            create_parser().print_help()
+        return 1
+    except Exception as e:
         logging.error("调试器崩溃: %s\n%s", str(e), traceback.format_exc())
         print(color_wrap(f"💥 调试器内部错误: {str(e)}", "error"))
         return 4
 
 
-def print_debug_summary() -> None:
+def print_debug_summary(report_path: Path) -> None:
     """打印调试会话摘要"""
     print(color_wrap("\n调试日志包含以下信息类型：", "line"))
     print(color_wrap("  ↘ CALL     - 函数调用及参数", "call"))
@@ -293,7 +341,7 @@ def print_debug_summary() -> None:
     print(color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
     print(color_wrap("\n调试功能说明:", "line"))
     print(color_wrap(f"{Path(__file__).parent}/logs/debug.log 查看日志", "line"))
-    print(color_wrap(f"{Path(__file__).parent}/logs/trace_report.html 查看网页报告", "line"))
+    print(color_wrap(f"{report_path} 查看网页报告", "line"))
 
 
 if __name__ == "__main__":

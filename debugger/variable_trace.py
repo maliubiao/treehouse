@@ -30,7 +30,7 @@ def analyze_variable_ops(func_or_code):
     for i, instr in enumerate(instructions):
         # Python 3.12+ 使用 positions 属性而不是 starts_line
         if PYTHON_312_OR_LATER and hasattr(instr, "positions"):
-            if instr.positions.lineno is not None:
+            if instr.positions and instr.positions.lineno is not None:
                 current_line = instr.positions.lineno
         elif instr.starts_line is not None:
             current_line = instr.starts_line
@@ -52,8 +52,9 @@ def analyze_variable_ops(func_or_code):
                 "STORE_FAST_STORE_FAST",
             ):
                 var_name = instr.argval
-                line_vars[current_line].add(var_name[0])
-                line_vars[current_line].add(var_name[1])
+                if isinstance(var_name, (list, tuple)):
+                    line_vars[current_line].add(var_name[0])
+                    line_vars[current_line].add(var_name[1])
                 continue
             # 处理 Python 3.13 的新操作码
             elif PYTHON_313_OR_LATER and instr.opname in (
@@ -62,8 +63,9 @@ def analyze_variable_ops(func_or_code):
                 "STORE_FAST_STORE_FAST",
             ):
                 var_name = instr.argval
-                line_vars[current_line].add(var_name[0])
-                line_vars[current_line].add(var_name[1])
+                if isinstance(var_name, (list, tuple)):
+                    line_vars[current_line].add(var_name[0])
+                    line_vars[current_line].add(var_name[1])
                 continue
 
         elif "LOAD" in instr.opname:
@@ -88,8 +90,9 @@ def analyze_variable_ops(func_or_code):
                 "LOAD_FAST_CHECK",
             ):
                 var_name = instr.argval
-                line_vars[current_line].add(var_name[0])
-                line_vars[current_line].add(var_name[1])
+                if isinstance(var_name, (list, tuple)):
+                    line_vars[current_line].add(var_name[0])
+                    line_vars[current_line].add(var_name[1])
                 continue
             # 处理 LOAD_ATTR
             elif instr.opname == "LOAD_ATTR":

@@ -24,6 +24,8 @@ from unittest.mock import Mock
 import yaml
 from colorama import Fore, Style, just_fix_windows_console
 
+from .source_cache import get_statement_info
+
 just_fix_windows_console()
 
 if TYPE_CHECKING:
@@ -45,11 +47,11 @@ if TYPE_CHECKING:
     class MonitoringModule:
         events: MonitoringEvents
 
-        def get_tool(self, tool_id: int) -> Optional[str]: ...
-        def use_tool_id(self, tool_id: int, tool_name: str) -> None: ...
-        def set_events(self, tool_id: int, event_set: int) -> None: ...
-        def register_callback(self, tool_id: int, event: int, callback: Callable[..., Any]) -> None: ...
-        def free_tool_id(self, tool_id: int) -> None: ...
+        def get_tool(self, _tool_id: int) -> Optional[str]: ...
+        def use_tool_id(self, _tool_id: int, _tool_name: str) -> None: ...
+        def set_events(self, _tool_id: int, _event_set: int) -> None: ...
+        def register_callback(self, _tool_id: int, _event: int, _callback: Callable[..., Any]) -> None: ...
+        def free_tool_id(self, _tool_id: int) -> None: ...
 
 
 # Constants
@@ -119,16 +121,17 @@ class TraceConfig:
 
     def __init__(
         self,
-        target_files: List[str] = None,
-        line_ranges: Dict[str, List[Tuple[int, int]]] = None,
-        capture_vars: List[str] = None,
+        target_files: Optional[List[str]] = None,
+        line_ranges: Optional[Dict[str, List[Tuple[int, int]]]] = None,
+        capture_vars: Optional[List[str]] = None,
         callback: Optional[callable] = None,
         report_name: str = _DEFAULT_REPORT_NAME,
-        exclude_functions: List[str] = None,
+        exclude_functions: Optional[List[str]] = None,
         enable_var_trace: bool = False,
         ignore_self: bool = True,
         ignore_system_paths: bool = True,
-        start_function: Tuple[str, int] = None,
+        start_function: Optional[Tuple[str, int]] = None,
+        source_base_dir: Optional[Path] = None,
         disable_html: bool = False,
     ):
         """
@@ -139,22 +142,28 @@ class TraceConfig:
             line_ranges: 文件行号范围字典，key为文件名，value为 (start_line, end_line) 元组列表
             capture_vars: 要捕获的变量表达式列表
             callback: 变量捕获时的回调函数
+            report_name: HTML报告文件名
             exclude_functions: 要排除的函数名列表
             enable_var_trace: 是否启用变量操作跟踪
+            ignore_self: 是否忽略跟踪器自身的文件
             ignore_system_paths: 是否忽略系统路径和第三方包路径
+            start_function: 指定开始跟踪的函数 (文件名, 行号)
+            source_base_dir: 源代码根目录，用于在报告中显示相对路径
+            disable_html: 是否禁用HTML报告生成
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
         self.capture_vars = capture_vars or []
         self.callback = callback
+        self.report_name = report_name if report_name else _DEFAULT_REPORT_NAME
         self.exclude_functions = exclude_functions or []
         self.enable_var_trace = enable_var_trace
         self.ignore_self = ignore_self
         self.ignore_system_paths = ignore_system_paths
         self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
         self._system_paths = self._get_system_paths() if ignore_system_paths else set()
-        self.report_name = report_name if report_name else _DEFAULT_REPORT_NAME
         self.start_function = start_function
+        self.source_base_dir = source_base_dir
         self.disable_html = disable_html
 
     @staticmethod
@@ -229,6 +238,7 @@ class TraceConfig:
             callback=config_data.get("callback", None),
             exclude_functions=config_data.get("exclude_functions", []),
             ignore_system_paths=config_data.get("ignore_system_paths", True),
+            source_base_dir=config_data.get("source_base_dir", None),
         )
 
     @staticmethod
@@ -261,7 +271,7 @@ class TraceConfig:
                     else:
                         raise ValueError(f"行号格式错误：{range_tuple} 应为 (start, end) 元组")
                 parsed[abs_path] = line_set
-            except Exception as e:
+            except (ValueError, OSError) as e:
                 raise ValueError(f"文件路径解析失败: {file_path}, 错误: {str(e)}") from e
         return parsed
 
@@ -364,16 +374,16 @@ def truncate_repr_value(value, keep_elements=10):
             preview = _truncate_sequence(value, keep_elements)
         elif isinstance(value, dict):
             preview = _truncate_dict(value, keep_elements)
-        elif hasattr(value, "__repr__") and value.__repr__ is not object.__repr__:
+        elif hasattr(value, "__repr__") and value.__repr__.__qualname__ != "object.__repr__":
             preview = repr(value)
-        elif hasattr(value, "__str__") and value.__str__ is not object.__str__:
+        elif hasattr(value, "__str__") and value.__str__.__qualname__ != "object.__str__":
             preview = str(value)
         elif hasattr(value, "__dict__"):
             preview = _truncate_object(value, keep_elements)
         else:
             preview = repr(value)
     except Exception as e:
-        preview = "[trace system error: %s]" % str(e)
+        preview = f"[trace system error: {e}]"
     if len(preview) > _MAX_VALUE_LENGTH:
         preview = preview[:_MAX_VALUE_LENGTH] + "..."
     return preview
@@ -440,7 +450,7 @@ class TraceDispatcher:
             return self._handle_exception_event(frame, arg)
         return None
 
-    def _handle_call_event(self, frame, arg=None):
+    def _handle_call_event(self, frame, _arg=None):
         """处理函数调用事件"""
         if frame.f_code.co_name in self.config.exclude_functions:
             frame.f_trace_lines = False
@@ -460,7 +470,7 @@ class TraceDispatcher:
             self.active_frames.discard(frame)
         return self.trace_dispatch
 
-    def _handle_line_event(self, frame, arg=None):
+    def _handle_line_event(self, frame, _arg=None):
         """处理行号事件"""
         if self.bad_frame:
             return self.trace_dispatch
@@ -592,7 +602,7 @@ class SysMonitoringTraceDispatcher:
                 self._handle_py_resume,
             )
 
-        except Exception as e:
+        except (RuntimeError, ValueError) as e:
             logging.error("Failed to register monitoring tool: %s", str(e))
             raise
 
@@ -623,7 +633,7 @@ class SysMonitoringTraceDispatcher:
             self._registered = False
             self._tool_id = None
 
-        except Exception as e:
+        except (RuntimeError, ValueError) as e:
             logging.error("Failed to unregister monitoring tool: %s", str(e))
 
     def _handle_py_start(self, _code, _offset):
@@ -770,58 +780,62 @@ class CallTreeHtmlRender:
         self._size_limit = 100 * 1024 * 1024
         self._current_size = 0
         self._size_exceeded = False
-        self._html_template = """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Python Trace Report</title>
-    <link rel="stylesheet" href="../tracer_styles.css">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet" id="prism-theme">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.css" rel="stylesheet">
-</head>
-<body>
-    <div id="sourceDialog" class="source-dialog">
-        <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
-        <div class="close-overlay"></div>
-        <div class="source-header">
-            <div class="source-title" id="sourceTitle"></div>
-        </div>
-        <div class="source-content" id="sourceContent"></div>
-
-    </div>
-    <h1>Python Trace Report</h1>
-    <div class="summary">
-        <p>Generated at: {generation_time}</p>
-        <p>Total messages: {message_count}</p>
-        <p>Errors: {error_count}</p>
-        <div class="theme-selector">
-            <label>Theme: </label>
-            <select id="themeSelector">
-                <!-- Options will be populated by JavaScript -->
-            </select>
-        </div>
-    </div>
-    <div id="controls">
-        <input type="text" id="search" placeholder="Search messages...">
-        <button id="expandAll">Expand All</button>
-        <button id="collapseAll">Collapse All</button>
-        <button id="exportBtn">Export as HTML</button>
-    </div>
-    <div id="content">\n{content}\n</div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
-    <script src="../tracer_scripts.js"></script>
-    <script>
-        window.executedLines = {executed_lines_data};
-        window.sourceFiles = {source_files_data};
-        window.commentsData = {comments_data};
-    </script>
-</body>
-</html>"""
+        self._html_template = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Python Trace Report</title>
+            <link rel="stylesheet" href="../tracer_styles.css">
+            <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css"
+                rel="stylesheet" id="prism-theme">
+            <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css"
+                rel="stylesheet">
+            <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.css"
+                rel="stylesheet">
+        </head>
+        <body>
+            <div id="sourceDialog" class="source-dialog">
+                <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
+                <div class="close-overlay"></div>
+                <div class="source-header">
+                    <div class="source-title" id="sourceTitle"></div>
+                </div>
+                <div class="source-content" id="sourceContent"></div>
+            </div>
+            <h1>Python Trace Report</h1>
+            <div class="summary">
+                <p>Generated at: {generation_time}</p>
+                <p>Total messages: {message_count}</p>
+                <p>Errors: {error_count}</p>
+                <div class="theme-selector">
+                    <label>Theme: </label>
+                    <select id="themeSelector">
+                        <!-- Options will be populated by JavaScript -->
+                    </select>
+                </div>
+            </div>
+            <div id="controls">
+                <input type="text" id="search" placeholder="Search messages...">
+                <button id="expandAll">Expand All</button>
+                <button id="collapseAll">Collapse All</button>
+                <button id="exportBtn">Export as HTML</button>
+            </div>
+            <div id="content">\n{content}\n</div>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+            <script src="../tracer_scripts.js"></script>
+            <script>
+                window.executedLines = {executed_lines_data};
+                window.sourceFiles = {source_files_data};
+                window.commentsData = {comments_data};
+            </script>
+        </body>
+        </html>
+        """
 
     def _get_nested_dict_value(self, data_dict, filename, frame_id=None):
         """获取嵌套字典中的值"""
@@ -941,7 +955,10 @@ class CallTreeHtmlRender:
         short_comment = comment[:64] + "..." if is_long else comment
         short_comment_escaped = html.escape(short_comment)
         full_comment_escaped = html.escape(comment)
-        return f'<span class="comment" id="{comment_id}" onclick="event.stopPropagation(); toggleCommentExpand(\'{comment_id}\', event)"><span class="comment-preview">{short_comment_escaped}</span><span class="comment-full">{full_comment_escaped}</span></span>'
+        return f'''<span class="comment" id="{comment_id}" 
+onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
+<span class="comment-preview">{short_comment_escaped}</span>
+<span class="comment-full">{full_comment_escaped}</span></span>'''
 
     def _build_view_source_html(self, filename, line_number, frame_id):
         """构建查看源代码按钮HTML片段"""
@@ -1228,7 +1245,7 @@ class TraceLogic:
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
-        self.last_line_vars = None
+        self.last_statement_vars = None
 
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         if self.config.disable_html:
@@ -1329,25 +1346,48 @@ class TraceLogic:
             time.sleep(1)
             self._flush_buffer()
 
-    def _get_formatted_filename(self, filename):
-        """获取格式化后的文件名"""
+    def _get_formatted_filename(self, filename: str) -> str:
+        """
+        获取格式化后的文件名。
+        - 如果设置了 source_base_dir，则尝试生成相对于该目录的路径。
+        - 如果文件不在 source_base_dir 内，则显示绝对路径。
+        - 如果未设置 source_base_dir，则回退到旧的简化逻辑。
+        """
         if filename in self._file_cache._file_name_cache:
             return self._file_cache._file_name_cache[filename]
 
         try:
-            path = Path(filename)
-            if path.name == "__init__.py":
-                parts = list(path.parts)
-                if len(parts) > 1:
-                    formatted = str(Path(*parts[-2:]))
-                else:
-                    formatted = path.name
+            # 处理<string>等非文件路径的特殊情况
+            if filename.startswith("<") and filename.endswith(">"):
+                self._file_cache._file_name_cache[filename] = filename
+                return filename
+
+            file_path = Path(filename).resolve()
+
+            if self.config.source_base_dir:
+                try:
+                    base_dir = self.config.source_base_dir.resolve()
+                    # 如果 file_path 在 base_dir 内，则使用相对路径
+                    formatted = str(file_path.relative_to(base_dir))
+                except (ValueError, OSError):
+                    # 否则，使用绝对路径
+                    formatted = str(file_path)
             else:
-                formatted = path.name
+                # 如果未提供 source_base_dir，则使用旧的简化逻辑
+                if file_path.name == "__init__.py":
+                    parts = list(file_path.parts)
+                    if len(parts) > 1:
+                        formatted = str(Path(*parts[-2:]))
+                    else:
+                        formatted = file_path.name
+                else:
+                    formatted = file_path.name
+
             self._file_cache._file_name_cache[filename] = formatted
             return formatted
-        except (TypeError, ValueError) as e:
-            logging.warning("文件名格式化失败: %s", str(e))
+        except (TypeError, ValueError, OSError) as e:
+            logging.warning("文件名格式化失败: %s, 错误: %s", filename, str(e))
+            self._file_cache._file_name_cache[filename] = filename
             return filename
 
     def _parse_trace_comment(self, line):
@@ -1466,17 +1506,21 @@ class TraceLogic:
         self._file_cache._var_ops_cache[code_obj] = analysis
         return analysis
 
-    def _get_line_vars(self, frame):
-        """获取当前行需要跟踪的变量"""
+    def _get_vars_in_range(self, code_obj, start_line, end_line):
+        """获取给定代码对象在指定行范围内的所有唯一变量。"""
         if not self.config.enable_var_trace:
             return []
 
-        code_obj = frame.f_code
         if code_obj not in self._frame_data._code_var_ops:
             self._frame_data._code_var_ops[code_obj] = self._get_var_ops(code_obj)
 
-        line_vars = self._frame_data._code_var_ops[code_obj].get(frame.f_lineno, set())
-        return line_vars
+        all_line_vars = self._frame_data._code_var_ops[code_obj]
+
+        statement_vars = set()
+        for i in range(start_line, end_line + 1):
+            statement_vars.update(all_line_vars.get(i, set()))
+
+        return list(statement_vars)
 
     def cache_eval(self, frame, expr):
         _, compiled = self._compile_expr(expr)
@@ -1515,22 +1559,41 @@ class TraceLogic:
         return tracked_vars
 
     def handle_line(self, frame):
-        """基础行号跟踪"""
+        """处理行事件，现在能够感知多行语句。"""
         lineno = frame.f_lineno
         filename = frame.f_code.co_filename
-        line = linecache.getline(filename, lineno).strip("\n")
+
+        # 使用新的缓存模块获取完整语句及其行范围
+        statement_info = get_statement_info(filename, lineno)
+        if statement_info:
+            full_statement, start_line, end_line = statement_info
+        else:
+            # 如果缓存模块无法处理（例如，文件IO错误），则回退到linecache
+            full_statement = linecache.getline(filename, lineno).strip("\n")
+            if not full_statement:
+                return  # 不处理空行
+            start_line = end_line = lineno
+
+        # 为避免重复记录同一语句，仅当事件是为语句的*第一*行触发时才继续。
+        if lineno != start_line:
+            return
+
         formatted_filename = self._get_formatted_filename(filename)
         frame_id = self._get_frame_id(frame)
         self._message_id += 1
         tracked_vars = {}
 
         if self.config.enable_var_trace:
-            if self.last_line_vars:
-                var_names = self.last_line_vars
-                self.last_line_vars = None
-                tracked_vars = self.trace_variables(frame, var_names)
-            else:
-                self.last_line_vars = self._get_line_vars(frame)
+            # 在当前语句开始时，我们可以检查*上一条*语句执行后的状态。
+            if self.last_statement_vars:
+                tracked_vars = self.trace_variables(frame, self.last_statement_vars)
+
+            # 确定*当前*语句的变量并存储它们。
+            # 它们将在*下一条*语句开始时被跟踪。
+            self.last_statement_vars = self._get_vars_in_range(frame.f_code, start_line, end_line)
+
+        # 为更好的日志格式，缩进语句的后续行。
+        indented_statement = full_statement.replace("\n", "\n" + _INDENT * (self.stack_depth + 1))
 
         log_data = {
             "idx": self._message_id,
@@ -1538,11 +1601,11 @@ class TraceLogic:
             "data": {
                 "indent": _INDENT * self.stack_depth,
                 "filename": formatted_filename,
-                "lineno": lineno,
-                "line": line,
+                "lineno": start_line,  # 总是报告语句的起始行
+                "line": indented_statement,
                 "frame_id": frame_id,
                 "original_filename": filename,
-                "tracked_vars": tracked_vars,  # 新增跟踪变量数据
+                "tracked_vars": tracked_vars,
             },
         }
 
@@ -1552,7 +1615,12 @@ class TraceLogic:
 
         self._add_to_buffer(log_data, TraceTypes.COLOR_LINE)
 
-        self._process_trace_expression(frame, line, filename, lineno)
+        # 处理语句中的特殊 #trace 注释
+        for i, line_content in enumerate(full_statement.split("\n")):
+            current_line_no = start_line + i
+            self._process_trace_expression(frame, line_content, filename, current_line_no)
+
+        # 处理当前帧状态的变量捕获
         if self.config.capture_vars:
             self._process_captured_vars(frame)
 
@@ -1615,7 +1683,9 @@ class TraceLogic:
         frame_id = self._get_frame_id(frame)
         msg = (
             {
-                "template": "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
+                "template": (
+                    "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
+                ),
                 "data": {
                     "indent": _INDENT * (self.stack_depth - 1),
                     "filename": filename,
@@ -1749,7 +1819,7 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
     tracer = None
     tracer = get_tracer(module_path, config)
     if not tracer:
-        if sys.version_info >= (3, 11):
+        if sys.version_info >= (3, 12):
             tracer = SysMonitoringTraceDispatcher(str(module_path), config)
         else:
             tracer = TraceDispatcher(str(module_path), config)
@@ -1784,16 +1854,17 @@ class Counter:
 
 
 def trace(
-    target_files: List[str] = None,
-    line_ranges: Dict[str, List[Tuple[int, int]]] = None,
-    capture_vars: List[str] = None,
+    target_files: Optional[List[str]] = None,
+    line_ranges: Optional[Dict[str, List[Tuple[int, int]]]] = None,
+    capture_vars: Optional[List[str]] = None,
     callback: Optional[callable] = None,
     report_name: str = _DEFAULT_REPORT_NAME,
-    exclude_functions: List[str] = None,
+    exclude_functions: Optional[List[str]] = None,
     enable_var_trace: bool = False,
     ignore_self: bool = True,
     ignore_system_paths: bool = True,
-    start_function: Tuple[str, int] = None,
+    start_function: Optional[Tuple[str, int]] = None,
+    source_base_dir: Optional[Path] = None,
     disable_html: bool = False,
 ):
     """函数跟踪装饰器
@@ -1809,6 +1880,7 @@ def trace(
         ignore_self: 是否忽略跟踪器自身
         ignore_system_paths: 是否忽略系统路径和第三方包路径
         start_function: 起始函数名和行号
+        source_base_dir: 源代码根目录，用于在报告中显示相对路径
         disable_html: 是否禁用HTML报告
     """
     if not target_files:
@@ -1829,6 +1901,7 @@ def trace(
                 ignore_self=ignore_self,
                 ignore_system_paths=ignore_system_paths,
                 start_function=start_function,
+                source_base_dir=source_base_dir,
                 disable_html=disable_html,
             )
             t = start_trace(config=config)

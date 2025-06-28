@@ -210,7 +210,7 @@ class TestAutoFix:
         target_files=["*.py"],
         enable_var_trace=True,
         report_name="run_all_tests.html",
-        ignore_self=True,
+        ignore_self=False,
         ignore_system_paths=True,
         disable_html=True,
     )
