@@ -2803,6 +2803,7 @@ class PatchPromptBuilder:
         self.symbols = symbols
         self.symbol_map = {}
         self.file_ranges = None
+        self.max_tokens = tokens_left
         self.tokens_left = tokens_left or GLOBAL_MODEL_CONFIG.max_context_size
 
     def process_search_results(self, search_results: dict) -> None:
@@ -2899,8 +2900,9 @@ class PatchPromptBuilder:
         if not self.use_patch:
             prompt += "现有代码库里的一些符号和代码块:\n"
 
+        skipped_symbols = []
         for symbol_name, patch_dict in self.symbol_map.items():
-            prompt += f"""
+            symbol_prompt = f"""
 [SYMBOL START]
 符号名称: {symbol_name}
 文件路径: {patch_dict["file_path"]}
@@ -2911,10 +2913,15 @@ class PatchPromptBuilder:
 
 [SYMBOL END]
 """
-            self.tokens_left -= len(prompt)
-            if self.tokens_left < 0:
-                print("警告: 符号提示内容过长，已截断")
-                break
+            if self.tokens_left - len(symbol_prompt) >= 0:
+                prompt += symbol_prompt
+                self.tokens_left -= len(symbol_prompt)
+            else:
+                skipped_symbols.append(symbol_name)
+
+        if skipped_symbols:
+            print(f"警告: max_tokens {self.max_tokens}不足，已跳过以下符号: {', '.join(skipped_symbols)}")
+
         return prompt
 
     def _build_file_range_prompt(self) -> str:

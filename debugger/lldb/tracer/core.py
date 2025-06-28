@@ -19,6 +19,20 @@ from .utils import get_platform_stdin_listener
 
 
 class Tracer:
+    @property
+    def config_manager(self) -> "ConfigManager":
+        """配置管理器属性。"""
+        return self._config_manager
+
+    @config_manager.setter
+    def config_manager(self, value: "ConfigManager"):
+        """
+        设置配置管理器，并自动更新 LogManager 的配置以保持一致。
+        """
+        self._config_manager = value
+        if hasattr(self, "log_manager") and self.log_manager:
+            self.log_manager.config = self._config_manager.config
+
     def __init__(self, **kwargs: Any) -> None:
         self.program_path: Optional[str] = kwargs.get("program_path")
         self.program_args: List[str] = kwargs.get("program_args", [])
@@ -29,8 +43,10 @@ class Tracer:
         self.stdin_forwarding_stop = threading.Event()
         self.log_manager: LogManager = LogManager(None, logfile)
         self.logger: logging.Logger = self.log_manager.logger
+
+        # 此处赋值会调用 setter，自动处理 log_manager.config 的关联
         self.config_manager: ConfigManager = ConfigManager(config_file, self.logger)
-        self.log_manager.config = self.config_manager.config
+
         self.breakpoint_table = {}
         self.breakpoint_seen = set()
         self.debugger: lldb.SBDebugger = lldb.SBDebugger.Create()

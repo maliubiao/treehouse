@@ -50,7 +50,8 @@ class LogManager:
             self.target_handler = target_handler
 
     def __init__(self, config, logfile=None):
-        self.config = config
+        # 修复：当config为None时初始化为空字典
+        self.config = config if config is not None else {}
         self.logfile = logfile
         self.logger = logging.getLogger("Tracer")
         self.logger.setLevel(logging.DEBUG)

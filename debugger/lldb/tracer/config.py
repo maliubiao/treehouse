@@ -89,6 +89,9 @@ class ConfigManager:
                     last_mtime = current_mtime
                     self._load_config(self.config_file)
                     self.logger.info("Config file reloaded")
+            except FileNotFoundError:
+                self.logger.error("Config file %s not found, stop watching.", self.config_file)
+                break  # 退出监控循环
             except OSError as e:
                 self.logger.error("Error watching config file: %s", str(e))
             time.sleep(1)

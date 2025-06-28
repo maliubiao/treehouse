@@ -257,7 +257,7 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch
     if not user_req:
         user_req = "分析并解决用户遇到的问题，修复test_*符号中的错误"
 
-    tokens_left = model_switch.current_config.max_tokens
+    tokens_left = model_switch.current_config.max_context_size
 
     prompt_content = f"""
 请根据以下tracer的报告, 分析问题原因并直接修复testcase相关问题。请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据。
@@ -271,7 +271,6 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch
     p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=tokens_left)
     p.process_search_results(symbol_result)
     prompt = p.build(user_requirement=prompt_content)
-
     print(Fore.YELLOW + "正在生成修复方案...")
     text = model_switch.query_for_text(model_switch.model_name, prompt, stream=True)
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
@@ -282,7 +281,7 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
     Performs an interactive, two-step fix: first explains the issue, then generates a patch.
     """
     print(Fore.YELLOW + "正在生成问题原因解释...")
-    tokens_left = model_switch.current_config.max_tokens
+    tokens_left = model_switch.current_config.max_context_size
 
     # Step 1: Explanation
     explain_prompt_template = (Path(__file__).parent.parent / "prompts/python-tracer").read_text(encoding="utf-8")
@@ -315,6 +314,7 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
 {auto_fix.trace_log}
 [trace log end]
     """
+    tokens_left = model_switch.current_config.max_context_size
 
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p_fix = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=tokens_left)
