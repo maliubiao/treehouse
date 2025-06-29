@@ -73,8 +73,8 @@ class ModelConfig:
     thinking_budget: int = 32768
     top_k: int = 20
     top_p: float = 0.95
-    price_1M_input: float | None = None
-    price_1M_output: float | None = None
+    price_1m_input: float | None = None
+    price_1m_output: float | None = None
 
     def __init__(
         self,
@@ -103,8 +103,8 @@ class ModelConfig:
         self.thinking_budget = thinking_budget
         self.top_k = top_k
         self.top_p = top_p
-        self.price_1M_input = price_1m_input
-        self.price_1M_output = price_1m_output
+        self.price_1m_input = price_1m_input
+        self.price_1m_output = price_1m_output
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
@@ -114,7 +114,7 @@ class ModelConfig:
             f"max_context_size={self.max_context_size}, temperature={self.temperature}, "
             f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, "
             f"thinking_budget={self.thinking_budget}, top_k={self.top_k}, top_p={self.top_p}, "
-            f"price_1M_input={self.price_1M_input}, price_1M_output={self.price_1M_output}, "
+            f"price_1M_input={self.price_1m_input}, price_1M_output={self.price_1m_output}, "
             f"key={masked_key})"
         )
 
@@ -131,8 +131,8 @@ class ModelConfig:
             "thinking_budget": self.thinking_budget,
             "top_k": self.top_k,
             "top_p": self.top_p,
-            "price_1M_input": self.price_1M_input,
-            "price_1M_output": self.price_1M_output,
+            "price_1M_input": self.price_1m_input,
+            "price_1M_output": self.price_1m_output,
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -3210,20 +3210,52 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
     file_patching_instr = []
     affected_paths = set()
 
+    # 使用绝对路径（不解析符号链接）
+    project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).absolute()
+
     for instr in instructions:
         instr_type = instr["type"]
         if instr_type == "project_setup_script":
             setup_script = instr["content"]
         elif instr_type in ("overwrite_whole_file", "created_file"):
+            # 构建绝对路径
+            raw_path = instr["path"]
+            candidate_path = Path(raw_path)
+            if not candidate_path.is_absolute():
+                candidate_path = project_root / candidate_path
+            abs_path = candidate_path.absolute()
+
+            try:
+                # 检查是否在项目根目录下
+                relative_path = abs_path.relative_to(project_root)
+            except ValueError:
+                print(f"警告: 文件路径 {abs_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
+                continue
+
+            instr["path"] = str(abs_path)  # 更新为绝对路径
             file_creation_overwriting_instr.append(instr)
-            affected_paths.add(Path(instr["path"]).resolve())
+            affected_paths.add(abs_path)
         elif instr_type in ("replace", "replace_lines", "insert"):
+            # 同样处理为绝对路径
+            raw_path = instr["path"]
+            candidate_path = Path(raw_path)
+            if not candidate_path.is_absolute():
+                candidate_path = project_root / candidate_path
+            abs_path = candidate_path.absolute()
+
+            try:
+                relative_path = abs_path.relative_to(project_root)
+            except ValueError:
+                print(f"警告: 文件路径 {abs_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
+                continue
+
+            instr["path"] = str(abs_path)
             file_patching_instr.append(instr)
-            affected_paths.add(Path(instr["path"]).resolve())
+            affected_paths.add(abs_path)
 
     # 在沙箱中准备影子文件以应用更改
     path_mapping = {}  # original_path -> shadow_path
-    project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).resolve()
+    shadow_root_path = Path(shadowroot)  # 使用新变量名避免冲突
 
     for original_path in affected_paths:
         try:
@@ -3232,7 +3264,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
             print(f"警告: 文件路径 {original_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
             continue
 
-        shadow_path = shadowroot / relative_path
+        shadow_path = shadow_root_path / relative_path
         shadow_path.parent.mkdir(parents=True, exist_ok=True)
         path_mapping[original_path] = shadow_path
         if not original_path.exists():
@@ -3247,7 +3279,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
 
     # 将文件创建/覆盖指令应用于影子文件
     for instr in file_creation_overwriting_instr:
-        original_path = Path(instr["path"]).resolve()
+        original_path = Path(instr["path"])
         shadow_path = path_mapping.get(original_path)
         if shadow_path:
             with open(shadow_path, "w", encoding="utf-8") as f:
@@ -3258,7 +3290,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         engine = ReplaceEngine()
         shadow_patching_instr = []
         for instr in file_patching_instr:
-            original_path = Path(instr["path"]).resolve()
+            original_path = Path(instr["path"])
             shadow_path = path_mapping.get(original_path)
             if shadow_path:
                 new_instr = instr.copy()
@@ -3277,7 +3309,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
     def _process_script(script, script_name):
         if not script:
             return
-        script_path = shadowroot / script_name
+        script_path = shadow_root_path / script_name
         _save_file_to_shadowroot(script_path, script)
         os.chmod(script_path, 0o755)
         print(f"{script_name}已保存到: {script_path}")
@@ -3927,8 +3959,8 @@ class ModelSwitch:
     def _calculate_cost(self, input_tokens: int, output_tokens: int, config: ModelConfig) -> float:
         """计算API调用费用(美元)，精确到小数点后6位"""
         # 计算每token费用
-        input_cost_per_token = (config.price_1M_input or 0) / 1_000_000
-        output_cost_per_token = (config.price_1M_output or 0) / 1_000_000
+        input_cost_per_token = (config.price_1m_input or 0) / 1_000_000
+        output_cost_per_token = (config.price_1m_output or 0) / 1_000_000
 
         # 精确计算费用
         input_cost = input_tokens * input_cost_per_token

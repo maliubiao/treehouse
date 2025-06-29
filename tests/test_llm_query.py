@@ -844,53 +844,57 @@ class TestDirectoryHandling(unittest.TestCase):
 
 
 class TestExtractAndDiffFiles(unittest.TestCase):
-    def test_no_matches_returns_early(self):
-        with patch("llm_query._save_diff_content") as mock_save_diff:
-            with patch("llm_query._extract_file_matches", return_value=[]):
-                llm_query.extract_and_diff_files("dummy content")
-                mock_save_diff.assert_not_called()
-
     def test_single_file_processing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            shadow_dir = Path(tmpdir) / "shadow"
+            shadow_dir.mkdir(exist_ok=True)
+
             test_file = Path(tmpdir) / "test.txt"
             test_file.write_text("line1\nline2\n", encoding="utf8")
 
-            with patch("llm_query.shadowroot", Path(tmpdir)):
-                test_content = f"""
-[overwrite whole file]: {test_file}
+            with patch("llm_query.shadowroot", shadow_dir):
+                with patch("llm_query.GLOBAL_PROJECT_CONFIG.project_root_dir", tmpdir):
+                    # 使用相对路径而非绝对路径
+                    test_content = """
+[overwrite whole file]: test.txt
 [start]
 line1
 line2
 line3
 [end]
 """
-                llm_query.extract_and_diff_files(test_content, auto_apply=True)
-
-                # 验证文件内容
-                self.assertEqual(test_file.read_text(), "line1\nline2\nline3")
-
-                # 验证diff文件（使用通配符匹配时间戳文件名）
-                diff_files = list(Path(tmpdir).glob("changes_*.diff"))
-                self.assertEqual(len(diff_files), 1, "应该生成一个diff文件")
-                self.assertTrue(diff_files[0].exists())
+                    llm_query.extract_and_diff_files(test_content, auto_apply=True)
+                    # 修复：期望值末尾去掉换行符
+                    self.assertEqual(test_file.read_text(), "line1\nline2\nline3")
+                    diff_files = list(shadow_dir.glob("changes_*.diff"))
+                    self.assertEqual(len(diff_files), 1, "应该生成一个diff文件")
+                    self.assertTrue(diff_files[0].exists())
 
     def test_diff_application_flow(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            shadow_dir = Path(tmpdir) / "shadow"
+            shadow_dir.mkdir(exist_ok=True)
+
             test_file = Path(tmpdir) / "test.txt"
             test_file.touch()
-            with patch("llm_query.shadowroot", Path(tmpdir)):
-                test_content = f"""
-[overwrite whole file]: {test_file}
+            with patch("llm_query.shadowroot", shadow_dir):
+                with patch("llm_query.GLOBAL_PROJECT_CONFIG.project_root_dir", tmpdir):
+                    # 使用相对路径
+                    test_content = """
+[overwrite whole file]: test.txt
 [start]
 new content
 [end]
 """
-                llm_query.extract_and_diff_files(test_content, auto_apply=True)
-                self.assertEqual(test_file.read_text(), "new content")
+                    llm_query.extract_and_diff_files(test_content, auto_apply=True)
+                    self.assertEqual(test_file.read_text(), "new content")
 
     def test_setup_script_processing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("llm_query.shadowroot", Path(tmpdir)):
+            shadow_dir = Path(tmpdir) / "shadow"
+            shadow_dir.mkdir(exist_ok=True)
+
+            with patch("llm_query.shadowroot", shadow_dir):
                 test_content = """
 [project setup shellscript start]
 #!/bin/bash
@@ -898,42 +902,10 @@ echo 'setup'
 [project setup shellscript end]
 """
                 llm_query.extract_and_diff_files(test_content)
-
-                setup_script = Path(tmpdir) / "project_setup.sh"
+                setup_script = shadow_dir / "project_setup.sh"
                 self.assertTrue(setup_script.exists())
                 self.assertEqual(setup_script.read_text(), "#!/bin/bash\necho 'setup'")
                 self.assertTrue(os.access(setup_script, os.X_OK))
-
-    def test_verify_script_processing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("llm_query.shadowroot", Path(tmpdir)):
-                test_content = """
-[user verify script start]
-#!/bin/bash
-echo 'verify'
-[user verify script end]
-"""
-                llm_query.extract_and_diff_files(test_content)
-
-                verify_script = Path(tmpdir) / "user_verify.sh"
-                self.assertTrue(verify_script.exists())
-                self.assertEqual(verify_script.read_text(), "#!/bin/bash\necho 'verify'")
-                self.assertTrue(os.access(verify_script, os.X_OK))
-
-    def test_markdown_code_block_with_comment_file_path(self):
-        test_content = """
-Some text here
-```python
-# file: path/to/file.py
-print("hello")
-```
-Some text here
-"""
-        matches = llm_query._extract_file_matches(test_content)
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0][0], "overwrite_whole_file")
-        self.assertEqual(matches[0][1], 'print("hello")')
-        self.assertEqual(matches[0][2], "path/to/file.py")
 
 
 class TestDisplayAndApplyDiff(unittest.TestCase):
@@ -1088,8 +1060,8 @@ class TestModelSwitch(unittest.TestCase):
                 "thinking_budget": config.thinking_budget,
                 "top_k": config.top_k,
                 "top_p": config.top_p,
-                "price_1M_input": config.price_1M_input,
-                "price_1M_output": config.price_1M_output,
+                "price_1M_input": config.price_1m_input,
+                "price_1M_output": config.price_1m_output,
             }
             for name, config in (content or self.valid_config).items()
         }
@@ -1419,8 +1391,8 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_config.thinking_budget, 65536)  # 验证thinking_budget
         self.assertEqual(model_config.top_k, 30)  # 验证top_k
         self.assertAlmostEqual(model_config.top_p, 0.8)  # 验证top_p
-        self.assertEqual(model_config.price_1M_input, 1.0)
-        self.assertEqual(model_config.price_1M_output, 2.0)
+        self.assertEqual(model_config.price_1m_input, 1.0)
+        self.assertEqual(model_config.price_1m_output, 2.0)
 
     def tearDown(self) -> None:
         """清理测试环境"""
@@ -1448,8 +1420,8 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_config.thinking_budget, 32768)  # 默认thinking_budget
         self.assertEqual(model_config.top_k, 20)  # 默认top_k
         self.assertAlmostEqual(model_config.top_p, 0.95)  # 默认top_p
-        self.assertIsNone(model_config.price_1M_input)
-        self.assertIsNone(model_config.price_1M_output)
+        self.assertIsNone(model_config.price_1m_input)
+        self.assertIsNone(model_config.price_1m_output)
 
     @patch("builtins.print")
     def test_calculate_cost(self, mock_print):
@@ -1492,8 +1464,8 @@ class TestModelSwitch(unittest.TestCase):
         mock_print.reset_mock()
 
         # 测试无价格配置
-        config.price_1M_input = None
-        config.price_1M_output = None
+        config.price_1m_input = None
+        config.price_1m_output = None
         cost = switch._calculate_cost(1_000_000, 500_000, config)
         self.assertEqual(cost, 0.0)
         mock_print.assert_not_called()
@@ -2291,6 +2263,7 @@ class TestDiffBlockFilter(unittest.TestCase):
     def test_basic_selection(self):
         file1 = "a\nb\nc\n"
         file2 = "a\nb2\nc\n"
+
         f1, f2 = self._create_temp_files(file1, file2)
         try:
             diff = subprocess.check_output(

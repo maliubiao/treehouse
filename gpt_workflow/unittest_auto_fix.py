@@ -217,9 +217,9 @@ class TestAutoFix:
         ignore_system_paths=True,
         disable_html=True,
     )
-    def run_tests(testcase: Optional[str] = None) -> Dict:
+    def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
         """Run tests and return results in JSON format."""
-        return run_tests(test_name=testcase, json_output=True)
+        return run_tests(test_patterns=test_patterns, verbosity=verbosity, json_output=True, list_mode=list_tests)
 
 
 from tests.test_main import run_tests
@@ -229,8 +229,23 @@ def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Test auto-fix tool")
     parser.add_argument(
-        "--testcase",
-        help="Run specific test case (format: TestCase.test_method). If not provided, runs all tests",
+        "test_patterns",
+        nargs="*",
+        default=None,
+        help="Test selection patterns (e.g. +test_module*, -/exclude.*/, TestCase.test_method)",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbosity",
+        type=int,
+        choices=[0, 1, 2],
+        default=1,
+        help="Output verbosity (0=quiet, 1=default, 2=verbose)",
+    )
+    parser.add_argument(
+        "--list-tests",
+        action="store_true",
+        help="List all available test cases without running them",
     )
     parser.add_argument(
         "--lookup",
@@ -345,7 +360,24 @@ def main():
             sys.exit(1)
         return
 
-    test_results = TestAutoFix.run_tests(args.testcase)
+    # 处理列出测试用例的情况
+    if args.list_tests:
+        test_results = TestAutoFix.run_tests(
+            test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=True
+        )
+
+        if "test_cases" in test_results:
+            print("\nAvailable test cases:")
+            print("=" * 50)
+            for test_id in test_results["test_cases"]:
+                print(test_id)
+            print("=" * 50)
+            print(f"Total: {len(test_results['test_cases'])} tests")
+        return
+
+    # 运行测试并获取结果
+    test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=False)
+
     auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
     auto_fix.display_errors()
 
