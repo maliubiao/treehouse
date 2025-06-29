@@ -1,12 +1,14 @@
 import argparse
+import fnmatch
+import inspect
 import json
 import os
+import re
 import sys
-import unittest
-from collections import defaultdict
-import inspect
 import time
 import traceback
+import unittest
+from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -22,10 +24,10 @@ def parse_args():
         help="Output verbosity (0=quiet, 1=default, 2=verbose)",
     )
     parser.add_argument(
-        "test_name",
-        nargs="?",
+        "test_patterns",
+        nargs="*",
         default=None,
-        help="Optional test case to run (format: TestCase.test_method)",
+        help="Test selection patterns (e.g. +test_module*, -/exclude.*/, TestCase.test_method)",
     )
     parser.add_argument("--json", action="store_true", help="Output test results in JSON format")
     parser.add_argument(
@@ -46,6 +48,69 @@ def add_gpt_path_to_syspath():
     if gpt_path and os.path.isdir(gpt_path):
         sys.path.insert(0, gpt_path)
         print(f"Added GPT_PATH to sys.path: {gpt_path}")
+
+
+def compile_pattern(pattern):
+    """Compile pattern to regex or glob matcher"""
+    if pattern.startswith("/") and pattern.endswith("/"):
+        # Regular expression pattern
+        try:
+            return re.compile(pattern[1:-1])
+        except re.error as e:
+            sys.stderr.write(f"Invalid regex pattern '{pattern}': {e}\n")
+            sys.exit(1)
+    else:
+        # Glob pattern (convert to regex)
+        regex = fnmatch.translate(pattern)
+        return re.compile(regex)
+
+
+def filter_tests(suite, patterns):
+    """Filter test suite based on inclusion/exclusion patterns"""
+    include_patterns = []
+    exclude_patterns = []
+
+    # Parse patterns into include/exclude lists
+    for pattern in patterns:
+        if pattern.startswith("-"):
+            exclude_patterns.append(compile_pattern(pattern[1:]))
+        else:
+            if pattern.startswith("+"):
+                pattern = pattern[1:]
+            include_patterns.append(compile_pattern(pattern))
+
+    # Create new filtered test suite
+    filtered_suite = unittest.TestSuite()
+
+    def should_include(test_id):
+        """Check if test should be included based on patterns"""
+        # If no include patterns, include by default
+        included = not include_patterns
+        for pattern in include_patterns:
+            if pattern.search(test_id):
+                included = True
+                break
+
+        # Check exclusion patterns
+        for pattern in exclude_patterns:
+            if pattern.search(test_id):
+                return False
+
+        return included
+
+    # Recursively filter tests
+    for test in suite:
+        if isinstance(test, unittest.TestCase):
+            test_id = test.id()
+            if should_include(test_id):
+                filtered_suite.addTest(test)
+        elif isinstance(test, unittest.TestSuite):
+            # Recursively filter sub-suites
+            filtered_subsuite = filter_tests(test, patterns)
+            if filtered_subsuite.countTestCases() > 0:
+                filtered_suite.addTest(filtered_subsuite)
+
+    return filtered_suite
 
 
 class JSONTestResult(unittest.TextTestResult):
@@ -181,22 +246,25 @@ class JSONTestResult(unittest.TextTestResult):
         return error_details
 
 
-def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=False, list_mode=False):
+def run_tests(test_patterns=None, verbosity=1, json_output=False, extract_errors=False, list_mode=False):
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     try:
-        if test_name:
-            suite.addTests(loader.loadTestsFromName(test_name))
+        # Always discover all tests first
+        discovered = loader.discover(start_dir="tests", pattern="test*.py")
+
+        # Apply test filters if any patterns provided
+        if test_patterns:
+            suite = filter_tests(discovered, test_patterns)
         else:
-            discovered = loader.discover(start_dir="tests", pattern="test*.py")
-            suite.addTests(discovered)
+            suite = discovered
 
         if list_mode:
-            # 只收集测试用例名称不运行
+            # Collect test case names without running
             test_cases = []
 
             def collect_test_ids(test_suite):
-                """递归收集所有测试用例ID"""
+                """Recursively collect all test case IDs"""
                 for test in test_suite:
                     if isinstance(test, unittest.TestCase):
                         test_cases.append(test.id())
@@ -204,7 +272,7 @@ def run_tests(test_name=None, verbosity=1, json_output=False, extract_errors=Fal
                         collect_test_ids(test)
 
             collect_test_ids(suite)
-            # 按名称排序后输出
+            # Sort by name and output
             for test_id in sorted(test_cases):
                 print(test_id)
             return {"test_cases": test_cases}
@@ -235,7 +303,7 @@ def main():
 
     try:
         result = run_tests(
-            test_name=args.test_name,
+            test_patterns=args.test_patterns,
             verbosity=args.verbosity,
             json_output=args.json,
             extract_errors=args.extract_errors,

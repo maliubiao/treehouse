@@ -209,7 +209,6 @@ class TestAutoFix:
         end = min(len(lines), line + context_lines)
         return [line.strip() for line in lines[start:end]]
 
-    @staticmethod
     @tracer.trace(
         target_files=["*.py"],
         enable_var_trace=True,
