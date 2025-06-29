@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 
     class MonitoringModule:
         events: MonitoringEvents
+        DISABLE: Any
 
         def get_tool(self, _tool_id: int) -> Optional[str]: ...
         def use_tool_id(self, _tool_id: int, _tool_name: str) -> None: ...
@@ -89,6 +90,7 @@ class TraceTypes:
     COLOR_ERROR = "error"
     COLOR_TRACE = "trace"
     COLOR_RESET = "reset"
+    COLOR_EXCEPTION = "exception"  # For consistency with event types
 
     # Log prefixes
     PREFIX_CALL = "CALL"
@@ -187,7 +189,7 @@ class TraceConfig:
         if self.ignore_self and filename == __file__:
             return False
         # 过滤<frozen posixpath>这类特殊文件名
-        if filename.endswith(">") or filename.endswith("sitecustomize.py"):
+        if filename.startswith("<") and filename.endswith(">") or filename.endswith("sitecustomize.py"):
             return False
         if self.ignore_system_paths:
             try:
@@ -399,6 +401,7 @@ def color_wrap(text, color_type):
         TraceTypes.COLOR_ERROR: Fore.RED,
         TraceTypes.COLOR_TRACE: Fore.MAGENTA,
         TraceTypes.COLOR_RESET: Style.RESET_ALL,
+        TraceTypes.COLOR_EXCEPTION: Fore.RED,
     }
     return f"{color_mapping.get(color_type, '')}{text}{Style.RESET_ALL}"
 
@@ -443,6 +446,7 @@ class TraceDispatcher:
         if event == TraceTypes.CALL:
             return self._handle_call_event(frame)
         if event == TraceTypes.RETURN:
+            self._logic.flush_exception()
             return self._handle_return_event(frame, arg)
         if event == TraceTypes.LINE:
             return self._handle_line_event(frame)
@@ -674,6 +678,7 @@ class SysMonitoringTraceDispatcher:
         """Handle PY_RETURN event (function return)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
+            self._logic.flush_exception()
             self._logic.handle_return(frame, retval)
             self.active_frames.discard(frame)
 
@@ -693,9 +698,7 @@ class SysMonitoringTraceDispatcher:
         """Handle EXCEPTION_HANDLED event"""
         frame = sys._getframe(1)  # Get the frame where exception was handled
         if frame in self.active_frames:
-            if len(self._logic.exception_chain) > 0:
-                self._logic.exception_chain.pop()
-            self._logic.stack_depth += 1
+            self._logic.handle_exception_was_handled(frame)
 
     def _handle_py_yield(self, _code, _offset, value):
         """Handle PY_YIELD event (generator yield)"""
@@ -924,7 +927,7 @@ class CallTreeHtmlRender:
                     "</div>",
                 ]
             )
-        elif msg_type in (TraceTypes.EXCEPTION, TraceTypes.ERROR):
+        elif msg_type in (TraceTypes.EXCEPTION, TraceTypes.ERROR, TraceTypes.COLOR_EXCEPTION):
             html_parts.extend(
                 [
                     "</div>",
@@ -1022,7 +1025,7 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             if self._size_exceeded:
                 continue
             buffer.append(self._message_to_html(message, msg_type, log_data))
-            if msg_type in (TraceTypes.ERROR, TraceTypes.EXCEPTION):
+            if msg_type in (TraceTypes.ERROR, TraceTypes.EXCEPTION, TraceTypes.COLOR_EXCEPTION):
                 error_count += 1
 
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1228,6 +1231,8 @@ class TraceLogic:
                 "html": parent._html_output,
             }
             self._active_outputs = set(["html", "file"])
+            self._log_file = None
+            self._log_file_index = None
 
     def __init__(self, config: TraceConfig):
         """初始化实例属性"""
@@ -1437,8 +1442,10 @@ class TraceLogic:
                 args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args]
                 log_prefix = TraceTypes.PREFIX_CALL
             parent_frame = frame.f_back
+            parent_lineno = 0
             if parent_frame is not None:
                 parent_frame_id = self._get_frame_id(parent_frame)
+                parent_lineno = parent_frame.f_lineno
             else:
                 parent_frame_id = 0
             filename = self._get_formatted_filename(frame.f_code.co_filename)
@@ -1457,6 +1464,7 @@ class TraceLogic:
                         "args": ", ".join(args_info),
                         "frame_id": frame_id,
                         "parent_frame_id": parent_frame_id,
+                        "caller_lineno": parent_lineno,
                     },
                 },
                 TraceTypes.COLOR_CALL,
@@ -1603,6 +1611,7 @@ class TraceLogic:
                 "filename": formatted_filename,
                 "lineno": start_line,  # 总是报告语句的起始行
                 "line": indented_statement,
+                "raw_line": full_statement,  # 为分析器提供原始行内容
                 "frame_id": frame_id,
                 "original_filename": filename,
                 "tracked_vars": tracked_vars,
@@ -1672,12 +1681,17 @@ class TraceLogic:
             )
 
     def flush_exception(self):
-        for i in self.exception_chain:
-            self._log_queue.put(i)
+        """将暂存的异常链刷入日志队列"""
+        for item in self.exception_chain:
+            self._log_queue.put(item)
         self.exception_chain = []
 
     def handle_exception(self, exc_type, exc_value, frame):
-        """记录异常信息"""
+        """
+        记录异常信息。
+        对于 sys.monitoring，此方法会将异常事件暂存到 exception_chain 中，
+        以区分最终被捕获的异常和导致函数终止的异常。
+        """
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self._get_frame_id(frame)
@@ -1697,10 +1711,27 @@ class TraceLogic:
                     "original_filename": frame.f_code.co_filename,
                 },
             },
-            TraceTypes.EXCEPTION,
+            TraceTypes.COLOR_EXCEPTION,
         )
-        self.exception_chain.append(msg)
-        self.stack_depth -= 1
+        # 对于非 monitoring 模式，直接记录
+        if sys.version_info < (3, 12):
+            self._add_to_buffer(*msg)
+        else:
+            self.exception_chain.append(msg)
+
+        self.stack_depth = max(0, self.stack_depth - 1)
+
+    def handle_exception_was_handled(self, frame):
+        """
+        当一个异常被 `try...except` 块捕获时调用此方法。
+        这是 sys.monitoring 的 EXCEPTION_HANDLED 事件的钩子。
+        基础实现只是丢弃待处理的异常记录并恢复堆栈深度。
+        """
+        if len(self.exception_chain) > 0:
+            # 最近引发的异常就是被处理的那个
+            self.exception_chain.pop()
+        # 恢复堆栈深度，因为函数没有终止
+        self.stack_depth += 1
 
     def capture_variables(self, frame):
         """捕获并计算变量表达式"""
@@ -1754,10 +1785,9 @@ class TraceLogic:
         self._running_flag = False
         if self._timer_thread:
             self._timer_thread.join(timeout=1)
-        if self.exception_chain:
-            for i in self.exception_chain:
-                self._log_queue.put(i)
-            self.exception_chain = []
+
+        self.flush_exception()  # 确保任何剩余的异常都被记录
+
         self._flush_buffer()
         while not self._log_queue.empty():
             self._log_queue.get_nowait()
@@ -1884,14 +1914,18 @@ def trace(
         disable_html: 是否禁用HTML报告
     """
     if not target_files:
-        target_files = [sys._getframe().f_back.f_code.co_filename]
+        try:
+            target_files = [sys._getframe(1).f_code.co_filename]
+        except (ValueError, AttributeError):
+            target_files = []
 
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            final_target_files = target_files or [func.__code__.co_filename]
             print(color_wrap("[start tracer]", TraceTypes.COLOR_CALL))
             config = TraceConfig(
-                target_files=target_files,
+                target_files=final_target_files,
                 line_ranges=line_ranges,
                 capture_vars=capture_vars,
                 callback=callback,

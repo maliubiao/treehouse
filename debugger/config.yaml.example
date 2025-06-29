@@ -1,0 +1,47 @@
+# Example configuration for the Python tracer.
+# You can use this file with the --config option.
+# Command-line arguments will override settings in this file.
+
+# List of file patterns to trace. Supports wildcards.
+# target_files:
+#   - "src/**/*.py"
+#   - "tests/test_*.py"
+
+# List of variable expressions to capture at each line.
+# capture_vars:
+#   - "self.state"
+#   - "user_data['name']"
+
+# List of function names to exclude from tracing.
+# exclude_functions:
+#   - "very_frequent_function"
+#   - "_internal_helper"
+
+# Specific line ranges to trace.
+# Format: { "filepath": [[start1, end1], [start2, end2]], ... }
+# File paths should be absolute or relative to the execution directory.
+# line_ranges:
+#   "/Users/richard/code/terminal-llm/my_project/main.py":
+#     - [10, 25]
+#     - [40, 55]
+
+# Enable detailed variable operation tracing (might impact performance).
+enable_var_trace: false
+
+# Generate HTML report. Set to true to disable.
+disable_html: false
+
+# Custom name for the HTML report file.
+report_name: "my_custom_trace_report.html"
+
+# Trace into system libraries and third-party packages.
+# Default is false (ignore_system_paths=true). Set to true to include them.
+include_system: false
+
+# Specify a function where tracing should begin.
+# Format: "filepath:lineno"
+# start_function: "/Users/richard/code/terminal-llm/my_project/main.py:42"
+
+# Base directory for source files to show relative paths in the report.
+# source_base_dir: "/Users/richard/code/terminal-llm/my_project"
+
