@@ -45,7 +45,7 @@ from llm_query import (
     interactive_symbol_location,
     process_file_change,
 )
-from tools import ChatbotUI
+from tools.chatbot import ChatbotUI
 from tree import BlockPatch, find_diff, find_patch
 
 
@@ -1048,8 +1048,8 @@ class TestModelSwitch(unittest.TestCase):
                 model_name="model1",
                 max_context_size=4096,
                 temperature=0.7,
-                price_1M_input=1.0,
-                price_1M_output=2.0,
+                price_1m_input=1.0,
+                price_1m_output=2.0,
             ),
             "model2": ModelConfig(
                 key="key2",
@@ -1057,8 +1057,8 @@ class TestModelSwitch(unittest.TestCase):
                 model_name="model2",
                 max_context_size=4096,
                 temperature=0.7,
-                price_1M_input=1.0,
-                price_1M_output=2.0,
+                price_1m_input=1.0,
+                price_1m_output=2.0,
             ),
         }
 
@@ -1401,8 +1401,8 @@ class TestModelSwitch(unittest.TestCase):
                 thinking_budget=65536,  # 测试thinking_budget
                 top_k=30,  # 测试top_k
                 top_p=0.8,  # 测试top_p
-                price_1M_input=1.0,
-                price_1M_output=2.0,
+                price_1m_input=1.0,
+                price_1m_output=2.0,
             )
         }
         switch = ModelSwitch()
@@ -1459,8 +1459,8 @@ class TestModelSwitch(unittest.TestCase):
             key="test_key",
             base_url="http://test",
             model_name="test",
-            price_1M_input=10.0,  # 每百万输入token $10
-            price_1M_output=20.0,  # 每百万输出token $20
+            price_1m_input=10.0,  # 每百万输入token $10
+            price_1m_output=20.0,  # 每百万输出token $20
         )
 
         switch = ModelSwitch()
@@ -1510,8 +1510,8 @@ class TestModelSwitch(unittest.TestCase):
                 key="key1",
                 base_url="url1",
                 model_name="model1",
-                price_1M_input=5.0,
-                price_1M_output=15.0,
+                price_1m_input=5.0,
+                price_1m_output=15.0,
             )
         }
 
@@ -1562,15 +1562,15 @@ class TestModelSwitch(unittest.TestCase):
                 key="keyA",
                 base_url="urlA",
                 model_name="modelA",
-                price_1M_input=10.0,
-                price_1M_output=20.0,
+                price_1m_input=10.0,
+                price_1m_output=20.0,
             ),
             "modelB": ModelConfig(
                 key="keyB",
                 base_url="urlB",
                 model_name="modelB",
-                price_1M_input=5.0,
-                price_1M_output=10.0,
+                price_1m_input=5.0,
+                price_1m_output=10.0,
             ),
         }
 
@@ -1620,7 +1620,7 @@ class TestModelSwitch(unittest.TestCase):
         # 添加使用记录
         switch._config_cache = {
             "model1": ModelConfig(
-                key="key1", base_url="url1", model_name="model1", price_1M_input=5.0, price_1M_output=15.0
+                key="key1", base_url="url1", model_name="model1", price_1m_input=5.0, price_1m_output=15.0
             )
         }
 

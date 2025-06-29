@@ -41,6 +41,7 @@ from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
 
 from debugger.tracer import trace
+from tools.replace_engine import LLMInstructionParser, ReplaceEngine
 from tree import (
     BINARY_MAGIC_NUMBERS,
     GLOBAL_PROJECT_CONFIG,
@@ -88,8 +89,8 @@ class ModelConfig:
         thinking_budget: int = 32768,
         top_k: int = 20,
         top_p: float = 0.95,
-        price_1M_input: float | None = None,
-        price_1M_output: float | None = None,
+        price_1m_input: float | None = None,
+        price_1m_output: float | None = None,
     ):
         self.key = key
         self.base_url = base_url
@@ -102,8 +103,8 @@ class ModelConfig:
         self.thinking_budget = thinking_budget
         self.top_k = top_k
         self.top_p = top_p
-        self.price_1M_input = price_1M_input
-        self.price_1M_output = price_1M_output
+        self.price_1M_input = price_1m_input
+        self.price_1M_output = price_1m_output
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
@@ -3100,81 +3101,6 @@ def _save_response_content(content):
     return response_path
 
 
-def _extract_file_matches(content):
-    """从内容中提取文件匹配项，支持多种格式"""
-    # 统一的正则表达式模式，匹配所有可能的格式
-    pattern = (
-        r"(\[project setup shellscript start\]\n(.*?)\n\[project setup shellscript end\]|"
-        r"\[user verify script start\]\n(.*?)\n\[user verify script end\]|"
-        r"\[(overwrite whole|created) file\]: (.*?)\n\[start\]\n(.*?)\n\[end\]|"
-        r"```(\w+):([^\[\n]+)\n(.*?)\n```|"
-        r"```\w*\n\[(?:overwrite whole|created) file\]:\s+([^\n]+)\n(.*?)\n```|"
-        r"```\w*:\[(?:overwrite whole|created) file\]:\s+([^\n]+)\n(.*?)\n```|"
-        r"```(\w*)\n(.*?)\n```)"  # 新增：通用Markdown代码块模式
-    )
-    matches = []
-    for match in re.finditer(pattern, content, re.DOTALL):
-        # 处理项目设置脚本
-        if match.group(1) and match.group(1).startswith("[project setup"):
-            matches.append(("project_setup_script", match.group(2).strip(), ""))
-
-        # 处理用户验证脚本
-        elif match.group(1) and match.group(1).startswith("[user verify"):
-            matches.append(("user_verify_script", match.group(3).strip(), ""))
-
-        # 处理文件覆盖/创建格式
-        elif match.group(4):
-            action_type = match.group(4).replace(" ", "_")  # 转换为 snake_case
-            file_path = match.group(5).strip()
-            file_content = match.group(6).strip()
-            matches.append((f"{action_type}_file", file_content, file_path))
-
-        # 处理 Markdown 代码块格式 (带语言和文件路径)
-        elif match.group(7):
-            file_path = match.group(8).strip()
-            file_content = match.group(9).strip()
-            # Remove [start] and [end] tags if they exist
-            file_content = re.sub(r"^\[start\]\n?|\n?\[end\]$", "", file_content).strip()
-            matches.append(("overwrite_whole_file", file_content, file_path))
-
-        # 处理标题+Markdown代码块格式 (#### 4. 更新CSS样式)
-        elif match.group(10):
-            file_path = match.group(10).strip()
-            file_content = match.group(11).strip()
-            # Remove [start] and [end] tags if they exist
-            file_content = re.sub(r"^\[start\]\n?|\n?\[end\]$", "", file_content).strip()
-            matches.append(("overwrite_whole_file", file_content, file_path))
-
-        # 处理 markdown:[overwrite whole file]: 格式
-        elif match.group(12):
-            file_path = match.group(12).strip()
-            file_content = match.group(13).strip()
-            # Remove [start] and [end] tags if they exist
-            file_content = re.sub(r"^\[start\]\n?|\n?\[end\]$", "", file_content).strip()
-            matches.append(("overwrite_whole_file", file_content, file_path))
-
-        # 新增：处理通用Markdown代码块（第一行包含文件注释）
-        elif match.group(14):
-            code_content = match.group(15).strip()
-            # 尝试从第一行提取文件路径
-            first_line, _, rest = code_content.partition("\n")
-            file_path_match = re.search(r"#\s*file:\s*(\S+)", first_line)
-            if file_path_match:
-                file_path = file_path_match.group(1)
-                file_content = rest
-                matches.append(("overwrite_whole_file", file_content, file_path))
-
-    return matches
-
-
-def _process_file_path(file_path):
-    """处理文件路径，将绝对路径转换为相对路径"""
-    if file_path.is_absolute():
-        parts = file_path.parts[1:]
-        return Path(*parts)
-    return file_path
-
-
 def _save_file_to_shadowroot(shadow_file_path, file_content):
     """将文件内容保存到shadowroot目录"""
     shadow_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3266,30 +3192,88 @@ def _apply_patch(diff_file):
 
 
 def extract_and_diff_files(content, auto_apply=False, save=True):
-    """从内容中提取文件并生成diff"""
+    """从内容中提取文件、执行替换并生成diff"""
     if save:
         _save_response_content(content)
-    matches = _extract_file_matches(content)
-    if not matches:
+
+    try:
+        instructions = LLMInstructionParser.parse(content)
+    except Exception as e:
+        print(f"解析LLM响应时出错: {e}", file=sys.stderr)
+        return
+
+    if not instructions:
         return
 
     setup_script = None
-    verify_script = None
-    file_matches = []
+    file_creation_overwriting_instr = []
+    file_patching_instr = []
+    affected_paths = set()
 
-    for match_type, match_content, path in matches:
-        if match_type == "project_setup_script":
-            setup_script = match_content
-        elif match_type == "user_verify_script":
-            verify_script = match_content
+    for instr in instructions:
+        instr_type = instr["type"]
+        if instr_type == "project_setup_script":
+            setup_script = instr["content"]
+        elif instr_type in ("overwrite_whole_file", "created_file"):
+            file_creation_overwriting_instr.append(instr)
+            affected_paths.add(Path(instr["path"]).resolve())
+        elif instr_type in ("replace", "replace_lines", "insert"):
+            file_patching_instr.append(instr)
+            affected_paths.add(Path(instr["path"]).resolve())
+
+    # 在沙箱中准备影子文件以应用更改
+    path_mapping = {}  # original_path -> shadow_path
+    project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).resolve()
+
+    for original_path in affected_paths:
+        try:
+            relative_path = original_path.relative_to(project_root)
+        except ValueError:
+            print(f"警告: 文件路径 {original_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
+            continue
+
+        shadow_path = shadowroot / relative_path
+        shadow_path.parent.mkdir(parents=True, exist_ok=True)
+        path_mapping[original_path] = shadow_path
+        if not original_path.exists():
+            original_path.touch()
+
+        if original_path.exists() and original_path.is_file():
+            with open(original_path, "r", encoding="utf-8") as f_in, open(shadow_path, "w", encoding="utf-8") as f_out:
+                f_out.write(f_in.read())
         else:
-            file_matches.append(
-                (
-                    GLOBAL_PROJECT_CONFIG.relative_to_current_path(Path(path)),
-                    match_content,
-                )
-            )
+            # 对于新文件，创建一个空的影子文件
+            shadow_path.touch()
 
+    # 将文件创建/覆盖指令应用于影子文件
+    for instr in file_creation_overwriting_instr:
+        original_path = Path(instr["path"]).resolve()
+        shadow_path = path_mapping.get(original_path)
+        if shadow_path:
+            with open(shadow_path, "w", encoding="utf-8") as f:
+                f.write(instr["content"])
+
+    # 使用ReplaceEngine将修补指令应用于影子文件
+    if file_patching_instr:
+        engine = ReplaceEngine()
+        shadow_patching_instr = []
+        for instr in file_patching_instr:
+            original_path = Path(instr["path"]).resolve()
+            shadow_path = path_mapping.get(original_path)
+            if shadow_path:
+                new_instr = instr.copy()
+                new_instr["path"] = str(shadow_path)
+                shadow_patching_instr.append(new_instr)
+
+        if shadow_patching_instr:
+            try:
+                engine.execute(shadow_patching_instr)
+            except Exception as e:
+                print(f"执行补丁操作时出错: {str(e)}", file=sys.stderr)
+                traceback.print_exc()
+                return
+
+    # 处理安装脚本
     def _process_script(script, script_name):
         if not script:
             return
@@ -3299,26 +3283,28 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         print(f"{script_name}已保存到: {script_path}")
 
     _process_script(setup_script, "project_setup.sh")
-    _process_script(verify_script, "user_verify.sh")
 
+    # 生成原始文件和影子文件之间的差异
     diff_content = ""
-    for filename, file_content in file_matches:
-        file_path = Path(filename).absolute()
-        old_file_path = file_path
-        if not old_file_path.exists():
-            old_file_path.parent.mkdir(parents=True, exist_ok=True)
-            old_file_path.touch()
-        file_path = _process_file_path(file_path)
-        shadow_file_path = shadowroot / file_path
-        _save_file_to_shadowroot(shadow_file_path, file_content)
+    for original_path, shadow_path in path_mapping.items():
         original_content = ""
-        with open(str(old_file_path), "r", encoding="utf8") as f:
-            original_content = f.read()
-        diff = _generate_unified_diff(old_file_path, shadow_file_path, original_content, file_content)
+        if original_path.exists() and original_path.is_file():
+            with open(original_path, "r", encoding="utf-8") as f:
+                original_content = f.read()
+
+        with open(shadow_path, "r", encoding="utf-8") as f:
+            shadow_content = f.read()
+
+        if original_content == shadow_content:
+            continue
+
+        diff = _generate_unified_diff(original_path, shadow_path, original_content, shadow_content)
         diff_content += diff + "\n\n"
-    diff_file = _save_diff_content(diff_content)
-    if diff_file:
-        display_and_apply_diff(diff_file, auto_apply=auto_apply)
+
+    if diff_content.strip():
+        diff_file = _save_diff_content(diff_content)
+        if diff_file:
+            display_and_apply_diff(diff_file, auto_apply=auto_apply)
 
 
 def process_response(prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
@@ -3657,8 +3643,8 @@ class ModelSwitch:
             thinking_budget=config_dict.get("thinking_budget", 32768),
             top_k=config_dict.get("top_k", 20),
             top_p=config_dict.get("top_p", 0.95),
-            price_1M_input=config_dict.get("price_1M_input"),
-            price_1M_output=config_dict.get("price_1M_output"),
+            price_1m_input=config_dict.get("price_1M_input"),
+            price_1m_output=config_dict.get("price_1M_output"),
         )
 
     def _get_config(self) -> dict[str, ModelConfig]:
@@ -3703,8 +3689,8 @@ class ModelSwitch:
                 model_name="test",
                 max_context_size=8192,
                 temperature=0.0,
-                price_1M_input=0.5,
-                price_1M_output=1.5,
+                price_1m_input=0.5,
+                price_1m_output=1.5,
             )
         }
 
