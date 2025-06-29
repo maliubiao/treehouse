@@ -1,6 +1,9 @@
 import argparse
 import sys
+from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from unittest.mock import _Call
 
 import colorama
 from colorama import Fore, Style
@@ -8,15 +11,8 @@ from colorama import Fore, Style
 from debugger import tracer
 
 colorama.init(autoreset=True)
-from collections import defaultdict
-from pathlib import Path
-from textwrap import dedent
-
-# this will cause recursion with repr
-from unittest.mock import _Call
 
 from llm_query import (
-    GLOBAL_MODEL_CONFIG,
     GPT_FLAG_PATCH,
     GPT_FLAGS,
     GPT_SYMBOL_PATCH,
@@ -51,6 +47,10 @@ class TestAutoFix:
                     if isinstance(error, dict):
                         # 添加文件存在性检查
                         file_path = error.get("file_path", "unknown")
+                        if file_path != "unknown" and not Path(file_path).exists():
+                            print(Fore.YELLOW + f"Warning: File path from test results does not exist: {file_path}")
+                            continue
+
                         error_details.append(
                             {
                                 "file_path": file_path,
@@ -155,11 +155,16 @@ class TestAutoFix:
                             print(Fore.RED + "  " * indent_level + f"✗ {ref.get('func', '?')}() raised exception")
             else:
                 print(Fore.YELLOW + f"\nNo tracer logs found for this location, {file_path}:{line}")
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, ValueError) as e:
             print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
 
-    def get_symbol_info_for_references(self, ref_files: list, references: list) -> dict:
-        """获取符号信息用于参考展示"""
+    def get_symbol_info_for_references(self, references: list) -> dict:
+        """获取符号信息用于参考展示
+        Args:
+            references: 引用位置列表，格式为[(filename, lineno), ...]
+        Returns:
+            符号信息字典
+        """
         # 按filename分组建立映射
         file_to_lines = defaultdict(list)
         for filename, lineno in references:
@@ -190,15 +195,14 @@ class TestAutoFix:
             print(Fore.BLUE + "-" * 30)
             for name, symbol in symbol_results.items():
                 print(Fore.CYAN + f"Symbol: {name}")
-                print(Fore.BLUE + f"start_line: {symbol['start_line']}")
-                print(Fore.BLUE + f"end_line: {symbol['end_line']}")
+                print(Fore.BLUE + f"  File: {symbol['file_path']}:{symbol['start_line']}-{symbol['end_line']}")
 
         return symbol_results
 
     def get_error_context(self, file_path: str, line: int, context_lines: int = 5) -> Optional[List[str]]:
         """Get context around the error line from source file."""
 
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         start = max(0, line - context_lines - 1)
@@ -216,9 +220,10 @@ class TestAutoFix:
     )
     def run_tests(testcase: Optional[str] = None) -> Dict:
         """Run tests and return results in JSON format."""
-        from tests.test_main import run_tests
-
         return run_tests(test_name=testcase, json_output=True)
+
+
+from tests.test_main import run_tests
 
 
 def parse_args():
@@ -345,11 +350,14 @@ def main():
     auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
     auto_fix.display_errors()
 
+    if not auto_fix.error_details:
+        return  # No errors to fix
+
     if not auto_fix.uniq_references:
-        print(Fore.GREEN + "\nNo references found for the test issues.")
+        print(Fore.YELLOW + "\nNo references found for the test issues. Cannot proceed with fix.")
         return
 
-    symbol_result = auto_fix.get_symbol_info_for_references([], list(auto_fix.uniq_references))
+    symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
 
     model_switch = ModelSwitch()
     model_switch.select(args.model)

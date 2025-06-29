@@ -195,14 +195,14 @@ class CallAnalyzer:
 
         frame_id = data["frame_id"]
         # 异常事件应归属于栈顶的帧
-        record = self.call_stack[-1]
-        if record and record["frame_id"] == frame_id:
+        if self.call_stack and self.call_stack[-1]["frame_id"] == frame_id:
+            record = self.call_stack[-1]
             record["exception"] = {
                 "type": data["exc_type"],
                 "value": data["exc_value"],
                 "lineno": data["lineno"],
             }
-            # 注意：此处不再弹出堆栈。帧的终结由 _reconcile_stack 或 return/unwind 事件处理。
+            # 注意：此处不再弹出堆栈。帧的终结由 _reconcile_stack 或 return 事件处理。
 
     def _add_to_final_tree(self, record: CallRecord):
         """将一个已完成的调用记录（正常或异常结束）归档"""
@@ -259,6 +259,10 @@ class CallAnalyzer:
         """
         将分析结果保存为 JSON 文件。
         """
+        # 在生成报告前，确保所有在栈中的调用都已处理（例如，程序提前结束）
+        while self.call_stack:
+            self._reconcile_stack(-1, "eof")  # 使用一个无效的 frame_id 来清空整个栈
+
         report_data = {}
         for filename, funcs in self.call_trees.items():
             report_data[filename] = {}
@@ -268,8 +272,9 @@ class CallAnalyzer:
         try:
             with open(report_path, "w", encoding="utf-8") as f:
                 json.dump(report_data, f, indent=2, ensure_ascii=False, default=str)
-            print(f"分析报告已生成: {report_path}")
-        except TypeError as e:
-            print(f"生成报告失败: {e}. 确保所有被跟踪的数据都是JSON可序列化的。")
-        except Exception as e:
-            print(f"生成报告时发生未知错误: {e}")
+        except (TypeError, ValueError) as e:
+            print(f"JSON序列化失败: {e}. 确保所有被跟踪的数据都是JSON可序列化的。")
+        except (IOError, OSError) as e:
+            print(f"文件操作失败: {e}")
+        except json.JSONEncodeError as e:
+            print(f"JSON编码错误: {e}")

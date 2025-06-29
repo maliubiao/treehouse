@@ -1,5 +1,7 @@
 import time
 
+from colorama import Fore
+
 from debugger.analyzable_tracer import analyzable_trace
 from debugger.call_analyzer import CallAnalyzer
 
@@ -18,14 +20,14 @@ def faulty_sub_function(x):
 def complex_sub_function(a, b):
     """一个包含循环和变量变化的子函数"""
     total = a
-    for i in range(b):
-        total += i + 1
+    for idx in range(b):  # 将i改为idx避免与外部作用域冲突
+        total += idx + 1
         time.sleep(0.01)  # 模拟耗时操作
 
     # 调用另一个子函数
     try:
         result = faulty_sub_function(total)
-    except ValueError as e:
+    except ValueError:  # 移除未使用的变量e
         result = -1  # 捕获异常并返回一个默认值
 
     return result
@@ -39,7 +41,7 @@ def main_entrypoint(val1, val2):
     print("--- 开始执行主函数 ---")
     # 第一次调用，正常执行
     # total = 10 + 1 + 2 + 3 = 16. faulty_sub_function(16) -> 160
-    intermediate_result = complex_sub_function(val1, 3)
+    intermediate_result = complex_sub_function(val1, val2)  # 使用val2代替硬编码的3
 
     # 第二次调用，这次会触发并捕获异常
     # total = 160. faulty_sub_function(160) -> raises ValueError
@@ -62,21 +64,21 @@ if __name__ == "__main__":
     # 4. 从 analyzer 中查询特定函数的调用记录
     # 注意：tracer 格式化后的文件名可能与原始路径不同
     # 我们需要从 analyzer 的数据中找到正确的文件名
-    filename = ""
+    FILENAME = ""
 
     if analyzer.call_trees:
         # 获取第一个记录的文件名作为示例
-        filename = next(iter(analyzer.call_trees))
+        FILENAME = next(iter(analyzer.call_trees))
 
-    func_name = "main_entrypoint"
-    main_calls = analyzer.get_calls_by_function(filename, func_name)
+    FUNC_NAME = "main_entrypoint"
+    main_calls = analyzer.get_calls_by_function(FILENAME, FUNC_NAME)
 
     if not main_calls:
-        print(f"未找到函数 {func_name} 在 {filename} 中的调用记录。")
+        print(f"未找到函数 {FUNC_NAME} 在 {FILENAME} 中的调用记录。")
     else:
         # 5. 打印调用树，展示捕获到的详细信息
         for i, call_record in enumerate(main_calls):
-            print(f"--- 第 {i + 1} 次调用 '{func_name}' 的详细记录 ---\n")
+            print(f"--- 第 {i + 1} 次调用 '{FUNC_NAME}' 的详细记录 ---\n")
             print(analyzer.pretty_print_call(call_record))
             print("\n" + "-" * 50 + "\n")
 
@@ -86,7 +88,7 @@ if __name__ == "__main__":
     print("=" * 50 + "\n")
 
     # 假设我们想为 complex_sub_function 生成测试
-    complex_func_calls = analyzer.get_calls_by_function(filename, "complex_sub_function")
+    complex_func_calls = analyzer.get_calls_by_function(FILENAME, "complex_sub_function")
     if complex_func_calls:
         # 获取第一次调用
         first_call = complex_func_calls[0]
@@ -106,7 +108,7 @@ if __name__ == "__main__":
         print("       with patch('your_module.faulty_sub_function', mock_faulty_sub):")
         # 注意：这里的参数值是字符串，在生成代码时可能需要类型转换
         print(f"          self.assertEqual(your_module.complex_sub_function({args['a']}, {args['b']}), {retval})")
-        print(f"          mock_faulty_sub.assert_called_once_with(16)")
+        print("          mock_faulty_sub.assert_called_once_with(16)")
 
         # 获取第二次调用，这次内部捕获了异常
         second_call = complex_func_calls[1]
@@ -123,7 +125,15 @@ if __name__ == "__main__":
         print("       mock_faulty_sub = MagicMock(side_effect=ValueError('输入值不能大于 150'))")
         print("       with patch('your_module.faulty_sub_function', mock_faulty_sub):")
         print(f"          self.assertEqual(your_module.complex_sub_function({args2['a']}, {args2['b']}), {retval2})")
-        print(f"          mock_faulty_sub.assert_called_once_with(160)")
+        print("          mock_faulty_sub.assert_called_once_with(160)")
 
-    # 7. 将完整的分析报告保存到文件
-    analyzer.generate_report("call_analysis_report.json")
+    # 7. 将完整的分析报告保存到文件，以便新的生成器工作流使用
+    REPORT_FILENAME = "call_analysis_report.json"
+    analyzer.generate_report(REPORT_FILENAME)
+    print("\n✅ 分析报告已保存到 'call_analysis_report.json'。")
+    print("   现在您可以使用以下命令为其生成单元测试：")
+    print(
+        Fore.CYAN + "   python gpt_workflow/unittest_generator.py "
+        f"--report-file {REPORT_FILENAME} --target-function complex_sub_function"
+    )
+    print(Fore.YELLOW + "   (该工具将以交互方式运行。要自动确认所有建议，请添加 `-y` 或 `--auto-confirm` 标志)")
