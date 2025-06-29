@@ -169,37 +169,45 @@ class TestShellCompletion(unittest.TestCase):
                 self.assertTrue(any("API request failed" in log for log in cm.output))
 
     def test_relative_to_root_dir(self):
-        # Create nested directory structure
-        nested_dir = self.root / "nested" / "subdir"
-        nested_dir.mkdir(parents=True)
+        original_cwd = os.getcwd()
+        try:
+            # Create nested directory structure
+            nested_dir = self.root / "nested" / "subdir"
+            nested_dir.mkdir(parents=True)
 
-        # Test from root directory
-        os.chdir(self.root)
-        result = relative_to_root_dir("lsp/file1.txt")
-        self.assertEqual(Path("lsp/file1.txt"), result)
+            # Test from root directory
+            os.chdir(self.root)
+            result = relative_to_root_dir("lsp/file1.txt")
+            self.assertEqual(Path("lsp/file1.txt"), result)
 
-        # Test from nested directory
-        os.chdir(nested_dir)
-        result = relative_to_root_dir("lsp/file1.txt")
-        self.assertEqual(Path("nested/subdir/lsp/file1.txt"), result)
+            # Test from nested directory
+            os.chdir(nested_dir)
+            result = relative_to_root_dir("lsp/file1.txt")
+            self.assertEqual(Path("nested/subdir/lsp/file1.txt"), result)
 
-        # Test outside root directory
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            os.chdir(tmp_dir)
-            result = relative_to_root_dir(str(self.root / "lsp/file1.txt"))
-            self.assertEqual(self.root / "lsp/file1.txt", result)
+            # Test outside root directory
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                os.chdir(tmp_dir)
+                result = relative_to_root_dir(str(self.root / "lsp/file1.txt"))
+                self.assertEqual(self.root / "lsp/file1.txt", result)
+        finally:
+            os.chdir(original_cwd)
 
     def test_find_root_dir(self):
-        # Should find root directory when in subdirectory
-        subdir = self.root / "lsp" / "subdir"
-        subdir.mkdir(parents=True, exist_ok=True)
-        os.chdir(subdir)
-        self.assertEqual(self.root.resolve(), find_root_dir().resolve())
+        original_cwd = os.getcwd()
+        try:
+            # Should find root directory when in subdirectory
+            subdir = self.root / "lsp" / "subdir"
+            subdir.mkdir(parents=True, exist_ok=True)
+            os.chdir(subdir)
+            self.assertEqual(self.root.resolve(), find_root_dir().resolve())
 
-        # Should return None when outside root directory
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            os.chdir(tmp_dir)
-            self.assertIsNone(find_root_dir())
+            # Should return None when outside root directory
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                os.chdir(tmp_dir)
+                self.assertIsNone(find_root_dir())
+        finally:
+            os.chdir(original_cwd)
 
 
 if __name__ == "__main__":

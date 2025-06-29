@@ -11,7 +11,7 @@ import subprocess
 import traceback
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
 
@@ -67,7 +67,6 @@ class LintParser:
         r"(?P<code>\w+):\s*"  # Lint code with colon
         r"(?P<message>.+)$"  # Error message
     )
-    _file_cache = {}
 
     @classmethod
     def parse(cls, raw_output: str) -> list[LintResult]:
@@ -93,13 +92,11 @@ class LintParser:
                 original_line = ""
 
                 try:
-                    if file_path not in cls._file_cache:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            cls._file_cache[file_path] = f.readlines()
-
-                    file_lines = cls._file_cache[file_path]
-                    if 0 < line_num <= len(file_lines):
-                        original_line = file_lines[line_num - 1].rstrip("\n")
+                    # 使用上下文管理器确保文件正确关闭
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        file_lines = f.readlines()
+                        if 0 < line_num <= len(file_lines):
+                            original_line = file_lines[line_num - 1].rstrip("\n")
                 except OSError as e:
                     print(f"Error reading {file_path}:{line_num} - {str(e)}")
 
@@ -123,9 +120,8 @@ class LintReportFix:
 
     def __init__(self, model_switch: ModelSwitch = None):
         self.model_switch = model_switch or ModelSwitch()
-        self._source_cache: dict[str, list[str]] = {}
 
-    def _build_prompt(self, symbol, symbol_map):
+    def _build_prompt(self, symbol: Dict, symbol_map: Dict) -> str:
         """构建合并后的提示词模板"""
         group: list[LintResult] = symbol.get("own_errors", [])
         errors_desc = "\n\n".join(
@@ -139,7 +135,7 @@ class LintReportFix:
 
         return f"{base_prompt}\n{errors_desc}\n不破坏编程接口，避免无法通过测试\n"
 
-    def fix_symbol(self, symbol, symbol_map) -> tuple[list[str], int, int]:
+    def fix_symbol(self, symbol: Dict, symbol_map: Dict) -> None:
         """生成批量修复建议"""
         prompt = self._build_prompt(symbol, symbol_map)
         print(prompt)
@@ -177,51 +173,53 @@ class PylintFixer:
             self.git_hint = "auto"
 
         if self.git_hint:
-            if self.git_hint == "auto":
-                # 获取所有源代码文件列表
-                files_result = subprocess.run(
-                    ["git", "ls-files", "*.py"],
+            try:
+                if self.git_hint == "auto":
+                    files_result = subprocess.run(
+                        ["git", "ls-files", "*.py"],
+                        capture_output=True,
+                        text=True,
+                        cwd=self.root_dir,
+                        check=True,
+                    )
+                elif self.git_hint == "stage":
+                    files_result = subprocess.run(
+                        ["git", "diff", "--cached", "--name-only", "--", "*.py"],
+                        capture_output=True,
+                        text=True,
+                        cwd=self.root_dir,
+                        check=True,
+                    )
+
+                # 准备pylint参数
+                pylint_args = []
+                pylintrc_path = self.root_dir / ".pylintrc"
+                if pylintrc_path.exists():
+                    pylint_args.extend(["--rcfile", str(pylintrc_path)])
+
+                # 一次性对所有文件执行pylint
+                result = subprocess.run(
+                    ["pylint", *pylint_args, *files_result.stdout.splitlines()],
                     capture_output=True,
                     text=True,
                     cwd=self.root_dir,
-                    check=True,
+                    check=False,
                 )
-            elif self.git_hint == "stage":
-                # 获取暂存区文件列表
-                files_result = subprocess.run(
-                    ["git", "diff", "--cached", "--name-only", "--", "*.py"],
-                    capture_output=True,
-                    text=True,
-                    cwd=self.root_dir,
-                    check=True,
-                )
+                log_content = result.stdout
+                self.results = LintParser.parse(log_content)
 
-            if files_result and files_result.returncode != 0:
-                raise RuntimeError(f"获取git文件列表失败: {files_result.stderr}")
-
-            # 准备pylint参数
-            pylint_args = []
-            pylintrc_path = self.root_dir / ".pylintrc"
-            if pylintrc_path.exists():
-                pylint_args.extend(["--rcfile", str(pylintrc_path)])
-
-            # 一次性对所有文件执行pylint
-            result = subprocess.run(
-                ["pylint", *pylint_args, *files_result.stdout.splitlines()],
-                capture_output=True,
-                text=True,
-                cwd=self.root_dir,
-                check=False,
-            )
-            log_content = result.stdout
-            self.results = LintParser.parse(log_content)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Git命令执行失败: {e.stderr}") from e
+            except Exception as e:
+                raise RuntimeError(f"执行过程中出错: {str(e)}") from e
 
         else:
             if not self.log_path.is_file():
                 raise FileNotFoundError(f"日志文件 '{self.log_path}' 不存在或不是文件")
 
             try:
-                log_content = self.log_path.read_text(encoding="utf-8")
+                with open(self.log_path, "r", encoding="utf-8") as f:
+                    log_content = f.read()
                 self.results = LintParser.parse(log_content)
             except OSError as e:
                 raise RuntimeError(f"读取日志文件失败: {e}") from e
@@ -232,7 +230,7 @@ class PylintFixer:
         for res in self.results:
             self.file_groups[res.file_path].append(res)
 
-    def _process_symbol_group(self, symbol: dict, symbol_map: dict) -> None:
+    def _process_symbol_group(self, symbol: Dict, symbol_map: Dict) -> None:
         """处理单个符号的错误组"""
         group = symbol.get("own_errors", [])
         if not group:
@@ -259,8 +257,8 @@ class PylintFixer:
         return [(line.line, line.column_range[0]) for line in self.file_groups[file_path]]
 
     def _associate_errors_with_symbols(
-        self, file_path, parser_util: ParserUtil, code_map: dict, locations: list
-    ) -> dict:
+        self, file_path: str, parser_util: ParserUtil, code_map: Dict, locations: List[Tuple[int, int]]
+    ) -> Dict[str, Dict]:
         """关联错误信息到符号"""
         symbol_map = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=1024 * 1024)
         new_symbol_map = {}
@@ -277,7 +275,7 @@ class PylintFixer:
             ]
         return new_symbol_map
 
-    def _group_symbols_by_token_limit(self, symbol_map: dict) -> list[list]:
+    def _group_symbols_by_token_limit(self, symbol_map: Dict) -> list[list]:
         """按token限制分组符号"""
         groups = []
         current_group = []
@@ -295,31 +293,24 @@ class PylintFixer:
             groups.append(current_group)
         return groups
 
-    def update_symbol_map(self, file_path, new_symbol_map: dict):
+    def update_symbol_map(self, file_path: str) -> Tuple[ParserUtil, Dict]:
         """更新符号映射"""
         parser_loader = ParserLoader()
         parser_util = ParserUtil(parser_loader)
         _, code_map = parser_util.get_symbol_paths(file_path)
-        for symbol in new_symbol_map.values():
-            if symbol.get("original_name", "") not in code_map:
-                print(f"警告: 符号 {symbol['original_name']} 在文件 {file_path} 中未找到")
-                continue
-            updated_symbol = code_map[symbol["original_name"]]
-            symbol["block_content"] = updated_symbol["code"].encode("utf8")
-            symbol["file_path"] = file_path
-            symbol["block_range"] = updated_symbol["block_range"]
         return parser_util, code_map
 
     def _process_symbols_for_file(self, file_path: str) -> None:
         """处理单个文件的所有符号"""
-        parser_util, code_map = self.update_symbol_map(file_path, {})
+        parser_util, code_map = self.update_symbol_map(file_path)
         locations = self._get_symbol_locations(file_path)
         symbol_map = self._associate_errors_with_symbols(file_path, parser_util, code_map, locations)
         symbol_groups = self._group_symbols_by_token_limit(symbol_map)
         for group in symbol_groups:
             for symbol in group:
                 self._process_symbol_group(symbol, symbol_map)
-                self.update_symbol_map(file_path, symbol_map)
+                # 更新后重新获取符号映射
+                parser_util, code_map = self.update_symbol_map(file_path)
 
     def execute(self) -> None:
         """执行完整的修复流程"""

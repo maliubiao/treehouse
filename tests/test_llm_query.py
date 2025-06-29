@@ -3,6 +3,7 @@
 llm_query 模块的单元测试
 """
 
+import datetime
 import json
 import logging
 import os
@@ -70,6 +71,7 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def tearDown(self):
         """清理测试环境"""
+        # 恢复原始工作目录
         os.chdir(self.original_cwd)
         # 使用 shutil.rmtree 更安全地删除目录及其内容
         import shutil
@@ -1046,6 +1048,8 @@ class TestModelSwitch(unittest.TestCase):
                 model_name="model1",
                 max_context_size=4096,
                 temperature=0.7,
+                price_1M_input=1.0,
+                price_1M_output=2.0,
             ),
             "model2": ModelConfig(
                 key="key2",
@@ -1053,6 +1057,8 @@ class TestModelSwitch(unittest.TestCase):
                 model_name="model2",
                 max_context_size=4096,
                 temperature=0.7,
+                price_1M_input=1.0,
+                price_1M_output=2.0,
             ),
         }
 
@@ -1074,10 +1080,16 @@ class TestModelSwitch(unittest.TestCase):
                 "key": config.key,
                 "base_url": config.base_url,
                 "model_name": config.model_name,
+                "tokenizer_name": config.tokenizer_name,
                 "max_context_size": config.max_context_size,
                 "temperature": config.temperature,
                 "is_thinking": config.is_thinking,
                 "max_tokens": config.max_tokens,
+                "thinking_budget": config.thinking_budget,
+                "top_k": config.top_k,
+                "top_p": config.top_p,
+                "price_1M_input": config.price_1M_input,
+                "price_1M_output": config.price_1M_output,
             }
             for name, config in (content or self.valid_config).items()
         }
@@ -1207,31 +1219,44 @@ class TestModelSwitch(unittest.TestCase):
     def test_api_query_with_retry(self, mock_query):
         """测试API调用重试机制"""
         time.sleep = lambda x: 0  # Mock sleep function
+        # 设置模拟API返回值包含完整结构
         mock_query.side_effect = [
             Exception("First fail"),
             Exception("Second fail"),
-            {"success": True},
+            {"choices": [{"message": {"content": "success"}}]},
         ]
 
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+        # 删除无效的switch.config赋值
 
         result = switch.query("model1", "test prompt")
-        self.assertEqual(result, {"success": True})
+        self.assertEqual(result["choices"][0]["message"]["content"], "success")
         self.assertEqual(mock_query.call_count, 3)
 
     @patch("llm_query.query_gpt_api")
     def test_api_config_propagation(self, mock_query):
-        """测试API配置正确传递"""
-        mock_query.return_value = {"success": True}
+        """测试配置参数是否正确传播到API调用"""
+        # 设置模拟API返回值为完整结构
+        mock_query.return_value = {"choices": [{"message": {"content": "test response"}}]}
 
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
+        # 删除无效的switch.config赋值
 
+        # 执行查询并验证配置传播
         switch.query("model1", "test prompt")
-
-        self.assertEqual(switch.current_config.key, "key1")
-        self.assertEqual(switch.current_config.base_url, "http://api1")
+        mock_query.assert_called_once_with(
+            base_url="http://api1",
+            api_key="key1",
+            prompt="test prompt",
+            model="model1",
+            disable_conversation_history=True,
+            max_context_size=4096,
+            temperature=0.7,
+            enable_thinking=False,
+            thinking_budget=32768,
+            top_k=20,
+            top_p=0.95,
+        )
 
     @patch("llm_query.ModelSwitch.query")
     @patch("gpt_workflow.ArchitectMode.parse_response")
@@ -1376,6 +1401,8 @@ class TestModelSwitch(unittest.TestCase):
                 thinking_budget=65536,  # 测试thinking_budget
                 top_k=30,  # 测试top_k
                 top_p=0.8,  # 测试top_p
+                price_1M_input=1.0,
+                price_1M_output=2.0,
             )
         }
         switch = ModelSwitch()
@@ -1392,6 +1419,8 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_config.thinking_budget, 65536)  # 验证thinking_budget
         self.assertEqual(model_config.top_k, 30)  # 验证top_k
         self.assertAlmostEqual(model_config.top_p, 0.8)  # 验证top_p
+        self.assertEqual(model_config.price_1M_input, 1.0)
+        self.assertEqual(model_config.price_1M_output, 2.0)
 
     def tearDown(self) -> None:
         """清理测试环境"""
@@ -1411,6 +1440,7 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_config.key, "min_key")
         self.assertEqual(model_config.base_url, "http://min")
         self.assertEqual(model_config.model_name, "min")
+        self.assertEqual(model_config.tokenizer_name, "min")
         self.assertEqual(model_config.max_context_size, None)
         self.assertEqual(model_config.temperature, 0.0)  # 来自ModelConfig类的默认值
         self.assertFalse(model_config.is_thinking)
@@ -1418,6 +1448,226 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_config.thinking_budget, 32768)  # 默认thinking_budget
         self.assertEqual(model_config.top_k, 20)  # 默认top_k
         self.assertAlmostEqual(model_config.top_p, 0.95)  # 默认top_p
+        self.assertIsNone(model_config.price_1M_input)
+        self.assertIsNone(model_config.price_1M_output)
+
+    @patch("builtins.print")
+    def test_calculate_cost(self, mock_print):
+        """测试费用计算逻辑"""
+        # 创建带价格的配置
+        config = ModelConfig(
+            key="test_key",
+            base_url="http://test",
+            model_name="test",
+            price_1M_input=10.0,  # 每百万输入token $10
+            price_1M_output=20.0,  # 每百万输出token $20
+        )
+
+        switch = ModelSwitch()
+
+        # 测试输入输出费用计算
+        cost = switch._calculate_cost(500_000, 250_000, config)
+        self.assertAlmostEqual(cost, (0.5 * 10) + (0.25 * 20))  # $5 + $5 = $10
+        self.assertEqual(mock_print.call_count, 1)  # 应打印警告
+        mock_print.reset_mock()  # 重置mock状态
+
+        # 修正：使用低于阈值的token数量
+        cost = switch._calculate_cost(50_000, 5_000, config)  # $0.5 + $0.1 = $0.6
+        mock_print.assert_not_called()
+        mock_print.reset_mock()
+
+        # 边界值测试(0.69999美元)
+        cost = switch._calculate_cost(69_999, 0, config)  # $0.69999
+        mock_print.assert_not_called()
+        mock_print.reset_mock()
+
+        # 边界值测试(0.70001美元)
+        cost = switch._calculate_cost(70_001, 0, config)  # $0.70001
+        mock_print.assert_called_once()
+        mock_print.reset_mock()
+
+        # 超过阈值应打印警告
+        cost = switch._calculate_cost(800_000, 400_000, config)  # $8 + $8 = $16
+        mock_print.assert_called_once()
+        mock_print.reset_mock()
+
+        # 测试无价格配置
+        config.price_1M_input = None
+        config.price_1M_output = None
+        cost = switch._calculate_cost(1_000_000, 500_000, config)
+        self.assertEqual(cost, 0.0)
+        mock_print.assert_not_called()
+
+    @patch("llm_query.ModelSwitch._save_usage_to_file")
+    def test_record_usage(self, mock_save):
+        """测试使用记录功能"""
+        switch = ModelSwitch()
+        # 确保mock应用到实例
+        switch._save_usage_to_file = mock_save
+
+        switch._config_cache = {
+            "model1": ModelConfig(
+                key="key1",
+                base_url="url1",
+                model_name="model1",
+                price_1M_input=5.0,
+                price_1M_output=15.0,
+            )
+        }
+
+        # 清空使用记录，确保测试环境干净
+        switch._usage_records = {}
+
+        # 第一次调用
+        switch._record_usage("model1", 200_000, 100_000)
+        today = datetime.date.today().isoformat()
+
+        # 验证记录内容
+        daily = switch._usage_records[today]
+        self.assertEqual(daily["total_input_tokens"], 200_000)
+        self.assertEqual(daily["total_output_tokens"], 100_000)
+        self.assertAlmostEqual(daily["total_cost"], (0.2 * 5) + (0.1 * 15))  # $1 + $1.5 = $2.5
+
+        model_record = daily["models"]["model1"]
+        self.assertEqual(model_record["input_tokens"], 200_000)
+        self.assertEqual(model_record["output_tokens"], 100_000)
+        self.assertAlmostEqual(model_record["cost"], 2.5)
+        self.assertEqual(model_record["count"], 1)
+
+        # 第二次调用
+        switch._record_usage("model1", 300_000, 150_000)
+
+        # 验证累加
+        self.assertEqual(daily["total_input_tokens"], 500_000)
+        self.assertEqual(daily["total_output_tokens"], 250_000)
+        self.assertAlmostEqual(daily["total_cost"], 2.5 + (0.3 * 5) + (0.15 * 15))  # $2.5 + $1.5 + $2.25 = $6.25
+
+        model_record = daily["models"]["model1"]
+        self.assertEqual(model_record["count"], 2)
+        self.assertEqual(model_record["input_tokens"], 500_000)
+        self.assertEqual(model_record["output_tokens"], 250_000)
+        self.assertAlmostEqual(model_record["cost"], 6.25)
+
+        # 验证保存调用
+        self.assertEqual(mock_save.call_count, 2)
+
+    def test_record_usage_multiple_models(self):
+        """测试多模型使用记录"""
+        switch = ModelSwitch()
+        # 清空使用记录，避免历史数据影响
+        switch._usage_records = {}
+
+        switch._config_cache = {
+            "modelA": ModelConfig(
+                key="keyA",
+                base_url="urlA",
+                model_name="modelA",
+                price_1M_input=10.0,
+                price_1M_output=20.0,
+            ),
+            "modelB": ModelConfig(
+                key="keyB",
+                base_url="urlB",
+                model_name="modelB",
+                price_1M_input=5.0,
+                price_1M_output=10.0,
+            ),
+        }
+
+        # 记录不同模型的使用
+        switch._record_usage("modelA", 100_000, 50_000)
+        switch._record_usage("modelB", 200_000, 100_000)
+        switch._record_usage("modelA", 50_000, 25_000)
+
+        today = datetime.date.today().isoformat()
+        daily = switch._usage_records[today]
+
+        # 验证总使用量
+        self.assertEqual(daily["total_input_tokens"], 350_000)
+        self.assertEqual(daily["total_output_tokens"], 175_000)
+        self.assertAlmostEqual(
+            daily["total_cost"],
+            (0.15 * 10 + 0.075 * 20)  # modelA: $1.5 + $1.5 = $3
+            + (0.2 * 5 + 0.1 * 10),  # modelB: $1 + $1 = $2
+            places=2,
+        )
+
+        # 验证模型A记录
+        modelA = daily["models"]["modelA"]
+        self.assertEqual(modelA["count"], 2)
+        self.assertEqual(modelA["input_tokens"], 150_000)
+        self.assertEqual(modelA["output_tokens"], 75_000)
+        self.assertAlmostEqual(modelA["cost"], 3.0)
+
+        # 验证模型B记录
+        modelB = daily["models"]["modelB"]
+        self.assertEqual(modelB["count"], 1)
+        self.assertEqual(modelB["input_tokens"], 200_000)
+        self.assertEqual(modelB["output_tokens"], 100_000)
+        self.assertAlmostEqual(modelB["cost"], 2.0)
+
+    @patch("builtins.open")
+    @patch("yaml.safe_dump")
+    @patch("yaml.safe_load")
+    def test_usage_file_persistence(self, mock_load, mock_dump, mock_open):
+        """测试使用记录的持久化存储"""
+        # 模拟空文件
+        mock_load.return_value = None
+
+        switch = ModelSwitch()
+        self.assertEqual(switch._usage_records, {})
+
+        # 添加使用记录
+        switch._config_cache = {
+            "model1": ModelConfig(
+                key="key1", base_url="url1", model_name="model1", price_1M_input=5.0, price_1M_output=15.0
+            )
+        }
+
+        # 记录两次使用
+        switch._record_usage("model1", 100_000, 50_000)
+        switch._record_usage("model1", 200_000, 100_000)
+
+        # 修复：应为两次调用（原测试错误断言为1次）
+        self.assertEqual(mock_dump.call_count, 2)
+
+        # 获取保存的数据
+        saved_data = mock_dump.call_args[0][0]
+        today = datetime.date.today().isoformat()
+        self.assertIn(today, saved_data)
+
+        # 验证数据结构
+        daily = saved_data[today]
+        self.assertEqual(daily["total_input_tokens"], 300_000)
+        self.assertEqual(daily["total_output_tokens"], 150_000)
+        self.assertAlmostEqual(daily["total_cost"], (0.3 * 5) + (0.15 * 15))  # $1.5 + $2.25 = $3.75)
+
+        # 验证模型记录
+        model_record = daily["models"]["model1"]
+        self.assertEqual(model_record["count"], 2)
+        self.assertEqual(model_record["input_tokens"], 300_000)
+        self.assertEqual(model_record["output_tokens"], 150_000)
+        self.assertAlmostEqual(model_record["cost"], 3.75)
+
+        # 模拟重新加载
+        mock_load.return_value = saved_data
+        new_switch = ModelSwitch()
+
+        # 验证加载的数据
+        self.assertIn(today, new_switch._usage_records)
+        daily = new_switch._usage_records[today]
+        self.assertEqual(daily["total_input_tokens"], 300_000)
+        self.assertEqual(daily["total_output_tokens"], 150_000)
+        self.assertAlmostEqual(daily["total_cost"], 3.75)
+
+        # 添加新记录
+        new_switch._record_usage("model1", 50_000, 25_000)
+
+        # 验证仅当天的记录
+        self.assertEqual(len(new_switch._usage_records), 1)
+        daily = list(new_switch._usage_records.values())[0]
+        self.assertEqual(daily["total_input_tokens"], 350_000)
+        self.assertEqual(daily["total_output_tokens"], 175_000)
 
 
 class TestChatbotUI(unittest.TestCase):

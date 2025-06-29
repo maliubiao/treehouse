@@ -709,7 +709,7 @@ class ParserUtil:
         code_map: dict,
         locations: list[tuple[int, int]],
         max_context_size: int = 16 * 1024,
-        include_class_context: bool = False,
+        include_class_context: bool = True,
     ) -> dict[str, dict]:
         """批量处理位置并返回符号名到符号信息的映射"""
         return self.code_map_builder.find_symbols_for_locations(
@@ -1609,7 +1609,7 @@ class CodeMapBuilder:
         code_map: dict,
         locations: list[tuple[int, int]],
         max_context_size: int = 16 * 1024,
-        include_class_context: bool = False,
+        include_class_context: bool = True,
     ) -> dict[str, dict]:
         """批量处理位置并返回符号名到符号信息的映射"""
         sorted_symbols = sorted(

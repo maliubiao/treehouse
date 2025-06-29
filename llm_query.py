@@ -64,45 +64,56 @@ class ModelConfig:
     key: str
     base_url: str
     model_name: str
+    tokenizer_name: str  # 新增tokenizer_name字段
     max_context_size: int | None = None
     temperature: float = 0.0
     is_thinking: bool = False
     max_tokens: int | None = None
-    thinking_budget: int = 32768  # 新增thinking_budget字段，默认32k
-    top_k: int = 20  # 新增top_k字段，默认20
-    top_p: float = 0.95  # 新增top_p字段，默认0.95
+    thinking_budget: int = 32768
+    top_k: int = 20
+    top_p: float = 0.95
+    price_1M_input: float | None = None
+    price_1M_output: float | None = None
 
     def __init__(
         self,
         key: str,
         base_url: str,
         model_name: str,
+        tokenizer_name: str | None = None,  # 新增参数
         max_context_size: int | None = None,
         temperature: float = 0.0,
         is_thinking: bool = False,
         max_tokens: int | None = None,
-        thinking_budget: int = 32768,  # 添加thinking_budget参数
-        top_k: int = 20,  # 新增top_k参数
-        top_p: float = 0.95,  # 新增top_p参数
+        thinking_budget: int = 32768,
+        top_k: int = 20,
+        top_p: float = 0.95,
+        price_1M_input: float | None = None,
+        price_1M_output: float | None = None,
     ):
         self.key = key
         self.base_url = base_url
         self.model_name = model_name
+        self.tokenizer_name = tokenizer_name or model_name  # 默认使用model_name
         self.max_context_size = max_context_size
         self.temperature = temperature
         self.is_thinking = is_thinking
         self.max_tokens = max_tokens
-        self.thinking_budget = thinking_budget  # 初始化thinking_budget
+        self.thinking_budget = thinking_budget
         self.top_k = top_k
         self.top_p = top_p
+        self.price_1M_input = price_1M_input
+        self.price_1M_output = price_1M_output
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
         return (
             f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
+            f"tokenizer_name={self.tokenizer_name!r}, "  # 新增字段
             f"max_context_size={self.max_context_size}, temperature={self.temperature}, "
             f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, "
             f"thinking_budget={self.thinking_budget}, top_k={self.top_k}, top_p={self.top_p}, "
+            f"price_1M_input={self.price_1M_input}, price_1M_output={self.price_1M_output}, "
             f"key={masked_key})"
         )
 
@@ -111,13 +122,16 @@ class ModelConfig:
         return {
             "base_url": self.base_url,
             "model_name": self.model_name,
+            "tokenizer_name": self.tokenizer_name,  # 新增字段
             "max_context_size": self.max_context_size,
             "temperature": self.temperature,
             "is_thinking": self.is_thinking,
             "max_tokens": self.max_tokens,
-            "thinking_budget": self.thinking_budget,  # 添加thinking_budget到调试信息
+            "thinking_budget": self.thinking_budget,
             "top_k": self.top_k,
             "top_p": self.top_p,
+            "price_1M_input": self.price_1M_input,
+            "price_1M_output": self.price_1M_output,
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -141,13 +155,17 @@ class ModelConfig:
         if not model_name:
             raise ValueError("环境变量GPT_MODEL未设置")
 
+        tokenizer_name = os.environ.get("GPT_TOKENIZER")  # 新增环境变量
+
         max_context_size = os.environ.get("GPT_MAX_CONTEXT_SIZE")
         temperature = os.environ.get("GPT_TEMPERATURE")
         is_thinking = os.environ.get("GPT_IS_THINKING")
         max_tokens = os.environ.get("GPT_MAX_TOKENS")
-        thinking_budget = os.environ.get("GPT_THINKING_BUDGET")  # 新增环境变量获取
-        top_k = os.environ.get("GPT_TOP_K")  # 新增top_k环境变量获取
-        top_p = os.environ.get("GPT_TOP_P")  # 新增top_p环境变量获取
+        thinking_budget = os.environ.get("GPT_THINKING_BUDGET")
+        top_k = os.environ.get("GPT_TOP_K")
+        top_p = os.environ.get("GPT_TOP_P")
+        price_1M_input = os.environ.get("GPT_PRICE_INPUT")
+        price_1M_output = os.environ.get("GPT_PRICE_OUTPUT")
 
         if max_context_size is not None:
             try:
@@ -173,31 +191,44 @@ class ModelConfig:
             raise ValueError(f"无效的max_tokens值: {max_tokens}") from exc
 
         try:
-            thinking_budget = int(thinking_budget) if thinking_budget is not None else 32768  # 默认32k
+            thinking_budget = int(thinking_budget) if thinking_budget is not None else 32768
         except ValueError as exc:
             raise ValueError(f"无效的thinking_budget值: {thinking_budget}") from exc
 
         try:
-            top_k = int(top_k) if top_k is not None else 20  # 默认20
+            top_k = int(top_k) if top_k is not None else 20
         except ValueError as exc:
             raise ValueError(f"无效的top_k值: {top_k}") from exc
 
         try:
-            top_p = float(top_p) if top_p is not None else 0.95  # 默认0.95
+            top_p = float(top_p) if top_p is not None else 0.95
         except ValueError as exc:
             raise ValueError(f"无效的top_p值: {top_p}") from exc
+
+        try:
+            price_1M_input = float(price_1M_input) if price_1M_input is not None else None
+        except ValueError as exc:
+            raise ValueError(f"无效的price_1M_input值: {price_1M_input}") from exc
+
+        try:
+            price_1M_output = float(price_1M_output) if price_1M_output is not None else None
+        except ValueError as exc:
+            raise ValueError(f"无效的price_1M_output值: {price_1M_output}") from exc
 
         return cls(
             key=key,
             base_url=base_url,
             model_name=model_name,
+            tokenizer_name=tokenizer_name,  # 新增参数
             max_context_size=max_context_size,
             temperature=temperature,
             is_thinking=is_thinking,
             max_tokens=max_tokens,
-            thinking_budget=thinking_budget,  # 添加thinking_budget参数
-            top_k=top_k,  # 添加top_k参数
-            top_p=top_p,  # 添加top_p参数
+            thinking_budget=thinking_budget,
+            top_k=top_k,
+            top_p=top_p,
+            price_1M_input=price_1M_input,
+            price_1M_output=price_1M_output,
         )
 
 
@@ -3581,6 +3612,22 @@ class ModelSwitch:
         self.current_config: Optional[ModelConfig] = None
         self.workflow = import_relative("gpt_workflow")
         self.model_name = ""
+        self._usage_records = {}  # 新增计费记录
+        self._usage_file = os.path.join(os.path.dirname(__file__), ".model_usage.yaml")
+        self._load_usage_from_file()  # 初始化时加载历史记录
+        try:
+            from colorama import Fore, Style, init
+
+            init(autoreset=True)
+            self.Fore = Fore
+            self.Style = Style
+        except ImportError:
+            # 回退模式
+            class DummyColor:
+                def __getattr__(self, name):
+                    return ""
+
+            self.Fore = self.Style = DummyColor()
 
     def models(self) -> list[str]:
         """
@@ -3602,13 +3649,16 @@ class ModelSwitch:
             key=config_dict["key"],
             base_url=config_dict["base_url"],
             model_name=config_dict["model_name"],
+            tokenizer_name=config_dict.get("tokenizer_name"),
             max_context_size=config_dict.get("max_context_size"),
-            temperature=config_dict.get("temperature", 0.6),
+            temperature=config_dict.get("temperature", 0.0),
             is_thinking=config_dict.get("is_thinking", False),
             max_tokens=config_dict.get("max_tokens"),
             thinking_budget=config_dict.get("thinking_budget", 32768),
             top_k=config_dict.get("top_k", 20),
             top_p=config_dict.get("top_p", 0.95),
+            price_1M_input=config_dict.get("price_1M_input"),
+            price_1M_output=config_dict.get("price_1M_output"),
         )
 
     def _get_config(self) -> dict[str, ModelConfig]:
@@ -3652,7 +3702,9 @@ class ModelSwitch:
                 base_url="http://test",
                 model_name="test",
                 max_context_size=8192,
-                temperature=0.6,
+                temperature=0.0,
+                price_1M_input=0.5,
+                price_1M_output=1.5,
             )
         }
 
@@ -3769,27 +3821,7 @@ class ModelSwitch:
         self.model_name = model_name
         globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
-    def query_for_text(self, model_name: str, prompt: str, **kwargs) -> dict:
-        """根据模型名称查询API并返回文本结果，支持缓存功能
-
-        该方法基于提供的模型名称和提示文本查询AI模型API，并返回文本响应。
-        支持缓存机制以避免重复请求，使用CRC32哈希值来标识不同的提示。
-
-        参数:
-            model_name (str): 要查询的AI模型名称
-            prompt (str): 发送给模型的提示文本
-            **kwargs: 额外参数，支持的选项包括:
-                - hint (str): 提示的额外描述信息，用于缓存记录
-                - ignore_cache (bool): 是否忽略缓存直接请求API
-                - no_cache_prompt_file (list): 不应缓存的提示文件列表
-                - skip_crc32 (list): 要跳过的提示CRC32哈希值列表
-
-        返回:
-            str: 模型生成的文本响应
-
-        注意:
-            缓存文件保存在"prompt_cache"目录中，格式为"时间戳_CRC32.json"
-        """
+    def query_for_text(self, model_name: str, prompt: str, use_cache: bool = True, **kwargs) -> dict:
         """根据模型名称查询API并返回文本结果，支持缓存功能"""
         cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
         os.makedirs(cache_dir, exist_ok=True)
@@ -3806,8 +3838,10 @@ class ModelSwitch:
         cache_path = os.path.join(cache_dir, cache_filename)
 
         # 检查缓存
-        if not kwargs.get("ignore_cache") and not self._should_skip_cache(
-            kwargs.get("no_cache_prompt_file", []), cache_filename
+        if (
+            use_cache
+            and not kwargs.get("ignore_cache")
+            and not self._should_skip_cache(kwargs.get("no_cache_prompt_file", []), cache_filename)
         ):
             cached_response = self._check_cache(prompt_crc32, cache_dir)
             if cached_response:
@@ -3819,17 +3853,18 @@ class ModelSwitch:
         response_text = response["choices"][0]["message"]["content"]
 
         # 保存到缓存
-        cache_data = {
-            "prompt": prompt,
-            "response_text": response_text,
-            "crc32": prompt_crc32,
-            "timestamp": current_time.isoformat(),
-            "hint": hint,
-            "model_name": model_name,
-            "kwargs": {k: v for k, v in kwargs.items() if k not in ["no_cache_prompt_file"]},
-        }
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f, indent=2)
+        if use_cache:
+            cache_data = {
+                "prompt": prompt,
+                "response_text": response_text,
+                "crc32": prompt_crc32,
+                "timestamp": current_time.isoformat(),
+                "hint": hint,
+                "model_name": model_name,
+                "kwargs": {k: v for k, v in kwargs.items() if k not in ["no_cache_prompt_file"]},
+            }
+            with open(cache_path, "w") as f:
+                json.dump(cache_data, f, indent=2)
         return response_text
 
     def _should_skip_cache(self, no_cache_files: List[str], cache_filename: str) -> bool:
@@ -3903,6 +3938,76 @@ class ModelSwitch:
                     continue
         return cache_info
 
+    def _calculate_cost(self, input_tokens: int, output_tokens: int, config: ModelConfig) -> float:
+        """计算API调用费用(美元)，精确到小数点后6位"""
+        # 计算每token费用
+        input_cost_per_token = (config.price_1M_input or 0) / 1_000_000
+        output_cost_per_token = (config.price_1M_output or 0) / 1_000_000
+
+        # 精确计算费用
+        input_cost = input_tokens * input_cost_per_token
+        output_cost = output_tokens * output_cost_per_token
+        total_cost = input_cost + output_cost
+        return total_cost
+
+    def _record_usage(self, model_name: str, input_tokens: int, output_tokens: int) -> float:
+        """记录API使用情况，精确计算费用并返回费用值"""
+        today = datetime.date.today().isoformat()
+        config = self._get_model_config(model_name)
+        cost = self._calculate_cost(input_tokens, output_tokens, config)
+
+        # 初始化当天记录
+        if today not in self._usage_records:
+            self._usage_records[today] = {
+                "total_cost": 0.0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "models": {},
+            }
+
+        # 更新总记录（使用浮点数精确累加）
+        self._usage_records[today]["total_cost"] += cost
+        self._usage_records[today]["total_input_tokens"] += input_tokens
+        self._usage_records[today]["total_output_tokens"] += output_tokens
+
+        # 更新模型记录
+        if model_name not in self._usage_records[today]["models"]:
+            self._usage_records[today]["models"][model_name] = {
+                "count": 0,
+                "cost": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+
+        model_record = self._usage_records[today]["models"][model_name]
+        model_record["count"] += 1
+        model_record["cost"] += cost
+        model_record["input_tokens"] += input_tokens
+        model_record["output_tokens"] += output_tokens
+
+        self._save_usage_to_file()
+        return cost
+
+    def _save_usage_to_file(self) -> None:
+        """将使用记录保存到文件"""
+        try:
+            with open(self._usage_file, "w") as f:
+                yaml.safe_dump(self._usage_records, f)
+        except Exception as e:
+            print(f"保存使用记录失败: {str(e)}")
+
+    def _load_usage_from_file(self) -> None:
+        """从文件加载历史使用记录"""
+        if not os.path.exists(self._usage_file):
+            return
+
+        try:
+            with open(self._usage_file, "r") as f:
+                self._usage_records = yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"加载使用记录失败: {str(e)}")
+            self._usage_records = {}
+
     def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> dict:
         """
         根据模型名称查询API
@@ -3923,6 +4028,12 @@ class ModelSwitch:
 
         config = self._get_model_config(model_name)
         self.current_config = config
+        tiktoken = __import__("tiktoken")
+        try:
+            encoding = tiktoken.encoding_for_model(config.tokenizer_name)
+        except KeyError:
+            encoding = tiktoken.encoding_for_model("gpt-4o")
+        input_tokens = len(encoding.encode(prompt))
 
         combined_kwargs = {
             "disable_conversation_history": disable_conversation_history,
@@ -3938,13 +4049,35 @@ class ModelSwitch:
         max_repeat = 3
         for i in range(max_repeat):
             try:
-                return query_gpt_api(
+                response = query_gpt_api(
                     base_url=config.base_url,
                     api_key=config.key,
                     prompt=prompt,
                     model=config.model_name,
                     **combined_kwargs,
                 )
+
+                # 回退到计算输出文本
+                content = response["choices"][0]["message"]["content"]
+                output_tokens = len(encoding.encode(content))
+
+                # 记录使用情况并显示消费信息
+                cost = self._record_usage(model_name, input_tokens, output_tokens)
+
+                # 显示消费信息（使用colorama优化UI）
+                if cost > 0:
+                    cost_cny = cost * 7  # 1美元≈7人民币
+                    cost_message = (
+                        f"{self.Fore.CYAN}API调用消费: "
+                        f"{self.Style.BRIGHT}${cost:.6f}{self.Style.RESET_ALL}{self.Fore.CYAN} "
+                        f"(≈¥{cost_cny:.2f}) | "
+                        f"输入Token: {self.Fore.GREEN}{input_tokens}{self.Fore.CYAN} | "
+                        f"输出Token: {self.Fore.GREEN}{output_tokens}{self.Fore.CYAN} | "
+                        f"模型: {self.Fore.YELLOW}{model_name}{self.Style.RESET_ALL}"
+                    )
+                    print(cost_message)
+
+                return response
             except Exception as e:
                 debug_info = f"API调用失败: {str(e)}\n当前配置状态: {self.current_config}"
                 print(debug_info)
