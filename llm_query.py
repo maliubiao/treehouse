@@ -3542,7 +3542,7 @@ def validate_files(program_args):
 def print_proxy_info(proxies, proxy_sources):
     """打印代理配置信息"""
     if proxies:
-        print("⚡ 检测到代理配置：")
+        print("⚡ 检测到代理：")
         max_len = max(len(p) for p in proxies)
         for protocol in sorted(proxies.keys()):
             source_var = proxy_sources.get(protocol, "unknown")
@@ -3550,7 +3550,7 @@ def print_proxy_info(proxies, proxy_sources):
             print(f"  ├─ {protocol.upper().ljust(max_len)} : {sanitized}")
             print(f"  └─ {'via'.ljust(max_len)} : {source_var}")
     else:
-        print("ℹ️ 未检测到代理配置")
+        print("ℹ️ 未检测到代理配置环境")
 
 
 def handle_ask_mode(program_args, proxies):
@@ -3760,6 +3760,8 @@ class ModelSwitch:
             top_p=config_dict.get("top_p", 0.95),
             price_1m_input=config_dict.get("price_1M_input"),
             price_1m_output=config_dict.get("price_1M_output"),
+            http_proxy=config_dict.get("http_proxy"),
+            https_proxy=config_dict.get("https_proxy"),
         )
 
     def _get_config(self) -> dict[str, ModelConfig]:
@@ -3827,7 +3829,6 @@ class ModelSwitch:
             "HTTP_PROXY": os.environ.get("HTTP_PROXY"),
             "HTTPS_PROXY": os.environ.get("HTTPS_PROXY"),
         }
-
         try:
             # 设置新的代理环境变量
             if config.http_proxy:
