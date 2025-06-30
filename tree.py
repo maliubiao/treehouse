@@ -2477,7 +2477,7 @@ class BlockPatch:
         for (start_pos, end_pos), old_content, _ in replacements:
             if start_pos != end_pos:  # 仅对非插入操作进行验证
                 selected = original_code[start_pos:end_pos]
-                if selected.decode("utf8").strip() != old_content.strip():
+                if selected.decode("utf8") != old_content:
                     raise ValueError(f"内容不匹配\n选中内容：{selected}\n传入内容：{old_content}")
 
         # 检查替换区间是否有重叠

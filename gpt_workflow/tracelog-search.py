@@ -500,7 +500,7 @@ class TraceLogSearcher:
         console.print("\n[bold blue]正在生成最终的分析报告总结...[/bold blue]")
         prompt = self._generate_summary_prompt(user_query, results)
 
-        raw_summary_response = self.model_switch.query_for_text(self.model_name, prompt, stream=True)
+        raw_summary_response = self.model_switch.query(self.model_name, prompt, stream=True)
 
         # Extract the actual summary from within the conclusion tags
         summary = self._parse_model_response(raw_summary_response).conclusion  # Re-using extract_block logic
@@ -534,7 +534,7 @@ class TraceLogSearcher:
         while True:
             prompt = self._build_prompt(self.state.user_query)
             print(prompt)
-            response_text = self.model_switch.query_for_text(self.model_name, prompt, stream=True)
+            response_text = self.model_switch.query(self.model_name, prompt, stream=True)
             try:
                 model_response = self._parse_model_response(response_text)
                 if model_response.command or model_response.solved:

@@ -174,7 +174,7 @@ class TraceAnalyzer:
 
         # 查询大模型
         try:
-            response = ModelSwitch().query_for_text(model_name=self.model_name, prompt=prompt, stream=False)
+            response = ModelSwitch().query(model_name=self.model_name, prompt=prompt, stream=False)
             return prompt, response
         except (ConnectionError, TimeoutError) as e:
             print(f"处理块 {chunk_idx} 时出错: {str(e)}")

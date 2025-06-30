@@ -141,7 +141,7 @@ class UnitTestGenerator:
         """).strip()
 
         print(Fore.CYAN + f"Querying LLM ({self.checker_model_name}) for file and class name suggestions...")
-        response_text = self.model_switch.query_for_text(self.checker_model_name, prompt, stream=False)
+        response_text = self.model_switch.query(self.checker_model_name, prompt, stream=False)
 
         try:
             # Extract JSON from markdown or raw response
@@ -234,7 +234,7 @@ class UnitTestGenerator:
         """).strip()
 
         print(Fore.YELLOW + f"Querying language model ({self.checker_model_name}) to merge test files...")
-        response_text = self.model_switch.query_for_text(self.checker_model_name, prompt, stream=False)
+        response_text = self.model_switch.query(self.checker_model_name, prompt, stream=False)
         return self._extract_code_from_response(response_text)
 
     def _generate_relative_sys_path_snippet(self, test_file_path: Path, project_root_path: Path) -> str:
@@ -702,7 +702,7 @@ class UnitTestGenerator:
                 existing_code=newly_generated_code,
             )
 
-            response_text = self.model_switch.query_for_text(self.generator_model_name, prompt, stream=False)
+            response_text = self.model_switch.query(self.generator_model_name, prompt, stream=False)
             extracted_code = self._extract_code_from_response(response_text)
 
             if extracted_code:

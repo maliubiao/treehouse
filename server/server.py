@@ -27,6 +27,8 @@ CACHE_DEFAULT_SECONDS = 60
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -166,26 +168,24 @@ class BrowserWebSocketHandler(websocket.WebSocketHandler):
                 await self._handle_html_response(data)
             elif data.get("type") == "selectorConfig":
                 logger.debug("🔄 处理selectorConfig消息")
-                print(data)
                 await self._handle_selector_config(data)
 
         except (json.JSONDecodeError, KeyError) as e:
             logger.error("🚨 处理消息出错: %s", str(e), exc_info=True)
 
     async def _handle_html_response(self, data):
-        logger.debug("📥 处理htmlResponse数据: %s", data)
         request_id = data.get("requestId")
-        logger.info("🆔 处理请求ID: %s", request_id)
+        content = data.get("content", "")
+        logger.info("✅ 请求 %s 结果已收到, 内容长度: %d", request_id, len(content))
         if request_id in pending_requests:
             logger.debug("📦 找到pending_requests中的请求: %s", request_id)
-            pending_requests[request_id].set_result(data["content"])
+            pending_requests[request_id].set_result(content)
             logger.info("✅ 请求 %s 已设置结果", request_id)
         else:
             logger.warning("⚠️ 未找到pending_requests中的请求: %s", request_id)
 
     async def _handle_selector_config(self, data):
-        logger.debug("📥 处理selectorConfig数据: %s", data)
-        logger.info("⚙️ 收到selector配置")
+        logger.debug("⚙️ 收到selector配置数据: %s", data)
         url = data.get("url")
         selector = data.get("selector")
         logger.debug("🔗 URL: %s, 选择器: %s", url, selector)
@@ -349,7 +349,7 @@ class ConvertHandler(web.RequestHandler):
             logger.info("🆔 生成请求ID: %s", request_id)
 
             try:
-                logger.info("📤 发送提取请求到浏览器，请求ID: %s", request_id)
+                logger.info("📤 正在转发提取请求到浏览器: (URL: %s, ID: %s)", url, request_id)
                 # 添加连接状态检查
                 if client.ws_connection is None or client.ws_connection.is_closing():
                     raise web.HTTPError(503, reason="WebSocket connection closed")

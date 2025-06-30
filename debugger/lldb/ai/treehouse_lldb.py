@@ -135,7 +135,7 @@ class GPTIntegrationService:
             clean_prompt = re.sub(r"\x1b\[[0-9;]*[mK]", "", clean_prompt)
             print(clean_prompt)
             os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
-            response_text = self.model_switch.query_for_text(
+            response_text = self.model_switch.query(
                 self.current_model,
                 clean_prompt,
                 disable_conversation_history=False,

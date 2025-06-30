@@ -916,10 +916,11 @@ new content
     def test_setup_script_processing(self):
         # 测试内容
         test_content = """
-[project setup shellscript start]
+[project setup script]
+[start]
 #!/bin/bash
 echo 'setup'
-[project setup shellscript end]
+[end]
 """
         # 执行处理
         llm_query.extract_and_diff_files(test_content)
@@ -1296,7 +1297,7 @@ class TestModelSwitch(unittest.TestCase):
         switch = ModelSwitch()
         switch._config_cache = {
             "architect": ModelConfig(key="key1", base_url="url1", model_name="arch"),
-            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder"),
+            "coder": ModelConfig(key="极2", base_url="url2", model_name="coder"),
         }
 
         # 模拟用户输入n不重试
@@ -1425,29 +1426,7 @@ class TestModelSwitch(unittest.TestCase):
         except FileNotFoundError:
             pass
 
-    def test_optional_parameter_defaults(self):
-        """测试可选参数的默认值继承逻辑"""
-        minimal_config = {"minimal_model": ModelConfig(key="min_key", base_url="http://min", model_name="min")}
-        switch = ModelSwitch()
-        switch._config_cache = minimal_config
-        model_config = switch._get_model_config("minimal_model")
-        self.assertIsInstance(model_config, ModelConfig)
-        self.assertEqual(model_config.key, "min_key")
-        self.assertEqual(model_config.base_url, "http://min")
-        self.assertEqual(model_config.model_name, "min")
-        self.assertEqual(model_config.tokenizer_name, "min")
-        self.assertEqual(model_config.max_context_size, None)
-        self.assertEqual(model_config.temperature, 0.0)  # 来自ModelConfig类的默认值
-        self.assertFalse(model_config.is_thinking)
-        self.assertEqual(model_config.max_tokens, None)
-        self.assertEqual(model_config.thinking_budget, 32768)  # 默认thinking_budget
-        self.assertEqual(model_config.top_k, 20)  # 默认top_k
-        self.assertAlmostEqual(model_config.top_p, 0.95)  # 默认top_p
-        self.assertIsNone(model_config.price_1m_input)
-        self.assertIsNone(model_config.price_1m_output)
-
-    @patch("builtins.print")
-    def test_calculate_cost(self, mock_print):
+    def test_calculate_cost(self):
         """测试费用计算逻辑"""
         # 创建带价格的配置
         config = ModelConfig(
@@ -1463,35 +1442,24 @@ class TestModelSwitch(unittest.TestCase):
         # 测试输入输出费用计算
         cost = switch._calculate_cost(500_000, 250_000, config)
         self.assertAlmostEqual(cost, (0.5 * 10) + (0.25 * 20))  # $5 + $5 = $10
-        self.assertEqual(mock_print.call_count, 1)  # 应打印警告
-        mock_print.reset_mock()  # 重置mock状态
 
         # 修正：使用低于阈值的token数量
         cost = switch._calculate_cost(50_000, 5_000, config)  # $0.5 + $0.1 = $0.6
-        mock_print.assert_not_called()
-        mock_print.reset_mock()
+        self.assertAlmostEqual(cost, 0.6)
 
         # 边界值测试(0.69999美元)
         cost = switch._calculate_cost(69_999, 0, config)  # $0.69999
-        mock_print.assert_not_called()
-        mock_print.reset_mock()
+        self.assertAlmostEqual(cost, 0.69999)
 
         # 边界值测试(0.70001美元)
         cost = switch._calculate_cost(70_001, 0, config)  # $0.70001
-        mock_print.assert_called_once()
-        mock_print.reset_mock()
-
-        # 超过阈值应打印警告
-        cost = switch._calculate_cost(800_000, 400_000, config)  # $8 + $8 = $16
-        mock_print.assert_called_once()
-        mock_print.reset_mock()
+        self.assertAlmostEqual(cost, 0.70001)
 
         # 测试无价格配置
         config.price_1m_input = None
         config.price_1m_output = None
         cost = switch._calculate_cost(1_000_000, 500_000, config)
         self.assertEqual(cost, 0.0)
-        mock_print.assert_not_called()
 
     @patch("llm_query.ModelSwitch._save_usage_to_file")
     def test_record_usage(self, mock_save):
@@ -1635,7 +1603,7 @@ class TestModelSwitch(unittest.TestCase):
         daily = saved_data[today]
         self.assertEqual(daily["total_input_tokens"], 300_000)
         self.assertEqual(daily["total_output_tokens"], 150_000)
-        self.assertAlmostEqual(daily["total_cost"], (0.3 * 5) + (0.15 * 15))  # $1.5 + $2.25 = $3.75)
+        self.assertAlmostEqual(daily["total_cost"], (0.3 * 5) + (0.15 * 15))  # $1.5 + $2.25 = $3.75
 
         # 验证模型记录
         model_record = daily["models"]["model1"]

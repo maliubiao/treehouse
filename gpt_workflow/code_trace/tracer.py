@@ -112,7 +112,7 @@ class CodeTracer:
 
         print(f"Submitting batch symbols count: {len(batch)}")
         future = self.executor.submit(
-            self.model_switch.query_for_text,
+            self.model_switch.query,
             model_name="hyperbolic-r1",
             prompt=batch_prompt,
             disable_conversation_history=True,

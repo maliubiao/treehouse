@@ -480,11 +480,13 @@
 
       // 验证CSS选择器
       try {
+        if (!cssQuery) throw new Error("Selector cannot be empty");
         const elements = document.querySelectorAll(cssQuery);
         if (elements.length === 0) {
           throw new Error("No matching elements");
         }
       } catch (error) {
+        console.error("CSS选择器验证失败:", error.message);
         panel.querySelector(`#${prefix}cssQueryInput`).style.border =
           "1px solid red";
         setTimeout(() => {
@@ -502,24 +504,18 @@
         },
         (response) => {
           if (chrome.runtime.lastError) {
-            console.error("保存失败:", chrome.runtime.lastError);
-            // 保存失败时按钮变红
+            console.error("🚨 保存配置失败:", chrome.runtime.lastError.message);
             saveBtn.style.backgroundColor = "#ff4444";
             saveBtn.textContent = "❌ 保存失败";
-            setTimeout(() => {
-              saveBtn.style.backgroundColor = "";
-              saveBtn.textContent = "💾 保存配置";
-            }, 2000);
           } else {
-            console.log("保存成功");
-            // 保存成功时按钮变绿
+            console.log("✅ 配置已成功发送到后台。");
             saveBtn.style.backgroundColor = "#4CAF50";
             saveBtn.textContent = "✅ 保存成功";
-            setTimeout(() => {
-              saveBtn.style.backgroundColor = "";
-              saveBtn.textContent = "💾 保存配置";
-            }, 2000);
           }
+          setTimeout(() => {
+            saveBtn.style.backgroundColor = "#4CAF50";
+            saveBtn.textContent = "💾保存配置";
+          }, 2000);
         },
       );
     });

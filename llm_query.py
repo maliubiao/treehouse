@@ -7,6 +7,7 @@ LLM 查询工具模块
 """
 
 import argparse
+import contextlib
 import datetime
 import difflib
 import fnmatch
@@ -75,6 +76,8 @@ class ModelConfig:
     top_p: float = 0.95
     price_1m_input: float | None = None
     price_1m_output: float | None = None
+    http_proxy: str | None = None  # 新增HTTP代理字段
+    https_proxy: str | None = None  # 新增HTTPS代理字段
 
     def __init__(
         self,
@@ -91,6 +94,8 @@ class ModelConfig:
         top_p: float = 0.95,
         price_1m_input: float | None = None,
         price_1m_output: float | None = None,
+        http_proxy: str | None = None,  # 新增参数
+        https_proxy: str | None = None,  # 新增参数
     ):
         self.key = key
         self.base_url = base_url
@@ -105,6 +110,8 @@ class ModelConfig:
         self.top_p = top_p
         self.price_1m_input = price_1m_input
         self.price_1m_output = price_1m_output
+        self.http_proxy = http_proxy  # 初始化HTTP代理
+        self.https_proxy = https_proxy  # 初始化HTTPS代理
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
@@ -115,6 +122,7 @@ class ModelConfig:
             f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, "
             f"thinking_budget={self.thinking_budget}, top_k={self.top_k}, top_p={self.top_p}, "
             f"price_1M_input={self.price_1m_input}, price_1M_output={self.price_1m_output}, "
+            f"http_proxy={self.http_proxy}, https_proxy={self.https_proxy}, "  # 新增字段
             f"key={masked_key})"
         )
 
@@ -133,6 +141,8 @@ class ModelConfig:
             "top_p": self.top_p,
             "price_1M_input": self.price_1m_input,
             "price_1M_output": self.price_1m_output,
+            "http_proxy": self.http_proxy,  # 新增字段
+            "https_proxy": self.https_proxy,  # 新增字段
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -167,6 +177,10 @@ class ModelConfig:
         top_p = os.environ.get("GPT_TOP_P")
         price_1M_input = os.environ.get("GPT_PRICE_INPUT")
         price_1M_output = os.environ.get("GPT_PRICE_OUTPUT")
+
+        # 从环境变量加载代理设置
+        http_proxy = os.environ.get("HTTP_PROXY")
+        https_proxy = os.environ.get("HTTPS_PROXY")
 
         if max_context_size is not None:
             try:
@@ -230,6 +244,8 @@ class ModelConfig:
             top_p=top_p,
             price_1M_input=price_1M_input,
             price_1M_output=price_1M_output,
+            http_proxy=http_proxy,  # 传递HTTP代理
+            https_proxy=https_proxy,  # 传递HTTPS代理
         )
 
 
@@ -3092,9 +3108,7 @@ class PatchPromptBuilder:
             self.tokens_left -= len(prompt)
 
         file_range_prompt = self._build_file_range_prompt()
-        example_prompt = f"""
-{get_patch_prompt_output(self.use_patch, self.file_ranges, dumb_prompt=DUMB_EXAMPLE_A if not GLOBAL_MODEL_CONFIG.is_thinking else "")}
-"""
+        example_prompt = ""
         user_prompt = ""
         # 添加用户需求
         if user_requirement:
@@ -3805,6 +3819,35 @@ class ModelSwitch:
             raise ValueError(error_msg)
         return config[model_name]
 
+    @contextlib.contextmanager
+    def _temp_env_vars(self, config: ModelConfig):
+        """临时设置模型配置相关的环境变量"""
+        # 保存当前环境变量
+        old_env = {
+            "HTTP_PROXY": os.environ.get("HTTP_PROXY"),
+            "HTTPS_PROXY": os.environ.get("HTTPS_PROXY"),
+        }
+
+        try:
+            # 设置新的代理环境变量
+            if config.http_proxy:
+                os.environ["HTTP_PROXY"] = config.http_proxy
+            if config.https_proxy:
+                os.environ["HTTPS_PROXY"] = config.https_proxy
+
+            yield  # 执行请求
+        finally:
+            # 恢复原始环境变量
+            if old_env["HTTP_PROXY"] is not None:
+                os.environ["HTTP_PROXY"] = old_env["HTTP_PROXY"]
+            else:
+                os.environ.pop("HTTP_PROXY", None)
+
+            if old_env["HTTPS_PROXY"] is not None:
+                os.environ["HTTPS_PROXY"] = old_env["HTTPS_PROXY"]
+            else:
+                os.environ.pop("HTTPS_PROXY", None)
+
     def execute_workflow(
         self,
         architect_model: str,
@@ -3839,8 +3882,11 @@ class ModelSwitch:
         )
         architect_prompt += f"\n{text}"
 
-        # 获取架构师响应
-        architect_response = self.query(architect_model, architect_prompt)
+        # 使用临时环境变量执行架构师请求
+        with self._temp_env_vars(architect_config):
+            # 获取架构师响应
+            architect_response = self.query(architect_model, architect_prompt)
+
         parsed = self.workflow.ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
 
         # 处理编码任务
@@ -3850,7 +3896,9 @@ class ModelSwitch:
             coder_prompt = Path(os.path.join(os.path.dirname(__file__), "prompts/coder")).read_text(encoding="utf-8")
 
             for job in parsed["jobs"]:
-                results.append(self._process_coder_job(job, coder_model, coder_config, coder_prompt, prompt))
+                # 使用临时环境变量执行编码任务
+                with self._temp_env_vars(coder_config):
+                    results.append(self._process_coder_job(job, coder_model, coder_config, coder_prompt, prompt))
 
         return results
 
@@ -3948,7 +3996,7 @@ class ModelSwitch:
         return cost
 
     def _save_usage_to_file(self) -> None:
-        """将使用记录保存到文件"""
+        """将使用记录保存到文件（与当前文件同目录）"""
         try:
             with open(self._usage_file, "w") as f:
                 yaml.safe_dump(self._usage_records, f)
@@ -3956,7 +4004,7 @@ class ModelSwitch:
             print(f"保存使用记录失败: {str(e)}")
 
     def _load_usage_from_file(self) -> None:
-        """从文件加载历史使用记录"""
+        """从文件加载历史使用记录（与当前文件同目录）"""
         if not os.path.exists(self._usage_file):
             return
 
@@ -3966,6 +4014,83 @@ class ModelSwitch:
         except Exception as e:
             print(f"加载使用记录失败: {str(e)}")
             self._usage_records = {}
+
+    def _record_usage_and_display(self, model_name: str, response: dict) -> None:
+        """记录API使用情况并显示消费信息"""
+        usage_data = response.get("usage", {})
+        if not usage_data:
+            return
+
+        input_tokens = usage_data["prompt_tokens"]
+        output_tokens = usage_data["completion_tokens"]
+        cost = self._record_usage(model_name, input_tokens, output_tokens)
+
+        if cost <= 0:
+            return
+
+        # 计算人民币成本
+        cost_cny = cost * 7  # 1美元≈7人民币
+        today = datetime.date.today().isoformat()
+        accumulated_cost = 0.0
+
+        # 获取当天累计消费
+        if today in self._usage_records:
+            model_record = self._usage_records[today]["models"].get(model_name)
+            if model_record:
+                accumulated_cost = model_record["cost"]
+
+        # 显示消费信息
+        cost_message = (
+            f"{Fore.CYAN}API调用消费: "
+            f"{ColorStyle.BRIGHT}${cost:.6f}{ColorStyle.RESET_ALL}{Fore.CYAN} "
+            f"(≈¥{cost_cny:.2f}) | "
+            f"输入Token: {Fore.GREEN}{input_tokens}{Fore.CYAN} | "
+            f"输出Token: {Fore.GREEN}{output_tokens}{Fore.CYAN} | "
+            f"模型: {Fore.YELLOW}{model_name}{ColorStyle.RESET_ALL} | "
+            f"今天累计: ${accumulated_cost:.6f}"
+        )
+        print(cost_message)
+
+        # 单次请求费用超过5元人民币警告
+        if not self.test_mode and cost_cny > 5.0:
+            warning_msg = (
+                f"{Fore.RED}{ColorStyle.BRIGHT}警告：单次请求费用超过5元人民币！"
+                f"({cost_cny:.2f}元){ColorStyle.RESET_ALL}"
+            )
+            print(warning_msg)
+            print(f"{Fore.RED}请确认是否继续执行大模型请求{ColorStyle.RESET_ALL}")
+
+    def _execute_query(self, config: ModelConfig, prompt: str, **kwargs) -> dict:
+        """执行单次API查询"""
+        with self._temp_env_vars(config):
+            response = query_gpt_api(
+                base_url=config.base_url, api_key=config.key, prompt=prompt, model=config.model_name, **kwargs
+            )
+        return response
+
+    def _retry_query(
+        self,
+        config: ModelConfig,
+        model_name: str,
+        prompt: str,
+        kwargs: dict,
+        max_retries: int = 3,
+        retry_delay: int = 5,
+    ) -> dict:
+        """带重试机制的API查询"""
+        for attempt in range(max_retries):
+            try:
+                response = self._execute_query(config, prompt, **kwargs)
+                return response
+            except Exception as e:
+                debug_info = f"API调用失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}\n当前配置状态: {config}"
+                print(debug_info)
+
+                if attempt < max_retries - 1:
+                    print(f"{retry_delay}s后重试...")
+                    time.sleep(retry_delay)
+
+        raise RuntimeError(f"API调用失败，重试次数已用尽: {max_retries}")
 
     def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> dict:
         """
@@ -3984,10 +4109,13 @@ class ModelSwitch:
         """
         if self.test_mode:
             return {"choices": [{"message": {"content": "test_response"}}]}
+
+        # 获取模型配置
         config = self._get_model_config(model_name)
         self.current_config = config
 
-        combined_kwargs = {
+        # 准备查询参数
+        query_kwargs = {
             "disable_conversation_history": disable_conversation_history,
             "max_context_size": config.max_context_size,
             "temperature": config.temperature,
@@ -3998,54 +4126,13 @@ class ModelSwitch:
             **kwargs,
         }
 
-        max_repeat = 3
-        for i in range(max_repeat):
-            try:
-                response = query_gpt_api(
-                    base_url=config.base_url,
-                    api_key=config.key,
-                    prompt=prompt,
-                    model=config.model_name,
-                    **combined_kwargs,
-                )
-                # 优先使用API返回的实际token数量
-                usage_data = response.get("usage", {})
-                if usage_data:
-                    input_tokens = usage_data["prompt_tokens"]
-                    output_tokens = usage_data["completion_tokens"]
-                    # 记录使用情况并显示消费信息
-                    cost = self._record_usage(model_name, input_tokens, output_tokens)
-                    # 显示消费信息（使用colorama优化UI）
-                    if cost > 0:
-                        cost_cny = cost * 7  # 1美元≈7人民币
-                        # 获取当天该模型的累计消费
-                        today = datetime.date.today().isoformat()
-                        accumulated_cost = 0.0
-                        if today in self._usage_records:
-                            model_record = self._usage_records[today]["models"].get(model_name)
-                            if model_record:
-                                accumulated_cost = model_record["cost"]
+        # 执行带重试的查询
+        response = self._retry_query(config, model_name, prompt, query_kwargs)
 
-                        # 在输出中添加当天累计消费信息
-                        cost_message = (
-                            f"{Fore.CYAN}API调用消费: "
-                            f"{ColorStyle.BRIGHT}${cost:.6f}{ColorStyle.RESET_ALL}{Fore.CYAN} "
-                            f"(≈¥{cost_cny:.2f}) | "
-                            f"输入Token: {Fore.GREEN}{input_tokens}{Fore.CYAN} | "
-                            f"输出Token: {Fore.GREEN}{output_tokens}{Fore.CYAN} | "
-                            f"模型: {Fore.YELLOW}{model_name}{ColorStyle.RESET_ALL} | "
-                            f"今天累计: ${accumulated_cost:.6f}"
-                        )
-                        print(cost_message)
+        # 记录并显示使用情况
+        self._record_usage_and_display(model_name, response)
 
-                return response
-            except Exception as e:
-                debug_info = f"API调用失败: {str(e)}\n当前配置状态: {self.current_config}"
-                print(debug_info)
-                print("5s后重试...")
-                time.sleep(5)
-
-        raise RuntimeError(f"API调用失败，重试次数已用尽: {max_repeat}")
+        return response
 
 
 def handle_workflow(program_args):

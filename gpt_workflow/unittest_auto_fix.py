@@ -288,7 +288,7 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch
     p.process_search_results(symbol_result)
     prompt = p.build(user_requirement=prompt_content)
     print(Fore.YELLOW + "正在生成修复方案...")
-    text = model_switch.query_for_text(model_switch.model_name, prompt, stream=True)
+    text = model_switch.query(model_switch.model_name, prompt, stream=True)
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
@@ -311,7 +311,7 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
     p_explain = PatchPromptBuilder(use_patch=False, symbols=[], tokens_left=tokens_left)
     p_explain.process_search_results(symbol_result)
     prompt_explain = p_explain.build(user_requirement=explain_prompt_content)
-    explain_text = model_switch.query_for_text(model_switch.model_name, prompt_explain, stream=True)
+    explain_text = model_switch.query(model_switch.model_name, prompt_explain, stream=True)
 
     # Step 2: Fix
     user_req_for_fix = user_req
@@ -338,7 +338,7 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
 
     print(Fore.YELLOW + "正在根据分析生成修复方案...")
-    text = model_switch.query_for_text(model_switch.model_name, prompt_fix, stream=True)
+    text = model_switch.query(model_switch.model_name, prompt_fix, stream=True)
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 

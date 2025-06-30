@@ -1,34 +1,24 @@
 (function () {
-  const DEBUG = true;
   const IDLE_TIMEOUT = 1000;
   const MAX_WAIT_TIME = 30000;
-  const MAX_SCROLL_ATTEMPTS = 3; // 减少到3次滚动
+  const MAX_SCROLL_ATTEMPTS = 3;
   const SCROLL_HEIGHT_CHANGE_THRESHOLD = 50;
 
   let selectors = null;
 
-  // 初始化监听器
-  function initListener() {
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message.action === "setSelectors") {
-        selectors = message.selectors;
-        DEBUG && console.debug("🎯 收到选择器:", selectors);
-      }
-    });
-  }
-
   // 主执行流程
   async function main() {
-    DEBUG && console.debug("🏁 启动内容提取流程");
-    
+    console.log("🏁 启动内容提取流程");
     try {
       await scrollUntilContentStable();
       const html = await processPageContent();
       sendHtmlContent(html);
     } catch (error) {
-      console.error("内容提取失败:", error);
-    } finally {
-      window.scrollTo(0, document.documentElement.scrollHeight);
+      console.error("🚨 内容提取失败:", error);
+      // 即使失败，也发送错误信息回去，避免服务端超时
+      sendHtmlContent(
+        `<html><body><h1>Extraction Failed on Page</h1><p>${error.message}</p></body></html>`,
+      );
     }
   }
 
@@ -36,99 +26,92 @@
   async function scrollUntilContentStable() {
     let scrollCount = 0;
     let lastScrollHeight = document.documentElement.scrollHeight;
-    
+
     while (scrollCount < MAX_SCROLL_ATTEMPTS) {
       scrollCount++;
-      DEBUG && console.debug(`🔄 第${scrollCount}次滚动到底部`);
-      
-      // 滚动并等待
+      console.log(`🔄 第${scrollCount}次滚动到底部`);
+
       window.scrollTo(0, document.documentElement.scrollHeight);
       const hadNetworkActivity = await waitForNetworkIdle();
-      
-      // 检查高度变化
+
       const newScrollHeight = document.documentElement.scrollHeight;
-      const heightChanged = Math.abs(newScrollHeight - lastScrollHeight) > SCROLL_HEIGHT_CHANGE_THRESHOLD;
-      
-      DEBUG && console.debug(
-        `📏 高度变化: ${lastScrollHeight} -> ${newScrollHeight} (${heightChanged ? "有变化" : "无变化"}), ` +
-        `网络活动: ${hadNetworkActivity ? "有" : "无"}`
+      const heightChanged =
+        Math.abs(newScrollHeight - lastScrollHeight) >
+        SCROLL_HEIGHT_CHANGE_THRESHOLD;
+
+      console.log(
+        `📏 高度变化: ${lastScrollHeight} -> ${newScrollHeight} (${heightChanged ? "有变化" : "无变化"}), 网络活动: ${hadNetworkActivity ? "有" : "无"}`,
       );
-      
-      // 终止条件：内容稳定且无网络活动
+
       if (!heightChanged && !hadNetworkActivity) {
-        DEBUG && console.debug("🛑 内容稳定，停止滚动");
+        console.log("🛑 内容稳定，停止滚动");
         return;
       }
-      
+
       lastScrollHeight = newScrollHeight;
     }
-    
-    DEBUG && console.debug("🛑 达到最大滚动次数");
+
+    console.log("🛑 达到最大滚动次数");
   }
 
   // 处理页面内容
   async function processPageContent() {
     return new Promise((resolve) => {
-      DEBUG && console.debug("🔍 处理页面内容...");
-      
-      // 创建新文档处理
+      console.log("🔍 正在处理页面内容...");
       const doc = new DOMParser().parseFromString(
         document.documentElement.outerHTML,
-        "text/html"
+        "text/html",
       );
-      DEBUG && console.debug("✅ 重建DOM树完成");
-      
-      // 应用选择器或默认处理
-      const html = selectors && selectors.length > 0 
-        ? applySelectors(doc) 
-        : applyDefaultProcessing(doc);
-      
+      console.log("✅ DOM树重建完成");
+
+      const html =
+        selectors && selectors.length > 0
+          ? applySelectors(doc)
+          : applyDefaultProcessing(doc);
+
       resolve(html);
     });
   }
 
   // 应用选择器提取内容
   function applySelectors(doc) {
-    DEBUG && console.debug("🎯 使用选择器过滤内容");
-    
-    const selectedElements = [];
-    
+    console.log("🎯 使用选择器过滤内容:", selectors);
+    let selectedElements = [];
+
     selectors.forEach((selector) => {
-      const elements = selector.startsWith("//")
-        ? getElementsByXPath(selector, doc)
-        : doc.querySelectorAll(selector);
-      
-      if (!elements || elements.length === 0) return;
-      
-      elements.forEach((element) => {
-        const isChild = selectedElements.some(selected => 
-          selected.contains(element)
-        );
-        
-        const isParent = selectedElements.some(selected => 
-          element.contains(selected)
-        );
-        
-        if (isParent) {
+      try {
+        const elements = selector.startsWith("//")
+          ? getElementsByXPath(selector, doc)
+          : doc.querySelectorAll(selector);
+
+        if (!elements || elements.length === 0) return;
+
+        elements.forEach((element) => {
+          if (!element || typeof element.outerHTML !== "string") return;
+
+          const isChild = selectedElements.some((selected) =>
+            selected.contains(element),
+          );
+          if (isChild) return;
+
           // 移除被当前元素包含的旧元素
           selectedElements = selectedElements.filter(
-            selected => !element.contains(selected)
+            (selected) => !element.contains(selected),
           );
-        }
-        
-        if (!isChild) {
           selectedElements.push(element);
-        }
-      });
+        });
+      } catch (e) {
+        console.error(`🚨 无效的选择器 '${selector}':`, e);
+      }
     });
-    
+
     if (selectedElements.length === 0) {
-      DEBUG && console.debug("ℹ️ 选择器未匹配到内容，使用默认处理");
+      console.warn("⚠️ 选择器未匹配到任何内容，将使用默认处理");
       return applyDefaultProcessing(doc);
     }
-    
+    console.log(`✅ 选择器匹配到 ${selectedElements.length} 个顶层元素`);
     return wrapHtmlContent(
-      selectedElements.map(el => el.outerHTML).join("\n")
+      selectedElements.map((el) => el.outerHTML).join("\n"),
     );
   }
 
@@ -139,33 +122,23 @@
       doc,
       null,
       XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-      null
+      null,
     );
-    
     const elements = [];
     for (let i = 0; i < result.snapshotLength; i++) {
       elements.push(result.snapshotItem(i));
     }
-    
     return elements;
   }
 
   // 默认处理逻辑
   function applyDefaultProcessing(doc) {
-    DEBUG && console.debug("ℹ️ 使用默认处理逻辑");
-    
-    // 移除样式表
-    const links = doc.querySelectorAll('link[rel="stylesheet"]');
-    links.forEach(link => link.remove());
-    DEBUG && console.debug(`🗑️ 移除 ${links.length} 个CSS链接`);
-    
-    // 移除媒体元素
-    const mediaElements = doc.querySelectorAll(
-      "audio, source, track, object, embed, canvas, svg, style, noscript, script"
+    console.log("ℹ️ 使用默认处理逻辑 (提取body内容)");
+    const elementsToRemove = doc.querySelectorAll(
+      "script, style, noscript, svg, canvas, footer, header, nav",
     );
-    mediaElements.forEach(el => el.remove());
-    DEBUG && console.debug(`🗑️ 移除 ${mediaElements.length} 个媒体元素`);
-    
+    elementsToRemove.forEach((el) => el.remove());
+    console.log(`🗑️ 移除了 ${elementsToRemove.length} 个无关元素`);
     return wrapHtmlContent(doc.body.innerHTML);
   }
 
@@ -185,65 +158,54 @@ ${bodyContent}
 
   // 发送HTML内容
   function sendHtmlContent(html) {
-    if (DEBUG) {
-      console.debug("📄 生成最终HTML:");
-      console.debug(html.substring(0, 200) + (html.length > 200 ? "..." : ""));
+    console.log("📄 生成最终HTML, 长度:", html.length);
+    try {
+      chrome.runtime.sendMessage({
+        action: "htmlContent",
+        content: html,
+      });
+      console.log("📨 已发送HTML内容到后台脚本");
+    } catch (error) {
+      console.error("🚨 发送HTML到后台脚本失败:", error);
     }
-    
-    chrome.runtime.sendMessage({
-      action: "htmlContent",
-      content: html
-    });
-    
-    DEBUG && console.debug("📨 已发送HTML内容到后台脚本");
   }
 
   // 等待网络空闲
   function waitForNetworkIdle() {
     return new Promise((resolve) => {
-      const startTime = Date.now();
       let lastRequestTime = Date.now();
       let timer;
       let observer;
       let hadNetworkActivity = false;
 
-      // 使用PerformanceObserver监听网络活动
       if (window.PerformanceObserver) {
         observer = new PerformanceObserver((list) => {
-          list.getEntries().forEach((entry) => {
-            lastRequestTime = Date.now();
-            hadNetworkActivity = true;
-            DEBUG && console.debug("🌐 检测到网络活动:", entry.name);
-            resetTimer();
-          });
+          lastRequestTime = Date.now();
+          hadNetworkActivity = true;
+          resetTimer();
         });
         observer.observe({ entryTypes: ["resource"] });
       }
 
-      // 最大等待超时
       const maxTimer = setTimeout(() => {
         cleanup();
-        DEBUG && console.debug("⏰ 达到最大等待时间，继续流程");
+        console.log("⏰ 达到最大等待时间，继续流程");
         resolve(hadNetworkActivity);
       }, MAX_WAIT_TIME);
 
-      // 重置空闲检测定时器
       function resetTimer() {
         clearTimeout(timer);
         timer = setTimeout(checkIdle, IDLE_TIMEOUT);
       }
 
-      // 检查是否空闲
       function checkIdle() {
-        const elapsed = Date.now() - lastRequestTime;
-        if (elapsed >= IDLE_TIMEOUT) {
-          DEBUG && console.debug(`🛑 网络空闲 ${(elapsed / 1000).toFixed(1)}秒`);
+        if (Date.now() - lastRequestTime >= IDLE_TIMEOUT) {
+          console.log("🛑 网络已空闲");
           cleanup();
           resolve(hadNetworkActivity);
         }
       }
 
-      // 清理资源
       function cleanup() {
         clearTimeout(timer);
         clearTimeout(maxTimer);
@@ -254,7 +216,13 @@ ${bodyContent}
     });
   }
 
-  // 初始化
-  initListener();
-  setTimeout(main, 1000);
+  // 脚本入口: 监听来自 background.js 的消息
+  console.log("🚀 extract.js 已加载，等待配置消息...");
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.action === "setSelectors") {
+      selectors = message.selectors;
+      console.log("🎯 收到选择器配置，即将开始提取:", selectors);
+      main(); // 收到消息后，启动主流程
+    }
+  });
 })();

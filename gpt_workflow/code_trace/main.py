@@ -117,7 +117,7 @@ def handle_prompt_debug(args: argparse.Namespace) -> None:
             prompt = base_prompt + start_tag + prompt[idx:]
             print("Debugging prompt:")
             print(prompt)
-            response = model_switch.query_for_text(
+            response = model_switch.query(
                 model_name="deepseek-r1",
                 prompt=prompt,
                 disable_conversation_history=True,

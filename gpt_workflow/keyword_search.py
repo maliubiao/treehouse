@@ -102,7 +102,7 @@ class KeywordExplainer:
         """查询模型并处理响应，返回块索引和结果"""
         try:
             console.print(f"[cyan]处理块 {chunk_index + 1}/{total_chunks} (大小: {len(prompt)} 字符)[/cyan]")
-            result = self.model_switch.query_for_text(self.model_name, prompt, stream=True)
+            result = self.model_switch.query(self.model_name, prompt, stream=True)
             return chunk_index, result
         except (ConnectionError, TimeoutError) as e:
             console.print(f"[red]查询块 {chunk_index} 时出错: {str(e)}[/red]")

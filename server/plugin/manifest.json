@@ -6,7 +6,7 @@
     "activeTab",
     "scripting",
     "tabs",
-    "alarms",
+    "alarms", // 确保有alarms权限
     "storage"
   ],
   "host_permissions": [
