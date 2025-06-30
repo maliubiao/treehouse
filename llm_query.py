@@ -3440,12 +3440,8 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
             display_and_apply_diff(diff_file, auto_apply=auto_apply)
 
 
-def process_response(prompt, response_data, file_path, save=True, obsidian_doc=None, ask_param=None):
+def process_response(prompt, content, file_path, save=True, obsidian_doc=None, ask_param=None):
     """处理API响应并保存结果"""
-    if not response_data["choices"]:
-        raise ValueError("API返回空响应")
-
-    content = response_data["choices"][0]["message"]["content"]
 
     # 处理文件路径
     file_path = Path(file_path)
@@ -3888,7 +3884,7 @@ class ModelSwitch:
             # 获取架构师响应
             architect_response = self.query(architect_model, architect_prompt)
 
-        parsed = self.workflow.ArchitectMode.parse_response(architect_response["choices"][0]["message"]["content"])
+        parsed = self.workflow.ArchitectMode.parse_response(architect_response)
 
         # 处理编码任务
         results = []
@@ -3921,9 +3917,8 @@ class ModelSwitch:
 
             coder_prompt_combine = f"{part_b}{context}{part_a}".replace(USER_DEMAND, "")
 
-            # 执行查询
-            result = self.query(coder_model, coder_prompt_combine)
-            content = result["choices"][0]["message"]["content"]
+            # 执行查询, query方法现在直接返回内容字符串
+            content = self.query(coder_model, coder_prompt_combine)
 
             # 处理补丁响应
             process_patch_response(
@@ -4133,7 +4128,7 @@ class ModelSwitch:
         # 记录并显示使用情况
         self._record_usage_and_display(model_name, response)
 
-        return response
+        return response["choices"][0]["message"]["content"]
 
 
 def handle_workflow(program_args):

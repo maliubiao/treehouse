@@ -192,6 +192,10 @@ class TraceConfig:
         if filename.startswith("<") and filename.endswith(">") or filename.endswith("sitecustomize.py"):
             return False
         if self.ignore_system_paths:
+            # 直接检查路径组件，使其对不存在的或合成的路径（如测试中的路径）同样有效
+            if any(part.startswith(("site-packages", "dist-packages")) for part in Path(filename).parts):
+                return False
+
             try:
                 resolved = str(Path(filename).resolve())
                 if any(resolved.startswith(sys_path) for sys_path in self._system_paths):
@@ -1400,12 +1404,12 @@ class TraceLogic:
         comment_pos = line.rfind("#")
         if comment_pos == -1:
             return None
-
+        start_tag = "trace:"
         comment = line[comment_pos + 1 :].strip()
-        if not comment.lower().startswith("trace "):
+        if not comment.lower().startswith(start_tag):
             return None
 
-        return comment[6:].strip()
+        return comment[len(start_tag) :].strip()
 
     def _get_trace_expression(self, filename, lineno):
         """获取缓存的追踪表达式"""
@@ -1842,8 +1846,9 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
             log_name = sys._getframe().f_back.f_code.co_name
             report_name = log_name + ".html"
             kwargs["report_name"] = report_name
+        if kwargs.get("target_files"):
+            kwargs["target_files"] = ([sys._getframe().f_back.f_code.co_filename],)
         config = TraceConfig(
-            target_files=[sys._getframe().f_back.f_code.co_filename],
             **kwargs,
         )
     tracer = None

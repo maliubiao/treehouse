@@ -12,47 +12,76 @@
 - **符号模式**: 当输入包含 `[SYMBOL START]` 参数时启用。处理目标为指定的符号。
 
 ### 2. 符号路径规范 (Symbol Path)
-符号路径是定位代码的唯一标识，格式为：`<文件路径>/<符号全名>`。
+符号路径是定位代码的唯一标识符，其生成规则必须严格遵守。
 
-**A. 多语言命名规则:**
+**A. 符号路径组成格式**
+`<文件路径>/<符号全名>`
+示例：`test_tree.py/TestParserUtil.test_go_method_extraction`
 
-- **Go**:
-    - 结构体方法: `包名.结构体名.方法名` (e.g., `main.MyStruct.Method1`)
-    - 函数: `包名.函数名` (e.g., `main.Function1`)
-    - 导入块: `__import__`
-- **C++**:
-    - 命名空间内符号: `命名空间链.符号名` (e.g., `Outer.Inner.Math.add`)
-    - 类成员: `类名.成员名` (e.g., `MyClass.myMethod`)
-    - 运算符重载: `类名.operator符号` (e.g., `Point.operator+`)
-- **Python**:
-    - 类方法: `类名.方法名` (e.g., `MyClass.my_method`)
-    - 主程序块: `__main__`
-    - 导入块: `__import__`
+**B. 多语言符号命名规则**
+
+1.  **Go语言**
+    - 结构体方法：`包名.结构体名.方法名` (示例: `main.MyStruct.Method1`)
+    - 函数：`包名.函数名` (示例: `main.Function1`)
+    - 类型声明：`包名.类型名` (示例: `main.MyInt`)
+    - 导入块：`__import__` (包含所有import语句)
+
+2.  **C++**
+    - 命名空间函数：`命名空间链.函数名` (示例: `Outer.Inner.Math.add`)
+    - 类成员：`类名.成员名` (示例: `c.a.b`)
+    - 模板类：`模板类名.方法名` (示例: `TemplateScope.template_method`)
+    - 运算符重载：`类名.operator符号` (示例: `Point.operator+`)
+
+3.  **Python**
+    - 类方法：`类名.方法名` (示例: `MyClass.my_method`)
+    - 主程序块：`__main__`
+    - 导入块：`__import__`
     - **注意**: Python符号路径不包含包名。
 
-**B. 特殊定位符 (Line Locators):**
-用于定位匿名或难以通过名称识别的结构。
+**C. 特殊规则与行号定位符**
 
-- `near_n`: 指代**包含**第 `n` 行的最小代码块（如函数、类、闭包）。
-- `at_n`: 指代从第 `n` 行**开始**定义的符号。
-- **重要**: 当输入定位符为 `near_n` 或 `at_n` 时，输出**必须**采用 `[overwrite whole file]` 模式，即输出完整的文件内容。
+1.  **嵌套结构**: 作用域链必须完整。
+    ```cpp
+    // 输入: namespace A { namespace B { class C { void d(){} } } }
+    // 符号路径: A.B.C.d
+    ```
 
-**C. 示例:**
-- **输入**:
-  ```go
-  package main
+2.  **模板处理**: 忽略模板参数。
+    ```cpp
+    // 输入: template<typename T> class Stack { void push(T v){} }
+    // 符号路径: Stack.push
+    ```
 
-  func (u User) GetName() string { // line 3
-      return u.Name
-  }
+3.  **行号定位符 (Line Locators)**: 用于定位匿名或无法通过名称识别的结构。
+    - `near_n`: 指代**包含**第 `n` 行的最小代码块（如函数、类、闭包）。必须是直接父级，不允许跨多级作用域。
+    - `at_n`: 指代从第 `n` 行**开始**定义的符号。必须是符号定义的起始行号。
+    - **重要**:
+        - `near_n` 和 `at_n` 均为终止节点，不允许继续扩展子元素。
+        - 当输入定位符为 `near_n` 或 `at_n` 时，输出**必须**采用 `[overwrite whole file]` 模式。
 
-  var handler = func() { // line 7
-      fmt.Println("near example")
-  }
-  ```
-- **应生成路径**:
-  - `test.go/main.User.GetName`
-  - `test.go/near_8` (定位第8行所在的匿名函数)
+4.  **示例**:
+    - 输入Go代码:
+      ```go
+      package main
+
+      func (u User) GetName() string { // line 3
+          return u.Name
+      }
+
+      var handler = func() { // line 7
+          fmt.Println("near example")
+      }
+      ```
+    - 应生成路径:
+      - `test.go/main.User.GetName`
+      - `test.go/near_8` (定位第8行所在的匿名函数)
+
+**D. 验证要点 (Validation Checklist)**
+1.  符号路径必须包含完整的作用域链。
+2.  匿名结构/函数不生成常规符号（必须使用行号定位符）。
+3.  每个符号必须能绑定到原始代码的准确位置。
+4.  同一文件内的符号路径必须唯一。
+5.  行号定位符必须满足其定义（`near_n` 是父节点行，`at_n` 是起始行），且不能包含子符号。
 
 ## 三、代码编写规范
 
@@ -82,9 +111,9 @@
 
 **1. 输出模式选择器:**
 
-- **IF** 输入包含 `[file name]`:
+- **IF** 输入包含 `[file name]` **OR** 使用了 `near_n`/`at_n` 定位符:
   - **THEN** 使用 `[overwrite whole file]` 模式。
-- **ELSE IF** 输入包含标准 `[symbol path] **OR** 使用了 `near_n`/`at_n` 定位符`:
+- **ELSE IF** 输入包含标准 `[symbol path]`:
   - **THEN** 使用 `[overwrite whole symbol]` 模式。
 
 **2. 输出格式要求:**
