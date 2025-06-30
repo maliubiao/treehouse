@@ -844,18 +844,40 @@ class TestDirectoryHandling(unittest.TestCase):
 
 
 class TestExtractAndDiffFiles(unittest.TestCase):
+    def setUp(self):
+        # 创建临时目录
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmpdir.name)
+
+        # 设置 shadow 目录
+        self.shadow_dir = self.tmp_path / "shadow"
+        self.shadow_dir.mkdir(exist_ok=True)
+
+        # 公共补丁
+        self.shadow_patch = patch("llm_query.shadowroot", self.shadow_dir)
+        self.project_patch = patch("llm_query.GLOBAL_PROJECT_CONFIG.project_root_dir", self.tmp_path)
+
+        # 应用补丁
+        self.shadow_patch.start()
+        self.project_patch.start()
+
+        # 添加清理函数
+        self.addCleanup(self.shadow_patch.stop)
+        self.addCleanup(self.project_patch.stop)
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def _create_test_file(self, filename, content=""):
+        """在临时目录中创建测试文件"""
+        file_path = self.tmp_path / filename
+        file_path.write_text(content, encoding="utf-8")
+        return file_path
+
     def test_single_file_processing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shadow_dir = Path(tmpdir) / "shadow"
-            shadow_dir.mkdir(exist_ok=True)
+        # 创建测试文件
+        test_file = self._create_test_file("test.txt", "line1\nline2\n")
 
-            test_file = Path(tmpdir) / "test.txt"
-            test_file.write_text("line1\nline2\n", encoding="utf8")
-
-            with patch("llm_query.shadowroot", shadow_dir):
-                with patch("llm_query.GLOBAL_PROJECT_CONFIG.project_root_dir", tmpdir):
-                    # 使用相对路径而非绝对路径
-                    test_content = """
+        # 测试内容
+        test_content = """
 [overwrite whole file]: test.txt
 [start]
 line1
@@ -863,49 +885,50 @@ line2
 line3
 [end]
 """
-                    llm_query.extract_and_diff_files(test_content, auto_apply=True)
-                    # 修复：期望值末尾去掉换行符
-                    self.assertEqual(test_file.read_text(), "line1\nline2\nline3")
-                    diff_files = list(shadow_dir.glob("changes_*.diff"))
-                    self.assertEqual(len(diff_files), 1, "应该生成一个diff文件")
-                    self.assertTrue(diff_files[0].exists())
+        # 执行处理
+        llm_query.extract_and_diff_files(test_content, auto_apply=True)
+
+        # 验证文件内容
+        self.assertEqual(test_file.read_text(encoding="utf-8"), "line1\nline2\nline3")
+
+        # 验证 diff 文件
+        diff_files = list(self.shadow_dir.glob("changes_*.diff"))
+        self.assertEqual(len(diff_files), 1, "应生成一个 diff 文件")
+        self.assertTrue(diff_files[0].exists())
 
     def test_diff_application_flow(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shadow_dir = Path(tmpdir) / "shadow"
-            shadow_dir.mkdir(exist_ok=True)
+        # 创建空测试文件
+        test_file = self._create_test_file("test.txt")
 
-            test_file = Path(tmpdir) / "test.txt"
-            test_file.touch()
-            with patch("llm_query.shadowroot", shadow_dir):
-                with patch("llm_query.GLOBAL_PROJECT_CONFIG.project_root_dir", tmpdir):
-                    # 使用相对路径
-                    test_content = """
+        # 测试内容
+        test_content = """
 [overwrite whole file]: test.txt
 [start]
 new content
 [end]
 """
-                    llm_query.extract_and_diff_files(test_content, auto_apply=True)
-                    self.assertEqual(test_file.read_text(), "new content")
+        # 执行处理
+        llm_query.extract_and_diff_files(test_content, auto_apply=True)
+
+        # 验证文件内容
+        self.assertEqual(test_file.read_text(encoding="utf-8"), "new content")
 
     def test_setup_script_processing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            shadow_dir = Path(tmpdir) / "shadow"
-            shadow_dir.mkdir(exist_ok=True)
-
-            with patch("llm_query.shadowroot", shadow_dir):
-                test_content = """
+        # 测试内容
+        test_content = """
 [project setup shellscript start]
 #!/bin/bash
 echo 'setup'
 [project setup shellscript end]
 """
-                llm_query.extract_and_diff_files(test_content)
-                setup_script = shadow_dir / "project_setup.sh"
-                self.assertTrue(setup_script.exists())
-                self.assertEqual(setup_script.read_text(), "#!/bin/bash\necho 'setup'")
-                self.assertTrue(os.access(setup_script, os.X_OK))
+        # 执行处理
+        llm_query.extract_and_diff_files(test_content)
+
+        # 验证脚本文件
+        setup_script = self.shadow_dir / "project_setup.sh"
+        self.assertTrue(setup_script.exists())
+        self.assertEqual(setup_script.read_text(encoding="utf-8"), "#!/bin/bash\necho 'setup'")
+        self.assertTrue(os.access(setup_script, os.X_OK), "脚本应具有可执行权限")
 
 
 class TestDisplayAndApplyDiff(unittest.TestCase):

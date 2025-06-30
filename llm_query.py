@@ -639,9 +639,9 @@ def _process_and_save_response(
         kwargs (dict): 包含conversation_file等参数
 
     返回:
-        dict: 处理后的响应结果
+        dict: 处理后的响应结果，新增usage字段
     """
-    content, reasoning = _process_stream_response(stream_client, **kwargs)
+    content, reasoning, usage = _process_stream_response(stream_client, **kwargs)  # 接收usage信息
 
     # 将助理回复添加到历史
     history.append({"role": "assistant", "content": content})
@@ -657,7 +657,11 @@ def _process_and_save_response(
     if reasoning:
         content = f"\n\n\n{content}"
 
-    return {"choices": [{"message": {"content": content}}]}
+    # 返回结果，新增usage字段
+    return {
+        "choices": [{"message": {"content": content}}],
+        "usage": usage,  # 新增usage字段
+    }
 
 
 def _process_stream_response(stream_client, **kwargs) -> tuple:
@@ -668,13 +672,19 @@ def _process_stream_response(stream_client, **kwargs) -> tuple:
         console: 控制台输出对象
 
     返回:
-        tuple: (正式内容, 推理内容)
+        tuple: (正式内容, 推理内容, token使用情况)
     """
     content = ""
     reasoning = ""
+    usage = None  # 初始化usage为None
     console = kwargs.get("console")
     verbose = kwargs.get("verbose", True)
+
     for chunk in stream_client:
+        # 检查并记录token使用情况
+        if hasattr(chunk, "usage") and chunk.usage:
+            usage = chunk.usage  # 保存最新的usage信息
+
         # 处理推理内容
         if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
             if verbose:
@@ -688,7 +698,7 @@ def _process_stream_response(stream_client, **kwargs) -> tuple:
             content += chunk.choices[0].delta.content
     if verbose:
         _print_newline(console)
-    return content, reasoning
+    return content, reasoning, usage  # 返回新增的usage信息
 
 
 def _handle_think_tags(content: str, reasoning: str) -> tuple:
@@ -1639,6 +1649,13 @@ PATCH_PROMPT_HEADER = """
 [symbol path rule start]
 {symbol_path_rule_content}
 [symbol path rule end]
+"""
+
+PATCH_PROMPT_HEADER_V3 = """
+[project description start]
+当前目录: {current_dir}
+[project description end]
+{patch_rule}
 """
 
 DUMB_EXAMPLE_A = (Path(__file__).parent / "prompts/dumb-example").read_text("utf8")
@@ -2984,11 +3001,13 @@ class PatchPromptBuilder:
 
         prompt = ""
         if self.use_patch:
-            text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
-            patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
-            prompt += PATCH_PROMPT_HEADER.format(
-                current_dir=str(Path.cwd()), patch_rule=patch_text, symbol_path_rule_content=text
-            )
+            # text = (Path(__file__).parent / "prompts/symbol-path-rule-v2").read_text("utf8")
+            # patch_text = (Path(__file__).parent / "prompts/patch-rule").read_text("utf8")
+            # prompt += PATCH_PROMPT_HEADER.format(
+            #     current_dir=str(Path.cwd()), patch_rule=patch_text, symbol_path_rule_content=text
+            # )
+            v3 = (Path(__file__).parent / "prompts/patch-v3").read_text("utf8")
+            prompt += PATCH_PROMPT_HEADER_V3.format(current_dir=str(Path.cwd()), patch_rule=v3)
             self.tokens_left -= len(prompt)
 
         file_range_prompt = self._build_file_range_prompt()
@@ -3007,7 +3026,7 @@ class PatchPromptBuilder:
         self.tokens_left -= len(file_range_prompt)
         symbol_prompt = self._build_symbol_prompt()
 
-        prompt = f"{symbol_prompt}{file_range_prompt}{example_prompt}{user_prompt}"
+        prompt = f"{prompt}{symbol_prompt}{file_range_prompt}{example_prompt}{user_prompt}"
         return prompt
 
 
@@ -3633,19 +3652,6 @@ class ModelSwitch:
         self._usage_records = {}  # 新增计费记录
         self._usage_file = os.path.join(os.path.dirname(__file__), ".model_usage.yaml")
         self._load_usage_from_file()  # 初始化时加载历史记录
-        try:
-            from colorama import Fore, Style, init
-
-            init(autoreset=True)
-            self.Fore = Fore
-            self.Style = Style
-        except ImportError:
-            # 回退模式
-            class DummyColor:
-                def __getattr__(self, name):
-                    return ""
-
-            self.Fore = self.Style = DummyColor()
 
     def models(self) -> list[str]:
         """
@@ -4046,12 +4052,6 @@ class ModelSwitch:
 
         config = self._get_model_config(model_name)
         self.current_config = config
-        tiktoken = __import__("tiktoken")
-        try:
-            encoding = tiktoken.encoding_for_model(config.tokenizer_name)
-        except KeyError:
-            encoding = tiktoken.encoding_for_model("gpt-4o")
-        input_tokens = len(encoding.encode(prompt))
 
         combined_kwargs = {
             "disable_conversation_history": disable_conversation_history,
@@ -4074,26 +4074,25 @@ class ModelSwitch:
                     model=config.model_name,
                     **combined_kwargs,
                 )
-
-                # 回退到计算输出文本
-                content = response["choices"][0]["message"]["content"]
-                output_tokens = len(encoding.encode(content))
-
-                # 记录使用情况并显示消费信息
-                cost = self._record_usage(model_name, input_tokens, output_tokens)
-
-                # 显示消费信息（使用colorama优化UI）
-                if cost > 0:
-                    cost_cny = cost * 7  # 1美元≈7人民币
-                    cost_message = (
-                        f"{self.Fore.CYAN}API调用消费: "
-                        f"{self.Style.BRIGHT}${cost:.6f}{self.Style.RESET_ALL}{self.Fore.CYAN} "
-                        f"(≈¥{cost_cny:.2f}) | "
-                        f"输入Token: {self.Fore.GREEN}{input_tokens}{self.Fore.CYAN} | "
-                        f"输出Token: {self.Fore.GREEN}{output_tokens}{self.Fore.CYAN} | "
-                        f"模型: {self.Fore.YELLOW}{model_name}{self.Style.RESET_ALL}"
-                    )
-                    print(cost_message)
+                # 优先使用API返回的实际token数量
+                usage_data = response.get("usage", {})
+                if usage_data:
+                    input_tokens = usage_data.prompt_tokens
+                    output_tokens = usage_data.completion_tokens
+                    # 记录使用情况并显示消费信息
+                    cost = self._record_usage(model_name, input_tokens, output_tokens)
+                    # 显示消费信息（使用colorama优化UI）
+                    if cost > 0:
+                        cost_cny = cost * 7  # 1美元≈7人民币
+                        cost_message = (
+                            f"{Fore.CYAN}API调用消费: "
+                            f"{ColorStyle.BRIGHT}${cost:.6f}{ColorStyle.RESET_ALL}{Fore.CYAN} "
+                            f"(≈¥{cost_cny:.2f}) | "
+                            f"输入Token: {Fore.GREEN}{input_tokens}{Fore.CYAN} | "
+                            f"输出Token: {Fore.GREEN}{output_tokens}{Fore.CYAN} | "
+                            f"模型: {Fore.YELLOW}{model_name}{ColorStyle.RESET_ALL}"
+                        )
+                        print(cost_message)
 
                 return response
             except Exception as e:

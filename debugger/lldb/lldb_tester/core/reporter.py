@@ -10,7 +10,6 @@ class TestReporter:
 
     def __init__(self):
         self.results: List[TestResult] = []
-        colorama.init()
 
     def add_result(self, result: TestResult):
         """Adds a test result to the collection."""

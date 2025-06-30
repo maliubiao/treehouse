@@ -13,7 +13,6 @@ from prompt_toolkit.key_binding import KeyBindings
 try:
     from colorama import Fore, Style, init
 
-    init(autoreset=True)
 except ImportError:
 
     class ColorFallback:

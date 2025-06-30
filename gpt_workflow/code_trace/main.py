@@ -64,7 +64,6 @@ def get_clipboard_content() -> str:
 
 def print_transformation_report(transform_data: Dict, file_filter: Optional[str] = None) -> None:
     """Pretty print transformation report."""
-    init()  # Initialize colorama
 
     print(f"\n{Fore.YELLOW}=== Code Transformation Report ==={Style.RESET_ALL}")
 
@@ -277,7 +276,6 @@ def handle_apply_transform(args: argparse.Namespace) -> None:
 
 def main() -> None:
     """Main entry point for code tracing functionality."""
-    init()  # Initialize colorama
 
     parser = argparse.ArgumentParser(description="Trace code symbols and process them in batch")
     parser.add_argument("--file", "-f", dest="file_path", help="Path to the file to be analyzed")

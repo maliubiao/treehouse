@@ -9,9 +9,6 @@ import colorama
 from colorama import Fore, Style
 
 from debugger import tracer
-
-colorama.init(autoreset=True)
-
 from llm_query import (
     GPT_FLAG_PATCH,
     GPT_FLAGS,

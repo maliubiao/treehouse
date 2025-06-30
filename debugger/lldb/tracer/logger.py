@@ -4,6 +4,40 @@ import time
 from collections import deque
 
 
+class BufferedHandler(logging.Handler):
+    def __init__(self, buffer_size=10, target_handler=None):
+        super().__init__()
+        self.buffer = deque(maxlen=buffer_size)
+        self.target_handler = target_handler
+        self._register_atexit()
+
+    def _register_atexit(self):
+        atexit.register(self.flush)
+
+    def emit(self, record):
+        # 格式化日志记录但不立即输出
+        msg = self.format(record)
+        self.buffer.append(msg)
+        if len(self.buffer) >= self.buffer.maxlen:
+            self.flush()
+
+    def flush(self):
+        if not self.buffer:
+            return
+
+        # 合并缓冲区中的所有日志记录
+        combined_msg = "\n".join(self.buffer)
+        self.buffer.clear()
+
+        # 使用目标处理器输出合并后的日志
+        if self.target_handler:
+            self.target_handler.stream.write(combined_msg + "\n")
+            self.target_handler.flush()
+
+    def setTarget(self, target_handler):
+        self.target_handler = target_handler
+
+
 class LogManager:
     class RelativeTimeFilter(logging.Filter):
         def __init__(self, start_time):
@@ -15,39 +49,6 @@ class LogManager:
             elapsed_ms = (time.perf_counter() - self.start_time) * 1000
             record.relative_time = elapsed_ms
             return True
-
-    class BufferedHandler(logging.Handler):
-        def __init__(self, buffer_size=10, target_handler=None):
-            super().__init__()
-            self.buffer = deque(maxlen=buffer_size)
-            self.target_handler = target_handler
-            self._register_atexit()
-
-        def _register_atexit(self):
-            atexit.register(self.flush)
-
-        def emit(self, record):
-            # 格式化日志记录但不立即输出
-            msg = self.format(record)
-            self.buffer.append(msg)
-            if len(self.buffer) >= self.buffer.maxlen:
-                self.flush()
-
-        def flush(self):
-            if not self.buffer:
-                return
-
-            # 合并缓冲区中的所有日志记录
-            combined_msg = "\n".join(self.buffer)
-            self.buffer.clear()
-
-            # 使用目标处理器输出合并后的日志
-            if self.target_handler:
-                self.target_handler.stream.write(combined_msg + "\n")
-                self.target_handler.flush()
-
-        def setTarget(self, target_handler):
-            self.target_handler = target_handler
 
     def __init__(self, config, logfile=None):
         # 修复：当config为None时初始化为空字典
@@ -92,9 +93,7 @@ class LogManager:
             # 根据配置决定是否使用缓冲
             buffer_size = self.config.get("log_buffer_size", 10)
             if buffer_size > 1:
-                self.buffered_handler = LogManager.BufferedHandler(
-                    buffer_size=buffer_size, target_handler=console_handler
-                )
+                self.buffered_handler = BufferedHandler(buffer_size=buffer_size, target_handler=console_handler)
                 self.logger.addHandler(self.buffered_handler)
             else:
                 self.logger.addHandler(console_handler)

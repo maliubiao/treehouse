@@ -1,5 +1,4 @@
 import argparse
-import atexit
 import fnmatch
 import inspect
 import json
@@ -40,11 +39,6 @@ def parse_args():
         "--list-tests",
         action="store_true",
         help="List all available test cases without running them",
-    )
-    parser.add_argument(
-        "--count-print",
-        action="store_true",
-        help="Count print calls and report frequent callers",
     )
     return parser.parse_args()
 
@@ -117,61 +111,6 @@ def filter_tests(suite, patterns):
                 filtered_suite.addTest(filtered_subsuite)
 
     return filtered_suite
-
-
-class PrintCounter:
-    """Count print calls and track their origin"""
-
-    def __init__(self):
-        self.original_print = None
-        self.call_counts = defaultdict(int)
-        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.test_dir = os.path.join(self.base_dir, "tests")
-        self.enabled = False
-
-    def enable(self):
-        """Replace built-in print with counting version"""
-        if self.enabled:
-            return
-
-        self.original_print = __builtins__.print
-        __builtins__.print = self.counting_print
-        self.enabled = True
-        atexit.register(self.report_counts)
-
-    def disable(self):
-        """Restore original print function"""
-        if self.enabled and self.original_print:
-            __builtins__.print = self.original_print
-            self.enabled = False
-
-    def counting_print(self, *args, **kwargs):
-        """Print replacement that counts calls and captures traceback"""
-        # Skip counting if called from test framework itself
-        stack = traceback.extract_stack()
-        for frame in reversed(stack[:-1]):
-            if frame.filename.startswith(self.test_dir):
-                # Skip test_main.py and framework files
-                if "test_main.py" in frame.filename:
-                    break
-
-                # Create traceback signature
-                tb_signature = f"{frame.filename}:{frame.lineno}"
-                self.call_counts[tb_signature] += 1
-                break
-
-        # Call original print function
-        self.original_print(*args, **kwargs)
-
-    def report_counts(self):
-        """Report most frequent print callers"""
-        if not self.call_counts:
-            return
-
-        print("\nPrint call frequency report (top 10):")
-        sorted_counts = sorted(self.call_counts.items(), key=lambda x: x[1], reverse=True)
-        for location, count in sorted_counts[:10]:
-            print(f"{count:5d} calls: {location}")
 
 
 class JSONTestResult(unittest.TextTestResult):
@@ -362,11 +301,6 @@ def main():
     add_gpt_path_to_syspath()
     args = parse_args()
 
-    # Initialize print counter if requested
-    print_counter = PrintCounter()
-    if args.count_print:
-        print_counter.enable()
-
     try:
         result = run_tests(
             test_patterns=args.test_patterns,
@@ -384,9 +318,6 @@ def main():
         sys.exit(exit_code)
     except Exception:
         sys.exit(2)
-    finally:
-        if args.count_print:
-            print_counter.disable()
 
 
 if __name__ == "__main__":

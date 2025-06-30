@@ -24,8 +24,6 @@ from llm_query import (
     query_symbol_service,
 )
 
-colorama.init(autoreset=True)
-
 
 class UnitTestGenerator:
     """

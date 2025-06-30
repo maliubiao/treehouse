@@ -18,7 +18,6 @@ class TransformApplier:
         self.dry_run = dry_run
         self.parser_loader = ParserLoader()
         self.parser_util = ParserUtil(self.parser_loader)
-        init()  # Initialize colorama
 
     def _normalize_skip_symbols(self, skip_symbols: Set[str]) -> Set[str]:
         """标准化跳过符号的格式，支持glob模式"""

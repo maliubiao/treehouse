@@ -52,8 +52,6 @@ class ConfigManager:
         self.config_file = config_file
         if config_file:
             self._load_config(config_file)
-            self.config_watcher = threading.Thread(target=self._watch_config, daemon=True)
-            self.config_watcher.start()
         else:
             self.config_file = "tracer_config.yaml"
         # 加载符号配置文件
