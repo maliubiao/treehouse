@@ -524,7 +524,7 @@ def query_gpt_api(
         # 获取API响应
         response = _get_api_response(api_key, model, history, kwargs)
         # 处理并保存响应
-        return _process_and_save_response(response, history, kwargs)
+        return _process_and_save_response(model, response, history, kwargs)
 
     except requests.exceptions.HTTPError as he:
         debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
@@ -608,24 +608,38 @@ def _get_api_response(
 
     if is_gemini:
         try:
-            from google import generativeai as genai
+            from google import genai
 
-            # 配置Gemini客户端
-            genai.configure(api_key=api_key)
-            # 转换对话历史为Gemini格式
-            contents = []
+            client = genai.Client(api_key=api_key)
+
+            # 提取系统消息作为system_instruction
+            system_instructions = "\n".join(
+                [msg["content"] for msg in history if msg.get("role") == "system" and msg.get("content")]
+            )
+
+            # 构建Gemini兼容的消息格式
+            gemini_contents = []
             for msg in history:
-                role = "user" if msg["role"] == "user" else "model"
-                contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+                role = msg.get("role")
+                content = msg.get("content")
+
+                # 跳过系统消息和空内容
+                if role == "system" or not content:
+                    continue
+
+                # 转换角色为Gemini格式
+                gemini_role = "user" if role == "user" else "model"
+
+                # 构建parts格式为[{"text": content}]
+                gemini_contents.append({"role": gemini_role, "parts": [{"text": content}]})
+
+            if not gemini_contents:
+                raise ValueError("转换后的Gemini历史记录为空，请检查输入。")
 
             # 创建Gemini流式请求
-            return genai.GenerativeModel(model).generate_content(
-                contents,
-                stream=True,
-                generation_config=genai.GenerationConfig(
-                    temperature=kwargs.get("temperature", 0.0),
-                    top_p=0.8,
-                ),
+            return client.models.generate_content_stream(
+                model=model,
+                contents=gemini_contents,
             )
         except ImportError:
             raise RuntimeError("使用Gemini模型需要安装google-generativeai库")
@@ -652,6 +666,7 @@ def _get_api_response(
 
 
 def _process_and_save_response(
+    model: str,
     stream_client,
     history: list,
     kwargs: dict,
@@ -666,7 +681,6 @@ def _process_and_save_response(
     返回:
         dict: 处理后的响应结果，新增usage字段
     """
-    model = kwargs.get("model", "gpt-4")
     content, reasoning, usage = _process_stream_response(stream_client, history, model, **kwargs)  # 接收usage信息
 
     # 将助理回复添加到历史
@@ -712,26 +726,24 @@ def _process_stream_response(stream_client, history, model, **kwargs) -> tuple:
     if is_gemini:
         # 处理Gemini流式响应
         for chunk in stream_client:
-            if chunk.candidates and chunk.candidates[0].content.parts:
-                chunk_text = chunk.candidates[0].content.parts[0].text or ""
-                if verbose:
-                    _print_content(chunk_text, console)
-                content += chunk_text
-
-                # 如果有usage_metadata则记录
-                if hasattr(chunk, "usage_metadata"):
-                    usage = {
-                        "prompt_tokens": chunk.usage_metadata.prompt_token_count,
-                        "completion_tokens": chunk.usage_metadata.candidates_token_count,
-                        "total_tokens": chunk.usage_metadata.total_token_count,
-                    }
+            # 正确访问text属性
+            chunk_text = chunk.text if hasattr(chunk, "text") else ""
+            if verbose:
+                _print_content(chunk_text, console)
+            content += chunk_text
+            # 如果有usage_metadata则记录
+            if hasattr(chunk, "usage_metadata"):
+                usage = {
+                    "prompt_tokens": chunk.usage_metadata.prompt_token_count,
+                    "completion_tokens": chunk.usage_metadata.candidates_token_count,
+                    "total_tokens": chunk.usage_metadata.total_token_count,
+                }
     else:
         # 原始OpenAI处理逻辑
         for chunk in stream_client:
             # 检查并记录token使用情况
             if hasattr(chunk, "usage") and chunk.usage:
-                usage = chunk.usage  # 保存最新的usage信息
-
+                usage = {"prompt_tokens": chunk.usage.prompt_tokens, "completion_tokens": chunk.usage.completion_tokens}
             # 处理推理内容
             if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
                 if verbose:
@@ -3702,21 +3714,16 @@ class ModelSwitch:
         """
         self._config_path = config_path
         self.test_mode = test_mode
-        self._config_cache = None  # 新增配置缓存
+        self._config_cache = None  # 配置缓存
         self.current_config: Optional[ModelConfig] = None
         self.workflow = import_relative("gpt_workflow")
         self.model_name = ""
-        self._usage_records = {}  # 新增计费记录
+        self._usage_records = {}  # 计费记录
         self._usage_file = os.path.join(os.path.dirname(__file__), ".model_usage.yaml")
         self._load_usage_from_file()  # 初始化时加载历史记录
 
     def models(self) -> list[str]:
-        """
-        获取所有可用的模型名称列表
-
-        返回:
-            list[str]: 模型名称列表
-        """
+        """获取所有可用的模型名称列表"""
         return list(self._get_config().keys())
 
     def _load_and_validate_config(self, config_dict: dict) -> ModelConfig:
@@ -3886,15 +3893,7 @@ class ModelSwitch:
             print("🔄 正在重试任务...")
 
     def select(self, model_name: str) -> None:
-        """
-        切换到指定模型
-
-        参数:
-            model_name (str): 配置中的模型名称(如'14b')
-
-        异常:
-            ValueError: 当模型配置不存在或缺少必要字段时
-        """
+        """切换到指定模型"""
         if self.test_mode:
             return
 
@@ -3902,134 +3901,14 @@ class ModelSwitch:
         self.model_name = model_name
         globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
-    def query_for_text(self, model_name: str, prompt: str, use_cache: bool = True, **kwargs) -> dict:
-        """根据模型名称查询API并返回文本结果，支持缓存功能"""
-        cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        # 计算prompt的CRC32
-        prompt_crc32 = zlib.crc32(prompt.encode("utf-8")) & 0xFFFFFFFF
-        current_time = datetime.datetime.now()
-        time_str = current_time.strftime("%Y%m%d-%H%M%S")
-        hint = kwargs.get("hint", "")
-        prompt_crc32_hex = f"{prompt_crc32:08x}"
-        if prompt_crc32_hex in kwargs.pop("skip_crc32", []):
-            print("跳过缓存:", prompt_crc32_hex)
-            return ""
-        cache_filename = f"{time_str}_{prompt_crc32:08x}.json"
-        cache_path = os.path.join(cache_dir, cache_filename)
-
-        # 检查缓存
-        if (
-            use_cache
-            and not kwargs.get("ignore_cache")
-            and not self._should_skip_cache(kwargs.get("no_cache_prompt_file", []), cache_filename)
-        ):
-            cached_response = self._check_cache(prompt_crc32, cache_dir)
-            if cached_response:
-                print("prompt缓存命中:", cache_filename)
-                return cached_response
-
-        # 没有缓存则调用API
-        response = self.query(model_name, prompt, **kwargs)
-        response_text = response["choices"][0]["message"]["content"]
-
-        # 保存到缓存
-        if use_cache:
-            cache_data = {
-                "prompt": prompt,
-                "response_text": response_text,
-                "crc32": prompt_crc32,
-                "timestamp": current_time.isoformat(),
-                "hint": hint,
-                "model_name": model_name,
-                "kwargs": {k: v for k, v in kwargs.items() if k not in ["no_cache_prompt_file"]},
-            }
-            with open(cache_path, "w") as f:
-                json.dump(cache_data, f, indent=2)
-        return response_text
-
-    def _should_skip_cache(self, no_cache_files: List[str], cache_filename: str) -> bool:
-        """检查是否应该跳过缓存"""
-        if not no_cache_files:
-            return False
-
-        for filename in no_cache_files:
-            last_part = filename.split("_")[-1]
-            if last_part in cache_filename:
-                print("跳过缓存:", filename)
-                return True
-        return False
-
-    def _check_cache(self, prompt_crc32: int, cache_dir: str) -> Optional[dict]:
-        """检查缓存是否存在"""
-        crc32_part = f"{prompt_crc32:08x}"
-        for filename in os.listdir(cache_dir):
-            if crc32_part in filename:
-                with open(os.path.join(cache_dir, filename), "r") as f:
-                    cache_data = json.load(f)
-                    print("找到缓存文件:", filename)
-                    return cache_data["response_text"]
-        return None
-
-    def _save_to_cache(self, cache_path: str, prompt: str, prompt_crc32: int, response_text: str) -> None:
-        """保存结果到缓存"""
-        cache_data = {
-            "prompt": prompt,
-            "response_text": response_text,
-            "crc32": prompt_crc32,
-            "timestamp": datetime.datetime.now().isoformat(),
-        }
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f, indent=2)
-
-    def get_prompt_cache_info(self) -> list:
-        """获取所有prompt缓存文件的信息"""
-        if hasattr(self, "_prompt_cache") and self._prompt_cache:
-            return self._format_cache_info(self._prompt_cache)
-
-        cache_dir = os.path.join(os.path.dirname(__file__), "prompt_cache")
-        if not os.path.exists(cache_dir):
-            return []
-
-        return self._get_file_cache_info(cache_dir)
-
-    def _format_cache_info(self, cache_items: List[dict]) -> List[dict]:
-        """格式化缓存信息"""
-        return [
-            {
-                "filename": f"{item['timestamp'].replace(':', '')}_{item['crc32']:08x}.json",
-                "crc32": item["crc32"],
-                "last_32_chars": item["response_text"][-32:],
-                "timestamp": item["timestamp"],
-                "prompt": item["prompt"][:100] + "..." if len(item["prompt"]) > 100 else item["prompt"],
-            }
-            for item in cache_items
-        ]
-
-    def _get_file_cache_info(self, cache_dir: str) -> List[dict]:
-        """从文件系统获取缓存信息"""
-        cache_info = []
-        for filename in os.listdir(cache_dir):
-            if filename.endswith(".json"):
-                try:
-                    crc32_part = filename.split("_")[-1].split(".")[0]
-                    crc32 = int(crc32_part, 16)
-                    cache_info.append({"filename": filename, "crc32": crc32, "last_32_chars": filename[-32:]})
-                except (ValueError, IndexError):
-                    continue
-        return cache_info
-
     def _calculate_cost(self, input_tokens: int, output_tokens: int, config: ModelConfig) -> float:
         """计算API调用费用(美元)，精确到小数点后6位"""
-        # 计算每token费用
         input_cost_per_token = (config.price_1m_input or 0) / 1_000_000
         output_cost_per_token = (config.price_1m_output or 0) / 1_000_000
 
-        # 精确计算费用
         input_cost = input_tokens * input_cost_per_token
         output_cost = output_tokens * output_cost_per_token
-        total_cost = input_cost + output_cost
-        return total_cost
+        return input_cost + output_cost
 
     def _record_usage(self, model_name: str, input_tokens: int, output_tokens: int) -> float:
         """记录API使用情况，精确计算费用并返回费用值"""
@@ -4046,7 +3925,7 @@ class ModelSwitch:
                 "models": {},
             }
 
-        # 更新总记录（使用浮点数精确累加）
+        # 更新总记录
         self._usage_records[today]["total_cost"] += cost
         self._usage_records[today]["total_input_tokens"] += input_tokens
         self._usage_records[today]["total_output_tokens"] += output_tokens
@@ -4106,7 +3985,6 @@ class ModelSwitch:
         """
         if self.test_mode:
             return {"choices": [{"message": {"content": "test_response"}}]}
-
         config = self._get_model_config(model_name)
         self.current_config = config
 
@@ -4134,20 +4012,30 @@ class ModelSwitch:
                 # 优先使用API返回的实际token数量
                 usage_data = response.get("usage", {})
                 if usage_data:
-                    input_tokens = usage_data.prompt_tokens
-                    output_tokens = usage_data.completion_tokens
+                    input_tokens = usage_data["prompt_tokens"]
+                    output_tokens = usage_data["completion_tokens"]
                     # 记录使用情况并显示消费信息
                     cost = self._record_usage(model_name, input_tokens, output_tokens)
                     # 显示消费信息（使用colorama优化UI）
                     if cost > 0:
                         cost_cny = cost * 7  # 1美元≈7人民币
+                        # 获取当天该模型的累计消费
+                        today = datetime.date.today().isoformat()
+                        accumulated_cost = 0.0
+                        if today in self._usage_records:
+                            model_record = self._usage_records[today]["models"].get(model_name)
+                            if model_record:
+                                accumulated_cost = model_record["cost"]
+
+                        # 在输出中添加当天累计消费信息
                         cost_message = (
                             f"{Fore.CYAN}API调用消费: "
                             f"{ColorStyle.BRIGHT}${cost:.6f}{ColorStyle.RESET_ALL}{Fore.CYAN} "
                             f"(≈¥{cost_cny:.2f}) | "
                             f"输入Token: {Fore.GREEN}{input_tokens}{Fore.CYAN} | "
                             f"输出Token: {Fore.GREEN}{output_tokens}{Fore.CYAN} | "
-                            f"模型: {Fore.YELLOW}{model_name}{ColorStyle.RESET_ALL}"
+                            f"模型: {Fore.YELLOW}{model_name}{ColorStyle.RESET_ALL} | "
+                            f"今天累计: ${accumulated_cost:.6f}"
                         )
                         print(cost_message)
 
