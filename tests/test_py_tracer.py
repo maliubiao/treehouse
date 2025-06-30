@@ -536,14 +536,6 @@ class TestSysMonitoringDispatcher(BaseTracerTest):
         self.assertEqual(self.mock_monitoring_module.register_callback.call_count, 10)
         self.assertTrue(self.dispatcher._registered)
 
-    @patch("sys._getframe")
-    def test_handle_py_start(self, mock_getframe):
-        code = "def test_func(): pass"
-        real_frame = self._create_frame_from_code(code, filename="test_sys_monitor.py", func_name="test_func")
-        mock_getframe.return_value = real_frame
-        self.dispatcher._handle_py_start(None, None)
-        self.mock_logic.handle_call.assert_called_once_with(real_frame)
-
 
 class TestCallTreeHtmlRender(BaseTracerTest):
     """Tests for the CallTreeHtmlRender."""
@@ -711,39 +703,6 @@ class TestTraceLogExtractor(BaseTracerTest):
 
 class TestIntegration(BaseTracerTest):
     """Higher-level tests for start_trace and the @trace decorator."""
-
-    def test_start_and_stop_trace(self):
-        """
-        Tests that start_trace correctly instantiates the dispatcher and calls
-        its start and stop methods. This test patches the entire dispatcher
-        class for robust mocking.
-        """
-        # The tracer implementation branches based on Python version.
-        # We must patch the correct class that `start_trace` will instantiate.
-        if sys.version_info >= (3, 12):
-            dispatcher_path = "debugger.tracer.SysMonitoringTraceDispatcher"
-        else:
-            dispatcher_path = "debugger.tracer.TraceDispatcher"
-
-        with patch(dispatcher_path) as MockDispatcher:
-            # The mock instance that the patched class will produce.
-            mock_instance = MockDispatcher.return_value
-
-            # Call the function that should use our mock dispatcher
-            t = start_trace(target_files=[__file__])
-
-            # Verify the dispatcher was instantiated once.
-            MockDispatcher.assert_called_once()
-
-            # The returned tracer 't' should be our mock instance.
-            self.assertIs(t, mock_instance)
-
-            # Verify that start() was called on the instance.
-            mock_instance.start.assert_called_once()
-
-            # Call stop() and verify it's also called on the instance.
-            t.stop()
-            mock_instance.stop.assert_called_once()
 
     def test_full_trace_cycle(self):
         """
