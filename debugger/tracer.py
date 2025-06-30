@@ -1846,8 +1846,8 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
             log_name = sys._getframe().f_back.f_code.co_name
             report_name = log_name + ".html"
             kwargs["report_name"] = report_name
-        if kwargs.get("target_files"):
-            kwargs["target_files"] = ([sys._getframe().f_back.f_code.co_filename],)
+        if not kwargs.get("target_files"):
+            kwargs["target_files"] = [sys._getframe().f_back.f_code.co_filename]
         config = TraceConfig(
             **kwargs,
         )

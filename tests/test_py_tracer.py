@@ -712,24 +712,59 @@ class TestTraceLogExtractor(BaseTracerTest):
 class TestIntegration(BaseTracerTest):
     """Higher-level tests for start_trace and the @trace decorator."""
 
-    @patch("debugger.tracer.TraceDispatcher.start")
-    @patch("debugger.tracer.TraceDispatcher.stop")
-    def test_start_and_stop_trace(self, mock_stop, mock_start):
-        t = start_trace(target_files=[__file__])
-        self.assertIsNotNone(t)
-        mock_start.assert_called_once()
-        t.stop()
-        mock_stop.assert_called_once()
+    def test_start_and_stop_trace(self):
+        """
+        Tests that start_trace correctly instantiates the dispatcher and calls
+        its start and stop methods. This test patches the entire dispatcher
+        class for robust mocking.
+        """
+        # The tracer implementation branches based on Python version.
+        # We must patch the correct class that `start_trace` will instantiate.
+        if sys.version_info >= (3, 12):
+            dispatcher_path = "debugger.tracer.SysMonitoringTraceDispatcher"
+        else:
+            dispatcher_path = "debugger.tracer.TraceDispatcher"
+
+        with patch(dispatcher_path) as MockDispatcher:
+            # The mock instance that the patched class will produce.
+            mock_instance = MockDispatcher.return_value
+
+            # Call the function that should use our mock dispatcher
+            t = start_trace(target_files=[__file__])
+
+            # Verify the dispatcher was instantiated once.
+            MockDispatcher.assert_called_once()
+
+            # The returned tracer 't' should be our mock instance.
+            self.assertIs(t, mock_instance)
+
+            # Verify that start() was called on the instance.
+            mock_instance.start.assert_called_once()
+
+            # Call stop() and verify it's also called on the instance.
+            t.stop()
+            mock_instance.stop.assert_called_once()
 
     def test_full_trace_cycle(self):
-        config = TraceConfig(target_files=[f"*{Path(__file__).name}"])
-        dispatcher = TraceDispatcher(__file__, config)
-        dispatcher.start()
-        result = sample_function(5, 10)
-        self.assertEqual(result, (30, "large"))
-        dispatcher.stop()
-        # Check if logs were produced (indirectly)
-        self.assertGreater(len(dispatcher._logic._html_render._messages), 0)
+        """
+        Tests a full tracing cycle using the start_trace entry point
+        to ensure the default tracer works end-to-end.
+        """
+        # start_trace will select the correct dispatcher automatically.
+        # This is a full integration test without mocks.
+        tracer = start_trace(target_files=[f"*{Path(__file__).name}"])
+        self.assertIsNotNone(tracer)
+
+        try:
+            # The actual code being traced.
+            result = sample_function(5, 10)
+            self.assertEqual(result, (30, "large"))
+        finally:
+            # Ensure the tracer is stopped even if the test fails.
+            tracer.stop()
+
+        # Check if logs were produced by inspecting the tracer's internal state.
+        self.assertGreater(len(tracer._logic._html_render._messages), 0)
 
 
 if __name__ == "__main__":

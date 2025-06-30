@@ -89,29 +89,30 @@ class TestAutoFix:
 
         print(Fore.YELLOW + "\nTest Issues Details:")
         print(Fore.YELLOW + "=" * 50)
-        for i, error in enumerate(self.error_details, 1):
-            print(Fore.RED + f"\nIssue #{i} ({error.get('issue_type', 'unknown')}):")
-            print(Fore.CYAN + f"File: {error['file_path']}")
-            print(Fore.CYAN + f"Line: {error['line']}")
-            print(Fore.CYAN + f"Function: {error['function']}")
-            print(Fore.MAGENTA + f"Type: {error['error_type']}")
-            print(Fore.MAGENTA + f"Message: {error['error_message']}")
-            if error.get("traceback"):
-                print(Fore.YELLOW + "\nTraceback:")
-                print(Fore.YELLOW + "-" * 30)
-                print(Fore.RED + error["traceback"])
-                print(Fore.YELLOW + "-" * 30)
+        # 只显示第一个错误，因为我们每次只修复一个
+        error = self.error_details[0]
+        print(Fore.RED + f"\nIssue #1 ({error.get('issue_type', 'unknown')}):")
+        print(Fore.CYAN + f"File: {error['file_path']}")
+        print(Fore.CYAN + f"Line: {error['line']}")
+        print(Fore.CYAN + f"Function: {error['function']}")
+        print(Fore.MAGENTA + f"Type: {error['error_type']}")
+        print(Fore.MAGENTA + f"Message: {error['error_message']}")
+        if error.get("traceback"):
+            print(Fore.YELLOW + "\nTraceback:")
+            print(Fore.YELLOW + "-" * 30)
+            print(Fore.RED + error["traceback"])
+            print(Fore.YELLOW + "-" * 30)
 
-            # Display references if provided
-            if references:
-                print(Fore.BLUE + "\nRelated References:")
-                print(Fore.BLUE + "-" * 30)
-                for ref_file, ref_line in references:
-                    print(Fore.CYAN + f"→ {ref_file}:{ref_line}")
+        # Display references if provided
+        if references:
+            print(Fore.BLUE + "\nRelated References:")
+            print(Fore.BLUE + "-" * 30)
+            for ref_file, ref_line in references:
+                print(Fore.CYAN + f"→ {ref_file}:{ref_line}")
 
-            # Add tracer log analysis
-            if error.get("file_path") and error.get("line"):
-                self._display_tracer_logs(error["file_path"], error["line"])
+        # Add tracer log analysis
+        if error.get("file_path") and error.get("line"):
+            self._display_tracer_logs(error["file_path"], error["line"])
 
     def lookup_reference(self, file_path: str, lineno: int) -> None:
         """Display reference information for a specific file and line."""
@@ -224,7 +225,7 @@ from tests.test_main import run_tests
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Test auto-fix tool")
+    parser = argparse.ArgumentParser(description="Test auto-fix tool with continuous repair workflow.")
     parser.add_argument(
         "test_patterns",
         nargs="*",
@@ -342,10 +343,67 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
+def run_fix_loop(args: argparse.Namespace):
+    """
+    Main loop for continuous test fixing.
+    Runs tests, fixes the first error, and repeats until all tests pass.
+    """
+    model_switch = ModelSwitch()
+    model_switch.select(args.model)
+    fix_mode = None
+
+    if not args.direct_fix:
+        print(Fore.YELLOW + "\n请选择修复模式：")
+        print(Fore.CYAN + "1. 解释并修复 (两步)")
+        print(Fore.CYAN + "2. 直接修复 (一步)")
+        print(Fore.CYAN + "3. 退出")
+        choice = input(Fore.GREEN + "请选择 (1/2/3): ").strip()
+
+        if choice == "1":
+            fix_mode = "two_step"
+        elif choice == "2":
+            fix_mode = "direct"
+        else:
+            print(Fore.RED + "已退出。")
+            return
+    else:
+        fix_mode = "direct"
+
+    while True:
+        print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
+        test_results = TestAutoFix.run_tests(
+            test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=False
+        )
+        auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
+        auto_fix.display_errors()
+
+        if not auto_fix.error_details:
+            print(Fore.GREEN + "\n🎉 恭喜！所有测试均已通过。")
+            break
+
+        if not auto_fix.uniq_references:
+            print(Fore.YELLOW + "\n未找到错误的有效引用。无法自动修复，请手动检查。")
+            break
+
+        symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
+
+        if fix_mode == "direct":
+            _perform_direct_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
+        elif fix_mode == "two_step":
+            _perform_two_step_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
+
+        # After applying a fix, ask the user if they want to continue
+        continue_choice = input(Fore.GREEN + "\n补丁已应用。是否继续修复下一个问题？ (y/n): ").strip().lower()
+        if continue_choice != "y":
+            print(Fore.RED + "用户选择退出修复流程。")
+            break
+
+
 def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
 
+    # Handle one-off commands that do not enter the fix loop
     if args.lookup:
         file_path, line = args.lookup
         try:
@@ -357,12 +415,10 @@ def main():
             sys.exit(1)
         return
 
-    # 处理列出测试用例的情况
     if args.list_tests:
         test_results = TestAutoFix.run_tests(
             test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=True
         )
-
         if "test_cases" in test_results:
             print("\nAvailable test cases:")
             print("=" * 50)
@@ -372,43 +428,8 @@ def main():
             print(f"Total: {len(test_results['test_cases'])} tests")
         return
 
-    # 运行测试并获取结果
-    test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=False)
-
-    auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
-    auto_fix.display_errors()
-
-    if not auto_fix.error_details:
-        return  # No errors to fix
-
-    if not auto_fix.uniq_references:
-        print(Fore.YELLOW + "\nNo references found for the test issues. Cannot proceed with fix.")
-        return
-
-    symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
-
-    model_switch = ModelSwitch()
-    model_switch.select(args.model)
-
-    if args.direct_fix:
-        _perform_direct_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
-    else:
-        print(Fore.YELLOW + "\n请选择操作：")
-        print(Fore.CYAN + "1. 解释并修复 (两步)")
-        print(Fore.CYAN + "2. 直接修复 (一步)")
-        print(Fore.CYAN + "3. 退出")
-        choice = input(Fore.GREEN + "请选择 (1/2/3): ").strip()
-
-        if choice == "1":
-            _perform_two_step_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
-        elif choice == "2":
-            _perform_direct_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
-        elif choice == "3":
-            print(Fore.RED + "已退出。")
-            return
-        else:
-            print(Fore.RED + "无效选择，退出。")
-            return
+    # Enter the main continuous fixing loop
+    run_fix_loop(args)
 
 
 if __name__ == "__main__":
