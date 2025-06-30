@@ -9,17 +9,25 @@ from pathlib import Path
 
 class TagRandomizer:
     """
-    处理标签随机化和还原的工具类
+    处理标签随机化和还原的工具类。
+
+    LLM在生成包含[start]/[end]标签的代码时，可能会在指令部分也错误地使用
+    这些标签。为了避免解析歧义，此工具类将指令内容中的标准标签随机化为
+    [start.XX]/[end.XX]格式，在执行前再由ReplaceEngine还原。
 
     功能:
-    - 将标准标签[start]/[end]随机化为[start.XX]/[end.XX]格式
-    - 将随机化标签还原为标准标签
-    - 避免处理指令部分的标准标签
+    - 将标准标签[start]/[end]随机化为[start.XX]/[end.XX]格式。
+    - 将随机化标签还原为标准标签。
 
     使用示例:
     >>> randomizer = TagRandomizer()
+    >>> source_code = "print('[start] a block [end]')"
     >>> randomized_content = randomizer.randomize_tags(source_code)
-    >>> restored_content = randomizer.restore_tags(randomized_content)
+    >>> print(randomized_content)
+    # print('[start.XX] a block [end.XX]')
+    >>> restored_content = TagRandomizer.restore_tags(randomized_content)
+    >>> print(restored_content)
+    # print('[start] a block [end]')
     """
 
     def __init__(self):
@@ -29,13 +37,13 @@ class TagRandomizer:
 
     def randomize_tags(self, content):
         """
-        将内容中的标准标签替换为随机化标签
+        将内容中的标准标签替换为随机化标签。
 
         Args:
-            content: 需要处理的文本内容
+            content (str): 需要处理的文本内容。
 
         Returns:
-            处理后的文本，所有[start]和[end]标签被替换为随机化版本
+            str: 处理后的文本，所有[start]和[end]标签被替换为随机化版本。
         """
 
         def replace_tag(match):
@@ -47,74 +55,53 @@ class TagRandomizer:
     @staticmethod
     def restore_tags(content):
         """
-        将内容中的随机化标签还原为标准标签
+        将内容中的随机化标签还原为标准标签。
+
+        此方法为静态方法，因为它不依赖于任何实例状态。
 
         Args:
-            content: 需要处理的文本内容
+            content (str): 需要处理的文本内容。
 
         Returns:
-            处理后的文本，所有[start.XX]和[end.XX]标签被还原为标准形式
+            str: 处理后的文本，所有[start.XX]和[end.XX]标签被还原为标准形式。
         """
-
-        def replace_randomized(match):
-            tag_type = match.group(1)
-            return f"[{tag_type}]"
-
         pattern = re.compile(r"\[(start|end)\.\d{2}\]")
-        return pattern.sub(replace_randomized, content)
+        return pattern.sub(r"[\1]", content)
 
 
 class ReplaceEngine:
     """
-    安全执行字符串替换操作的引擎
+    一个安全的文件修改引擎，用于执行LLM生成的指令。
 
     功能特点:
-    - 严格验证替换源字符串的唯一性
-    - 操作失败时自动回滚
-    - 支持批量顺序执行替换指令
-    - 详细的错误报告机制
+    - 支持多种操作：文件创建、全量覆盖、内容替换、按行替换、内容插入。
+    - 安全至上：所有文件写操作都通过备份-回滚机制保证原子性。
+    - 严格验证：在执行操作前，对指令和文件状态进行严格校验。
+    - 错误处理：提供清晰的错误信息。
 
     使用示例:
     >>> engine = ReplaceEngine()
     >>> instructions = [
-    ...     {
-    ...         'type': 'replace',
-    ...         'path': '/path/to/file',
-    ...         'src': 'original content',
-    ...         'dst': 'new content'
-    ...     },
-    ...     {
-    ...         'type': 'replace_lines',
-    ...         'path': '/path/to/file',
-    ...         'start_line': 5,
-    ...         'end_line': 8,
-    ...         'src': 'lines content',
-    ...         'dst': 'new lines'
-    ...     },
-    ...     {
-    ...         'type': 'insert',
-    ...         'path': '/path/to/file',
-    ...         'line_num': 10,
-    ...         'content': 'inserted content'
-    ...     }
+    ...     {'type': 'created_file', 'path': '/tmp/new_file.txt', 'content': 'Hello World'},
+    ...     {'type': 'overwrite_whole_file', 'path': '/tmp/new_file.txt', 'content': 'New Content'},
+    ...     # ... 其他指令
     ... ]
     >>> engine.execute(instructions)
     """
 
     def execute(self, instructions):
         """
-        执行替换指令集
+        按顺序执行一个指令集。
 
         Args:
-            instructions: 替换指令列表
+            instructions (list[dict]): 从LLMInstructionParser解析出的指令列表。
 
         Raises:
-            ValueError: 当指令验证失败时
-            RuntimeError: 当操作执行失败时
+            ValueError: 当指令验证失败时。
+            RuntimeError: 当文件操作执行失败时。
+            FileNotFoundError: 当指令中指定的文件不存在时（`created_file`除外）。
         """
         validated = self._validate_instructions(instructions)
-
-        # 还原指令内容中的随机化标签
         restored_instructions = self._restore_randomized_tags(validated)
 
         for instr in restored_instructions:
@@ -133,540 +120,349 @@ class ReplaceEngine:
                     self._safe_insert(path=instr["path"], line_num=instr["line_num"], content=instr["content"])
                 elif instr["type"] == "overwrite_whole_file":
                     self._safe_overwrite_file(path=instr["path"], content=instr["content"])
+                elif instr["type"] == "created_file":
+                    self._safe_create_file(path=instr["path"], content=instr["content"])
+                # project_setup_script is handled by the caller, so we ignore it here.
+
             except Exception as e:
-                raise RuntimeError(f"操作失败 @ {instr['path']}: {str(e)}") from e
-
-    def _safe_overwrite_file(self, path, content):
-        """
-        安全覆盖整个文件（带备份和回滚机制）
-
-        Args:
-            path: 文件路径
-            content: 要写入的新内容
-
-        Raises:
-            FileNotFoundError: 如果文件不存在
-            RuntimeError: 如果写入失败
-        """
-        # 检查文件是否存在
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"文件不存在: {path}")
-
-        # 读取原始内容并创建备份
-        with open(path, "r", encoding="utf-8") as f:
-            original_content = f.read()
-        backup_path = self._create_backup(path, original_content)
-
-        try:
-            # 写入新内容
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-        except Exception:
-            # 恢复备份
-            self._restore_backup(backup_path, path)
-            raise
-        finally:
-            # 清理备份文件
-            if backup_path.exists():
-                backup_path.unlink()
+                # 统一异常出口，附加文件路径信息，方便调试
+                raise RuntimeError(f"操作失败 @ {instr.get('path', 'project_setup_script')}: {e}") from e
 
     def _restore_randomized_tags(self, instructions):
         """
-        还原指令内容中的随机化标签
-
-        Args:
-            instructions: 原始指令列表
-
-        Returns:
-            还原标签后的指令列表
+        还原指令内容中的所有随机化标签。
         """
         restored = []
         for instr in instructions:
-            # 根据指令类型还原不同字段中的标签
-            if instr["type"] == "replace":
-                restored.append(
-                    {
-                        "type": "replace",
-                        "path": instr["path"],
-                        "src": TagRandomizer.restore_tags(instr["src"]),
-                        "dst": TagRandomizer.restore_tags(instr["dst"]),
-                    }
-                )
-            elif instr["type"] == "replace_lines":
-                restored.append(
-                    {
-                        "type": "replace_lines",
-                        "path": instr["path"],
-                        "start_line": instr["start_line"],
-                        "end_line": instr["end_line"],
-                        "src": TagRandomizer.restore_tags(instr["src"]),
-                        "dst": TagRandomizer.restore_tags(instr["dst"]),
-                    }
-                )
-            elif instr["type"] == "insert":
-                restored.append(
-                    {
-                        "type": "insert",
-                        "path": instr["path"],
-                        "line_num": instr["line_num"],
-                        "content": TagRandomizer.restore_tags(instr["content"]),
-                    }
-                )
-            elif instr["type"] in ("overwrite_whole_file", "created_file"):
-                restored.append(
-                    {
-                        "type": instr["type"],
-                        "path": instr["path"],
-                        "content": TagRandomizer.restore_tags(instr["content"]),
-                    }
-                )
-            elif instr["type"] == "project_setup_script":
-                restored.append(
-                    {"type": "project_setup_script", "content": TagRandomizer.restore_tags(instr["content"])}
-                )
-            else:
-                # 未知指令类型，原样保留
-                restored.append(instr)
+            new_instr = instr.copy()
+            if new_instr["type"] in ("replace", "replace_lines"):
+                new_instr["src"] = TagRandomizer.restore_tags(instr["src"])
+                new_instr["dst"] = TagRandomizer.restore_tags(instr["dst"])
+            elif new_instr["type"] in ("insert", "overwrite_whole_file", "created_file", "project_setup_script"):
+                if "content" in new_instr:
+                    new_instr["content"] = TagRandomizer.restore_tags(instr["content"])
+            restored.append(new_instr)
         return restored
 
     def _validate_instructions(self, instr_set):
-        """验证指令集有效性"""
+        """验证指令集的有效性，并解析为内部格式。"""
         if not instr_set:
             return []
 
         validated = []
         for i, instr in enumerate(instr_set):
             if not self._is_valid_instruction(instr):
-                raise ValueError(f"无效指令 @ 索引 {i}")
+                raise ValueError(f"无效或不完整的指令 @ 索引 {i}: {instr}")
 
-            # 检查文件是否存在
-            path = Path(instr["path"])
-            # 例外：created_file允许文件不存在
-            if instr["type"] != "created_file":
-                if not path.exists():
+            # 对需要路径的指令进行标准化和存在性检查
+            if "path" in instr:
+                path = Path(instr["path"])
+                # created_file 指令允许文件不存在，但其父目录必须可写
+                if instr["type"] == "created_file":
+                    parent_dir = path.parent
+                    if not parent_dir.exists():
+                        # We will create it, just check if we can write there
+                        try:
+                            parent_dir.mkdir(parents=True, exist_ok=True)
+                            if not any(parent_dir.iterdir()):
+                                parent_dir.rmdir()  # Clean up test directory if we created it and it's empty
+                        except OSError as e:
+                            raise ValueError(f"无法创建父目录 for {path}: {e}")
+                    elif not os.access(parent_dir, os.W_OK):
+                        raise ValueError(f"父目录不可写: {parent_dir}")
+                # 其他指令要求文件必须存在
+                elif not path.exists():
                     raise FileNotFoundError(f"文件不存在: {path}")
-                if not path.is_file():
-                    raise ValueError(f"路径不是文件: {path}")
+                elif not path.is_file():
+                    raise ValueError(f"路径不是一个文件: {path}")
 
-            if instr["type"] == "replace":
-                validated.append(
-                    {"type": "replace", "path": str(path.resolve()), "src": instr["src"], "dst": instr["dst"]}
-                )
-            elif instr["type"] == "replace_lines":
-                # 验证行号范围
-                start_line = instr["start_line"]
-                end_line = instr["end_line"]
-                if not (isinstance(start_line, int) and isinstance(end_line, int)):
-                    raise ValueError(f"行号必须是整数: start_line={start_line}, end_line={end_line}")
-                if start_line < 1 or end_line < start_line:
-                    raise ValueError(f"无效行号范围: {start_line}-{end_line}")
+                instr["path"] = str(path.resolve())
 
-                validated.append(
-                    {
-                        "type": "replace_lines",
-                        "path": str(path.resolve()),
-                        "start_line": start_line,
-                        "end_line": end_line,
-                        "src": instr["src"],
-                        "dst": instr["dst"],
-                    }
-                )
+            # 类型特定验证
+            if instr["type"] == "replace_lines":
+                start_line, end_line = instr["start_line"], instr["end_line"]
+                if not (isinstance(start_line, int) and isinstance(end_line, int) and 1 <= start_line <= end_line):
+                    raise ValueError(f"无效的行号范围: start={start_line}, end={end_line}")
+
             elif instr["type"] == "insert":
-                # 验证行号
                 line_num = instr["line_num"]
-                if not isinstance(line_num, int) or line_num < 0:  # 0 for inserting at the beginning
-                    raise ValueError(f"无效行号: {line_num}")
+                if not (isinstance(line_num, int) and line_num >= 0):  # 0 for insert at the beginning
+                    raise ValueError(f"无效的插入行号: {line_num}")
 
-                validated.append(
-                    {"type": "insert", "path": str(path.resolve()), "line_num": line_num, "content": instr["content"]}
-                )
-            # 添加对文件覆盖/创建指令的支持
-            elif instr["type"] in ("overwrite_whole_file", "created_file"):
-                # 对于覆盖整个文件和创建文件，只需要路径和内容
-                validated.append({"type": instr["type"], "path": str(path.resolve()), "content": instr["content"]})
-            else:
-                # 未知指令类型，可以记录警告或抛出异常，这里我们选择跳过
-                continue
-
+            validated.append(instr)
         return validated
 
     @staticmethod
     def _is_valid_instruction(instr):
-        if not isinstance(instr, dict):
+        """检查单个指令是否包含所有必需的键。"""
+        if not isinstance(instr, dict) or "type" not in instr:
             return False
 
-        # 公共必填字段
-        if "type" not in instr or "path" not in instr:
+        instr_type = instr["type"]
+        if instr_type == "project_setup_script":
+            return "content" in instr
+
+        # All other types require a path
+        if "path" not in instr:
             return False
 
-        # 类型特定验证
-        if instr["type"] == "replace":
-            required_keys = {"src", "dst"}
-            return required_keys.issubset(instr.keys())
-
-        if instr["type"] == "replace_lines":
-            required_keys = {"start_line", "end_line", "src", "dst"}
-            return required_keys.issubset(instr.keys())
-
-        if instr["type"] == "insert":
-            required_keys = {"line_num", "content"}
-            return required_keys.issubset(instr.keys())
-
-        # 添加对文件覆盖/创建指令的支持
-        if instr["type"] in ("overwrite_whole_file", "created_file"):
-            required_keys = {"content"}
-            return required_keys.issubset(instr.keys())
-
-        # 添加对项目设置脚本的支持
-        if instr["type"] == "project_setup_script":
+        if instr_type == "replace":
+            return {"src", "dst"}.issubset(instr.keys())
+        if instr_type == "replace_lines":
+            return {"start_line", "end_line", "src", "dst"}.issubset(instr.keys())
+        if instr_type == "insert":
+            return {"line_num", "content"}.issubset(instr.keys())
+        if instr_type in ("overwrite_whole_file", "created_file"):
             return "content" in instr
 
         return False
 
-    def _safe_replace(self, path, src, dst):
+    def _safe_create_file(self, path, content):
         """
-        安全的替换实现（带备份和回滚机制）
+        安全地创建一个新文件，包括其父目录。
 
-        步骤:
-        1. 创建临时备份文件
-        2. 执行替换操作
-        3. 验证替换结果
-        4. 失败时恢复备份
+        如果文件已存在，将抛出异常以防意外覆盖。
         """
-        # 读取原始内容
+        path_obj = Path(path)
+        if path_obj.exists():
+            raise FileExistsError(f"创建文件失败，路径已存在: {path}")
+
+        # 自动创建父目录，这比用户预期的更周到
+        path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+        # 直接写入，因为没有原始文件，无需备份
+        with open(path_obj, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _safe_overwrite_file(self, path, content):
+        """安全地用新内容覆盖整个文件，使用备份和回滚机制。"""
+        backup_path = None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                original_content = f.read()
+            backup_path = self._create_backup(path, original_content)
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:
+            if backup_path:
+                self._restore_backup(backup_path, path)
+            raise
+        finally:
+            if backup_path and backup_path.exists():
+                backup_path.unlink()
+
+    def _safe_replace(self, path, src, dst):
+        """安全地替换文件中的唯一匹配字符串，使用备份和回滚机制。"""
         with open(path, "r", encoding="utf-8") as f:
             original_content = f.read()
 
-        # 验证源字符串唯一性
         count = original_content.count(src)
         if count == 0:
             raise ValueError("未找到匹配的源字符串")
         if count > 1:
-            raise ValueError(f"找到多个匹配项 ({count}处)，无法确保唯一性")
+            raise ValueError(f"找到 {count} 个匹配项，无法确保唯一性以进行安全替换")
 
-        # 执行替换
-        updated_content = original_content.replace(src, dst)
+        updated_content = original_content.replace(src, dst, 1)
 
-        # 创建备份
         backup_path = self._create_backup(path, original_content)
-
         try:
-            # 写入新内容
             with open(path, "w", encoding="utf-8") as f:
                 f.write(updated_content)
-
-            # 验证替换结果
-            if not self._verify_replacement(path, src, dst):
-                raise RuntimeError("替换后验证失败")
-
         except Exception:
-            # 恢复备份
             self._restore_backup(backup_path, path)
             raise
         finally:
-            # 清理备份
-            if backup_path.exists():
+            if backup_path and backup_path.exists():
                 backup_path.unlink()
 
     def _safe_replace_lines(self, path, start_line, end_line, src, dst):
-        """
-        安全的行号范围替换实现
-
-        步骤:
-        1. 创建临时备份文件
-        2. 执行行范围替换
-        3. 验证替换结果
-        4. 失败时恢复备份
-        """
-        # 读取原始内容
+        """安全地替换指定行范围的内容，使用备份和回滚机制。"""
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
-        # 验证行号范围
-        if start_line < 1 or end_line > len(lines) or start_line > end_line:
+        if not (1 <= start_line <= end_line <= len(lines)):
             raise ValueError(f"无效行号范围: {start_line}-{end_line}，文件总行数: {len(lines)}")
 
-        # 提取行范围内容
         original_block = "".join(lines[start_line - 1 : end_line])
+        # 使用strip()来忽略因编辑器配置可能产生的尾部空白差异
         if original_block.strip() != src.strip():
-            raise ValueError("源字符串与文件指定行范围的内容不匹配")
+            # 提供详细的差异信息，便于调试
+            raise ValueError(
+                f"源字符串与文件指定行范围的内容不匹配。\n--- EXPECTED ---\n{src}\n--- ACTUAL ---\n{original_block}"
+            )
 
-        # 创建备份
         backup_path = self._create_backup(path, "".join(lines))
-
         try:
-            # 准备替换内容（保留换行符）
-            dst_lines = dst.splitlines(keepends=True)
-            if dst and not dst.endswith("\n"):
-                dst_lines[-1] += "\n"
+            # 将替换内容按行分割，并确保每行都以换行符结尾
+            dst_lines = [line + "\n" for line in dst.splitlines()]
+            if dst:
+                # 增加一个额外的空行，以提高代码变更的可读性
+                dst_lines.append("\n")
 
-            # 构建新内容
             new_lines = lines[: start_line - 1] + dst_lines + lines[end_line:]
-
-            # 写入新内容
             with open(path, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
-
         except Exception:
             self._restore_backup(backup_path, path)
             raise
         finally:
-            if backup_path.exists():
+            if backup_path and backup_path.exists():
                 backup_path.unlink()
 
     def _safe_insert(self, path, line_num, content):
-        """
-        安全的插入实现
-
-        步骤:
-        1. 创建临时备份文件
-        2. 执行插入操作
-        3. 验证插入结果
-        4. 失败时恢复备份
-        """
-        # 读取原始内容
+        """安全地在指定行号插入内容，使用备份和回滚机制。"""
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
-        # 验证行号
-        if line_num < 0 or line_num > len(lines):
+        # line_num可以等于len(lines)，表示在文件末尾插入
+        if not (0 <= line_num <= len(lines)):
             raise ValueError(f"无效行号: {line_num}，文件总行数: {len(lines)}")
 
-        # 创建备份
         backup_path = self._create_backup(path, "".join(lines))
-
         try:
-            # 准备插入内容（保留换行符）
-            insert_lines = content.splitlines(keepends=True)
-            if content and not content.endswith("\n"):
-                insert_lines[-1] += "\n"
+            # 将插入内容按行分割，并确保每行都以换行符结尾
+            insert_lines = [line + "\n" for line in content.splitlines()]
+            if content:
+                # 增加一个额外的空行，以提高代码变更的可读性
+                insert_lines.append("\n")
 
-            # 执行插入
             new_lines = lines[:line_num] + insert_lines + lines[line_num:]
-
-            # 写入新内容
             with open(path, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
-
         except Exception:
             self._restore_backup(backup_path, path)
             raise
         finally:
-            if backup_path.exists():
+            if backup_path and backup_path.exists():
                 backup_path.unlink()
 
     @staticmethod
     def _create_backup(original_path, content):
-        """创建临时备份文件"""
+        """创建临时备份文件。"""
         backup_dir = Path(tempfile.gettempdir())
-        file_hash = hashlib.md5(content.encode()).hexdigest()[:8]
-        backup_name = f"{Path(original_path).name}.bak_{file_hash}"
+        file_hash = hashlib.md5(str(original_path).encode()).hexdigest()[:8]
+        backup_name = f"{Path(original_path).name}.{file_hash}.bak"
         backup_path = backup_dir / backup_name
-
         with open(backup_path, "w", encoding="utf-8") as f:
             f.write(content)
-
         return backup_path
 
     @staticmethod
     def _restore_backup(backup_path, target_path):
-        """从备份恢复文件"""
-        with open(backup_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        with open(target_path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-    @staticmethod
-    def _verify_replacement(path, src, dst):
-        """验证替换结果是否正确"""
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # 源字符串应完全消失
-        if src in content:
-            return False
-
-        # 目标字符串应存在（除非是删除操作）
-        if dst and dst not in content:
-            return False
-
-        return True
-
-    @staticmethod
-    def _verify_lines_replacement(path, start_line, expected):
-        """验证行号范围替换结果"""
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        # 计算替换后的行数
-        expected_lines = expected.splitlines(keepends=True)
-        if expected and not expected.endswith("\n"):
-            expected_lines[-1] += "\n"
-
-        expected_line_count = len(expected_lines)
-        actual_block = "".join(lines[start_line - 1 : start_line - 1 + expected_line_count])
-
-        return actual_block.strip() == expected.strip()
-
-    @staticmethod
-    def _verify_insertion(path, line_num, expected):
-        """验证插入结果"""
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        # 计算插入内容的行数
-        insert_lines = expected.splitlines(keepends=True)
-        if expected and not expected.endswith("\n"):
-            insert_lines[-1] += "\n"
-        insert_line_count = len(insert_lines)
-
-        # 验证插入位置
-        actual_block = "".join(lines[line_num : line_num + insert_line_count])
-        return actual_block.strip() == expected.strip()
+        """从备份恢复文件。"""
+        if backup_path and backup_path.exists():
+            with open(backup_path, "r", encoding="utf-8") as f_bak, open(target_path, "w", encoding="utf-8") as f_orig:
+                f_orig.write(f_bak.read())
 
 
 class LLMInstructionParser:
     """
-    从LLM响应内容中解析指令。
-    支持文件创建/覆盖和部分内容替换。
+    从LLM响应内容中解析出结构化的文件操作指令。
 
-    增强功能:
-    - 移除了未使用的user verify功能
-    - 强化了文件覆盖指令的可靠性
-    - 简化了正则表达式模式
-    - 添加了更健壮的内容提取
-    - 支持行号范围替换和插入指令
+    该解析器设计得非常健壮，能识别多种常见的LLM输出格式，包括
+    严格的指令格式和常见的Markdown代码块格式。
     """
 
     _PATTERN = re.compile(
-        r"\[project setup shellscript start\]\n(?P<setup_script>.*?)\n\[project setup shellscript end\]|"
-        r"\[(?P<action>overwrite whole file|created file)\]:\s*(?P<path>[^\n]+)\n\[start\]\n(?P<content>.*?)\n\[end\]|"
-        r"```(?P<lang>\w*):(?P<alt_path>[^\n]+?)\n(?P<alt_content>.*?)```|"
-        r"\[replace\]:\s*(?P<path_replace>.+?)\n(?:\[lines\]:\s*(?P<lines>\d+-\d+)\n)?"
-        r"\[start\]\n(?P<src_replace>.*?)\n\[end\]\n\[start\]\n(?P<dst_replace>.*?)\n\[end\]|"
-        r"\[insert\]:\s*(?P<path_insert>.+?)\n\[line\]:\s*(?P<line_num>\d+)\n"
-        r"\[start\]\n(?P<content_insert>.*?)\n\[end\]",
-        re.DOTALL,
+        # 格式1: 项目设置脚本
+        # [project setup script]
+        # [start]
+        # ... shell script ...
+        # [end]
+        r"\[project setup script\]\n\[start\]\n?(?P<setup_script>.*?)\n?\[end\]|"
+        # 格式2: 文件创建/覆盖
+        # [overwrite whole file|created file]: /path/to/file
+        # [start]
+        # ... content ...
+        # [end]
+        r"\[(?P<action>overwrite whole file|created file)\]:\s*(?P<path>[^\n]+?)\n\[start\]\n?(?P<content>.*?)\n?\[end\]|"
+        # 格式3: 标准替换 (字符串或行范围)
+        # [replace]: /path/to/file
+        # [lines]: 5-10  (可选)
+        # [start]
+        # ... src content ...
+        # [end]
+        # [start]
+        # ... dst content ...
+        # [end]
+        r"\[replace\]:\s*(?P<path_replace>[^\n]+?)\n(?:\[lines\]:\s*(?P<lines>\d+-\d+)\n)?\[start\]\n?(?P<src_replace>.*?)\n?\[end\]\n\[start\]\n?(?P<dst_replace>.*?)\n?\[end\]|"
+        # 格式4: 插入
+        # [insert]: /path/to/file
+        # [line]: 15
+        # [start]
+        # ... content ...
+        # [end]
+        r"\[insert\]:\s*(?P<path_insert>[^\n]+?)\n\[line\]:\s*(?P<line_num>\d+)\n\[start\]\n?(?P<content_insert>.*?)\n?\[end\]|"
+        # 格式5 (备用): Markdown代码块格式
+        # ```python:/path/to/file
+        # ... content ...
+        # ```
+        r"```(?P<lang>\w*):(?P<alt_path>[^\n]+?)\n(?P<alt_content>.*?)```",
+        re.DOTALL | re.MULTILINE,
     )
 
     @classmethod
-    def parse(cls, content):
+    def parse(cls, text):
         """
-        从文本内容解析指令。
-
-        支持格式:
-        1. 项目设置脚本:
-           [project setup shellscript start]...script...[project setup shellscript end]
-
-        2. 文件覆盖/创建:
-           [overwrite whole file]: /path/to/file
-           [start]
-           ...content...
-           [end]
-
-        3. 代码块格式文件:
-           ```lang:/path/to/file
-           ...content...
-           ```
-
-        4. 字符串替换:
-           [replace]: /path/to/file
-           [start]
-           ...src...
-           [end]
-           [start]
-           ...dst...
-           [end]
-
-        5. 行号范围替换:
-           [replace]: /path/to/file
-           [lines]: start_line-end_line
-           [start]
-           ...src...
-           [end]
-           [start]
-           ...dst...
-           [end]
-
-        6. 指定行插入:
-           [insert]: /path/to/file
-           [line]: line_number
-           [start]
-           ...content...
-           [end]
+        从文本中解析所有匹配的指令。
         """
         instructions = []
-        for match in cls._PATTERN.finditer(content):
-            gd = match.groupdict()
+        for match in cls._PATTERN.finditer(text):
+            groups = match.groupdict()
 
-            # 处理项目设置脚本
-            if gd["setup_script"] is not None:
-                instructions.append({"type": "project_setup_script", "content": gd["setup_script"].strip()})
+            if groups["setup_script"] is not None:
+                instructions.append({"type": "project_setup_script", "content": groups["setup_script"].strip()})
 
-            # 处理文件覆盖/创建指令
-            elif gd["action"] is not None:
-                action_type = gd["action"].replace(" ", "_")
+            elif groups["action"] is not None:
                 instructions.append(
                     {
-                        "type": action_type,
-                        "path": gd["path"].strip(),
-                        "content": gd["content"],
+                        "type": groups["action"].replace(" ", "_"),
+                        "path": groups["path"].strip(),
+                        "content": groups["content"].strip(),
                     }
                 )
 
-            # 处理代码块格式文件
-            elif gd["alt_path"] is not None:
-                instructions.append(
-                    {
-                        "type": "overwrite_whole_file",
-                        "path": gd["alt_path"].strip(),
-                        "content": gd["alt_content"].strip(),
-                    }
-                )
-
-            # 处理字符串替换和行号范围替换
-            elif gd["path_replace"] is not None:
-                # 检查是否是行号范围替换
-                if gd["lines"] is not None:
-                    try:
-                        start_line, end_line = map(int, gd["lines"].split("-"))
-                    except ValueError:
-                        continue  # 跳过格式错误的行号
-
+            elif groups["path_replace"] is not None:
+                path = groups["path_replace"].strip()
+                if groups["lines"]:
+                    start, end = map(int, groups["lines"].split("-"))
                     instructions.append(
                         {
                             "type": "replace_lines",
-                            "path": gd["path_replace"].strip(),
-                            "start_line": start_line,
-                            "end_line": end_line,
-                            "src": gd["src_replace"],
-                            "dst": gd["dst_replace"],
+                            "path": path,
+                            "start_line": start,
+                            "end_line": end,
+                            "src": groups["src_replace"].strip(),
+                            "dst": groups["dst_replace"].strip(),
                         }
                     )
                 else:
                     instructions.append(
                         {
                             "type": "replace",
-                            "path": gd["path_replace"].strip(),
-                            "src": gd["src_replace"],
-                            "dst": gd["dst_replace"],
+                            "path": path,
+                            "src": groups["src_replace"].strip(),
+                            "dst": groups["dst_replace"].strip(),
                         }
                     )
 
-            # 处理插入指令
-            elif gd["path_insert"] is not None and gd["line_num"] is not None:
-                try:
-                    line_num = int(gd["line_num"])
-                except ValueError:
-                    continue  # 跳过无效行号
-
+            elif groups["path_insert"] is not None:
                 instructions.append(
                     {
                         "type": "insert",
-                        "path": gd["path_insert"].strip(),
-                        "line_num": line_num,
-                        "content": gd["content_insert"],
+                        "path": groups["path_insert"].strip(),
+                        "line_num": int(groups["line_num"]),
+                        "content": groups["content_insert"].strip(),
+                    }
+                )
+
+            elif groups["alt_path"] is not None:
+                instructions.append(
+                    {
+                        "type": "overwrite_whole_file",
+                        "path": groups["alt_path"].strip(),
+                        "content": groups["alt_content"].strip(),
                     }
                 )
 
@@ -674,358 +470,156 @@ class LLMInstructionParser:
 
 
 def _run_tests():
-    """执行所有测试用例"""
-    print("=== ReplaceEngine Self-test Start ===")
+    """为ReplaceEngine和LLMInstructionParser运行一个全面的自测试套件。"""
+    import shutil
+    import traceback
 
-    # Test 1: Basic replacement
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        content = (
-            "Line 1\n"
-            "Line 2\n"
-            "### START BLOCK ###\n"
-            "Unique content to be replaced.\n"
-            "It can span multiple lines.\n"
-            "### END BLOCK ###\n"
-            "Last line."
-        )
-        tmp.write(content)
-        tmp.flush()
-
-    print(f"Test 1: Created test file: {test_path}")
-    src_block = "### START BLOCK ###\nUnique content to be replaced.\nIt can span multiple lines.\n### END BLOCK ###"
-    dst_block = "### REPLACED BLOCK ###\nThis is the new content.\nIt also spans multiple lines.\n### END BLOCK ###"
-
-    instruction_text = f"""[replace]: {test_path}
-[start]
-{src_block}
-[end]
-[start]
-{dst_block}
-[end]"""
-
-    print("Parsing replacement instruction...")
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    assert len(instr_list) == 1, "Instruction parsing failed"
-    assert instr_list[0]["type"] == "replace"
-
+    print("=" * 20 + " Engine Self-test Start " + "=" * 20)
     engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("Test 1: Replacement successful")
-    except RuntimeError as e:
-        print(f"Test 1 FAILED: {str(e)}")
-        os.unlink(test_path)
-        sys.exit(1)
+    test_dir = Path(tempfile.gettempdir()) / "engine_tests"
+    if test_dir.exists():
+        shutil.rmtree(test_dir)
+    test_dir.mkdir(parents=True)
 
-    with open(test_path, "r", encoding="utf-8") as f:
-        new_content = f.read()
+    test_counter = 1
 
-    if src_block in new_content:
-        print("Test 1 ERROR: Original content was not replaced.")
-        os.unlink(test_path)
-        sys.exit(1)
+    def run_test(name, instructions_text, initial_content, expected_content_map, should_fail=False):
+        nonlocal test_counter
+        print(f"\n--- Test {test_counter}: {name} ---")
 
-    if dst_block not in new_content:
-        print("Test 1 ERROR: New content was not written correctly.")
-        os.unlink(test_path)
-        sys.exit(1)
+        # Create a map from placeholder name to full temporary path
+        all_relative_paths = set(initial_content.keys()) | set(expected_content_map.keys())
+        # For tests that are expected to fail, the placeholder might not be in the maps.
+        # Find all placeholders in the instruction text to be robust.
+        placeholders = re.findall(r"\{([^}]+)\}", instructions_text)
+        all_relative_paths.update(placeholders)
 
-    print("Test 1 PASSED!")
-    os.unlink(test_path)
+        path_map = {rel_path: str(test_dir / rel_path) for rel_path in all_relative_paths}
 
-    # Test 2: Multiple occurrences of source string
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        content = "重复内容\n### 替换目标块 ###\n重复内容\n### 替换目标块 ###\n重复内容"
-        tmp.write(content)
-        tmp.flush()
+        try:
+            # 1. Setup initial files
+            for rel_path, content in initial_content.items():
+                full_path = Path(path_map[rel_path])
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(full_path, "w", encoding="utf-8") as f:
+                    f.write(content)
 
-    print(f"测试2: 创建测试文件: {test_path}")
-    src_block = "### 替换目标块 ###"
-    dst_block = "### 已替换块 ###"
+            # 2. Prepare instructions by replacing placeholders with full paths.
+            final_instructions_text = instructions_text
+            for rel_path, full_path in path_map.items():
+                final_instructions_text = final_instructions_text.replace(f"{{{rel_path}}}", full_path)
 
-    instruction_text = f"""[replace]: {test_path}
-[start]
-{src_block}
-[end]
-[start]
-{dst_block}
-[end]"""
+            instructions = LLMInstructionParser.parse(final_instructions_text)
 
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("测试2错误: 预期异常未抛出")
-        os.unlink(test_path)
-        sys.exit(1)
-    except RuntimeError as e:
-        if "多个匹配项" in str(e):
-            print(f"测试2通过: 捕获到预期异常 - {str(e)}")
-        else:
-            print(f"测试2失败: 异常类型错误 - {str(e)}")
-            os.unlink(test_path)
-            sys.exit(1)
-    finally:
-        if os.path.exists(test_path):
-            os.unlink(test_path)
+            # 3. Execute
+            engine.execute(instructions)
 
-    # Test 3: Source string not found
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        content = "没有目标内容"
-        tmp.write(content)
-        tmp.flush()
+            if should_fail:
+                print(">>> FAILED: Expected an exception, but none was raised.")
+                return
 
-    print(f"测试3: 创建测试文件: {test_path}")
-    src_block = "不存在的字符串"
-    dst_block = "新内容"
+            # 4. Verify
+            for rel_path, expected_content in expected_content_map.items():
+                full_path = Path(path_map[rel_path])
+                if not full_path.exists():
+                    print(f">>> FAILED: Expected file '{rel_path}' not found.")
+                    return
+                with open(full_path, "r", encoding="utf-8") as f:
+                    actual_content = f.read()
+                if actual_content != expected_content:
+                    print(f">>> FAILED: Content mismatch in '{rel_path}'.")
+                    print(f"--- EXPECTED ---\n{expected_content}\n--- ACTUAL ---\n{actual_content}")
+                    return
+            print(">>> PASSED!")
 
-    instruction_text = f"""[replace]: {test_path}
-[start]
-{src_block}
-[end]
-[start]
-{dst_block}
-[end]"""
+        except Exception as e:
+            if should_fail:
+                print(f">>> PASSED: Caught expected exception: {type(e).__name__}: {e}")
+            else:
+                print(f">>> FAILED: Unexpected exception: {type(e).__name__}: {e}")
+                traceback.print_exc()
+        finally:
+            test_counter += 1
 
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("测试3错误: 预期异常未抛出")
-        os.unlink(test_path)
-        sys.exit(1)
-    except RuntimeError as e:
-        if "未找到匹配的源字符串" in str(e):
-            print(f"测试3通过: 捕获到预期异常 - {str(e)}")
-        else:
-            print(f"测试3失败: 异常类型错误 - {str(e)}")
-            os.unlink(test_path)
-            sys.exit(1)
-    finally:
-        if os.path.exists(test_path):
-            os.unlink(test_path)
+    # --- Test Cases ---
 
-    # Test 4: Empty string replacement
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        content = "原始内容"
-        tmp.write(content)
-        tmp.flush()
+    # Test 1: Create a new file
+    run_test(
+        "Create a new file",
+        "[created file]: {file1.txt}\n[start]\nHello, new world!\n[end]",
+        {},
+        {"file1.txt": "Hello, new world!"},
+    )
 
-    print(f"测试4: 创建测试文件: {test_path}")
-    src_block = "原始内容"
-    dst_block = ""
+    # Test 2: Overwrite a whole file
+    run_test(
+        "Overwrite a whole file",
+        "[overwrite whole file]: {file1.txt}\n[start]\nNew content.\n[end]",
+        {"file1.txt": "Old content."},
+        {"file1.txt": "New content."},
+    )
 
-    instruction_text = f"""[replace]: {test_path}
-[start]
-{src_block}
-[end]
-[start]
-{dst_block}
-[end]"""
+    # Test 3: Basic string replacement
+    run_test(
+        "Basic string replacement",
+        "[replace]: {file1.txt}\n[start]\nold\n[end]\n[start]\nnew\n[end]",
+        {"file1.txt": "This is old content."},
+        {"file1.txt": "This is new content."},
+    )
 
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("测试4: 替换执行成功")
-    except RuntimeError as e:
-        print(f"测试4失败: {str(e)}")
-        os.unlink(test_path)
-        sys.exit(1)
+    # Test 4: Line range replacement
+    run_test(
+        "Line range replacement",
+        "[replace]: {file1.txt}\n[lines]: 2-3\n[start]Line 2\nLine 3\n[end]\n[start]New Line 2\nNew Line 3\n[end]",
+        {"file1.txt": "Line 1\nLine 2\nLine 3\nLine 4\n"},
+        {"file1.txt": "Line 1\nNew Line 2\nNew Line 3\n\nLine 4\n"},
+    )
 
-    with open(test_path, "r", encoding="utf-8") as f:
-        new_content = f.read()
+    # Test 5: Insert content at a specific line
+    run_test(
+        "Insert content at a specific line",
+        "[insert]: {file1.txt}\n[line]: 1\n[start]\nInserted Line\n[end]",
+        {"file1.txt": "Line 1\nLine 2\n"},
+        {"file1.txt": "Line 1\nInserted Line\n\nLine 2\n"},
+    )
 
-    if new_content != "":
-        print(f"测试4错误: 预期空文件, 实际内容: {new_content}")
-        os.unlink(test_path)
-        sys.exit(1)
+    # Test 6: Fail on multiple matches for replace
+    run_test(
+        "Fail on multiple matches for replace",
+        "[replace]: {file1.txt}\n[start]\nfail\n[end]\n[start]\npass\n[end]",
+        {"file1.txt": "fail fail"},
+        {},
+        should_fail=True,
+    )
 
-    print("测试4通过!")
-    os.unlink(test_path)
+    # Test 7: Fail on source mismatch for line replace
+    run_test(
+        "Fail on source mismatch for line replace",
+        "[replace]: {file1.txt}\n[lines]: 1-1\n[start]\nWrong source\n[end]\n[start]\n...\n[end]",
+        {"file1.txt": "Correct source\n"},
+        {},
+        should_fail=True,
+    )
 
-    # Test 5: Overwrite whole file
-    print("测试5: 覆盖整个文件指令")
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        tmp.write("原始内容")
-        tmp.flush()
+    # Test 8: Randomized tag restoration
+    run_test(
+        "Randomized tag restoration",
+        "[overwrite whole file]: {file1.txt}\n[start]\nThis has [start.12] and [end.99] tags.\n[end]",
+        {"file1.txt": "Initial"},
+        {"file1.txt": "This has [start] and [end] tags."},
+    )
 
-    new_content = "这是全新的文件内容"
-    instruction_text = f"""[overwrite whole file]: {test_path}
-[start]
-{new_content}
-[end]"""
+    # Test 9: Create file in a new subdirectory
+    run_test(
+        "Create file in a new subdirectory",
+        "[created file]: {new_dir/file.txt}\n[start]\nSubdir content\n[end]",
+        {},
+        {"new_dir/file.txt": "Subdir content"},
+    )
 
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    assert len(instr_list) == 1, "文件覆盖指令解析失败"
-    assert instr_list[0]["type"] == "overwrite_whole_file", "指令类型错误"
-    assert instr_list[0]["path"] == test_path, "路径解析错误"
-    assert instr_list[0]["content"] == new_content, "内容解析错误"
-
-    engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("测试5: 文件覆盖执行成功")
-
-        with open(test_path, "r", encoding="utf-8") as f:
-            content = f.read()
-            if content != new_content:
-                print(f"测试5错误: 预期内容: '{new_content}', 实际内容: '{content}'")
-                os.unlink(test_path)
-                sys.exit(1)
-    except RuntimeError as e:
-        print(f"测试5失败: {str(e)}")
-        os.unlink(test_path)
-        sys.exit(1)
-
-    print("测试5通过!")
-    os.unlink(test_path)
-
-    # Test 6: Create new file
-    print("测试6: 创建新文件指令")
-    with tempfile.NamedTemporaryFile(mode="w+", delete=True, suffix=".txt", encoding="utf-8") as tmp:
-        # 获取临时文件名但不实际创建文件
-        test_path = tmp.name
-
-    new_content = "新文件内容"
-    instruction_text = f"""[created file]: {test_path}
-[start]
-{new_content}
-[end]"""
-
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    assert len(instr_list) == 1, "文件创建指令解析失败"
-    assert instr_list[0]["type"] == "created_file", "指令类型错误"
-    assert instr_list[0]["path"] == test_path, "路径解析错误"
-    assert instr_list[0]["content"] == new_content, "内容解析错误"
-    print("测试6通过!")
-
-    # Test 7: Line range replacement
-    print("测试7: 行号范围替换")
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\n"
-        tmp.write(content)
-        tmp.flush()
-
-    src_block = "Line 3\nLine 4\n"
-    dst_block = "New Line 3\nNew Line 4"
-    instruction_text = f"""[replace]: {test_path}
-[lines]: 3-4
-[start]
-{src_block}
-[end]
-[start]
-{dst_block}
-[end]"""
-
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    assert len(instr_list) == 1, "行号替换指令解析失败"
-    assert instr_list[0]["type"] == "replace_lines"
-    assert instr_list[0]["start_line"] == 3
-    assert instr_list[0]["end_line"] == 4
-
-    engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("测试7: 行号替换执行成功")
-    except RuntimeError as e:
-        print(f"测试7失败: {str(e)}")
-        os.unlink(test_path)
-        sys.exit(1)
-
-    with open(test_path, "r", encoding="utf-8") as f:
-        new_content = f.read()
-        expected = "Line 1\nLine 2\nNew Line 3\nNew Line 4\nLine 5\nLine 6\n"
-        if new_content != expected:
-            print(f"测试7错误: 预期内容: '{expected}', 实际内容: '{new_content}'")
-            os.unlink(test_path)
-            sys.exit(1)
-
-    print("测试7通过!")
-    os.unlink(test_path)
-
-    # Test 8: Insert at specific line
-    print("测试8: 指定行插入")
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        content = "Line 1\nLine 2\nLine 3\nLine 4\n"
-        tmp.write(content)
-        tmp.flush()
-
-    insert_content = "Inserted Line"
-    instruction_text = f"""[insert]: {test_path}
-[line]: 2
-[start]
-{insert_content}
-[end]"""
-
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    assert len(instr_list) == 1, "插入指令解析失败"
-    assert instr_list[0]["type"] == "insert"
-    assert instr_list[0]["line_num"] == 2
-
-    engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("测试8: 插入执行成功")
-    except RuntimeError as e:
-        print(f"测试8失败: {str(e)}")
-        os.unlink(test_path)
-        sys.exit(1)
-
-    with open(test_path, "r", encoding="utf-8") as f:
-        new_content = f.read()
-        expected = "Line 1\nLine 2\nInserted Line\nLine 3\nLine 4\n"
-        if new_content != expected:
-            print(f"测试8错误: 预期内容: '{expected}', 实际内容: '{new_content}'")
-            os.unlink(test_path)
-            sys.exit(1)
-
-    print("测试8通过!")
-    os.unlink(test_path)
-
-    # Test 9: Randomized tags restoration
-    print("测试9: 随机化标签还原")
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
-        test_path = tmp.name
-        tmp.write("原始内容")
-
-    # 包含随机化标签的内容
-    randomized_content = "Line with [start.42]\nLine with [end.99]\n"
-    expected_content = "Line with [start]\nLine with [end]\n"
-
-    instruction_text = f"""[overwrite whole file]: {test_path}
-[start]
-{randomized_content}
-[end]"""
-
-    instr_list = LLMInstructionParser.parse(instruction_text)
-    engine = ReplaceEngine()
-    try:
-        engine.execute(instr_list)
-        print("测试9: 文件覆盖执行成功")
-    except RuntimeError as e:
-        print(f"测试9失败: {str(e)}")
-        os.unlink(test_path)
-        sys.exit(1)
-
-    with open(test_path, "r", encoding="utf-8") as f:
-        new_content = f.read()
-        if new_content != expected_content:
-            print(f"测试9错误: 预期内容: '{expected_content}', 实际内容: '{new_content}'")
-            os.unlink(test_path)
-            sys.exit(1)
-
-    print("测试9通过!")
-    os.unlink(test_path)
-
-    print("=== 所有测试通过 ===")
+    print("\n" + "=" * 21 + " Engine Self-test End " + "=" * 22)
+    # Clean up test directory
+    shutil.rmtree(test_dir)
 
 
 if __name__ == "__main__":

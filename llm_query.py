@@ -41,7 +41,7 @@ from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
 
 from debugger.tracer import trace
-from tools.replace_engine import LLMInstructionParser, ReplaceEngine
+from tools.replace_engine import LLMInstructionParser, ReplaceEngine, TagRandomizer
 from tree import (
     BINARY_MAGIC_NUMBERS,
     GLOBAL_PROJECT_CONFIG,
@@ -3014,19 +3014,31 @@ class PatchPromptBuilder:
 
     def _build_symbol_prompt(self) -> str:
         """构建符号部分的prompt"""
+
         prompt = ""
         if not self.use_patch:
             prompt += "现有代码库里的一些符号和代码块:\n"
 
         skipped_symbols = []
+        tag_randomizer = TagRandomizer()  # 实例化一次，确保批次内随机后缀一致性
+
         for symbol_name, patch_dict in self.symbol_map.items():
+            # 将符号的源代码内容解码为字符串
+            content_str = (
+                patch_dict["block_content"]
+                if isinstance(patch_dict["block_content"], str)
+                else patch_dict["block_content"].decode("utf-8")
+            )
+            # 对源代码中的[start]/[end]标签进行随机化处理，以避免与指令标签冲突
+            randomized_content = tag_randomizer.randomize_tags(content_str)
+
             symbol_prompt = f"""
 [SYMBOL START]
 符号名称: {symbol_name}
 文件路径: {patch_dict["file_path"]}
 
 [start]
-{patch_dict["block_content"] if isinstance(patch_dict["block_content"], str) else patch_dict["block_content"].decode("utf-8")}
+{randomized_content}
 [end]
 
 [SYMBOL END]
@@ -3293,127 +3305,114 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
     if not instructions:
         return
 
+    # 1. 指令分类：将安装脚本和文件操作指令分开
     setup_script = None
-    file_creation_overwriting_instr = []
-    file_patching_instr = []
-    affected_paths = set()
-
-    # 使用绝对路径（不解析符号链接）
-    project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).absolute()
-
+    file_instructions = []
     for instr in instructions:
-        instr_type = instr["type"]
-        if instr_type == "project_setup_script":
-            setup_script = instr["content"]
-        elif instr_type in ("overwrite_whole_file", "created_file"):
-            # 构建绝对路径
-            raw_path = instr["path"]
-            candidate_path = Path(raw_path)
-            if not candidate_path.is_absolute():
-                candidate_path = project_root / candidate_path
-            abs_path = candidate_path.absolute()
+        if instr["type"] == "project_setup_script":
+            setup_script = instr.get("content")
+        else:
+            file_instructions.append(instr)
 
-            try:
-                # 检查是否在项目根目录下
-                relative_path = abs_path.relative_to(project_root)
-            except ValueError:
-                print(f"警告: 文件路径 {abs_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
-                continue
+    if not file_instructions and not setup_script:
+        return
 
-            instr["path"] = str(abs_path)  # 更新为绝对路径
-            file_creation_overwriting_instr.append(instr)
-            affected_paths.add(abs_path)
-        elif instr_type in ("replace", "replace_lines", "insert"):
-            # 同样处理为绝对路径
-            raw_path = instr["path"]
-            candidate_path = Path(raw_path)
-            if not candidate_path.is_absolute():
-                candidate_path = project_root / candidate_path
-            abs_path = candidate_path.absolute()
+    # 2. 路径验证和受影响路径收集
+    project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).absolute()
+    path_mapping = {}  # original_path (Path) -> shadow_path (Path)
+    valid_file_instructions = []
 
-            try:
-                relative_path = abs_path.relative_to(project_root)
-            except ValueError:
-                print(f"警告: 文件路径 {abs_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
-                continue
+    for instr in file_instructions:
+        if "path" not in instr:
+            print(f"警告: 指令缺少 'path' 字段，已跳过: {instr}", file=sys.stderr)
+            continue
 
-            instr["path"] = str(abs_path)
-            file_patching_instr.append(instr)
-            affected_paths.add(abs_path)
+        raw_path = instr["path"]
+        candidate_path = Path(raw_path)
+        if not candidate_path.is_absolute():
+            candidate_path = project_root / candidate_path
+        abs_path = candidate_path.absolute()
 
-    # 在沙箱中准备影子文件以应用更改
-    path_mapping = {}  # original_path -> shadow_path
-    shadow_root_path = Path(shadowroot)  # 使用新变量名避免冲突
+        try:
+            abs_path.relative_to(project_root)
+        except ValueError:
+            print(f"警告: 文件路径 {abs_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
+            continue
 
-    for original_path in affected_paths:
+        # 使用绝对路径更新指令，并记录以备处理
+        instr["path"] = str(abs_path)
+        valid_file_instructions.append(instr)
+        path_mapping[abs_path] = None  # 暂存，稍后填充影子路径
+
+    # 3. 在沙箱中准备影子文件
+    shadow_root_path = Path(shadowroot)
+    affected_paths_for_diff = set(path_mapping.keys())
+
+    for original_path in affected_paths_for_diff:
         try:
             relative_path = original_path.relative_to(project_root)
         except ValueError:
-            print(f"警告: 文件路径 {original_path} 不在项目根目录 {project_root} 下，已跳过。", file=sys.stderr)
-            continue
+            continue  # 上面已检查，此处为防御性编程
 
         shadow_path = shadow_root_path / relative_path
         shadow_path.parent.mkdir(parents=True, exist_ok=True)
         path_mapping[original_path] = shadow_path
-        if not original_path.exists():
-            original_path.touch()
 
         if original_path.exists() and original_path.is_file():
             with open(original_path, "r", encoding="utf-8") as f_in, open(shadow_path, "w", encoding="utf-8") as f_out:
                 f_out.write(f_in.read())
         else:
-            # 对于新文件，创建一个空的影子文件
+            # 对于新文件或不存在的路径，创建一个空的影子文件作为起点
             shadow_path.touch()
 
-    # 将文件创建/覆盖指令应用于影子文件
-    for instr in file_creation_overwriting_instr:
-        original_path = Path(instr["path"])
-        shadow_path = path_mapping.get(original_path)
-        if shadow_path:
-            with open(shadow_path, "w", encoding="utf-8") as f:
-                f.write(instr["content"])
-
-    # 使用ReplaceEngine将修补指令应用于影子文件
-    if file_patching_instr:
-        engine = ReplaceEngine()
-        shadow_patching_instr = []
-        for instr in file_patching_instr:
+    # 4. 使用ReplaceEngine将所有文件更改应用于影子文件
+    if valid_file_instructions:
+        shadow_instructions = []
+        for instr in valid_file_instructions:
             original_path = Path(instr["path"])
             shadow_path = path_mapping.get(original_path)
             if shadow_path:
                 new_instr = instr.copy()
                 new_instr["path"] = str(shadow_path)
-                shadow_patching_instr.append(new_instr)
+                shadow_instructions.append(new_instr)
 
-        if shadow_patching_instr:
+        if shadow_instructions:
+            engine = ReplaceEngine()
             try:
-                engine.execute(shadow_patching_instr)
+                engine.execute(shadow_instructions)
             except Exception as e:
-                print(f"执行补丁操作时出错: {str(e)}", file=sys.stderr)
+                print(f"在沙箱中执行更改时出错: {str(e)}", file=sys.stderr)
                 traceback.print_exc()
                 return
 
-    # 处理安装脚本
+    # 5. 处理安装脚本
     def _process_script(script, script_name):
         if not script:
             return
         script_path = shadow_root_path / script_name
-        _save_file_to_shadowroot(script_path, script)
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script)
         os.chmod(script_path, 0o755)
         print(f"{script_name}已保存到: {script_path}")
 
     _process_script(setup_script, "project_setup.sh")
 
-    # 生成原始文件和影子文件之间的差异
+    # 6. 生成原始文件和影子文件之间的差异
     diff_content = ""
-    for original_path, shadow_path in path_mapping.items():
+    # 对路径排序以确保diff输出的确定性
+    sorted_paths = sorted(list(path_mapping.keys()), key=lambda p: str(p))
+    for original_path in sorted_paths:
+        shadow_path = path_mapping[original_path]
+
         original_content = ""
         if original_path.exists() and original_path.is_file():
             with open(original_path, "r", encoding="utf-8") as f:
                 original_content = f.read()
 
-        with open(shadow_path, "r", encoding="utf-8") as f:
-            shadow_content = f.read()
+        shadow_content = ""
+        if shadow_path.exists() and shadow_path.is_file():
+            with open(shadow_path, "r", encoding="utf-8") as f:
+                shadow_content = f.read()
 
         if original_content == shadow_content:
             continue
