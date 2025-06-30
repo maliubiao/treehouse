@@ -603,27 +603,52 @@ def _get_api_response(
     返回:
         Generator: 流式响应生成器
     """
-    client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
-    if "gemini" in model.lower():
-        extra_body = {}
+    # 检查是否为Gemini模型
+    is_gemini = "gemini" in model.lower()
+
+    if is_gemini:
+        try:
+            from google import generativeai as genai
+
+            # 配置Gemini客户端
+            genai.configure(api_key=api_key)
+            # 转换对话历史为Gemini格式
+            contents = []
+            for msg in history:
+                role = "user" if msg["role"] == "user" else "model"
+                contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+            # 创建Gemini流式请求
+            return genai.GenerativeModel(model).generate_content(
+                contents,
+                stream=True,
+                generation_config=genai.GenerationConfig(
+                    temperature=kwargs.get("temperature", 0.0),
+                    top_p=0.8,
+                ),
+            )
+        except ImportError:
+            raise RuntimeError("使用Gemini模型需要安装google-generativeai库")
     else:
+        # 原始OpenAI实现
+        client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
         extra_body = {
             "enable_thinking": True if kwargs.get("enable_thinking") else False,
             "thinking_budget": kwargs.get("thinking_budget", 32 * 1024),
         }
-    try:
-        return client.chat.completions.create(
-            model=model,
-            messages=history,
-            reasoning_effort="medium",
-            temperature=kwargs.get("temperature", 0.0),
-            extra_body=extra_body,
-            top_p=0.8,
-            stream=True,
-        )
-    except Exception as e:
-        err_msg = f"API请求失败: {str(e)}"
-        raise RuntimeError(err_msg) from e
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=history,
+                reasoning_effort="medium",
+                temperature=kwargs.get("temperature", 0.0),
+                extra_body=extra_body,
+                top_p=0.8,
+                stream=True,
+            )
+        except Exception as e:
+            err_msg = f"API请求失败: {str(e)}"
+            raise RuntimeError(err_msg) from e
 
 
 def _process_and_save_response(
@@ -641,7 +666,8 @@ def _process_and_save_response(
     返回:
         dict: 处理后的响应结果，新增usage字段
     """
-    content, reasoning, usage = _process_stream_response(stream_client, **kwargs)  # 接收usage信息
+    model = kwargs.get("model", "gpt-4")
+    content, reasoning, usage = _process_stream_response(stream_client, history, model, **kwargs)  # 接收usage信息
 
     # 将助理回复添加到历史
     history.append({"role": "assistant", "content": content})
@@ -660,15 +686,17 @@ def _process_and_save_response(
     # 返回结果，新增usage字段
     return {
         "choices": [{"message": {"content": content}}],
-        "usage": usage,  # 新增usage字段
+        "usage": usage or {},  # 确保usage不为空
     }
 
 
-def _process_stream_response(stream_client, **kwargs) -> tuple:
+def _process_stream_response(stream_client, history, model, **kwargs) -> tuple:
     """处理流式响应
 
     参数:
         stream (Generator): 流式响应
+        history (list): 对话历史
+        model (str): 模型名称
         console: 控制台输出对象
 
     返回:
@@ -679,25 +707,54 @@ def _process_stream_response(stream_client, **kwargs) -> tuple:
     usage = None  # 初始化usage为None
     console = kwargs.get("console")
     verbose = kwargs.get("verbose", True)
+    is_gemini = "gemini" in model.lower()
 
-    for chunk in stream_client:
-        # 检查并记录token使用情况
-        if hasattr(chunk, "usage") and chunk.usage:
-            usage = chunk.usage  # 保存最新的usage信息
+    if is_gemini:
+        # 处理Gemini流式响应
+        for chunk in stream_client:
+            if chunk.candidates and chunk.candidates[0].content.parts:
+                chunk_text = chunk.candidates[0].content.parts[0].text or ""
+                if verbose:
+                    _print_content(chunk_text, console)
+                content += chunk_text
 
-        # 处理推理内容
-        if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
-            if verbose:
-                _print_content(chunk.choices[0].delta.reasoning_content, console, style="#00ff00")
-            reasoning += chunk.choices[0].delta.reasoning_content
+                # 如果有usage_metadata则记录
+                if hasattr(chunk, "usage_metadata"):
+                    usage = {
+                        "prompt_tokens": chunk.usage_metadata.prompt_token_count,
+                        "completion_tokens": chunk.usage_metadata.candidates_token_count,
+                        "total_tokens": chunk.usage_metadata.total_token_count,
+                    }
+    else:
+        # 原始OpenAI处理逻辑
+        for chunk in stream_client:
+            # 检查并记录token使用情况
+            if hasattr(chunk, "usage") and chunk.usage:
+                usage = chunk.usage  # 保存最新的usage信息
 
-        # 处理正式回复内容
-        if chunk.choices[0].delta.content:
-            if verbose:
-                _print_content(chunk.choices[0].delta.content, console)
-            content += chunk.choices[0].delta.content
+            # 处理推理内容
+            if hasattr(chunk.choices[0].delta, "reasoning_content") and chunk.choices[0].delta.reasoning_content:
+                if verbose:
+                    _print_content(chunk.choices[0].delta.reasoning_content, console, style="#00ff00")
+                reasoning += chunk.choices[0].delta.reasoning_content
+
+            # 处理正式回复内容
+            if chunk.choices[0].delta.content:
+                if verbose:
+                    _print_content(chunk.choices[0].delta.content, console)
+                content += chunk.choices[0].delta.content
+
     if verbose:
         _print_newline(console)
+
+    # 如果Gemini响应未提供usage，尝试从最后一块获取
+    if is_gemini and usage is None and hasattr(stream_client, "usage_metadata"):
+        usage = {
+            "prompt_tokens": stream_client.usage_metadata.prompt_token_count,
+            "completion_tokens": stream_client.usage_metadata.candidates_token_count,
+            "total_tokens": stream_client.usage_metadata.total_token_count,
+        }
+
     return content, reasoning, usage  # 返回新增的usage信息
 
 

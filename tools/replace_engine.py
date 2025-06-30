@@ -1,9 +1,67 @@
 import hashlib
 import os
+import random
 import re
 import sys
 import tempfile
 from pathlib import Path
+
+
+class TagRandomizer:
+    """
+    处理标签随机化和还原的工具类
+
+    功能:
+    - 将标准标签[start]/[end]随机化为[start.XX]/[end.XX]格式
+    - 将随机化标签还原为标准标签
+    - 避免处理指令部分的标准标签
+
+    使用示例:
+    >>> randomizer = TagRandomizer()
+    >>> randomized_content = randomizer.randomize_tags(source_code)
+    >>> restored_content = randomizer.restore_tags(randomized_content)
+    """
+
+    def __init__(self):
+        self.random_suffix = f"{random.randint(0, 99):02d}"
+        self.tag_pattern = re.compile(r"\[(start|end)\]")
+        self.randomized_pattern = re.compile(r"\[(start|end)\.\d{2}\]")
+
+    def randomize_tags(self, content):
+        """
+        将内容中的标准标签替换为随机化标签
+
+        Args:
+            content: 需要处理的文本内容
+
+        Returns:
+            处理后的文本，所有[start]和[end]标签被替换为随机化版本
+        """
+
+        def replace_tag(match):
+            tag_type = match.group(1)
+            return f"[{tag_type}.{self.random_suffix}]"
+
+        return self.tag_pattern.sub(replace_tag, content)
+
+    @staticmethod
+    def restore_tags(content):
+        """
+        将内容中的随机化标签还原为标准标签
+
+        Args:
+            content: 需要处理的文本内容
+
+        Returns:
+            处理后的文本，所有[start.XX]和[end.XX]标签被还原为标准形式
+        """
+
+        def replace_randomized(match):
+            tag_type = match.group(1)
+            return f"[{tag_type}]"
+
+        pattern = re.compile(r"\[(start|end)\.\d{2}\]")
+        return pattern.sub(replace_randomized, content)
 
 
 class ReplaceEngine:
@@ -48,21 +106,18 @@ class ReplaceEngine:
         执行替换指令集
 
         Args:
-            instructions: 替换指令列表，每个指令为包含以下键的字典:
-                - type: 操作类型 (replace/replace_lines/insert)
-                - path: 文件绝对路径
-                - 其他操作特定参数
+            instructions: 替换指令列表
 
         Raises:
-            ValueError: 当出现以下情况时:
-                - 源字符串在文件中不存在
-                - 源字符串在文件中出现多次
-                - 文件路径无效
-                - 行号范围无效
+            ValueError: 当指令验证失败时
+            RuntimeError: 当操作执行失败时
         """
         validated = self._validate_instructions(instructions)
 
-        for instr in validated:
+        # 还原指令内容中的随机化标签
+        restored_instructions = self._restore_randomized_tags(validated)
+
+        for instr in restored_instructions:
             try:
                 if instr["type"] == "replace":
                     self._safe_replace(path=instr["path"], src=instr["src"], dst=instr["dst"])
@@ -76,8 +131,103 @@ class ReplaceEngine:
                     )
                 elif instr["type"] == "insert":
                     self._safe_insert(path=instr["path"], line_num=instr["line_num"], content=instr["content"])
+                elif instr["type"] == "overwrite_whole_file":
+                    self._safe_overwrite_file(path=instr["path"], content=instr["content"])
             except Exception as e:
                 raise RuntimeError(f"操作失败 @ {instr['path']}: {str(e)}") from e
+
+    def _safe_overwrite_file(self, path, content):
+        """
+        安全覆盖整个文件（带备份和回滚机制）
+
+        Args:
+            path: 文件路径
+            content: 要写入的新内容
+
+        Raises:
+            FileNotFoundError: 如果文件不存在
+            RuntimeError: 如果写入失败
+        """
+        # 检查文件是否存在
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"文件不存在: {path}")
+
+        # 读取原始内容并创建备份
+        with open(path, "r", encoding="utf-8") as f:
+            original_content = f.read()
+        backup_path = self._create_backup(path, original_content)
+
+        try:
+            # 写入新内容
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:
+            # 恢复备份
+            self._restore_backup(backup_path, path)
+            raise
+        finally:
+            # 清理备份文件
+            if backup_path.exists():
+                backup_path.unlink()
+
+    def _restore_randomized_tags(self, instructions):
+        """
+        还原指令内容中的随机化标签
+
+        Args:
+            instructions: 原始指令列表
+
+        Returns:
+            还原标签后的指令列表
+        """
+        restored = []
+        for instr in instructions:
+            # 根据指令类型还原不同字段中的标签
+            if instr["type"] == "replace":
+                restored.append(
+                    {
+                        "type": "replace",
+                        "path": instr["path"],
+                        "src": TagRandomizer.restore_tags(instr["src"]),
+                        "dst": TagRandomizer.restore_tags(instr["dst"]),
+                    }
+                )
+            elif instr["type"] == "replace_lines":
+                restored.append(
+                    {
+                        "type": "replace_lines",
+                        "path": instr["path"],
+                        "start_line": instr["start_line"],
+                        "end_line": instr["end_line"],
+                        "src": TagRandomizer.restore_tags(instr["src"]),
+                        "dst": TagRandomizer.restore_tags(instr["dst"]),
+                    }
+                )
+            elif instr["type"] == "insert":
+                restored.append(
+                    {
+                        "type": "insert",
+                        "path": instr["path"],
+                        "line_num": instr["line_num"],
+                        "content": TagRandomizer.restore_tags(instr["content"]),
+                    }
+                )
+            elif instr["type"] in ("overwrite_whole_file", "created_file"):
+                restored.append(
+                    {
+                        "type": instr["type"],
+                        "path": instr["path"],
+                        "content": TagRandomizer.restore_tags(instr["content"]),
+                    }
+                )
+            elif instr["type"] == "project_setup_script":
+                restored.append(
+                    {"type": "project_setup_script", "content": TagRandomizer.restore_tags(instr["content"])}
+                )
+            else:
+                # 未知指令类型，原样保留
+                restored.append(instr)
+        return restored
 
     def _validate_instructions(self, instr_set):
         """验证指令集有效性"""
@@ -91,12 +241,13 @@ class ReplaceEngine:
 
             # 检查文件是否存在
             path = Path(instr["path"])
-            if not path.exists():
-                raise FileNotFoundError(f"文件不存在: {path}")
-            if not path.is_file():
-                raise ValueError(f"路径不是文件: {path}")
+            # 例外：created_file允许文件不存在
+            if instr["type"] != "created_file":
+                if not path.exists():
+                    raise FileNotFoundError(f"文件不存在: {path}")
+                if not path.is_file():
+                    raise ValueError(f"路径不是文件: {path}")
 
-            # 根据指令类型进行额外验证
             if instr["type"] == "replace":
                 validated.append(
                     {"type": "replace", "path": str(path.resolve()), "src": instr["src"], "dst": instr["dst"]}
@@ -120,7 +271,7 @@ class ReplaceEngine:
                         "dst": instr["dst"],
                     }
                 )
-            else:  # insert
+            elif instr["type"] == "insert":
                 # 验证行号
                 line_num = instr["line_num"]
                 if not isinstance(line_num, int) or line_num < 0:  # 0 for inserting at the beginning
@@ -129,11 +280,18 @@ class ReplaceEngine:
                 validated.append(
                     {"type": "insert", "path": str(path.resolve()), "line_num": line_num, "content": instr["content"]}
                 )
+            # 添加对文件覆盖/创建指令的支持
+            elif instr["type"] in ("overwrite_whole_file", "created_file"):
+                # 对于覆盖整个文件和创建文件，只需要路径和内容
+                validated.append({"type": instr["type"], "path": str(path.resolve()), "content": instr["content"]})
+            else:
+                # 未知指令类型，可以记录警告或抛出异常，这里我们选择跳过
+                continue
+
         return validated
 
     @staticmethod
     def _is_valid_instruction(instr):
-        """验证单个指令有效性"""
         if not isinstance(instr, dict):
             return False
 
@@ -153,6 +311,15 @@ class ReplaceEngine:
         if instr["type"] == "insert":
             required_keys = {"line_num", "content"}
             return required_keys.issubset(instr.keys())
+
+        # 添加对文件覆盖/创建指令的支持
+        if instr["type"] in ("overwrite_whole_file", "created_file"):
+            required_keys = {"content"}
+            return required_keys.issubset(instr.keys())
+
+        # 添加对项目设置脚本的支持
+        if instr["type"] == "project_setup_script":
+            return "content" in instr
 
         return False
 
@@ -699,6 +866,23 @@ def _run_tests():
     assert instr_list[0]["type"] == "overwrite_whole_file", "指令类型错误"
     assert instr_list[0]["path"] == test_path, "路径解析错误"
     assert instr_list[0]["content"] == new_content, "内容解析错误"
+
+    engine = ReplaceEngine()
+    try:
+        engine.execute(instr_list)
+        print("测试5: 文件覆盖执行成功")
+
+        with open(test_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            if content != new_content:
+                print(f"测试5错误: 预期内容: '{new_content}', 实际内容: '{content}'")
+                os.unlink(test_path)
+                sys.exit(1)
+    except RuntimeError as e:
+        print(f"测试5失败: {str(e)}")
+        os.unlink(test_path)
+        sys.exit(1)
+
     print("测试5通过!")
     os.unlink(test_path)
 
@@ -804,6 +988,41 @@ def _run_tests():
             sys.exit(1)
 
     print("测试8通过!")
+    os.unlink(test_path)
+
+    # Test 9: Randomized tags restoration
+    print("测试9: 随机化标签还原")
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8") as tmp:
+        test_path = tmp.name
+        tmp.write("原始内容")
+
+    # 包含随机化标签的内容
+    randomized_content = "Line with [start.42]\nLine with [end.99]\n"
+    expected_content = "Line with [start]\nLine with [end]\n"
+
+    instruction_text = f"""[overwrite whole file]: {test_path}
+[start]
+{randomized_content}
+[end]"""
+
+    instr_list = LLMInstructionParser.parse(instruction_text)
+    engine = ReplaceEngine()
+    try:
+        engine.execute(instr_list)
+        print("测试9: 文件覆盖执行成功")
+    except RuntimeError as e:
+        print(f"测试9失败: {str(e)}")
+        os.unlink(test_path)
+        sys.exit(1)
+
+    with open(test_path, "r", encoding="utf-8") as f:
+        new_content = f.read()
+        if new_content != expected_content:
+            print(f"测试9错误: 预期内容: '{expected_content}', 实际内容: '{new_content}'")
+            os.unlink(test_path)
+            sys.exit(1)
+
+    print("测试9通过!")
     os.unlink(test_path)
 
     print("=== 所有测试通过 ===")
