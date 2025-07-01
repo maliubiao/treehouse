@@ -3422,7 +3422,8 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         if original_path.exists() and original_path.is_file():
             with open(original_path, "r", encoding="utf-8") as f:
                 original_content = f.read()
-
+        if not original_path.exists():
+            original_path.touch()
         shadow_content = ""
         if shadow_path.exists() and shadow_path.is_file():
             with open(shadow_path, "r", encoding="utf-8") as f:
