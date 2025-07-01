@@ -123,7 +123,11 @@ class ReplaceEngine:
                     self._safe_overwrite_file(path=instr["path"], content=instr["content"])
                 elif instr["type"] == "created_file":
                     self._safe_create_file(path=instr["path"], content=instr["content"])
-                # project_setup_script is handled by the caller, so we ignore it here.
+                elif instr["type"] == "project_setup_script":
+                    # project_setup_script is handled by the caller, so we ignore it here.
+                    pass
+                else:
+                    raise ValueError(f"未知的指令类型: {instr['type']}")
 
             except Exception as e:
                 # 统一异常出口，附加文件路径信息，方便调试
@@ -137,11 +141,13 @@ class ReplaceEngine:
         for instr in instructions:
             new_instr = instr.copy()
             if new_instr["type"] in ("replace", "replace_lines"):
-                new_instr["src"] = TagRandomizer.restore_tags(instr["src"])
-                new_instr["dst"] = TagRandomizer.restore_tags(instr["dst"])
+                if "src" in new_instr:
+                    new_instr["src"] = TagRandomizer.restore_tags(new_instr["src"])
+                if "dst" in new_instr:
+                    new_instr["dst"] = TagRandomizer.restore_tags(new_instr["dst"])
             elif new_instr["type"] in ("insert", "overwrite_whole_file", "created_file", "project_setup_script"):
                 if "content" in new_instr:
-                    new_instr["content"] = TagRandomizer.restore_tags(instr["content"])
+                    new_instr["content"] = TagRandomizer.restore_tags(new_instr["content"])
             restored.append(new_instr)
         return restored
 
@@ -149,16 +155,10 @@ class ReplaceEngine:
         """验证指令中的路径，并返回解析后的绝对路径。"""
         path = Path(path_str)
         if instr_type == "created_file":
+            # 对于 created_file，我们只需要确保父目录是可写的。
+            # 如果父目录不存在，我们将在执行时创建它。
             parent_dir = path.parent
-            if not parent_dir.exists():
-                try:
-                    parent_dir.mkdir(parents=True, exist_ok=True)
-                    if not any(parent_dir.iterdir()):
-                        # We created it for validation, so clean up
-                        parent_dir.rmdir()
-                except OSError as e:
-                    raise ValueError(f"无法创建父目录 for {path}: {e}") from e
-            elif not os.access(parent_dir, os.W_OK):
+            if parent_dir.exists() and not os.access(parent_dir, os.W_OK):
                 raise ValueError(f"父目录不可写: {parent_dir}")
         else:  # For all other instructions, path must exist and be a file
             if not path.exists():
@@ -179,7 +179,10 @@ class ReplaceEngine:
                 raise ValueError(f"无效或不完整的指令 @ 索引 {i}: {instr}")
 
             if "path" in instr:
-                instr["path"] = self._validate_path_for_instruction(instr["path"], instr["type"])
+                # 路径验证在这里不进行，因为对于不存在的文件路径，
+                # resolve() 会失败。路径在每个操作函数内部处理。
+                # instr["path"] = self._validate_path_for_instruction(instr["path"], instr["type"])
+                pass
 
             # 类型特定验证
             if instr["type"] == "replace_lines":
@@ -241,6 +244,7 @@ class ReplaceEngine:
 
     def _safe_overwrite_file(self, path, content):
         """安全地用新内容覆盖整个文件，使用备份和回滚机制。"""
+        self._validate_path_for_instruction(path, "overwrite_whole_file")
         backup_path = None
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -259,6 +263,7 @@ class ReplaceEngine:
 
     def _safe_replace(self, path, src, dst):
         """安全地替换文件中的唯一匹配字符串，使用备份和回滚机制。"""
+        self._validate_path_for_instruction(path, "replace")
         with open(path, "r", encoding="utf-8") as f:
             original_content = f.read()
 
@@ -267,9 +272,9 @@ class ReplaceEngine:
             # 允许源字符串为空的情况，此时不做任何操作
             if src == "":
                 return
-            raise ValueError("未找到匹配的源字符串")
+            raise RuntimeError("未找到匹配的源字符串")
         if count > 1:
-            raise ValueError(f"找到 {count} 个匹配项，无法确保唯一性以进行安全替换")
+            raise RuntimeError(f"找到 {count} 个匹配项，无法确保唯一性以进行安全替换")
 
         updated_content = original_content.replace(src, dst, 1)
 
@@ -286,24 +291,28 @@ class ReplaceEngine:
 
     def _safe_replace_lines(self, path, start_line, end_line, src, dst):
         """安全地替换指定行范围的内容，使用备份和回滚机制。"""
+        self._validate_path_for_instruction(path, "replace_lines")
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         if not 1 <= start_line <= end_line <= len(lines):
-            raise ValueError(f"无效行号范围: {start_line}-{end_line}，文件总行数: {len(lines)}")
+            raise RuntimeError(f"无效行号范围: {start_line}-{end_line}，文件总行数: {len(lines)}")
 
         original_block = "".join(lines[start_line - 1 : end_line])
         # 使用strip()来忽略因编辑器配置可能产生的尾部空白差异
         if original_block.strip() != src.strip():
             # 提供详细的差异信息，便于调试
-            raise ValueError(
+            raise RuntimeError(
                 f"源字符串与文件指定行范围的内容不匹配。\n--- EXPECTED ---\n{src}\n--- ACTUAL ---\n{original_block}"
             )
 
         backup_path = self._create_backup(path, "".join(lines))
         try:
             # 将替换内容按行分割，并确保每行都以换行符结尾
-            dst_lines = [line + "\n" for line in dst.splitlines()]
+            dst_lines = [line + "\n" for line in dst.splitlines(True)]
+            if not dst.endswith("\n"):
+                dst_lines = [line + "\n" for line in dst.splitlines()]
+
             # 修复：如果dst非空，在其后增加一个额外的空行，以提高代码变更的可读性
             if dst:
                 dst_lines.append("\n")
@@ -320,17 +329,19 @@ class ReplaceEngine:
 
     def _safe_insert(self, path, line_num, content):
         """安全地在指定行号插入内容，使用备份和回滚机制。"""
+        self._validate_path_for_instruction(path, "insert")
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         # line_num可以等于len(lines)，表示在文件末尾插入
         if not 0 <= line_num <= len(lines):
-            raise ValueError(f"无效行号: {line_num}，文件总行数: {len(lines)}")
+            raise RuntimeError(f"无效行号: {line_num}，文件总行数: {len(lines)}")
 
         backup_path = self._create_backup(path, "".join(lines))
         try:
             # 将插入内容按行分割，并确保每行都以换行符结尾
             insert_lines = [line + "\n" for line in content.splitlines()]
+
             # 修复：如果content非空，在其后增加一个额外的空行，以提高代码变更的可读性
             if content:
                 insert_lines.append("\n")

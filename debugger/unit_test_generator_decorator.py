@@ -2,6 +2,7 @@ import atexit
 import json
 import multiprocessing
 import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -21,16 +22,22 @@ class UnitTestGeneratorDecorator:
     提供一个交互式界面，让用户选择为哪些函数生成单元测试。
 
     使用示例:
+        # 示例 1: 追踪文件，交互式选择函数
         @generate_unit_tests(
             target_files=["my_app/**/*.py"], # 追踪 my_app 下所有 .py 文件
-            output_dir="generated_tests",
-            auto_confirm=True,
-            trace_llm=True,
-            num_workers=4
+            auto_confirm=False,
         )
         def main_entrypoint():
             # ... 你的应用主逻辑 ...
             # main_entrypoint 自身及其调用的、在 target_files 范围内的函数都会被追踪。
+
+        # 示例 2: 预先指定要生成测试的函数
+        @generate_unit_tests(
+            target_functions=["my_func1", "my_func2"], # 直接指定目标函数
+            auto_confirm=True, # 通常与非交互模式一起使用
+        )
+        def run_specific_tests():
+            # ...
     """
 
     _registry = defaultdict(dict)
@@ -38,12 +45,13 @@ class UnitTestGeneratorDecorator:
     def __init__(
         self,
         target_files: Optional[List[str]] = None,
+        target_functions: Optional[List[str]] = None,
         output_dir: str = "generated_tests",
         report_dir: str = "call_reports",
         auto_confirm: bool = False,
         enable_var_trace: bool = True,
         model_name: str = "deepseek-r1",
-        checker_model_name: str = "deepseek-checker",
+        checker_model_name: str = "deepseek-v3",
         use_symbol_service: bool = True,
         trace_llm: bool = False,
         llm_trace_dir: str = "llm_traces",
@@ -55,9 +63,12 @@ class UnitTestGeneratorDecorator:
         Args:
             target_files: 需要追踪的文件模式列表 (支持 glob 通配符, e.g., ["project_name/**/*.py"])。
                           如果为 None, 默认为 ["*.py"]。
+            target_functions: [新] 需要生成单元测试的函数名列表。如果提供此参数，
+                              将跳过交互式选择，并自动为这些函数（以及被装饰的函数）生成测试。
+                              这优先于 `auto_confirm`（对于函数选择）。
             output_dir: 生成的单元测试文件输出目录。
             report_dir: 调用分析报告存储目录。
-            auto_confirm: 是否自动确认所有LLM建议和文件覆盖提示。
+            auto_confirm: 是否自动确认所有LLM建议和文件覆盖提示。如果提供了 `target_functions`，此参数对函数选择无效。
             enable_var_trace: 是否启用变量跟踪。
             model_name: 用于生成测试的核心语言模型名称。
             checker_model_name: 用于辅助任务（如命名、合并）的模型名称。
@@ -67,6 +78,7 @@ class UnitTestGeneratorDecorator:
             num_workers: 并行生成单元测试的工作进程数。0或1表示顺序执行。
         """
         self.target_files = target_files if target_files is not None else ["*.py"]
+        self.target_functions = target_functions
         self.output_dir = output_dir
         self.report_dir = report_dir
         self.auto_confirm = auto_confirm
@@ -76,7 +88,6 @@ class UnitTestGeneratorDecorator:
         self.use_symbol_service = use_symbol_service
         self.trace_llm = trace_llm
         self.llm_trace_dir = llm_trace_dir
-        # [REFACTORED] num_workers is now a primary configuration
         self.num_workers = num_workers if num_workers >= 0 else 0
 
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
@@ -94,6 +105,13 @@ class UnitTestGeneratorDecorator:
         # 确保被装饰的函数本身一定在追踪范围内
         decorated_func_file = func.__code__.co_filename
         final_target_files = list(set(self.target_files + [decorated_func_file]))
+
+        # [NEW] Handle target_functions to determine generation targets ahead of time
+        final_target_functions = list(self.target_functions) if self.target_functions is not None else None
+        if final_target_functions is not None:
+            # Automatically add the decorated function to the generation targets if not already present
+            if func_name not in final_target_functions:
+                final_target_functions.append(func_name)
 
         traced_func = analyzable_trace(
             analyzer=analyzer,
@@ -117,6 +135,7 @@ class UnitTestGeneratorDecorator:
                 "trace_llm": self.trace_llm,
                 "llm_trace_dir": self.llm_trace_dir,
                 "num_workers": self.num_workers,
+                "target_functions": final_target_functions,
             },
         }
 
@@ -125,7 +144,7 @@ class UnitTestGeneratorDecorator:
     @classmethod
     def _interactive_target_selection(cls, all_discovered_calls: Dict[str, Dict[str, Any]]) -> Optional[List[str]]:
         """
-        [NEW] 提供一个交互式界面，让用户选择要为其生成测试的函数。
+        提供一个交互式界面，让用户选择要为其生成测试的函数。
         """
         if not all_discovered_calls:
             print(Fore.YELLOW + "No executed functions found in the trace report.")
@@ -198,6 +217,7 @@ class UnitTestGeneratorDecorator:
             print(f"\n{Fore.YELLOW}Processing entry point: {entry_func_name}{Style.RESET_ALL}")
             analyzer: CallAnalyzer = data["analyzer"]
             config = data["config"]
+            target_functions = config.get("target_functions")
 
             report_filename = f"{entry_func_name}_trace_report.json"
             report_path = str(Path(config["report_dir"]) / report_filename)
@@ -208,11 +228,19 @@ class UnitTestGeneratorDecorator:
                 print(f"{Fore.YELLOW}No unique function executions found for this entry point.{Style.RESET_ALL}")
                 continue
 
-            targets_for_generation = (
-                cls._interactive_target_selection(final_test_cases)
-                if not config["auto_confirm"]
-                else list(func for funcs in final_test_cases.values() for func in funcs.keys())
-            )
+            # [REFACTORED] Determine generation targets based on priority:
+            # 1. `target_functions` if provided.
+            # 2. Interactive selection if not in `auto_confirm` mode.
+            # 3. All discovered functions if in `auto_confirm` mode.
+            targets_for_generation = None
+            all_discovered_funcs = {func for funcs in final_test_cases.values() for func in funcs.keys()}
+
+            if target_functions:
+                targets_for_generation = [f for f in target_functions if f in all_discovered_funcs]
+            elif not config["auto_confirm"]:
+                targets_for_generation = cls._interactive_target_selection(final_test_cases)
+            else:  # auto_confirm is True and no target_functions
+                targets_for_generation = list(all_discovered_funcs)
 
             if targets_for_generation is None:
                 print(f"{Fore.BLUE}Test generation cancelled by user for '{entry_func_name}'.{Style.RESET_ALL}")
@@ -280,6 +308,11 @@ class UnitTestGeneratorDecorator:
 
         for filename, funcs in call_trees.items():
             for func_name, records in funcs.items():
+                # [FIX] Filter out special function names like '<module>' or '<lambda>'
+                # that are not suitable for test generation.
+                if re.match(r"^<.*?>$", func_name):
+                    continue
+
                 total_calls += len(records)
                 seen_signatures = set()
                 for record in records:

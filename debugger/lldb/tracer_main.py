@@ -2,6 +2,7 @@
 """LLDB Tracer 主入口模块"""
 
 import argparse
+import atexit
 import logging
 import sys
 
@@ -77,4 +78,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # 注册全局退出处理函数
+    atexit.register(lambda: logging.shutdown())
+
     main()

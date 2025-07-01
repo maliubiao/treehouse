@@ -110,7 +110,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         self.assertEqual(self._read_file("file1.txt"), expected_content)
 
     def test_insert_content(self):
-        """测试 'insert' 指令，验证内容是否在指定行号插入。"""
+        """测试 'insert' 指令，验证内容是否在指定行号后插入。"""
         file_path_str = self._prepare_file("file1.txt", "Line 1\nLine 2\n")
         instructions_text = f"[insert]: {file_path_str}\n[line]: 1\n[start]\nInserted Line\n[end]"
 
@@ -127,7 +127,6 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         instructions_text = f"[replace]: {file_path_str}\n[start]\nfail\n[end]\n[start]\npass\n[end]"
 
         instructions = LLMInstructionParser.parse(instructions_text)
-        # 修复此处的断言，使其与新的、更具体的错误消息匹配
         with self.assertRaises(RuntimeError) as cm:
             self.engine.execute(instructions)
         self.assertIn("找到 2 个匹配项", str(cm.exception))

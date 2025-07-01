@@ -41,8 +41,8 @@ def complex_sub_function(a, b):
 
 
 # [REFACTORED] 使用装饰器为目标函数自动生成单元测试。
-# - target_functions: 指定需要生成测试的函数列表。
-#   [NEW] 装饰器现在会自动将被装饰的函数（'main_entrypoint'）也作为目标，无需手动添加。
+# - target_functions: [FIXED] 此参数现在可以正常工作。它指定了需要生成测试的函数列表，
+#   装饰器会自动将被装饰的函数（'main_entrypoint'）也作为目标，无需手动添加。
 # - auto_confirm: 自动接受所有LLM的建议，便于自动化流程。
 # - trace_llm: 启用LLM交互日志，将提示和响应保存在 'llm_traces' 目录。
 # - num_workers: [REFACTORED] 设置为2，启用并行测试生成。UnitTestGenerator 将在内部处理并行逻辑。

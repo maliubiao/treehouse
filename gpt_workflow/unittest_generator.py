@@ -25,6 +25,7 @@ from llm_query import (
     ModelSwitch,
     query_symbol_service,
 )
+from tools.replace_engine import LLMInstructionParser, ReplaceEngine
 
 
 class TracingModelSwitch(ModelSwitch):
@@ -125,6 +126,7 @@ class UnitTestGenerator:
             test_mode=test_mode,  # Ensure test_mode is passed
         )
         self.formatter = CodeFormatter()
+        self.engine = ReplaceEngine()
         self.generator_model_name = model_name
         self.checker_model_name = checker_model_name
         self.analysis_data: Dict[str, Any] = {}
@@ -154,16 +156,16 @@ class UnitTestGenerator:
 
     def _extract_code_from_response(self, response: str) -> Optional[str]:
         """
-        Extracts a Python code block from the LLM's response using markdown syntax.
+        [REFACTORED] Extracts content from a `[start]...[end]` block in the LLM response
+        using a robust state-machine parser. Falls back to markdown for compatibility.
         """
-        # Regex to find code block ```python ... ```
-        match = re.search(r"```python\s*(.*?)\s*```", response, re.DOTALL)
-        if match:
-            return dedent(match.group(1)).strip()
+        content, _ = LLMInstructionParser._consume_block(response.splitlines(), 0)
+        if content is not None:
+            return dedent(content).strip()
 
-        print(Fore.YELLOW + "Warning: Could not find a '```python ... ```' block. Trying to find any code block.")
-        # Fallback to any ```...``` block
-        match = re.search(r"```\s*(.*?)\s*```", response, re.DOTALL)
+        # Fallback for old markdown format for compatibility, if needed.
+        print(Fore.YELLOW + "Warning: Could not find a '[start]...[end]' block. Trying to find a markdown block.")
+        match = re.search(r"```(?:python)?\s*(.*?)\s*```", response, re.DOTALL)
         if match:
             return dedent(match.group(1)).strip()
 
@@ -212,8 +214,6 @@ class UnitTestGenerator:
         self, file_path: str, target_funcs: List[str], file_content: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[str]]:
         """Asks the LLM to suggest a filename and class name for the test suite."""
-        # If file content is not provided, we can't provide context to the LLM.
-        # In symbol mode, this might be acceptable if the function name is descriptive.
         source_code_context = ""
         if file_content:
             source_code_context = f"""
@@ -232,16 +232,16 @@ class UnitTestGenerator:
             {source_code_context}
 
             **Your Task:**
-            Provide your suggestions in a JSON format. The filename must follow the `test_*.py` convention. The class
-            name should be descriptive and encompass all target functions.
+            Provide your suggestions in a JSON object. The filename must follow the `test_*.py` convention.
+            The JSON object MUST be enclosed in `[start]` and `[end]` tags.
 
             **Example Output:**
-            ```json
+            [start]
             {{
               "file_name": "test_my_module.py",
               "class_name": "TestMyModuleFunctionality"
             }}
-            ```
+            [end]
 
             **Response:**
         """).strip()
@@ -250,16 +250,9 @@ class UnitTestGenerator:
         response_text = self.model_switch.query(self.checker_model_name, prompt, stream=False)
 
         try:
-            # Extract JSON from markdown or raw response
-            json_match = re.search(r"```json\n(.*?)\n```", response_text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                # Fallback for raw JSON object in the response
-                json_str_match = re.search(r"{\s*\"file_name\":.*}", response_text, re.DOTALL)
-                if not json_str_match:
-                    raise ValueError("No JSON object found in the response.")
-                json_str = json_str_match.group(0)
+            json_str = self._extract_code_from_response(response_text)
+            if not json_str:
+                raise ValueError("No content block found in the response.")
 
             data = json.loads(json_str)
             file_name = data.get("file_name")
@@ -318,18 +311,18 @@ class UnitTestGenerator:
 
             [File Path]: {output_path}
             [Existing Code]:
-            ```python
+            [start]
             {existing_code}
-            ```
+            [end]
 
             **2. CONTEXT: NEWLY GENERATED TEST CASES**
             These are new test cases that need to be added to the file.
             They are already formatted as a complete test class.
 
             [New Test Code to Add]:
-            ```python
+            [start]
             {new_code_block}
-            ```
+            [end]
 
             **3. YOUR TASK: MERGE THE CODE**
             - **Combine Imports:** Merge the imports from both blocks, removing duplicates.
@@ -339,8 +332,8 @@ class UnitTestGenerator:
             - **Do Not Remove Existing Tests:** Ensure all original tests are kept.
             - **Completeness:** The final output must be a single, complete, and runnable Python file.
 
-            **IMPORTANT**: Your entire response must be only the merged Python code, enclosed within a single
-            Python markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+            **IMPORTANT**: Your entire response MUST be only the merged Python code, enclosed within a single
+            `[start]` and `[end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap  the merged Python code
         """).strip()
 
         print(Fore.YELLOW + f"Querying language model ({self.checker_model_name}) to merge test files...")
@@ -349,29 +342,27 @@ class UnitTestGenerator:
 
     def _generate_relative_sys_path_snippet(self, test_file_path: Path, project_root_path: Path) -> str:
         """
-        Generates a portable sys.path setup snippet based on the relative
-        location of the test file to the project root.
+        [REFACTORED] Generates a portable sys.path setup snippet based on the relative
+        location of the test file to the project root, making it more robust.
         """
         try:
-            # 获取测试文件所在目录（已包含一层回溯）
             test_dir = test_file_path.parent.resolve()
             proj_root = project_root_path.resolve()
 
-            # 计算从测试文件目录到项目根目录的相对路径
+            # Calculate the relative path from the test directory up to the project root.
             relative_path_to_root = os.path.relpath(proj_root, test_dir)
 
-            # 处理相对路径
-            if relative_path_to_root == ".":
-                path_traversal = "parent"  # 测试文件直接在根目录
-            else:
-                depth = len(Path(relative_path_to_root).parts)
-                # 增加一层回溯（从文件到目录）
-                path_traversal = ".".join(["parent"] * (depth + 1))
+            # Count the number of '..' segments to determine the depth.
+            depth = relative_path_to_root.count("..")
 
+            # From the test file, we need to go up one level to its directory,
+            # then 'depth' more levels to reach the project root.
+            num_parents = 1 + depth
+            path_traversal = ".".join(["parent"] * num_parents)
             sys_path_code = f"project_root = Path(__file__).resolve().{path_traversal}"
 
         except (ValueError, OSError) as e:
-            # 回退到绝对路径
+            # Fallback to an absolute path if relative path calculation fails.
             print(Fore.YELLOW + f"Warning: Could not determine relative path: {e}. Falling back to absolute path.")
             sys_path_code = f"project_root = Path(r'{project_root_path.resolve()}')"
 
@@ -542,9 +533,9 @@ class UnitTestGenerator:
 
             [File Path]: {file_path}
             [File Content]:
-            ```python
+            [start]
             {file_content}
-            ```
+            [end]
         """).strip()
 
         prompt_part2 = dedent(f"""
@@ -555,9 +546,9 @@ class UnitTestGenerator:
             and the final return value or exception. Use this to understand the test case.
 
             [Runtime Execution Trace]
-            ```text
+            [start]
             {call_record_text}
-            ```
+            [end]
 
             **4. INTELLIGENT MOCKING STRATEGY**
             {self._get_mocking_guidance(target_func, module_to_test)}
@@ -566,8 +557,8 @@ class UnitTestGenerator:
             {code_structure_guidance}
             {existing_code_section}
 
-            **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single Python
-            markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+            **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single
+            `[start]` and `[end]` block. Do not add any explanations or text outside the code block.
         """).strip()
 
         return f"{prompt_part1}\n\n{prompt_part2}"
@@ -620,9 +611,9 @@ class UnitTestGenerator:
             DO NOT copy this code into the test file; import the target function as instructed.
 
             [Relevant Code Snippets]
-            ```python
+            [start]
             {context_code_str.strip()}
-            ```
+            [end]
         """).strip()
 
         prompt_part2 = dedent(f"""
@@ -633,9 +624,9 @@ class UnitTestGenerator:
             and the final return value or exception. Use this to understand the test case.
 
             [Runtime Execution Trace]
-            ```text
+            [start]
             {call_record_text}
-            ```
+            [end]
 
             **4. INTELLIGENT MOCKING STRATEGY**
             {self._get_mocking_guidance(target_func, module_to_test)}
@@ -644,8 +635,8 @@ class UnitTestGenerator:
             {code_structure_guidance}
             {existing_code_section}
 
-            **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single Python
-            markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+            **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single
+            `[start]` and `[end]` block. Do not add any explanations or text outside the code block.
         """).strip()
         return f"{prompt_part1}\n\n{prompt_part2}"
 
@@ -656,9 +647,9 @@ class UnitTestGenerator:
             action_verb = "Add the new method to the existing class."
             existing_code_section = f"""
 [Existing Test File Content]
-```python
+[start]
 {existing_code}
-```
+[end]
 """
         else:
             action_description = f"create a new `unittest.TestCase` class named `{test_class_name}`"
@@ -716,26 +707,18 @@ class UnitTestGenerator:
         num_workers: int = 0,
     ) -> bool:
         """
-        [REFACTORED] Generates the unit test file for the specified functions, with parallel execution support.
+        [REFACTORED] Generates the unit test file, now using a robust instruction-based engine for file writing.
 
         The process is as follows:
         1.  **Setup Phase (Serial):** Find all call records, get user confirmation for file/class names,
-            and resolve paths. This is done once to avoid race conditions.
-        2.  **Task Preparation:** Create a list of atomic, self-contained tasks, one for each call record.
+            and resolve paths.
+        2.  **Task Preparation:** Create a list of atomic, self-contained tasks for test case generation.
         3.  **Generation Phase (Parallel/Serial):**
-            - If num_workers > 1, a multiprocessing pool is used to generate test cases in parallel.
-            - Each worker generates a complete, runnable test code block for one case.
-        4.  **Aggregation Phase (Serial):** The generated code blocks from all tasks are intelligently
-            merged into a single, cohesive test file.
-        5.  **Finalization Phase (Serial):** The final code is formatted and written to disk.
-
-        Args:
-            target_funcs: The names of the functions to generate tests for.
-            output_dir: Directory to save the generated test file(s).
-            auto_confirm: If True, automatically accept all suggestions without prompting the user.
-            use_symbol_service: If True, use symbol service to get precise context.
-            num_workers: Number of parallel processes to use for test generation.
-                         If 0 or 1, generation is sequential.
+            - Each worker generates a complete, runnable Python code block for one test case.
+        4.  **Aggregation Phase (Serial):** The generated code blocks are intelligently merged into a single,
+            cohesive Python code string.
+        5.  **Finalization Phase (Serial):** A file operation instruction (`created_file` or `overwrite_whole_file`)
+            is constructed and executed by the `ReplaceEngine`.
         """
         if not target_funcs:
             print(Fore.RED + "No target functions specified.")
@@ -767,18 +750,18 @@ class UnitTestGenerator:
             output_path,
         )
         # --- 3. Generation Phase (Parallel or Serial) ---
-        newly_generated_code = self._execute_generation_tasks(tasks, num_workers)
-        if not newly_generated_code:
+        generated_code_snippets = self._execute_generation_tasks(tasks, num_workers)
+        if not generated_code_snippets:
             print(Fore.RED + "No test code was generated.")
             return False
 
-        # --- 4. File Writing / Merging Phase (Serial) ---
-        final_code_to_write = self._handle_existing_file(output_path, newly_generated_code, auto_confirm)
+        # --- 4. Aggregation Phase ---
+        final_code_to_write = self._aggregate_code(generated_code_snippets, output_path, final_class_name)
         if not final_code_to_write:
             return False
 
         # --- 5. Finalization ---
-        return self._write_final_code(output_path, final_code_to_write)
+        return self._write_final_code(output_path, final_code_to_write, auto_confirm)
 
     def _setup_generation_environment(
         self, all_calls_by_func: Dict, use_symbol_service: bool, output_dir: str, auto_confirm: bool
@@ -975,16 +958,16 @@ class UnitTestGenerator:
                     "checker_model_name": self.checker_model_name,
                     "trace_llm": self.model_switch.trace_llm,
                     "trace_dir": self.model_switch.trace_run_dir.parent if self.model_switch.trace_run_dir else None,
+                    "test_mode": self.test_mode,
                 }
                 tasks.append(task)
         return tasks
 
-    def _execute_generation_tasks(self, tasks: List[Dict], num_workers: int) -> Optional[str]:
-        """Executes prepared tasks either serially or in parallel."""
+    def _execute_generation_tasks(self, tasks: List[Dict], num_workers: int) -> List[str]:
+        """Executes prepared tasks either serially or in parallel, returning a list of code snippets."""
         if not tasks:
-            return None
+            return []
 
-        # [REFACTORED] Parallel/Serial execution logic is now centralized here.
         use_parallel = num_workers > 1 and len(tasks) > 1
         if use_parallel:
             print(
@@ -993,44 +976,17 @@ class UnitTestGenerator:
                 + Style.RESET_ALL
             )
             try:
-                # Use a try-with-resources block for the pool
                 with multiprocessing.Pool(processes=num_workers) as pool:
                     results = pool.map(UnitTestGenerator._generation_worker, tasks)
             except Exception as e:
                 print(Fore.RED + f"A critical error occurred during parallel processing: {e}")
-                return None
+                return []
         else:
             print(Fore.MAGENTA + "\nStarting serial test case generation..." + Style.RESET_ALL)
             results = [UnitTestGenerator._generation_worker(task) for task in tasks]
 
-        # Aggregate results
-        generated_code = None
-        for i, code_snippet in enumerate(results):
-            if code_snippet:
-                print(Fore.GREEN + f"Successfully generated code for case {i + 1}/{len(tasks)}." + Style.RESET_ALL)
-                if generated_code is None:
-                    generated_code = code_snippet
-                else:
-                    # Merge the new snippet into the accumulated code
-                    merged_code = self._merge_tests(
-                        existing_code=generated_code,
-                        new_code_block=code_snippet,
-                        output_path=tasks[0]["output_file_abs_path"],
-                    )
-                    if merged_code:
-                        generated_code = merged_code
-                    else:
-                        print(
-                            Fore.RED
-                            + f"Failed to merge code from case {i + 1}. Aborting further merges."
-                            + Style.RESET_ALL
-                        )
-                        # Keep the code generated so far instead of returning None
-                        break
-            else:
-                print(Fore.RED + f"Failed to generate code for case {i + 1}/{len(tasks)}." + Style.RESET_ALL)
-
-        return generated_code
+        # Filter out None results
+        return [res for res in results if res is not None]
 
     @staticmethod
     def _generation_worker(task: Dict) -> Optional[str]:
@@ -1044,16 +1000,15 @@ class UnitTestGenerator:
         case_num = task["case_number"]
         call_idx = task["call_index"]
         total_calls = task["total_calls"]
-        test_mode = task.get("test_mode", False)  # Capture test_mode from task
+        test_mode = task.get("test_mode", False)
 
         # Re-create a minimal generator instance inside the worker process
-        # Pass test_mode from task to ensure mock consistency
         worker_generator = UnitTestGenerator(
             model_name=task["generator_model_name"],
             checker_model_name=task["checker_model_name"],
             trace_llm=task["trace_llm"],
             llm_trace_dir=str(task["trace_dir"]) if task["trace_dir"] else "llm_traces",
-            test_mode=test_mode,  # Use test_mode from task
+            test_mode=test_mode,
         )
 
         print(
@@ -1064,8 +1019,6 @@ class UnitTestGenerator:
         prompt = worker_generator._build_prompt(
             target_func=target_func,
             call_record=call_record,
-            # For the first case, `existing_code` is None. For subsequent merges,
-            # the main process will handle it. Here, we generate a self-contained block.
             existing_code=None,
             **{
                 k: v
@@ -1086,54 +1039,71 @@ class UnitTestGenerator:
         response_text = worker_generator.model_switch.query(task["generator_model_name"], prompt, stream=False)
         return worker_generator._extract_code_from_response(response_text)
 
-    def _handle_existing_file(self, output_path: Path, new_code: str, auto_confirm: bool) -> Optional[str]:
-        """Handle existing test file with merge/overwrite options."""
-        if not output_path.exists():
-            return new_code
+    def _aggregate_code(self, code_snippets: List[str], output_path: Path, class_name: str) -> Optional[str]:
+        """Aggregates multiple code snippets into a single final code string."""
+        if not code_snippets:
+            return None
 
-        print(Fore.YELLOW + f"\nFile '{output_path}' already exists")
+        final_code = code_snippets[0]
+        if len(code_snippets) > 1:
+            print(Fore.CYAN + "\nMerging multiple generated test cases into a single file...")
+            for i, new_snippet in enumerate(code_snippets[1:]):
+                print(f"Merging case {i + 2}/{len(code_snippets)}...")
+                merged_code = self._merge_tests(
+                    existing_code=final_code,
+                    new_code_block=new_snippet,
+                    output_path=str(output_path),
+                )
+                if merged_code:
+                    final_code = merged_code
+                else:
+                    print(Fore.RED + f"Failed to merge code from case {i + 2}. Aborting further merges.")
+                    break
+        return final_code
 
-        if auto_confirm:
-            print(Fore.YELLOW + "Auto-selecting [M]erge")
-            choice = "M"
-        else:
-            choice = self._get_user_choice()
-            if choice == "C":
-                return None
-
-        if choice == "M":
-            print(Fore.CYAN + "Merging new tests into existing file...")
-            existing_code = output_path.read_text(encoding="utf-8")
-            return self._merge_tests(existing_code, new_code, str(output_path))
-
-        return new_code if choice == "O" else None
-
-    def _get_user_choice(self) -> str:
-        """Get user choice for file conflict resolution."""
-        while True:
-            user_input = (
-                input(Fore.CYAN + "Do you want to [M]erge, [O]verwrite or [C]ancel? (Default: M) ").strip().upper()
-            )
-            if not user_input:
-                return "M"
-            if user_input in ["M", "O", "C"]:
-                return user_input
-            print(Fore.RED + "Invalid choice. Please enter M, O, or C")
-
-    def _write_final_code(self, output_path: Path, code: str) -> bool:
-        """Formats and writes the final code to a file."""
+    def _write_final_code(self, output_path: Path, code: str, auto_confirm: bool) -> bool:
+        """[NEW] Formats and writes the final code to a file using ReplaceEngine."""
         try:
             print(Fore.CYAN + "\nFormatting generated code with ruff...")
             formatted_code = self.formatter.format_code(code)
 
-            print(Fore.GREEN + f"Saving tests to '{output_path}'...")
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(formatted_code)
-            print(Fore.GREEN + "Done!")
+            op_type_str = "overwrite_whole_file"
+            if not output_path.exists():
+                op_type_str = "created_file"
+            else:
+                print(Fore.YELLOW + f"\nFile '{output_path}' already exists.")
+                if not auto_confirm:
+                    choice = input(Fore.CYAN + "Do you want to [O]verwrite or [C]ancel? (Default: O) ").strip().upper()
+                    if choice == "C":
+                        print(Fore.YELLOW + "Operation cancelled.")
+                        return False
+                    # Overwrite is the default action if not cancelled.
+                else:
+                    print(Fore.YELLOW + "Auto-selecting to overwrite.")
+
+            # Create instruction and execute
+            op_name = op_type_str.replace("_", " ")
+            instruction_str = f"[{op_name}]: {output_path}\n[start]\n{formatted_code}\n[end]"
+            instructions = LLMInstructionParser.parse(instruction_str)
+
+            print(Fore.GREEN + f"Executing file operation via ReplaceEngine to save tests to '{output_path}'...")
+            self.engine.execute(instructions)
+            print(Fore.GREEN + Style.BRIGHT + "Unit test generation complete!")
             return True
-        except IOError as e:
-            print(Fore.RED + f"Failed to write file: {e}")
+        except Exception as e:
+            print(Fore.RED + f"Failed to write final code: {e}")
             return False
+
+    def _get_user_choice(self) -> str:
+        """Get user choice for file conflict resolution."""
+        while True:
+            # Merge is no longer a direct option here, it's handled during aggregation.
+            user_input = input(Fore.CYAN + "Do you want to [O]verwrite or [C]ancel? (Default: O) ").strip().upper()
+            if not user_input:
+                return "O"
+            if user_input in ["O", "C"]:
+                return user_input
+            print(Fore.RED + "Invalid choice. Please enter O, or C")
 
 
 def parse_args():
@@ -1180,7 +1150,7 @@ def parse_args():
         "-y",
         "--auto-confirm",
         action="store_true",
-        help="Automatically confirm all interactive prompts, such as file/class name suggestions and merge choices.",
+        help="Automatically confirm all interactive prompts, such as file/class name suggestions and overwrite choices.",
     )
     parser.add_argument(
         "--trace-llm",

@@ -352,6 +352,19 @@ def read_model_config(model_name: str, config_file: str):
         print(" ".join(output))
 
 
+# from debugger.unit_test_generator_decorator import generate_unit_tests
+# @generate_unit_tests(
+#     target_files=["*.py"],
+#     output_dir="generated_tests",
+#     report_dir="call_reports",
+#     auto_confirm=True,
+#     trace_llm=True,
+#     num_workers=10,
+#     model_name="deepseek-v3",
+#     checker_model_name= "deepseek-v3",
+# )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Terminal LLM helper script")
     subparsers = parser.add_subparsers(dest="command")
