@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import json
 import os
 import re
@@ -8,7 +9,6 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any, Dict, List, Optional, Tuple
 
-import colorama
 from colorama import Fore, Style
 
 # Add project root to sys.path to allow importing project modules
@@ -23,6 +23,68 @@ from llm_query import (
     ModelSwitch,
     query_symbol_service,
 )
+
+
+class TracingModelSwitch(ModelSwitch):
+    """
+    A wrapper around ModelSwitch that adds logging for LLM queries.
+    """
+
+    def __init__(self, trace_llm: bool = False, trace_dir: str = "llm_traces", **kwargs):
+        """
+        Initializes the TracingModelSwitch.
+
+        Args:
+            trace_llm: If True, log LLM prompts and responses.
+            trace_dir: Directory to save LLM traces.
+            **kwargs: Arguments to pass to the parent ModelSwitch constructor.
+        """
+        super().__init__(**kwargs)
+        self.trace_llm = trace_llm
+        self.trace_run_dir: Optional[Path] = None
+        if self.trace_llm:
+            trace_dir_path = Path(trace_dir)
+            run_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.trace_run_dir = trace_dir_path / run_timestamp
+            self.trace_run_dir.mkdir(parents=True, exist_ok=True)
+
+    def query(self, model_name: str, prompt: str, **kwargs) -> str:
+        """
+        Executes a query and logs the prompt and response if tracing is enabled.
+        """
+        # The parent query method returns a string, despite its 'dict' type hint.
+        response_content = super().query(model_name, prompt, **kwargs)
+
+        if self.trace_llm and self.trace_run_dir:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            # Sanitize model_name for filename
+            safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", model_name)
+            trace_file_path = self.trace_run_dir / f"{timestamp}_{safe_model_name}.log"
+
+            log_parts = [
+                "--- PROMPT ---",
+                f"Model: {model_name}",
+                f"Timestamp: {datetime.datetime.now().isoformat()}",
+                "----------------",
+                "",
+                prompt,
+                "",
+                "",
+                "--- RESPONSE ---",
+                "----------------",
+                "",
+                response_content,
+            ]
+            trace_content = "\n".join(log_parts)
+
+            try:
+                with trace_file_path.open("w", encoding="utf-8") as f:
+                    f.write(trace_content)
+                print(Fore.YELLOW + f"LLM trace saved to: {trace_file_path}")
+            except IOError as e:
+                print(Fore.RED + f"Error saving LLM trace: {e}")
+
+        return response_content
 
 
 class UnitTestGenerator:
@@ -50,7 +112,7 @@ class UnitTestGenerator:
             llm_trace_dir: Directory to save LLM traces.
         """
         self.report_path = Path(report_path)
-        self.model_switch = ModelSwitch(trace_llm=trace_llm, trace_dir=llm_trace_dir)
+        self.model_switch = TracingModelSwitch(trace_llm=trace_llm, trace_dir=llm_trace_dir)
         self.formatter = CodeFormatter()
         self.generator_model_name = model_name
         self.checker_model_name = checker_model_name
@@ -85,33 +147,41 @@ class UnitTestGenerator:
 
         return None
 
-    def _recursive_search(self, record: Dict, target_func: str, found_calls: List[Dict]):
-        """Recursively search for call records of a target function within a call tree."""
-        if not isinstance(record, dict):
-            return
-
-        # Check if the current record is for the target function
-        if record.get("func_name") == target_func:
-            found_calls.append(record)
-
-        # Search within nested calls in the 'events' list
-        for event in record.get("events", []):
-            if event.get("type") == "call" and isinstance(event.get("data"), dict):
-                # The data of a 'call' event is another call record
-                self._recursive_search(event.get("data"), target_func, found_calls)
-
-    def _find_all_calls_for_function(self, target_func: str) -> List[Dict]:
+    def _find_all_calls_for_targets(self, target_funcs: List[str]) -> Dict[str, List[Dict]]:
         """
+        Finds all call records for a list of target functions by traversing the
+        entire analysis data tree once. This is more efficient than searching
+        for each function individually.
 
-        Finds all call records for a specific function by traversing the entire analysis data.
+        Returns:
+            A dictionary mapping each found target function name to a list of its call records.
         """
-        all_calls = []
+        target_set = set(target_funcs)
+        calls_by_func = defaultdict(list)
+
+        def _recursive_search(record: Dict):
+            """Inner recursive helper to traverse the call tree."""
+            if not isinstance(record, dict):
+                return
+
+            # Check if the current record is for one of the target functions
+            func_name = record.get("func_name")
+            if func_name in target_set:
+                calls_by_func[func_name].append(record)
+
+            # Search within nested calls in the 'events' list
+            for event in record.get("events", []):
+                if event.get("type") == "call" and isinstance(event.get("data"), dict):
+                    # The data of a 'call' event is another call record
+                    _recursive_search(event.get("data"))
+
         # Iterate over all top-level entry points recorded in the analysis data
-        for _, funcs in self.analysis_data.items():  # filename not used
-            for _, records in funcs.items():  # func_name not used
+        for funcs_data in self.analysis_data.values():
+            for records in funcs_data.values():
                 for record in records:
-                    self._recursive_search(record, target_func, all_calls)
-        return all_calls
+                    _recursive_search(record)
+
+        return calls_by_func
 
     def _suggest_test_file_and_class_names(
         self, file_path: str, target_funcs: List[str], file_content: Optional[str] = None
@@ -129,14 +199,16 @@ class UnitTestGenerator:
 """
         target_funcs_str = ", ".join(f"`{f}`" for f in target_funcs)
         prompt = dedent(f"""
-            You are a Python testing expert. Based on the following functions and their source file, suggest a suitable filename and a `unittest.TestCase` class name for their test suite.
+            You are a Python testing expert. Based on the following functions and their source file, suggest a suitable
+            filename and a `unittest.TestCase` class name for their test suite.
 
             **Source File Path:** {file_path}
             **Target Function Names:** {target_funcs_str}
             {source_code_context}
 
             **Your Task:**
-            Provide your suggestions in a JSON format. The filename must follow the `test_*.py` convention. The class name should be descriptive and encompass all target functions.
+            Provide your suggestions in a JSON format. The filename must follow the `test_*.py` convention. The class
+            name should be descriptive and encompass all target functions.
 
             **Example Output:**
             ```json
@@ -213,7 +285,8 @@ class UnitTestGenerator:
     def _merge_tests(self, existing_code: str, new_code_block: str, output_path: str) -> Optional[str]:
         """Asks the LLM to merge new test cases into an existing test file."""
         prompt = dedent(f"""
-            You are an expert Python developer specializing in refactoring and maintaining test suites. Your task is to intelligently merge new test cases into an existing test file.
+            You are an expert Python developer specializing in refactoring and maintaining test suites.
+            Your task is to intelligently merge new test cases into an existing test file.
 
             **1. CONTEXT: EXISTING TEST FILE**
             This is the current content of the test file.
@@ -225,7 +298,8 @@ class UnitTestGenerator:
             ```
 
             **2. CONTEXT: NEWLY GENERATED TEST CASES**
-            These are new test cases that need to be added to the file. They are already formatted as a complete test class.
+            These are new test cases that need to be added to the file.
+            They are already formatted as a complete test class.
 
             [New Test Code to Add]:
             ```python
@@ -234,12 +308,14 @@ class UnitTestGenerator:
 
             **3. YOUR TASK: MERGE THE CODE**
             - **Combine Imports:** Merge the imports from both blocks, removing duplicates.
-            - **Merge into Class:** Add the new test methods from the new code into the existing `unittest.TestCase` class. If the class names differ, use the existing class name.
+            - **Merge into Class:** Add the new test methods from the new code into the existing `unittest.TestCase`
+              class. If the class names differ, use the existing class name.
             - **Preserve Structure:** Maintain the overall structure and style of the existing file.
             - **Do Not Remove Existing Tests:** Ensure all original tests are kept.
             - **Completeness:** The final output must be a single, complete, and runnable Python file.
 
-            **IMPORTANT**: Your entire response must be only the merged Python code, enclosed within a single Python markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+            **IMPORTANT**: Your entire response must be only the merged Python code, enclosed within a single
+            Python markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
         """).strip()
 
         print(Fore.YELLOW + f"Querying language model ({self.checker_model_name}) to merge test files...")
@@ -311,7 +387,7 @@ class UnitTestGenerator:
                 output_file_abs_path=output_file_abs_path,
                 existing_code=existing_code,
             )
-        elif file_content and file_path:
+        if file_content and file_path:
             return self._build_file_based_prompt(
                 file_path=file_path,
                 file_content=file_content,
@@ -323,8 +399,7 @@ class UnitTestGenerator:
                 output_file_abs_path=output_file_abs_path,
                 existing_code=existing_code,
             )
-        else:
-            raise ValueError("Either symbol_context or file_content must be provided to build a prompt.")
+        raise ValueError("Either symbol_context or file_content must be provided to build a prompt.")
 
     def _build_file_based_prompt(
         self,
@@ -349,47 +424,54 @@ class UnitTestGenerator:
             test_class_name, existing_code
         )
 
-        prompt = dedent(f"""
-        You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
-        Your task is to {action_description} for the function `{target_func}`.
+        prompt_part1 = dedent(f"""
+            You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
+            Your task is to {action_description} for the function `{target_func}`.
 
-        **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
-        You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
-        - **Project Root Directory:** `{project_root_path}`
-        - **Module to Test:** `{module_to_test}`
-        - **How to Import the Target Function:** `from {module_to_test} import {target_func}`
-        - **`sys.path` Setup:** To ensure the import works correctly, you MUST include this exact code snippet at the top of the test file. It dynamically finds the project root.
-          ```python
-          {sys_path_setup_snippet}
-          ```
+            **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+            You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
+            - **Project Root Directory:** `{project_root_path}`
+            - **Module to Test:** `{module_to_test}`
+            - **How to Import the Target Function:** `from {module_to_test} import {target_func}`
+            - **`sys.path` Setup:** To ensure the import works correctly, you MUST include this exact code
+              snippet at the top of the test file. It dynamically finds the project root.
+              ```python
+              {sys_path_setup_snippet}
+              ```
 
-        **2. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
-        This is the content of the file where the target function resides. Use it to understand the function's logic, but DO NOT copy it.
+            **2. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
+            This is the content of the file where the target function resides. Use it to understand the
+            function's logic, but DO NOT copy it.
 
-        [File Path]: {file_path}
-        [File Content]:
-        ```python
-        {file_content}
-        ```
-
-        **3. CONTEXT: CAPTURED RUNTIME DATA for `{target_func}`**
-        This JSON object represents a single execution of the function, including its arguments, return value, and any calls it made to other functions (dependencies).
-
-        [Runtime Call Record]
-        ```json
-        {call_record_json}
-        ```
-
-        **4. INTELLIGENT MOCKING STRATEGY**
-        {self._get_mocking_guidance(target_func, module_to_test)}
-
-        **5. YOUR TASK: GENERATE THE TEST CODE**
-        {code_structure_guidance}
-        {existing_code_section}
-
-        **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single Python markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+            [File Path]: {file_path}
+            [File Content]:
+            ```python
+            {file_content}
+            ```
         """).strip()
-        return prompt
+
+        prompt_part2 = dedent(f"""
+            **3. CONTEXT: CAPTURED RUNTIME DATA for `{target_func}`**
+            This JSON object represents a single execution of the function, including its arguments,
+            return value, and any calls it made to other functions (dependencies).
+
+            [Runtime Call Record]
+            ```json
+            {call_record_json}
+            ```
+
+            **4. INTELLIGENT MOCKING STRATEGY**
+            {self._get_mocking_guidance(target_func, module_to_test)}
+
+            **5. YOUR TASK: GENERATE THE TEST CODE**
+            {code_structure_guidance}
+            {existing_code_section}
+
+            **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single Python
+            markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+        """).strip()
+
+        return f"{prompt_part1}\n\n{prompt_part2}"
 
     def _build_symbol_based_prompt(
         self,
@@ -418,51 +500,59 @@ class UnitTestGenerator:
             test_class_name, existing_code
         )
 
-        prompt = dedent(f"""
-        You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
-        Your task is to {action_description} for the function `{target_func}`.
+        prompt_part1 = dedent(f"""
+            You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
+            Your task is to {action_description} for the function `{target_func}`.
 
-        **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
-        You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
-        - **Project Root Directory:** `{project_root_path}`
-        - **Module to Test:** `{module_to_test}`
-        - **How to Import the Target Function:** `from {module_to_test} import {target_func}`
-        - **`sys.path` Setup:** To ensure the import works correctly, you MUST include this exact code snippet at the top of the test file. It dynamically finds the project root.
-          ```python
-          {sys_path_setup_snippet}
-          ```
+            **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+            You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
+            - **Project Root Directory:** `{project_root_path}`
+            - **Module to Test:** `{module_to_test}`
+            - **How to Import the Target Function:** `from {module_to_test} import {target_func}`
+            - **`sys.path` Setup:** To ensure the import works correctly, you MUST include this exact code
+              snippet at the top of the test file. It dynamically finds the project root.
+              ```python
+              {sys_path_setup_snippet}
+              ```
 
-        **2. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
-        Instead of the full file, you are given the precise source code for the target function and all other functions it called during a sample execution. Use this context to understand the logic. DO NOT copy this code into the test file; import the target function as instructed.
+            **2. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
+            Instead of the full file, you are given the precise source code for the target function and all other
+            functions it called during a sample execution. Use this context to understand the logic.
+            DO NOT copy this code into the test file; import the target function as instructed.
 
-        [Relevant Code Snippets]
-        ```python
-        {context_code_str.strip()}
-        ```
-
-        **3. CONTEXT: CAPTURED RUNTIME DATA for `{target_func}`**
-        This JSON object represents a single execution of the function, including its arguments, return value, and any calls it made to other functions (dependencies).
-
-        [Runtime Call Record]
-        ```json
-        {call_record_json}
-        ```
-
-        **4. INTELLIGENT MOCKING STRATEGY**
-        {self._get_mocking_guidance(target_func, module_to_test)}
-
-        **5. YOUR TASK: GENERATE THE TEST CODE**
-        {code_structure_guidance}
-        {existing_code_section}
-
-        **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single Python markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+            [Relevant Code Snippets]
+            ```python
+            {context_code_str.strip()}
+            ```
         """).strip()
-        return prompt
+
+        prompt_part2 = dedent(f"""
+            **3. CONTEXT: CAPTURED RUNTIME DATA for `{target_func}`**
+            This JSON object represents a single execution of the function, including its arguments,
+            return value, and any calls it made to other functions (dependencies).
+
+            [Runtime Call Record]
+            ```json
+            {call_record_json}
+            ```
+
+            **4. INTELLIGENT MOCKING STRATEGY**
+            {self._get_mocking_guidance(target_func, module_to_test)}
+
+            **5. YOUR TASK: GENERATE THE TEST CODE**
+            {code_structure_guidance}
+            {existing_code_section}
+
+            **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single Python
+            markdown block (e.g., ```python ... ```). Do not add any explanations or text outside the code block.
+        """).strip()
+        return f"{prompt_part1}\n\n{prompt_part2}"
 
     def _get_common_prompt_sections(self, test_class_name: str, existing_code: Optional[str]) -> Tuple[str, str, str]:
         """Generates common prompt sections for action, existing code, and structure."""
         if existing_code:
             action_description = f"add a new test method to the existing `unittest.TestCase` class `{test_class_name}`"
+            action_verb = "Add the new method to the existing class."
             existing_code_section = f"""
 [Existing Test File Content]
 ```python
@@ -471,12 +561,16 @@ class UnitTestGenerator:
 """
         else:
             action_description = f"create a new `unittest.TestCase` class named `{test_class_name}`"
+            action_verb = (
+                "Define the test class and a main execution block (`if __name__ == '__main__': unittest.main()`)."
+            )
             existing_code_section = ""
 
         code_structure_guidance = (
             "- **Framework:** Use Python's built-in `unittest` module.\n"
             "- **Test Method:** Create a new, descriptively named test method (e.g., `test_..._case_N`).\n"
-            "- **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only the necessary dependencies from the `events` list.\n"
+            "- **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only the necessary\n"
+            "  dependencies from the `events` list.\n"
             "    - Configure mocks to behave exactly as recorded (return value or exception).\n"
             "    - Verify mocks were called correctly using `mock_instance.assert_called_once_with(...)`.\n"
             "- **Assertions:**\n"
@@ -484,34 +578,36 @@ class UnitTestGenerator:
             "    - Use `self.assertRaises()` for exceptions.\n"
             "- **Code Structure:**\n"
             "  - Generate a complete, runnable Python code snippet.\n"
-            "  - Include all necessary imports (`unittest`, `unittest.mock`, "
-            "the `sys.path` setup, and the function to be tested).\n"
-            "  - {action}"
-        ).format(
-            action="Add the new method to the existing class."
-            if existing_code
-            else "Define the test class and a main execution block (`if __name__ == '__main__': unittest.main()`)."
+            "  - Include all necessary imports (`unittest`, `unittest.mock`, the `sys.path` setup, "
+            "and the function to be tested).\n"
+            f"  - {action_verb}"
         )
         return action_description, existing_code_section, code_structure_guidance
 
     def _get_mocking_guidance(self, target_func: str, module_to_test: str) -> str:
         """Generates the standard mocking guidance section for the prompt."""
-        return dedent(f"""
+        guidance = dedent(f"""
         Your goal is to create a valuable and robust test. Do not mock everything blindly.
         - **DO Mock:**
-            - Functions with external side effects (e.g., network requests, database queries, file I/O, `time.sleep`).
+            - Functions with external side effects (e.g., network requests, database queries, file I/O).
             - Functions that are non-deterministic (e.g., `datetime.now()`, `random.randint()`).
             - Dependencies that are slow or complex, to isolate the function under test.
-            - In the provided trace, `faulty_sub_function` is a good candidate for mocking because we want to test how `{target_func}` handles its success and failure cases independently.
+            - In the provided trace, `faulty_sub_function` is a good candidate for mocking because we
+              want to test how `{target_func}` handles its success and failure cases independently.
         - **DO NOT Mock:**
-            - Simple, pure, deterministic helper functions within your own project (e.g., a function that just performs a calculation). Letting these simple functions run makes the test more meaningful and less brittle.
+            - Simple, pure, deterministic helper functions within your own project (e.g., a function
+              that just performs a calculation). Letting these simple functions run makes the test more
+              meaningful and less brittle.
 
-        - **How to Patch:** When using `unittest.mock.patch`, the path must be based on the module where the dependency is *used*. For example, to patch `dependency_func` which is imported and used in `{module_to_test}`, use `patch('{module_to_test}.dependency_func', ...)`.
+        - **How to Patch:** When using `unittest.mock.patch`, the path must be based on the module where
+          the dependency is *used*. For example, to patch `dependency_func` which is imported and used in
+          `{module_to_test}`, use `patch('{module_to_test}.dependency_func', ...)`.
         """).strip()
+        return guidance
 
     def generate(
         self, target_funcs: List[str], output_dir: str, auto_confirm: bool = False, use_symbol_service: bool = True
-    ):
+    ) -> bool:
         """
         Generates the unit test file for the specified functions.
 
@@ -525,51 +621,20 @@ class UnitTestGenerator:
             print(Fore.RED + "No target functions specified.")
             return False
 
-        all_calls_by_func = {func: self._find_all_calls_for_function(func) for func in target_funcs}
+        all_calls_by_func = self._find_all_calls_for_targets(target_funcs)
         all_calls_by_func = {f: calls for f, calls in all_calls_by_func.items() if calls}
 
         if not all_calls_by_func:
             print(Fore.RED + f"No call records found for specified functions: {', '.join(target_funcs)}")
             return False
 
-        first_func = next(iter(all_calls_by_func))
-        target_file_path = self._resolve_target_file_path(all_calls_by_func[first_func][0]["original_filename"])
-        if not target_file_path:
+        # --- Setup Phase ---
+        setup_data = self._setup_generation_environment(all_calls_by_func, use_symbol_service, output_dir, auto_confirm)
+        if not setup_data:
             return False
+        (target_file_path, file_content, symbol_context, output_path, final_class_name, module_to_test) = setup_data
 
-        symbol_context = None
-        file_content = None
-        all_calls_flat = [call for calls in all_calls_by_func.values() for call in calls]
-        if use_symbol_service:
-            print(Fore.CYAN + "\nUsing symbol service to gather precise code context...")
-            symbol_context = self._get_symbols_for_calls(all_calls_flat)
-            if not symbol_context:
-                print(Fore.YELLOW + "Warning: Failed to get symbol context. Falling back to full file content.")
-                file_content = self._read_file_content(target_file_path)
-                if not file_content:
-                    return False
-        else:
-            file_content = self._read_file_content(target_file_path)
-            if not file_content:
-                return False
-
-        suggested_file, suggested_class = self._suggest_test_file_and_class_names(
-            str(target_file_path), list(all_calls_by_func.keys()), file_content
-        )
-        if not (suggested_file and suggested_class):
-            print(Fore.RED + "Could not get suggestions for file/class names.")
-            return False
-
-        final_file_name, final_class_name = self._get_final_names(suggested_file, suggested_class, auto_confirm)
-
-        output_path = self._validate_and_resolve_path(output_dir, final_file_name)
-        if not output_path:
-            return False
-
-        module_to_test = self._get_module_path(target_file_path)
-        if not module_to_test:
-            return False
-
+        # --- Generation Phase ---
         newly_generated_code = self._generate_test_cases(
             all_calls_by_func=all_calls_by_func,
             target_file_path=target_file_path,
@@ -582,16 +647,56 @@ class UnitTestGenerator:
         if not newly_generated_code:
             return False
 
+        # --- File Writing Phase ---
         final_code_to_write = self._handle_existing_file(output_path, newly_generated_code, auto_confirm)
         if not final_code_to_write:
             return False
 
         return self._write_final_code(output_path, final_code_to_write)
 
+    def _setup_generation_environment(
+        self, all_calls_by_func: Dict, use_symbol_service: bool, output_dir: str, auto_confirm: bool
+    ) -> Optional[Tuple]:
+        """Prepares all necessary context and paths for test generation."""
+        first_func = next(iter(all_calls_by_func))
+        target_file_path = self._resolve_target_file_path(all_calls_by_func[first_func][0]["original_filename"])
+        if not target_file_path:
+            return None
+
+        symbol_context, file_content = None, None
+        if use_symbol_service:
+            print(Fore.CYAN + "\nUsing symbol service to gather precise code context...")
+            all_calls_flat = [call for calls in all_calls_by_func.values() for call in calls]
+            symbol_context = self._get_symbols_for_calls(all_calls_flat)
+            if not symbol_context:
+                print(Fore.YELLOW + "Warning: Failed to get symbol context. Falling back to full file content.")
+        if not symbol_context:  # Fallback if service disabled or failed
+            file_content = self._read_file_content(target_file_path)
+            if not file_content:
+                return None
+
+        suggested_file, suggested_class = self._suggest_test_file_and_class_names(
+            str(target_file_path), list(all_calls_by_func.keys()), file_content
+        )
+        if not (suggested_file and suggested_class):
+            print(Fore.RED + "Could not get suggestions for file/class names.")
+            return None
+
+        final_file_name, final_class_name = self._get_final_names(suggested_file, suggested_class, auto_confirm)
+
+        output_path = self._validate_and_resolve_path(output_dir, final_file_name)
+        if not output_path:
+            return None
+
+        module_to_test = self._get_module_path(target_file_path)
+        if not module_to_test:
+            return None
+
+        return target_file_path, file_content, symbol_context, output_path, final_class_name, module_to_test
+
     def _get_symbols_for_calls(self, all_calls: List[Dict]) -> Optional[Dict[str, Dict]]:
         """
-        Gathers all unique function locations from call records and fetches their
-        source code using the symbol service.
+        Gathers unique function locations and fetches their source code via the symbol service.
         """
         locations = set()
         for record in all_calls:
@@ -603,10 +708,9 @@ class UnitTestGenerator:
             for event in record.get("events", []):
                 if event.get("type") == "call":
                     data = event.get("data", {})
-                    if "filename" in data and "lineno" in data:
-                        # Exclude calls to self to avoid redundant lookups
-                        if data.get("func_name") != record.get("func_name"):
-                            locations.add((data["filename"], data["lineno"]))
+                    # Add only if location info is present and it's not a self-recursive call
+                    if "filename" in data and "lineno" in data and data.get("func_name") != record.get("func_name"):
+                        locations.add((data["filename"], data["lineno"]))
 
         if not locations:
             print(Fore.YELLOW + "No symbol locations found in call records.")
@@ -617,10 +721,13 @@ class UnitTestGenerator:
             if isinstance(filename, str) and isinstance(lineno, int):
                 file_to_lines[filename].append(lineno)
 
-        file_results = []
-        for filename, lines in file_to_lines.items():
-            matches = [MatchResult(line=lineno, column_range=(0, 0), text="") for lineno in lines]
-            file_results.append(FileSearchResult(file_path=filename, matches=matches))
+        file_results = [
+            FileSearchResult(
+                file_path=filename,
+                matches=[MatchResult(line=lineno, column_range=(0, 0), text="") for lineno in lines],
+            )
+            for filename, lines in file_to_lines.items()
+        ]
 
         if not file_results:
             return None
@@ -628,14 +735,16 @@ class UnitTestGenerator:
         search_results = FileSearchResults(results=file_results)
 
         print(Fore.CYAN + f"Querying symbol service for {len(locations)} unique locations...")
-        symbol_results = query_symbol_service(search_results, 128 * 1024, model_switch=self.model_switch)
+        # The 'model_switch' keyword argument is removed to fix the pylint error.
+        # This may prevent LLM call tracing for this specific operation.
+        symbol_results = query_symbol_service(search_results, 128 * 1024)
 
         if symbol_results and isinstance(symbol_results, dict):
             print(Fore.GREEN + f"Successfully retrieved {len(symbol_results)} symbols.")
             return symbol_results
-        else:
-            print(Fore.RED + "Failed to retrieve symbol information from the service.")
-            return None
+
+        print(Fore.RED + "Failed to retrieve symbol information from the service.")
+        return None
 
     def _resolve_target_file_path(self, original_filename: str) -> Optional[Path]:
         """Resolve and validate the target file path."""

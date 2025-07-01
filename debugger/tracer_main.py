@@ -57,7 +57,8 @@ def create_parser() -> ArgumentParser:
         "  python -m debugger.tracer_main --watch-files='src/*.py' script.py\n"
         "  python -m debugger.tracer_main --capture-vars='x' --capture-vars='y.z' script.py\n"
         "  python -m debugger.tracer_main --line-ranges='test.py:10-20' script.py\n"
-        "  python -m debugger.tracer_main --start-function='main.py:5' script.py arg1 --arg2"
+        "  python -m debugger.tracer_main --start-function='main.py:5' script.py arg1 --arg2\n"
+        "  python -m debugger.tracer_main --include-stdlibs=json --include-stdlibs=re script.py"
     )
     parser = ArgumentParser(
         description="Python脚本调试跟踪工具",
@@ -122,6 +123,11 @@ def create_parser() -> ArgumentParser:
         "--include-system",
         action="store_true",
         help="包含系统路径和第三方库的跟踪",
+    )
+    parser.add_argument(
+        "--include-stdlibs",
+        action="append",
+        help="即使默认忽略系统路径，也强制追踪指定的标准库模块 (可多次指定，例如: --include-stdlibs json)",
     )
     parser.add_argument(
         "--trace-self",
@@ -214,6 +220,7 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "start_function": start_function,
         "source_base_dir": args.source_base_dir,
         "script_args": script_args,
+        "include_stdlibs": args.include_stdlibs or [],
     }
 
 
@@ -266,6 +273,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             print(color_wrap(f"📝 起始函数: {args['start_function'][0]}:{args['start_function'][1]}", "var"))
         if args["source_base_dir"]:
             print(color_wrap(f"📝 源码根目录: {args['source_base_dir'].resolve()}", "var"))
+        if args["include_stdlibs"]:
+            print(color_wrap(f"📝 包含标准库: {', '.join(args['include_stdlibs'])}", "var"))
 
         # 创建 TraceConfig 实例
         config = TraceConfig(
@@ -280,6 +289,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             ignore_self=args["ignore_self"],
             start_function=args["start_function"],
             source_base_dir=args["source_base_dir"],
+            include_stdlibs=args["include_stdlibs"],
         )
 
         log_dir = Path(__file__).parent / "logs"

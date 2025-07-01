@@ -195,37 +195,34 @@ class TraceConfig:
         if filename.startswith("<") and filename.endswith(">") or filename.endswith("sitecustomize.py"):
             return False
 
+        try:
+            resolved_path = Path(filename).resolve()
+            resolved_str = str(resolved_path)
+        except (ValueError, OSError):
+            resolved_path = Path(filename)
+            resolved_str = filename
+
         # 新增：检查是否属于特别包含的标准库模块
         if self.ignore_system_paths and self.include_stdlibs:
-            try:
-                resolved = str(Path(filename).resolve())
-                # 检查是否属于系统路径
-                in_system_path = any(resolved.startswith(sys_path) for sys_path in self._system_paths)
-                # 检查是否属于需要特别包含的标准库模块
-                is_included_stdlib = any(f"/{module}/" in resolved for module in self.include_stdlibs)
-
-                if in_system_path and is_included_stdlib:
-                    # 即使位于系统路径，但属于特别包含的模块，允许跟踪
-                    return True
-            except (ValueError, OSError):
-                pass
+            # 检查是否属于系统路径
+            in_system_path = any(resolved_str.startswith(sys_path) for sys_path in self._system_paths)
+            if in_system_path:
+                # 使用pathlib.parts来跨平台地检查路径组件
+                path_components = set(resolved_path.parts)
+                is_included_stdlib = any(mod in path_components for mod in self.include_stdlibs)
+                if is_included_stdlib:
+                    return True  # 即使位于系统路径，但属于特别包含的模块，允许跟踪
 
         if self.ignore_system_paths:
-            # 直接检查路径组件，使其对不存在的或合成的路径（如测试中的路径）同样有效
-            if any(part.startswith(("site-packages", "dist-packages")) for part in Path(filename).parts):
+            if any(part in ("site-packages", "dist-packages") for part in resolved_path.parts):
                 return False
-
-            try:
-                resolved = str(Path(filename).resolve())
-                if any(resolved.startswith(sys_path) for sys_path in self._system_paths):
-                    return False
-            except (ValueError, OSError):
-                pass
+            if any(resolved_str.startswith(sys_path) for sys_path in self._system_paths):
+                return False
 
         if not self.target_files:
             return True
 
-        filename_posix = Path(filename).as_posix()
+        filename_posix = resolved_path.as_posix()
         return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
 
     @classmethod
