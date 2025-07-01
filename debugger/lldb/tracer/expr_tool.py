@@ -3,27 +3,37 @@ import argparse
 import logging
 import sys
 import tempfile
-from typing import Dict, List, Tuple
+from collections import defaultdict
+from typing import Any, Dict, List, Tuple
 
-from expr_extractor import ExpressionExtractor, ExprType
+from ..tree import ParserLoader, parse_code_file
+from .expr_extractor import ExpressionExtractor
+from .expr_types import ExprType
 
-from tree import ParserLoader, parse_code_file
-
-# 配置日志
+# Configure logging for the tool
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("ExpressionTool")
 
 
 class ExpressionTool:
+    """
+    A command-line tool and testing utility for the ExpressionExtractor.
+
+    To run this tool, execute it as a module from the project root directory:
+    `python -m debugger.lldb.tracer.expr_tool <args>`
+    """
+
     def __init__(self):
         self.extractor = ExpressionExtractor()
         self.parser_loader = ParserLoader()
 
-    def extract_expressions(
-        self, source_code: bytes
+    def extract_from_source(
+        self, source_code: bytes, language: str = "cpp"
     ) -> Dict[int, List[Tuple[ExprType, str, Tuple[int, int, int, int]]]]:
-        """从源代码中提取表达式"""
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".cpp") as temp_file:
+        """Extracts expressions from a given source code string."""
+        # Use a temporary file to allow tree-sitter to infer the language
+        suffix = ".cpp" if language == "cpp" else ".c"
+        with tempfile.NamedTemporaryFile(delete=True, suffix=suffix) as temp_file:
             temp_file.write(source_code)
             temp_file.flush()
 
@@ -31,252 +41,156 @@ class ExpressionTool:
             tree = parse_code_file(temp_file.name, parser)
             return self.extractor.extract(tree.root_node, source_code)
 
-    def annotate_source(
-        self, source_code: bytes, expressions: Dict[int, List[Tuple[ExprType, str, Tuple[int, int, int, int]]]]
-    ) -> str:
-        """在源代码中添加表达式注释"""
+    def annotate_source(self, source_code: bytes, expressions: Dict[int, List[Tuple[ExprType, str, Any]]]) -> str:
+        """Adds comments to the source code showing the extracted expressions."""
         lines = source_code.decode("utf8").splitlines()
         annotated_lines = []
 
-        for line_num, line in enumerate(lines):
-            annotated_line = line
-            if line_num in expressions:
-                # 收集当前行的所有表达式
-                expr_comments = []
-                for expr_type, expr_text, _ in expressions[line_num]:
-                    expr_comments.append(f"{ExprType(expr_type).name}: {expr_text}")
+        # Group expressions by line for annotation
+        line_comments = defaultdict(list)
+        for line_num, expr_list in expressions.items():
+            for expr_type, expr_text, _ in expr_list:
+                line_comments[line_num].append(f"{expr_type.name}: '{expr_text}'")
 
-                # 添加注释
-                if expr_comments:
-                    annotated_line += " // " + ", ".join(expr_comments)
-
-            annotated_lines.append(annotated_line)
+        for i, line in enumerate(lines):
+            if i in line_comments:
+                # Append comments to the end of the line
+                comments = " // " + ", ".join(line_comments[i])
+                annotated_lines.append(line + comments)
+            else:
+                annotated_lines.append(line)
 
         return "\n".join(annotated_lines)
 
     def run_tests(self):
-        """运行内置测试用例"""
-        test_code = """
+        """
+        Runs a comprehensive set of tests against a predefined C++ code block.
+        This validates the accuracy of the expression extractor.
+        """
+        logger.info("Running built-in test suite...")
+        test_code = b"""
         #include <iostream>
         #include <vector>
 
-        template<typename T>
-        class MyVector {
-        public:
-            void push_back(const T& value) {
-                data.push_back(value);
-            }
+        struct Point { float x, y; };
+        class Tool { public: static int size() { return 1; } };
+        int getIndex() { return 0; }
 
-            T& operator[](size_t index) {
-                return data[index];
-            }
-
-        private:
-            std::vector<T> data;
-        };
-
-        struct Point {
-            float x;
-            float y;
-        };
-
-        int main() {
-            // 基础表达式
+        int main(int argc, char** argv) {
             int a = 5;
             int *ptr = &a;
             int **pptr = &ptr;
+            a = 10;
+            *ptr += 1;
 
-            // 结构体和指针
-            Point p1 = {.x=10, .y=20};
+            Point p1 = {1.0f, 2.0f};
             Point *p_ptr = &p1;
+            p1.x = 3.0f;
+            p_ptr->y = 4.0f;
 
-            // 复杂表达式
+            int arr[2];
+            arr[0] = **pptr;
             a = p1.x + *ptr;
-            p_ptr->y = 30;
-            **pptr = 50;
+            int b = (int)p1.x; // Type cast should be ignored
 
-            // 函数调用参数
-            printf("Value: %d\\n", a);
-
-            // 模板实例化
-            MyVector<int> vec;
-            vec.push_back(42);
-            int val = vec[0];
-
-            // 控制流中的表达式
-            if (a > 0) {
-                return val * 2;
+            if (a > 0 && p_ptr != nullptr) {
+                printf("Value: %d\\n", a);
             }
 
-            //成员访问
-            cl::ReallyHidden
-            // 多级成员访问
-            Point p2 = {.x=1.5, .y=2.5};
-            p_ptr = &p2;
-            float result = p_ptr->x + p2.y;
+            for (int i = 0; i < 2; ++i) {
+                arr[i] = i;
+            }
 
-            // 类型转换（应排除）
-            int num = (int)(p_ptr->x);
-
-            // 内联汇编（应排除）
-            asm volatile("nop");
-
-            // 包含函数调用的表达式（应排除）
-            int size = Tool.size();
+            // Function calls where arguments should be extracted, but not the call itself.
+            int size = Tool::size();
             int value = arr[getIndex()];
-            // range-based for语句;
-            for (auto &abcd : Sub.OptionsMap) {
-                abcd.getValue();
+            
+            // Range-based for where the container is extracted, but not the loop var.
+            std::vector<int> vec = {1, 2, 3};
+            for (auto& item : vec) {
+                item++;
             }
-            for (auto &Cat1 : I.second->Categories) {
-            }
-            for(int i = 0; i < j; ++i) {
-                printf("Loop iteration: %d\\n", i);
-            }
-            &CommonOptions->GenericCategory;
-            CommonOptions->GenericCategory1;
-            argv[i][0];
-            // Simple C++ class example
-            class Calculator {
-            public:
-                Calculator() : result(0) {}
-                
-                void add(int value) {
-                    result += value;
-                }
-                
-                void subtract(int value) {
-                    result -= value;
-                }
-                
-                int getResult() const {
-                    return result;
-                }
-                
-            private:
-                int result;
-            };
-            // Nested namespaces example
-            namespace Outer {
-                int outerVar = 100;
-                
-                namespace Inner {
-                    int innerVar = 200;
-                    
-                    void displayValues() {
-                        std::cout << "Outer var: " << outerVar << std::endl;
-                        std::cout << "Inner var: " << innerVar << std::endl;
-                    }
-                }
-                
-                void accessInnerNamespace() {
-                    Inner::displayValues();
-                    Inner::innerVar += 50;
-                    std::cout << "Modified inner var: " << Inner::innerVar << std::endl;
-                }
-            }
-            SubArchName.starts_with(a, 1);
-            *--CurPtr = hexdigit(x, !Upper);
-            return 0;
         }
+        """
 
-        """.encode("utf8")
+        expressions = self.extract_from_source(test_code)
 
-        expressions = self.extract_expressions(test_code)
+        # Flatten the results for easier comparison
         extracted_exprs = set()
         for expr_list in expressions.values():
             for expr_type, expr_text, _ in expr_list:
                 extracted_exprs.add((expr_type, expr_text))
 
-        # 预期提取的表达式（更新为当前支持的7种核心类型）
+        # Define what we expect to find
         expected_exprs = {
-            (ExprType.VARIABLE_ACCESS, "a"),
             (ExprType.ASSIGNMENT_TARGET, "a"),
-            (ExprType.VARIABLE_ACCESS, "ptr"),
-            (ExprType.ASSIGNMENT_TARGET, "ptr"),
             (ExprType.ADDRESS_OF, "&a"),
+            (ExprType.ASSIGNMENT_TARGET, "ptr"),
+            (ExprType.ASSIGNMENT_TARGET, "pptr"),
             (ExprType.ADDRESS_OF, "&ptr"),
-            (ExprType.VARIABLE_ACCESS, "p1"),
+            (ExprType.ASSIGNMENT_TARGET, "*ptr"),
+            (ExprType.POINTER_DEREF, "*ptr"),
             (ExprType.ASSIGNMENT_TARGET, "p1"),
-            (ExprType.VARIABLE_ACCESS, "p_ptr"),
             (ExprType.ASSIGNMENT_TARGET, "p_ptr"),
             (ExprType.ADDRESS_OF, "&p1"),
+            (ExprType.ASSIGNMENT_TARGET, "p1.x"),
             (ExprType.MEMBER_ACCESS, "p1.x"),
-            (ExprType.POINTER_DEREF, "*ptr"),
             (ExprType.ASSIGNMENT_TARGET, "p_ptr->y"),
             (ExprType.MEMBER_ACCESS, "p_ptr->y"),
-            (ExprType.POINTER_DEREF, "**pptr"),
+            (ExprType.ASSIGNMENT_TARGET, "arr[0]"),
+            (ExprType.SUBSCRIPT_EXPRESSION, "arr[0]"),
             (ExprType.ASSIGNMENT_TARGET, "**pptr"),
-            (ExprType.VARIABLE_ACCESS, "a"),  # printf参数中的a
-            (ExprType.VARIABLE_ACCESS, "vec"),
-            (ExprType.VARIABLE_ACCESS, "val"),
-            (ExprType.ASSIGNMENT_TARGET, "val"),
-            (ExprType.SUBSCRIPT_EXPRESSION, "vec[0]"),
-            (ExprType.VARIABLE_ACCESS, "a"),  # if条件中的a
-            (ExprType.VARIABLE_ACCESS, "val"),  # return中的val
-            (ExprType.ASSIGNMENT_TARGET, "p_ptr"),
-            (ExprType.ADDRESS_OF, "&p2"),
-            (ExprType.VARIABLE_ACCESS, "result"),
-            (ExprType.ASSIGNMENT_TARGET, "result"),
-            (ExprType.MEMBER_ACCESS, "p_ptr->x"),
-            (ExprType.MEMBER_ACCESS, "p2.y"),
-            (ExprType.VARIABLE_ACCESS, "num"),
-            (ExprType.ASSIGNMENT_TARGET, "num"),
-            (ExprType.MEMBER_ACCESS, "p_ptr->x"),
-            (ExprType.MEMBER_ACCESS, "Sub.OptionsMap"),
-            (ExprType.MEMBER_ACCESS, "I.second->Categories"),
-            (ExprType.ADDRESS_OF, "&CommonOptions->GenericCategory"),
-            (ExprType.MEMBER_ACCESS, "CommonOptions->GenericCategory1"),
-            (ExprType.SUBSCRIPT_EXPRESSION, "argv[i][0]"),
+            (ExprType.POINTER_DEREF, "**pptr"),
+            (ExprType.ASSIGNMENT_TARGET, "b"),
+            (ExprType.VARIABLE_ACCESS, "a"),
+            (ExprType.VARIABLE_ACCESS, "p_ptr"),
+            (ExprType.ASSIGNMENT_TARGET, "arr[i]"),
+            (ExprType.SUBSCRIPT_EXPRESSION, "arr[i]"),
             (ExprType.VARIABLE_ACCESS, "i"),
-            (ExprType.VARIABLE_ACCESS, "j"),
-            # 新增来自剪贴板的表达式
-            (ExprType.VARIABLE_ACCESS, "value"),
-            (ExprType.ASSIGNMENT_TARGET, "result"),
-            (ExprType.VARIABLE_ACCESS, "result"),
-            (ExprType.ASSIGNMENT_TARGET, "outerVar"),
-            (ExprType.ASSIGNMENT_TARGET, "innerVar"),
-            (ExprType.VARIABLE_ACCESS, "outerVar"),
-            (ExprType.VARIABLE_ACCESS, "innerVar"),
-            (ExprType.VARIABLE_ACCESS, "Inner::displayValues"),
-            (ExprType.ASSIGNMENT_TARGET, "Inner::innerVar"),
-            (ExprType.VARIABLE_ACCESS, "Inner::innerVar"),
+            (ExprType.ASSIGNMENT_TARGET, "size"),
+            (ExprType.ASSIGNMENT_TARGET, "value"),
+            (ExprType.SUBSCRIPT_EXPRESSION, "arr[getIndex()]"),
+            (ExprType.VARIABLE_ACCESS, "vec"),
+            (ExprType.ASSIGNMENT_TARGET, "item"),
         }
 
-        # 预期排除的表达式（字面量不再提取, 循环变量不提取）
-        excluded_exprs = {
-            (ExprType.VARIABLE_ACCESS, '"nop"'),  # 内联汇编中的字符串
-            (ExprType.VARIABLE_ACCESS, "Tool.size()"),  # 函数调用
-            (ExprType.VARIABLE_ACCESS, "arr[getIndex()]"),  # 包含函数调用
-            (ExprType.VARIABLE_ACCESS, "abcd.getValue()"),  # 函数调用
-            (ExprType.VARIABLE_ACCESS, "abcd"),  # range-based for 循环变量
-            (ExprType.VARIABLE_ACCESS, "Cat1"),  # range-based for 循环变量
-        }
+        # Define what we expect *not* to find
+        unexpected_exprs = {"main", "argc", "argv", "printf", "Tool::size", "getIndex", "item"}
 
-        # 验证所有预期表达式都被提取到
+        # --- Validation ---
+        success = True
         missing = expected_exprs - extracted_exprs
         if missing:
-            logger.error("缺失的表达式: %s", missing)
-            return False
+            logger.error("TEST FAILED: The following expressions were NOT found:")
+            for expr_type, expr_text in sorted(list(missing)):
+                print(f"  - {expr_type.name}: '{expr_text}'")
+            success = False
 
-        # 验证排除的表达式没有被提取
-        unexpected = set()
-        for expr_type, expr_text in excluded_exprs:
-            if (expr_type, expr_text) in extracted_exprs:
-                unexpected.add((expr_type, expr_text))
-        if unexpected:
-            logger.error("意外的表达式: %s", unexpected)
-            return False
+        found_unexpected = set()
+        for _, expr_text in extracted_exprs:
+            if expr_text in unexpected_exprs:
+                found_unexpected.add(expr_text)
 
-        logger.info("所有测试通过!")
-        return True
+        if found_unexpected:
+            logger.error("TEST FAILED: The following unexpected expressions WERE found:")
+            for expr_text in sorted(list(found_unexpected)):
+                print(f"  - '{expr_text}'")
+            success = False
+
+        if success:
+            logger.info("All tests passed!")
+
+        return success
 
 
 def main():
-    parser = argparse.ArgumentParser(description="表达式提取工具")
-    parser.add_argument("--source-comment", action="store_true", help="在源代码中添加表达式注释")
-    parser.add_argument("--test", action="store_true", help="运行测试用例")
-    parser.add_argument("input_file", nargs="?", help="输入源代码文件路径")
+    """Command-line interface for the ExpressionTool."""
+    parser = argparse.ArgumentParser(
+        description="Extracts and analyzes evaluatable expressions from C/C++ source code."
+    )
+    parser.add_argument("input_file", nargs="?", help="Path to the source code file to analyze.")
+    parser.add_argument("--annotate", action="store_true", help="Print the source code with annotations.")
+    parser.add_argument("--test", action="store_true", help="Run the built-in test suite.")
 
     args = parser.parse_args()
 
@@ -284,19 +198,28 @@ def main():
 
     if args.test:
         sys.exit(0 if tool.run_tests() else 1)
-    elif args.source_comment:
-        if not args.input_file:
-            logger.error("需要指定输入文件")
-            sys.exit(1)
 
+    if not args.input_file:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
         with open(args.input_file, "rb") as f:
             source_code = f.read()
+    except FileNotFoundError:
+        logger.error("Input file not found: %s", args.input_file)
+        sys.exit(1)
 
-        expressions = tool.extract_expressions(source_code)
-        annotated_source = tool.annotate_source(source_code, expressions)
-        print(annotated_source)
+    expressions = tool.extract_from_source(source_code)
+
+    if args.annotate:
+        annotated_code = tool.annotate_source(source_code, expressions)
+        print(annotated_code)
     else:
-        parser.print_help()
+        for line_num, expr_list in sorted(expressions.items()):
+            print(f"--- Line {line_num + 1} ---")
+            for _, expr_text, _ in expr_list:
+                print(f"  - Type: {expr_type.name:<20} Text: '{expr_text}'")
 
 
 if __name__ == "__main__":

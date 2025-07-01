@@ -2,204 +2,148 @@ import os
 import re
 import sys
 import traceback
-from typing import List, Optional
+from typing import List
 
 import lldb
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.formatted_text import HTML, FormattedText  # 新增导入
 from prompt_toolkit.key_binding import KeyBindings
-
-try:
-    from colorama import Fore, Style, init
-
-except ImportError:
-
-    class ColorFallback:
-        def __getattr__(self, name):
-            return ""
-
-    Fore = ColorFallback()
-    Style = ColorFallback()
-    print("Warning: colorama not found. Console output will not be colored.", file=sys.stderr)
+from prompt_toolkit.styles import Style
 
 
 class LLDBCompleter(Completer):
+    """
+    A prompt_toolkit completer that uses LLDB's built-in completion engine.
+    """
+
     def __init__(self, ci: lldb.SBCommandInterpreter, custom_commands: List[str]):
         self.ci = ci
         self.custom_commands = custom_commands
-        # Pre-compiled regex for finding the start of the word to complete
+        # Regex to find the start of the word to be completed
         self._word_boundary_re = re.compile(r"[\s=:]+")
-        # 添加命令后缀空格模式
-        self._command_pattern = re.compile(r"^\w+$")  # 简单匹配命令单词
-
-    def _get_current_word_start(self, text: str, cursor_pos: int) -> int:
-        """Find the start of the word at the cursor."""
-        start_index = cursor_pos
-        while start_index > 0:
-            if self._word_boundary_re.match(text[start_index - 1]):
-                break
-            start_index -= 1
-        return start_index
 
     def get_completions(self, document, complete_event):
         full_text = document.text
         cursor_pos = document.cursor_position
 
-        # Find the start of the word to complete
-        match_start_point = self._get_current_word_start(full_text, cursor_pos)
-        word_to_complete = full_text[match_start_point:cursor_pos]
+        # Find the start of the word being typed
+        match_start_point = self._word_boundary_re.split(full_text[:cursor_pos])[-1]
 
-        # Use LLDB's built-in completer
+        # Get completions from LLDB
         matches = lldb.SBStringList()
         descriptions = lldb.SBStringList()
+        self.ci.HandleCompletionWithDescriptions(full_text, cursor_pos, 0, -1, matches, descriptions)
 
-        self.ci.HandleCompletionWithDescriptions(
-            full_text,
-            cursor_pos,
-            match_start_point,
-            100,  # max_return_elements
-            matches,
-            descriptions,
-        )
-
-        # Yield completions from LLDB
+        # Yield LLDB completions
         for i in range(matches.GetSize()):
-            match = matches.GetStringAtIndex(i)
-            description = descriptions.GetStringAtIndex(i) if i < descriptions.GetSize() else ""
+            match_text = matches.GetStringAtIndex(i)
+            desc_text = descriptions.GetStringAtIndex(i) if i < descriptions.GetSize() else ""
+            # Add a space for commands to allow for faster argument typing
+            display_text = match_text + " " if "command" in desc_text.lower() else match_text
+            yield Completion(display_text, start_position=-len(match_start_point), display_meta=desc_text or "Argument")
 
-            # 修复：返回完整匹配项而不是后缀
-            if match.startswith(word_to_complete):
-                # 判断是否是命令补全（简单通过描述文本判断）
-                is_command = "Command" in description or self._command_pattern.match(match)
-
-                # 命令补全添加空格后缀，参数补全不加
-                display = match + (" " if is_command else "")
-
-                # 设置start_position为负的当前词长度，确保完整替换
-                yield Completion(display, start_position=-len(word_to_complete), display_meta=description or "Argument")
-
-        # Add custom commands
+        # Yield custom command completions
         for cmd in self.custom_commands:
-            if cmd.startswith(word_to_complete):
-                # 自定义命令也返回完整命令
-                # 自定义命令也添加空格后缀
-                yield Completion(cmd + " ", start_position=-len(word_to_complete), display_meta="Custom Command")
+            if cmd.startswith(match_start_point):
+                yield Completion(cmd + " ", start_position=-len(match_start_point), display_meta="Shell Command")
 
 
 def show_console(debugger: lldb.SBDebugger):
     """
-    Launches an interactive LLDB console with fixed default messages.
+    Launches an interactive LLDB console.
+
+    This function is intended to be called when the debugger stops at a point
+    requiring manual intervention, such as a specific breakpoint exception.
 
     Args:
         debugger: The active lldb.SBDebugger instance.
     """
-    initial_message = "Entering LLDB interactive shell due to an event."
-    prompt = "(lldb-shell) "
-
-    print(f"\n{Fore.CYAN}{Style.BRIGHT}--- LLDB Interactive Console ---{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}{initial_message}{Style.RESET_ALL}")
-
-    # Automatically determine call location and stack trace
-    try:
-        # Get the frame that called this function (skip show_console frame)
-        frame = sys._getframe(1)
-        python_line = frame.f_lineno
-        python_file = frame.f_code.co_filename
-
-        # Format stack trace excluding this function's frame
-        stack_trace = []
-        while frame:
-            # Skip internal frames of the debugger itself
-            if "__name__" in frame.f_globals and frame.f_globals["__name__"] == __name__:
-                frame = frame.f_back
-                continue
-
-            stack_trace.append(f'  File "{frame.f_code.co_filename}", line {frame.f_lineno}, in {frame.f_code.co_name}')
-            frame = frame.f_back
-
-        python_traceback_str = "\n".join(reversed(stack_trace))
-
-        print(f"{Fore.MAGENTA}Python execution paused at: {python_file}:{python_line}{Style.RESET_ALL}")
-        print(f"{Fore.MAGENTA}Python Traceback:\n{python_traceback_str}{Style.RESET_ALL}")
-
-    except Exception as e:
-        print(f"{Fore.RED}Could not determine call location: {e}{Style.RESET_ALL}")
-
     ci: lldb.SBCommandInterpreter = debugger.GetCommandInterpreter()
     if not ci.IsValid():
-        print(f"{Fore.RED}Error: Could not get a valid LLDB command interpreter.{Style.RESET_ALL}")
+        print("Error: Could not get a valid LLDB command interpreter.", file=sys.stderr)
         return
 
-    custom_commands = ["q", "exit", "clear"]
+    # --- Print Contextual Information ---
+    print("\n" + "=" * 60)
+    print("  Entering LLDB Interactive Shell".center(60))
+    print("=" * 60)
+
+    try:
+        # Get Python call stack that led to this shell
+        stack = traceback.extract_stack()
+        # The last frame is this function, the one before is the caller.
+        caller_frame = stack[-2]
+        print(f"-> Shell triggered from: {caller_frame.filename}:{caller_frame.lineno} in `{caller_frame.name}`")
+    except Exception as e:
+        print(f"-> Could not determine call location: {e}")
+
+    print("-" * 60)
+
+    # --- Setup Prompt-toolkit Session ---
+    custom_commands = ["quit", "exit", "clear"]
     completer = LLDBCompleter(ci, custom_commands)
 
-    help_message = (
-        f"{Fore.GREEN}Type 'help' for LLDB commands, "
-        f"'q' or 'exit' to quit. Use 'clear' or Ctrl+L "
-        f"to clear screen.{Style.RESET_ALL}"
+    # Define a style for the prompt and output
+    style = Style.from_dict(
+        {
+            "prompt": "ansicyan bold",
+            "output": "ansigreen",
+            "error": "ansired bold",
+        }
     )
-    print(help_message)
 
-    # Define keybindings for the session
+    # Key bindings for Ctrl+C (exit) and Ctrl+L (clear screen)
     bindings = KeyBindings()
 
     @bindings.add("c-c")
-    def _exit_handler(event):
-        """Handle Ctrl+C to exit."""
+    def _(event):
         event.app.exit()
 
     @bindings.add("c-l")
-    def _clear_screen_handler(event):
-        """Handle Ctrl+L to clear the screen."""
+    def _(event):
         event.app.renderer.clear()
 
-    # 使用FormattedText处理样式
-    prompt_text = FormattedText(
-        [
-            ("#0080ff", prompt)  # 蓝色提示符
-        ]
+    session = PromptSession(
+        "(lldb) ", key_bindings=bindings, completer=completer, complete_while_typing=True, style=style
     )
 
-    session = PromptSession(key_bindings=bindings, completer=completer, complete_while_typing=True)
+    print("Type 'help' for LLDB commands. 'quit' or 'exit' to resume program execution.")
+    print("-" * 60 + "\n")
 
+    # --- Command Loop ---
     while True:
         try:
-            # 使用FormattedText而不是原始ANSI序列
-            command_line = session.prompt(prompt_text).strip()
+            command_line = session.prompt().strip()
             if not command_line:
                 continue
 
-            if command_line.lower() in ("q", "exit"):
-                print(f"{Fore.CYAN}Exiting LLDB interactive console.{Style.RESET_ALL}")
+            if command_line.lower() in ("q", "quit", "exit"):
                 break
 
             if command_line.lower() == "clear":
-                os.system("clear")
+                os.system("cls" if os.name == "nt" else "clear")
                 continue
 
-            result: lldb.SBCommandReturnObject = lldb.SBCommandReturnObject()
+            # Execute the command in LLDB
+            result = lldb.SBCommandReturnObject()
             ci.HandleCommand(command_line, result)
 
-            if result.Succeeded():
-                if result.GetOutputSize() > 0:
-                    sys.stdout.write(result.GetOutput())
-                if result.GetErrorSize() > 0:
-                    sys.stderr.write(result.GetError())
-            else:
-                if result.GetOutputSize() > 0:
-                    sys.stdout.write(result.GetOutput())
-                if result.GetErrorSize() > 0:
-                    sys.stderr.write(f"{Fore.RED}{result.GetError()}{Style.RESET_ALL}")
-                else:
-                    sys.stderr.write(f"{Fore.RED}Command failed: {command_line}{Style.RESET_ALL}\n")
+            # Print output/error
+            output = result.GetOutput()
+            if output:
+                print(output, end="")
 
-        except EOFError:
-            print(f"\n{Fore.CYAN}Exiting LLDB interactive console (EOF).{Style.RESET_ALL}")
+            error = result.GetError()
+            if error:
+                print(error, file=sys.stderr, end="")
+
+            # Ensure a newline after command execution if there wasn't one
+            if (output and not output.endswith("\n")) or (error and not error.endswith("\n")):
+                print()
+
+        except (EOFError, KeyboardInterrupt):
             break
-        except KeyboardInterrupt:
-            print(f"\n{Fore.CYAN}Exiting LLDB interactive console (KeyboardInterrupt).{Style.RESET_ALL}")
-            break
-        except (ValueError, RuntimeError) as e:
-            print(f"{Fore.RED}An error occurred: {e}{Style.RESET_ALL}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+
+    print("\n" + "=" * 60)
+    print("  Resuming program execution...".center(60))
+    print("=" * 60 + "\n")
