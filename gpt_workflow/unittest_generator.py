@@ -300,11 +300,29 @@ class UnitTestGenerator:
             print(Fore.RED + f"Error resolving path: {e}")
             return None
 
-    def _merge_tests(self, existing_code: str, new_code_block: str, output_path: str) -> Optional[str]:
-        """Asks the LLM to merge new test cases into an existing test file."""
+    def _merge_tests(self, existing_code: str, new_code_snippets: List[str], output_path: str) -> Optional[str]:
+        """[REFACTORED] Asks the LLM to merge one or more new test cases into an existing test file."""
+        new_blocks_str = ""
+        for i, snippet in enumerate(new_code_snippets):
+            # Using a distinct header for each block to help the LLM.
+            new_blocks_str += dedent(f"""
+            ---
+            [New Test Case(s) Block {i + 1}]
+            ---
+            [start]
+            {snippet}
+            [end]
+            """)
+
+        task_description = "intelligently merge new test cases into an existing test file."
+        if len(new_code_snippets) > 1:
+            task_description = (
+                "intelligently merge MULTIPLE new test cases from several blocks into an existing test file."
+            )
+
         prompt = dedent(f"""
             You are an expert Python developer specializing in refactoring and maintaining test suites.
-            Your task is to intelligently merge new test cases into an existing test file.
+            Your task is to {task_description}
 
             **1. CONTEXT: EXISTING TEST FILE**
             This is the current content of the test file.
@@ -317,26 +335,27 @@ class UnitTestGenerator:
 
             **2. CONTEXT: NEWLY GENERATED TEST CASES**
             These are new test cases that need to be added to the file.
-            They are already formatted as a complete test class.
+            Each block might contain one or more test cases within a complete, runnable script.
 
             [New Test Code to Add]:
-            [start]
-            {new_code_block}
-            [end]
+            {new_blocks_str.strip()}
 
             **3. YOUR TASK: MERGE THE CODE**
-            - **Combine Imports:** Merge the imports from both blocks, removing duplicates.
-            - **Merge into Class:** Add the new test methods from the new code into the existing `unittest.TestCase`
+            - **Combine Imports:** Merge the imports from the existing code and ALL new blocks, removing duplicates.
+            - **Merge into Class:** Add the new test methods from all new code blocks into the existing `unittest.TestCase`
               class. If the class names differ, use the existing class name.
             - **Preserve Structure:** Maintain the overall structure and style of the existing file.
             - **Do Not Remove Existing Tests:** Ensure all original tests are kept.
             - **Completeness:** The final output must be a single, complete, and runnable Python file.
 
             **IMPORTANT**: Your entire response MUST be only the merged Python code, enclosed within a single
-            `[start]` and `[end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap  the merged Python code
+            `[start]` and `end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap  the merged Python code
         """).strip()
 
-        print(Fore.YELLOW + f"Querying language model ({self.checker_model_name}) to merge test files...")
+        print(
+            Fore.YELLOW
+            + f"Querying language model ({self.checker_model_name}) to merge {len(new_code_snippets)} snippet(s)..."
+        )
         response_text = self.model_switch.query(self.checker_model_name, prompt, stream=False)
         return self._extract_code_from_response(response_text)
 
@@ -707,7 +726,8 @@ class UnitTestGenerator:
         num_workers: int = 0,
     ) -> bool:
         """
-        [REFACTORED] Generates the unit test file, now using a robust instruction-based engine for file writing.
+        [REFACTORED] Generates the unit test file, now using a robust instruction-based engine for file writing
+        and an intelligent batch-merging strategy for efficiency.
 
         The process is as follows:
         1.  **Setup Phase (Serial):** Find all call records, get user confirmation for file/class names,
@@ -716,7 +736,7 @@ class UnitTestGenerator:
         3.  **Generation Phase (Parallel/Serial):**
             - Each worker generates a complete, runnable Python code block for one test case.
         4.  **Aggregation Phase (Serial):** The generated code blocks are intelligently merged into a single,
-            cohesive Python code string.
+            cohesive Python code string using a batching strategy to minimize LLM calls.
         5.  **Finalization Phase (Serial):** A file operation instruction (`created_file` or `overwrite_whole_file`)
             is constructed and executed by the `ReplaceEngine`.
         """
@@ -1040,18 +1060,89 @@ class UnitTestGenerator:
         return worker_generator._extract_code_from_response(response_text)
 
     def _aggregate_code(self, code_snippets: List[str], output_path: Path, class_name: str) -> Optional[str]:
-        """Aggregates multiple code snippets into a single final code string."""
+        """[REFACTORED] Aggregates multiple code snippets into a single final code string using intelligent batching."""
         if not code_snippets:
             return None
 
+        # Use the first snippet as the base.
+        final_code = code_snippets[0]
+        remaining_snippets = code_snippets[1:]
+
+        if not remaining_snippets:
+            return final_code
+
+        # --- Setup for batched merging ---
+        print(Fore.CYAN + "\nStarting intelligent batch-merging of test cases...")
+        try:
+            # Select the model to get its configuration
+            self.model_switch.select(self.checker_model_name)
+            config = self.model_switch.current_config
+            if not config:
+                raise ValueError(f"Could not load configuration for checker model: {self.checker_model_name}")
+
+            max_tokens = config.max_context_size or 32768  # Fallback
+            # Reserve a generous amount for the output and other prompt text.
+            # Use a conservative char-to-token ratio of 1.5 (1 token ~ 1.5 chars) to stay safely within the limit.
+            prompt_char_limit = int((max_tokens - 8192) * 1.5)
+            print(
+                f"Using checker model '{self.checker_model_name}' with a character limit of ~{prompt_char_limit} for merge prompts."
+            )
+
+        except Exception as e:
+            print(Fore.RED + f"Error setting up for batched merge: {e}. Falling back to sequential merge.")
+            return self._aggregate_code_sequentially(code_snippets, output_path)
+
+        # --- Batch Processing Loop ---
+        while remaining_snippets:
+            current_batch = []
+            current_batch_chars = 0
+            # Estimate base prompt length: current code + ~2k chars for the prompt template.
+            base_prompt_len = len(final_code) + 2000
+
+            # Greedily fill the batch with snippets that fit into the context window.
+            for snippet in remaining_snippets:
+                snippet_len = len(snippet)
+                if current_batch and (base_prompt_len + current_batch_chars + snippet_len > prompt_char_limit):
+                    # If adding the next snippet exceeds the limit, stop filling the batch.
+                    # The `current_batch` must be non-empty to break, so that a single large snippet can form a batch of its own.
+                    break
+
+                current_batch.append(snippet)
+                current_batch_chars += snippet_len
+
+            if not current_batch:
+                print(Fore.RED + "Error: A snippet is too large to process, even alone. Aborting merge.")
+                return final_code  # Return what we have so far
+
+            # Process the batch
+            merged_code = self._merge_tests(
+                existing_code=final_code,
+                new_code_snippets=current_batch,
+                output_path=str(output_path),
+            )
+
+            if merged_code:
+                final_code = merged_code
+                # Remove the processed snippets from the list
+                num_batched = len(current_batch)
+                remaining_snippets = remaining_snippets[num_batched:]
+            else:
+                print(Fore.RED + f"Failed to merge a batch of {len(current_batch)} snippets. Aborting further merges.")
+                return final_code  # Return what we have so far to avoid losing work
+
+        return final_code
+
+    def _aggregate_code_sequentially(self, code_snippets: List[str], output_path: Path) -> Optional[str]:
+        """The original sequential merge, kept as a fallback."""
         final_code = code_snippets[0]
         if len(code_snippets) > 1:
-            print(Fore.CYAN + "\nMerging multiple generated test cases into a single file...")
+            print(Fore.CYAN + "\nMerging multiple generated test cases into a single file sequentially...")
             for i, new_snippet in enumerate(code_snippets[1:]):
                 print(f"Merging case {i + 2}/{len(code_snippets)}...")
+                # The _merge_tests function takes a list, so we wrap the snippet.
                 merged_code = self._merge_tests(
                     existing_code=final_code,
-                    new_code_block=new_snippet,
+                    new_code_snippets=[new_snippet],
                     output_path=str(output_path),
                 )
                 if merged_code:
