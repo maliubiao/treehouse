@@ -4,46 +4,99 @@ from debugger.unit_test_generator_decorator import generate_unit_tests
 
 
 def faulty_sub_function(x):
-    """一个会抛出异常的子函数"""
+    """
+    一个简单的子函数，其行为依赖于输入值。
+    - 当输入大于150时，它会抛出ValueError。
+    - 否则，它返回输入值的10倍。
+    这是测试生成器需要处理的两种独特执行路径：正常返回和异常退出。
+    """
     if x > 150:
+        # 路径 1: 异常退出
         raise ValueError("输入值不能大于 150")
+    # 路径 2: 正常返回
     return x * 10
 
 
 def complex_sub_function(a, b):
-    """一个包含循环和变量变化的子函数"""
+    """
+    一个包含业务逻辑、循环和异常处理的复杂函数。
+    它调用了另一个可能失败的函数(faulty_sub_function)，并对异常进行了捕获和处理。
+    这同样会产生两种主要的执行路径。
+    """
     total = a
     for idx in range(b):
         total += idx + 1
-        time.sleep(0.01)
+        time.sleep(0.01)  # 模拟耗时操作
 
     try:
+        # 调用 faulty_sub_function。
+        # CallAnalyzer 需要能正确跟踪到这次调用，并记录其是正常返回还是异常退出。
         result = faulty_sub_function(total)
     except ValueError:
+        # 路径 A: 内部调用失败，函数通过异常处理块返回。
         result = -1
 
+    # 路径 B: 内部调用成功，函数正常返回。
     return result
 
 
-# 使用装饰器自动生成单元测试
-# - target_functions: 指定为同一个文件中的两个函数，它们将被批量处理
-# - auto_confirm: 自动接受所有LLM建议，无需手动确认
-# - trace_llm: 启用LLM交互日志，方便调试
+# [REFACTORED] 使用装饰器为目标函数自动生成单元测试。
+# - target_functions: 指定需要生成测试的函数列表。
+#   [NEW] 装饰器现在会自动将被装饰的函数（'main_entrypoint'）也作为目标，无需手动添加。
+# - auto_confirm: 自动接受所有LLM的建议，便于自动化流程。
+# - trace_llm: 启用LLM交互日志，将提示和响应保存在 'llm_traces' 目录。
+# - num_workers: [REFACTORED] 设置为2，启用并行测试生成。UnitTestGenerator 将在内部处理并行逻辑。
+#                设为0或1则为顺序执行。
 @generate_unit_tests(
     target_functions=["complex_sub_function", "faulty_sub_function"],
     output_dir="generated_tests",
+    report_dir="call_reports",
     auto_confirm=True,
     trace_llm=True,
+    num_workers=2,
 )
 def main_entrypoint(val1, val2):
-    """演示的主入口函数"""
+    """
+    演示的主入口函数。
+    它的执行将触发对目标函数的多次调用，覆盖正常和异常路径，
+    从而为单元测试生成提供丰富的运行时数据。
+    """
     print("--- 开始执行主函数 ---")
+
+    # 场景 1: 触发目标函数的“异常/失败”路径。
+    # - complex_sub_function(10, 20) 被调用 -> total = 220。
+    # - faulty_sub_function(220) 被调用 -> 触发 ValueError。
+    # - complex_sub_function 捕获异常，返回 -1。
+    # [预期测试 1]: faulty_sub_function(220) -> raises ValueError。
+    # [预期测试 2]: complex_sub_function(10, 20) -> returns -1。
+    print("\n[场景 1] 测试目标函数的“失败”路径...")
     intermediate_result = complex_sub_function(val1, val2)
+    print(f"第一次调用 complex_sub_function 的结果: {intermediate_result}")
+
+    # 场景 2: 触发目标函数的“正常/成功”路径。
+    # - complex_sub_function(-1, 0) 被调用 -> total = -1。
+    # - faulty_sub_function(-1) 被调用 -> 返回 -10。
+    # - complex_sub_function 正常返回 -10。
+    # [预期测试 3]: faulty_sub_function(-1) -> returns -10。
+    # [预期测试 4]: complex_sub_function(-1, 0) -> returns -10。
+    print("\n[场景 2] 测试目标函数的“成功”路径...")
     final_result = complex_sub_function(intermediate_result, 0)
-    print(f"最终结果: {final_result}")
-    print("--- 主函数执行完毕 ---")
+    print(f"第二次调用 complex_sub_function 的结果: {final_result}")
+
+    # 注意：即使我们再次以相同的参数调用，新的去重逻辑也不会生成重复的测试用例。
+    print("\n[场景 3] 重复调用，预期不会产生新的测试用例...")
+    complex_sub_function(val1, val2)
+    print("第三次调用 complex_sub_function 完成。")
+
+    # 由于入口函数 'main_entrypoint' 被自动加入测试目标，也会为其生成测试。
+    # [预期测试 5]: main_entrypoint(10, 20) -> returns -10 (因为 `final_result` 被返回)。
+    print("\n--- 主函数执行完毕 ---")
     return final_result
 
 
 if __name__ == "__main__":
+    # 运行此脚本将执行 main_entrypoint。
+    # 程序正常退出时，注册的 atexit 回调函数将被触发，
+    # 自动开始对 `target_functions` 列表中的函数（以及main_entrypoint自身）生成单元测试。
+    # UnitTestGenerator 现在将根据 `num_workers` 参数在内部管理并行生成。
     main_entrypoint(10, 20)

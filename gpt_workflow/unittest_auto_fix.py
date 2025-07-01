@@ -109,40 +109,80 @@ class TestAutoFix:
         print(Fore.BLUE + f"Skipped: {skipped}")
         print(Fore.CYAN + "=" * 50)
 
-    def display_errors(self, references: List[Tuple[str, int]] = None) -> None:
-        """Display test errors in a user-friendly format with optional references."""
+    def select_error_interactive(self) -> Optional[Dict]:
+        """
+        Displays a list of all current errors and prompts the user to select one to fix.
+        If only one error exists, it is selected automatically.
+
+        Returns:
+            The dictionary of the selected error, or None if no selection is made or possible.
+        """
         self._print_stats()
 
         if not self.error_details:
-            print(Fore.GREEN + "\nNo test issues found!")
-            return
+            return None
 
-        print(Fore.YELLOW + "\nTest Issues Details:")
+        print(Fore.YELLOW + "\nPlease select an issue to fix:")
         print(Fore.YELLOW + "=" * 50)
-        # 只显示第一个错误，因为我们每次只修复一个
-        error = self.error_details[0]
-        print(Fore.RED + f"\nIssue #1 ({error.get('issue_type', 'unknown')}):")
-        print(Fore.CYAN + f"File: {error['file_path']}")
-        print(Fore.CYAN + f"Line: {error['line']}")
-        print(Fore.CYAN + f"Function: {error['function']}")
-        print(Fore.MAGENTA + f"Type: {error['error_type']}")
-        print(Fore.MAGENTA + f"Message: {error['error_message']}")
-        if error.get("traceback"):
+        for i, error in enumerate(self.error_details):
+            issue_type = error.get("issue_type", "unknown").upper()
+            func_name = error.get("function", "unknown")
+            error_type = error.get("error_type", "UnknownError")
+            color = Fore.RED if issue_type == "FAILURE" else Fore.YELLOW
+
+            print(color + f"  {i + 1}: [{issue_type}] in {func_name} ({error_type})")
+            print(Fore.CYAN + f"     File: {error['file_path']}:{error['line']}")
+
+            error_message = error["error_message"]
+            if len(error_message) > 100:
+                error_message = error_message[:97] + "..."
+            print(Fore.MAGENTA + f"     Msg:  {error_message}" + Style.RESET_ALL)
+
+        print(Fore.YELLOW + "=" * 50)
+
+        if len(self.error_details) == 1:
+            print(Fore.GREEN + "\nAutomatically selecting the only available issue.")
+            return self.error_details[0]
+
+        while True:
+            try:
+                choice_str = input(
+                    Fore.GREEN + f"Enter the number of the issue to fix (1-{len(self.error_details)}), or 'q' to quit: "
+                ).strip()
+                if choice_str.lower() == "q":
+                    return None
+
+                choice = int(choice_str)
+                if 1 <= choice <= len(self.error_details):
+                    return self.error_details[choice - 1]
+                else:
+                    print(Fore.RED + "Invalid choice. Please enter a number from the list.")
+            except ValueError:
+                print(Fore.RED + "Invalid input. Please enter a number or 'q'.")
+
+    def display_selected_error_details(self, selected_error: Dict) -> None:
+        """
+        Display detailed information for the selected test error, including traceback and tracer logs.
+        This method populates `self.uniq_references` and `self.trace_log`.
+        """
+        print(Fore.YELLOW + "\nAnalyzing selected issue:")
+        print(Fore.YELLOW + "=" * 50)
+
+        print(Fore.RED + f"\nIssue ({selected_error.get('issue_type', 'unknown')}):")
+        print(Fore.CYAN + f"File: {selected_error['file_path']}")
+        print(Fore.CYAN + f"Line: {selected_error['line']}")
+        print(Fore.CYAN + f"Function: {selected_error['function']}")
+        print(Fore.MAGENTA + f"Type: {selected_error['error_type']}")
+        print(Fore.MAGENTA + f"Message: {selected_error['error_message']}")
+
+        if selected_error.get("traceback"):
             print(Fore.YELLOW + "\nTraceback:")
             print(Fore.YELLOW + "-" * 30)
-            print(Fore.RED + error["traceback"])
+            print(Fore.RED + selected_error["traceback"])
             print(Fore.YELLOW + "-" * 30)
 
-        # Display references if provided
-        if references:
-            print(Fore.BLUE + "\nRelated References:")
-            print(Fore.BLUE + "-" * 30)
-            for ref_file, ref_line in references:
-                print(Fore.CYAN + f"→ {ref_file}:{ref_line}")
-
-        # Add tracer log analysis
-        if error.get("file_path") and error.get("line"):
-            self._display_tracer_logs(error["file_path"], error["line"])
+        if selected_error.get("file_path") and selected_error.get("line"):
+            self._display_tracer_logs(selected_error["file_path"], selected_error["line"])
 
     def lookup_reference(self, file_path: str, lineno: int) -> None:
         """Display reference information for a specific file and line."""
@@ -383,7 +423,7 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
 def run_fix_loop(args: argparse.Namespace):
     """
     Main loop for continuous test fixing.
-    Runs tests, fixes the first error, and repeats until all tests pass.
+    Runs tests, allows user to select an error, fixes it, and repeats.
     """
     model_switch = ModelSwitch()
     model_switch.select(args.model)
@@ -407,7 +447,6 @@ def run_fix_loop(args: argparse.Namespace):
         fix_mode = "direct"
 
     while True:
-        # Reload project modules to ensure the latest code is used
         _reload_project_modules()
 
         print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
@@ -415,15 +454,30 @@ def run_fix_loop(args: argparse.Namespace):
             test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=False
         )
         auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
-        auto_fix.display_errors()
 
-        if not auto_fix.error_details:
-            print(Fore.GREEN + "\n🎉 恭喜！所有测试均已通过。")
+        selected_error = auto_fix.select_error_interactive()
+
+        if not selected_error:
+            if not auto_fix.error_details:
+                print(Fore.GREEN + "\n🎉 恭喜！所有测试均已通过。")
+            else:
+                print(Fore.RED + "\n用户选择退出修复流程。")
             break
+
+        # Reset state for the selected error to ensure a clean analysis
+        auto_fix.uniq_references = set()
+        auto_fix.trace_log = ""
+
+        auto_fix.display_selected_error_details(selected_error)
 
         if not auto_fix.uniq_references:
             print(Fore.YELLOW + "\n未找到错误的有效引用。无法自动修复，请手动检查。")
-            break
+            continue_choice = input(Fore.GREEN + "\n是否返回列表选择其他问题或重新运行测试? (y/n): ").strip().lower()
+            if continue_choice == "y":
+                continue
+            else:
+                print(Fore.RED + "用户选择退出修复流程。")
+                break
 
         symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
 
@@ -432,7 +486,6 @@ def run_fix_loop(args: argparse.Namespace):
         elif fix_mode == "two_step":
             _perform_two_step_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
 
-        # After applying a fix, ask the user if they want to continue
         continue_choice = input(Fore.GREEN + "\n补丁已应用。是否继续修复下一个问题？ (y/n): ").strip().lower()
         if continue_choice != "y":
             print(Fore.RED + "用户选择退出修复流程。")

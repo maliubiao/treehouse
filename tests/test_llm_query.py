@@ -2775,5 +2775,162 @@ class TestClipboard(unittest.TestCase):
             self.fail(f"测试失败: {str(e)}")
 
 
+from llm_query import display_and_apply_diff, extract_and_diff_files
+
+
+class TestLLMQueryDiffFunctions(unittest.TestCase):
+    def test_file_not_exists(self):
+        """Test when diff file doesn't exist"""
+        non_existent_file = Path("/non/existent/file.diff")
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            display_and_apply_diff(non_existent_file)
+            self.assertEqual(mock_stdout.getvalue(), "")
+
+    def test_auto_apply_true(self):
+        """Test auto-apply without user prompt"""
+        mock_file = MagicMock(spec=Path)
+        mock_file.exists.return_value = True
+        mock_file.read_text.return_value = "dummy diff"
+
+        with (
+            patch("llm_query.highlight", return_value="highlighted diff"),
+            patch("llm_query._apply_patch") as mock_apply_patch,
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            display_and_apply_diff(mock_file, auto_apply=True)
+
+            # Verify output
+            output = mock_stdout.getvalue()
+            self.assertIn("高亮显示的diff内容：", output)
+            self.assertIn("highlighted diff", output)
+
+            # Verify function calls
+            mock_apply_patch.assert_called_once_with(mock_file)
+
+    def test_user_confirms_apply(self):
+        """Test user confirms apply with 'y' input"""
+        mock_file = MagicMock(spec=Path)
+        mock_file.exists.return_value = True
+        mock_file.read_text.return_value = "dummy diff"
+
+        with (
+            patch("llm_query.highlight", return_value="highlighted diff"),
+            patch("llm_query._apply_patch") as mock_apply_patch,
+            patch("builtins.input", return_value="y"),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            display_and_apply_diff(mock_file, auto_apply=False)
+
+            # Verify output
+            output = mock_stdout.getvalue()
+            self.assertIn("高亮显示的diff内容：", output)
+            self.assertIn("highlighted diff", output)
+            self.assertIn(f"\n申请变更文件，是否应用 {mock_file}？", output)
+
+            # Verify function calls
+            mock_apply_patch.assert_called_once_with(mock_file)
+
+    def test_user_cancels_apply(self):
+        """Test user cancels apply with non-y input"""
+        mock_file = MagicMock(spec=Path)
+        mock_file.exists.return_value = True
+        mock_file.read_text.return_value = "dummy diff"
+
+        with (
+            patch("llm_query.highlight", return_value="highlighted diff"),
+            patch("llm_query._apply_patch") as mock_apply_patch,
+            patch("builtins.input", return_value="n"),
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            display_and_apply_diff(mock_file, auto_apply=False)
+
+            # Verify output
+            output = mock_stdout.getvalue()
+            self.assertIn("高亮显示的diff内容：", output)
+            self.assertIn("highlighted diff", output)
+            self.assertIn(f"\n申请变更文件，是否应用 {mock_file}？", output)
+
+            # Verify no patch application
+            mock_apply_patch.assert_not_called()
+
+    def test_extract_and_diff_files_created_file(self):
+        """Test processing a 'created_file' instruction"""
+        # Setup test content and paths
+        content = (
+            "我将创建一个简单的helloworld.sh脚本，这个脚本将：\n"
+            '1. 输出"Hello World"信息\n'
+            "2. 遵循bash脚本最佳实践\n"
+            "[created file]: /project/helloworld.sh\n"
+            "[start]\n"
+            "#!/bin/bash\n"
+            'echo "Hello World"\n'
+            "[end]"
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir)
+            shadow_root = project_root / ".shadowroot"
+            shadow_root.mkdir()
+
+            # Configure global settings
+            with (
+                patch("llm_query.GLOBAL_PROJECT_CONFIG") as mock_config,
+                patch("llm_query.shadowroot", shadow_root),
+                patch("llm_query._save_response_content") as mock_save_response,
+                patch("llm_query.LLMInstructionParser.parse") as mock_parse,
+                patch("llm_query.ReplaceEngine") as MockReplaceEngine,
+                patch("llm_query._generate_unified_diff") as mock_generate_diff,
+                patch("llm_query._save_diff_content") as mock_save_diff,
+                patch("llm_query.display_and_apply_diff") as mock_display,
+            ):
+                # Setup mocks
+                mock_config.project_root_dir = str(project_root)
+                mock_parse.return_value = [
+                    {
+                        "type": "created_file",
+                        "path": str(project_root / "helloworld.sh"),
+                        "content": '#!/bin/bash\necho "Hello World"',
+                    }
+                ]
+
+                mock_engine = MockReplaceEngine.return_value
+
+                # Mock the shadow file content after execution
+                def mock_execute(instructions):
+                    for instr in instructions:
+                        if instr["type"] == "created_file":
+                            shadow_path = Path(instr["path"])
+                            shadow_path.write_text(instr["content"])
+
+                mock_engine.execute.side_effect = mock_execute
+
+                mock_generate_diff.return_value = (
+                    '--- a/helloworld.sh\n+++ b/helloworld.sh\n@@ -0,0 +1,2 @@\n+#!/bin/bash\n+echo "Hello World"'
+                )
+                mock_save_diff.return_value = MagicMock(spec=Path)
+
+                # Execute function
+                extract_and_diff_files(content, auto_apply=False, save=True)
+
+                # Verify behavior
+                mock_save_response.assert_called_once_with(content)
+                mock_parse.assert_called_once_with(content)
+
+                # Verify ReplaceEngine called with shadow path
+                expected_shadow_instr = [
+                    {
+                        "type": "created_file",
+                        "path": str(shadow_root / "helloworld.sh"),
+                        "content": '#!/bin/bash\necho "Hello World"',
+                    }
+                ]
+                mock_engine.execute.assert_called_once_with(expected_shadow_instr)
+
+                # Verify diff processing
+                mock_generate_diff.assert_called_once()
+                mock_save_diff.assert_called_once_with(mock_generate_diff.return_value)
+                mock_display.assert_called_once_with(mock_save_diff.return_value, auto_apply=False)
+
+
 if __name__ == "__main__":
     unittest.main()

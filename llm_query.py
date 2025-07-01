@@ -3274,14 +3274,13 @@ def _save_diff_content(diff_content):
     return None
 
 
-def display_and_apply_diff(diff_file, auto_apply=False):
+def display_and_apply_diff(diff_file: Path, auto_apply=False):
     """显示并应用diff"""
     if diff_file.exists():
-        with open(diff_file, "r", encoding="utf-8") as f:
-            diff_text = f.read()
-            highlighted_diff = highlight(diff_text, DiffLexer(), TerminalFormatter())
-            print("\n高亮显示的diff内容：")
-            print(highlighted_diff)
+        diff_text = diff_file.read_text(encoding="utf8")
+        highlighted_diff = highlight(diff_text, DiffLexer(), TerminalFormatter())
+        print("\n高亮显示的diff内容：")
+        print(highlighted_diff)
 
         if auto_apply:
             print("自动应用变更...")

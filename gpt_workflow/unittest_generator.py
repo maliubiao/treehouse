@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import json
+import multiprocessing
 import os
 import re
 import sys
@@ -15,6 +16,7 @@ from colorama import Fore, Style
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from debugger import tracer
 from gpt_workflow.utils.code_formatter import CodeFormatter
 from llm_query import (
     FileSearchResult,
@@ -158,6 +160,7 @@ class UnitTestGenerator:
         """
         target_set = set(target_funcs)
         calls_by_func = defaultdict(list)
+        frame_id_seen = set()
 
         def _recursive_search(record: Dict):
             """Inner recursive helper to traverse the call tree."""
@@ -167,7 +170,9 @@ class UnitTestGenerator:
             # Check if the current record is for one of the target functions
             func_name = record.get("func_name")
             if func_name in target_set:
-                calls_by_func[func_name].append(record)
+                if record["frame_id"] not in frame_id_seen:
+                    frame_id_seen.add(record["frame_id"])
+                    calls_by_func[func_name].append(record)
 
             # Search within nested calls in the 'events' list
             for event in record.get("events", []):
@@ -362,6 +367,83 @@ class UnitTestGenerator:
         sys.path.insert(0, str(project_root))
         """).strip()
 
+    def _format_call_record_as_text(self, call_record: Dict[str, Any]) -> str:
+        """
+        Formats a single call record from the analysis report into a compact,
+        human-readable text trace. This format is easier for LLMs to parse than full JSON.
+
+        Args:
+            call_record: A dictionary representing a single function call record.
+
+        Returns:
+            A formatted string representing the execution trace.
+        """
+        trace_lines = []
+
+        func_name = call_record.get("func_name", "N/A")
+        original_filename = call_record.get("original_filename", "N/A")
+        args = call_record.get("args", {})
+        return_value = call_record.get("return_value")
+        exception = call_record.get("exception")
+
+        # --- Header ---
+        trace_lines.append(f"Execution trace for `{func_name}` from `{original_filename}`:")
+
+        # --- Call Signature ---
+        args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items()) if args else ""
+        trace_lines.append(f"\n[CALL] {func_name}({args_str})")
+
+        # --- Body: Executed Lines and Sub-calls ---
+        events = call_record.get("events", [])
+        if events:
+            trace_lines.append("\n[TRACE]")
+            for event in events:
+                event_type = event.get("type")
+                data = event.get("data", {})
+
+                if event_type == "line":
+                    line_no = data.get("line_no")
+                    # content has original indentation, rstrip removes trailing newlines
+                    content = data.get("content", "").rstrip()
+                    tracked_vars = data.get("tracked_vars")
+
+                    line_str = f"  L{line_no:<4} {content}"
+
+                    if tracked_vars:
+                        # Format tracked variables for readability
+                        vars_str = ", ".join(f"{k}={repr(v)}" for k, v in tracked_vars.items())
+                        line_str += f"    >> VARS: {vars_str}"
+
+                    trace_lines.append(line_str)
+
+                elif event_type == "call":
+                    sub_call_data = data
+                    sub_func_name = sub_call_data.get("func_name", "N/A")
+                    sub_args = sub_call_data.get("args", {})
+                    sub_return = sub_call_data.get("return_value")
+                    sub_exception = sub_call_data.get("exception")
+                    caller_lineno = sub_call_data.get("caller_lineno", "?")
+
+                    sub_args_str = ", ".join(f"{k}={repr(v)}" for k, v in sub_args.items()) if sub_args else ""
+
+                    call_summary = f"{sub_func_name}({sub_args_str})"
+                    if sub_exception:
+                        result_summary = f"RAISED {repr(sub_exception)}"
+                    else:
+                        result_summary = f"RETURNED {repr(sub_return)}"
+
+                    # This line represents a dependency that might need to be mocked.
+                    sub_call_line = f"  L{caller_lineno:<4} [SUB-CALL] {call_summary} -> {result_summary}"
+                    trace_lines.append(sub_call_line)
+
+        # --- Footer: Return Value or Exception ---
+        if exception:
+            trace_lines.append(f"\n[FINAL] RAISES: {repr(exception)}")
+        else:
+            trace_lines.append(f"\n[FINAL] RETURNS: {repr(return_value)}")
+
+        return "\n".join(trace_lines)
+
     def _build_prompt(
         self,
         target_func: str,
@@ -418,7 +500,7 @@ class UnitTestGenerator:
         sys_path_setup_snippet = self._generate_relative_sys_path_snippet(
             Path(output_file_abs_path), Path(project_root_path)
         )
-        call_record_json = json.dumps(call_record, indent=2, default=str)
+        call_record_text = self._format_call_record_as_text(call_record)
 
         action_description, existing_code_section, code_structure_guidance = self._get_common_prompt_sections(
             test_class_name, existing_code
@@ -451,13 +533,15 @@ class UnitTestGenerator:
         """).strip()
 
         prompt_part2 = dedent(f"""
-            **3. CONTEXT: CAPTURED RUNTIME DATA for `{target_func}`**
-            This JSON object represents a single execution of the function, including its arguments,
-            return value, and any calls it made to other functions (dependencies).
+            **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+            This is a compact text trace representing a single execution of the function.
+            It shows the arguments, the lines of code executed (`L...`), captured variable
+            states (`>> VARS:`), any sub-calls made to other functions (`[SUB-CALL]`),
+            and the final return value or exception. Use this to understand the test case.
 
-            [Runtime Call Record]
-            ```json
-            {call_record_json}
+            [Runtime Execution Trace]
+            ```text
+            {call_record_text}
             ```
 
             **4. INTELLIGENT MOCKING STRATEGY**
@@ -488,7 +572,7 @@ class UnitTestGenerator:
         sys_path_setup_snippet = self._generate_relative_sys_path_snippet(
             Path(output_file_abs_path), Path(project_root_path)
         )
-        call_record_json = json.dumps(call_record, indent=2, default=str)
+        call_record_text = self._format_call_record_as_text(call_record)
 
         context_code_str = ""
         for name, data in symbol_context.items():
@@ -527,13 +611,15 @@ class UnitTestGenerator:
         """).strip()
 
         prompt_part2 = dedent(f"""
-            **3. CONTEXT: CAPTURED RUNTIME DATA for `{target_func}`**
-            This JSON object represents a single execution of the function, including its arguments,
-            return value, and any calls it made to other functions (dependencies).
+            **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+            This is a compact text trace representing a single execution of the function.
+            It shows the arguments, the lines of code executed (`L...`), captured variable
+            states (`>> VARS:`), any sub-calls made to other functions (`[SUB-CALL]`),
+            and the final return value or exception. Use this to understand the test case.
 
-            [Runtime Call Record]
-            ```json
-            {call_record_json}
+            [Runtime Execution Trace]
+            ```text
+            {call_record_text}
             ```
 
             **4. INTELLIGENT MOCKING STRATEGY**
@@ -570,7 +656,7 @@ class UnitTestGenerator:
             "- **Framework:** Use Python's built-in `unittest` module.\n"
             "- **Test Method:** Create a new, descriptively named test method (e.g., `test_..._case_N`).\n"
             "- **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only the necessary\n"
-            "  dependencies from the `events` list.\n"
+            "  dependencies, which are shown as `[SUB-CALL]` lines in the execution trace.\n"
             "    - Configure mocks to behave exactly as recorded (return value or exception).\n"
             "    - Verify mocks were called correctly using `mock_instance.assert_called_once_with(...)`.\n"
             "- **Assertions:**\n"
@@ -589,12 +675,13 @@ class UnitTestGenerator:
         guidance = dedent(f"""
         Your goal is to create a valuable and robust test. Do not mock everything blindly.
         - **DO Mock:**
-            - Functions with external side effects (e.g., network requests, database queries, file I/O).
+            - Functions with external side effects (e.g., network requests, database queries).
             - Functions that are non-deterministic (e.g., `datetime.now()`, `random.randint()`).
             - Dependencies that are slow or complex, to isolate the function under test.
-            - In the provided trace, `faulty_sub_function` is a good candidate for mocking because we
-              want to test how `{target_func}` handles its success and failure cases independently.
+            - In the provided trace, any dependency shown as a `[SUB-CALL]` is a good candidate for mocking,
+              allowing you to test how `{target_func}` handles its success and failure cases independently.
         - **DO NOT Mock:**
+            - I/O operations that your can use a tempdir, tempfile to avoid side affect.
             - Simple, pure, deterministic helper functions within your own project (e.g., a function
               that just performs a calculation). Letting these simple functions run makes the test more
               meaningful and less brittle.
@@ -605,17 +692,44 @@ class UnitTestGenerator:
         """).strip()
         return guidance
 
+    @tracer.trace(
+        target_files=["*.py"],
+        enable_var_trace=True,
+        report_name="unittest_generate.html",
+        ignore_self=False,
+        ignore_system_paths=True,
+        disable_html=False,
+        # include_stdlibs=["unittest"],
+    )
     def generate(
-        self, target_funcs: List[str], output_dir: str, auto_confirm: bool = False, use_symbol_service: bool = True
+        self,
+        target_funcs: List[str],
+        output_dir: str,
+        auto_confirm: bool = False,
+        use_symbol_service: bool = True,
+        num_workers: int = 0,
     ) -> bool:
         """
-        Generates the unit test file for the specified functions.
+        [REFACTORED] Generates the unit test file for the specified functions, with parallel execution support.
+
+        The process is as follows:
+        1.  **Setup Phase (Serial):** Find all call records, get user confirmation for file/class names,
+            and resolve paths. This is done once to avoid race conditions.
+        2.  **Task Preparation:** Create a list of atomic, self-contained tasks, one for each call record.
+        3.  **Generation Phase (Parallel/Serial):**
+            - If num_workers > 1, a multiprocessing pool is used to generate test cases in parallel.
+            - Each worker generates a complete, runnable test code block for one case.
+        4.  **Aggregation Phase (Serial):** The generated code blocks from all tasks are intelligently
+            merged into a single, cohesive test file.
+        5.  **Finalization Phase (Serial):** The final code is formatted and written to disk.
 
         Args:
             target_funcs: The names of the functions to generate tests for.
             output_dir: Directory to save the generated test file(s).
             auto_confirm: If True, automatically accept all suggestions without prompting the user.
             use_symbol_service: If True, use symbol service to get precise context.
+            num_workers: Number of parallel processes to use for test generation.
+                         If 0 or 1, generation is sequential.
         """
         if not target_funcs:
             print(Fore.RED + "No target functions specified.")
@@ -628,30 +742,35 @@ class UnitTestGenerator:
             print(Fore.RED + f"No call records found for specified functions: {', '.join(target_funcs)}")
             return False
 
-        # --- Setup Phase ---
+        # --- 1. Setup Phase (Serial) ---
         setup_data = self._setup_generation_environment(all_calls_by_func, use_symbol_service, output_dir, auto_confirm)
         if not setup_data:
             return False
         (target_file_path, file_content, symbol_context, output_path, final_class_name, module_to_test) = setup_data
 
-        # --- Generation Phase ---
-        newly_generated_code = self._generate_test_cases(
-            all_calls_by_func=all_calls_by_func,
-            target_file_path=target_file_path,
-            file_content=file_content,
-            symbol_context=symbol_context,
-            test_class_name=final_class_name,
-            module_to_test=module_to_test,
-            output_path=output_path,
+        # --- 2. Task Preparation (Serial) ---
+        tasks = self._prepare_generation_tasks(
+            all_calls_by_func,
+            target_file_path,
+            file_content,
+            symbol_context,
+            final_class_name,
+            module_to_test,
+            output_path,
         )
+
+        # --- 3. Generation Phase (Parallel or Serial) ---
+        newly_generated_code = self._execute_generation_tasks(tasks, num_workers)
         if not newly_generated_code:
+            print(Fore.RED + "No test code was generated.")
             return False
 
-        # --- File Writing Phase ---
+        # --- 4. File Writing / Merging Phase (Serial) ---
         final_code_to_write = self._handle_existing_file(output_path, newly_generated_code, auto_confirm)
         if not final_code_to_write:
             return False
 
+        # --- 5. Finalization ---
         return self._write_final_code(output_path, final_code_to_write)
 
     def _setup_generation_environment(
@@ -709,8 +828,12 @@ class UnitTestGenerator:
                 if event.get("type") == "call":
                     data = event.get("data", {})
                     # Add only if location info is present and it's not a self-recursive call
-                    if "filename" in data and "lineno" in data and data.get("func_name") != record.get("func_name"):
-                        locations.add((data["filename"], data["lineno"]))
+                    if (
+                        "original_filename" in data
+                        and "original_lineno" in data
+                        and data.get("func_name") != record.get("func_name")
+                    ):
+                        locations.add((data["original_filename"], data["original_lineno"]))
 
         if not locations:
             print(Fore.YELLOW + "No symbol locations found in call records.")
@@ -737,6 +860,7 @@ class UnitTestGenerator:
         print(Fore.CYAN + f"Querying symbol service for {len(locations)} unique locations...")
         # The 'model_switch' keyword argument is removed to fix the pylint error.
         # This may prevent LLM call tracing for this specific operation.
+
         symbol_results = query_symbol_service(search_results, 128 * 1024)
 
         if symbol_results and isinstance(symbol_results, dict):
@@ -797,56 +921,146 @@ class UnitTestGenerator:
             print(Fore.RED + f"Error: {error_msg}")
             return None
 
-    def _generate_test_cases(
+    def _prepare_generation_tasks(
         self,
         all_calls_by_func: Dict[str, List[Dict]],
         target_file_path: Path,
+        file_content: Optional[str],
+        symbol_context: Optional[Dict[str, Dict]],
         test_class_name: str,
         module_to_test: str,
         output_path: Path,
-        file_content: Optional[str],
-        symbol_context: Optional[Dict[str, Dict]],
-    ) -> Optional[str]:
-        """Generate test cases for all call records, accumulating them."""
-        newly_generated_code = None
-        case_counter = 0
-
+    ) -> List[Dict]:
+        """Creates a list of task dictionaries for parallel processing."""
+        tasks = []
         for target_func, call_records in all_calls_by_func.items():
-            if not call_records:
-                continue
-
             for i, call_record in enumerate(call_records):
-                case_counter += 1
-                print(
-                    Fore.CYAN
-                    + f"\nGenerating Test Case {case_counter} for '{target_func}' (call {i + 1}/{len(call_records)})"
-                )
-                print(Fore.CYAN + f"Querying LLM ({self.generator_model_name})...")
+                task = {
+                    "case_number": len(tasks) + 1,
+                    "target_func": target_func,
+                    "call_record": call_record,
+                    "total_calls": len(call_records),
+                    "call_index": i + 1,
+                    # Pass all necessary context for the worker
+                    "target_file_path": str(target_file_path),
+                    "file_content": file_content,
+                    "symbol_context": symbol_context,
+                    "test_class_name": test_class_name,
+                    "module_to_test": module_to_test,
+                    "project_root_path": str(project_root.resolve()),
+                    "output_file_abs_path": str(output_path.resolve()),
+                    "generator_model_name": self.generator_model_name,
+                    "checker_model_name": self.checker_model_name,
+                    "trace_llm": self.model_switch.trace_llm,
+                    "trace_dir": self.model_switch.trace_run_dir.parent if self.model_switch.trace_run_dir else None,
+                }
+                tasks.append(task)
+        return tasks
 
-                prompt = self._build_prompt(
-                    file_path=str(target_file_path),
-                    file_content=file_content,
-                    symbol_context=symbol_context,
-                    target_func=target_func,
-                    call_record=call_record,
-                    test_class_name=test_class_name,
-                    module_to_test=module_to_test,
-                    project_root_path=str(project_root.resolve()),
-                    output_file_abs_path=str(output_path.resolve()),
-                    existing_code=newly_generated_code,
-                )
+    def _execute_generation_tasks(self, tasks: List[Dict], num_workers: int) -> Optional[str]:
+        """Executes prepared tasks either serially or in parallel."""
+        if not tasks:
+            return None
 
-                response_text = self.model_switch.query(self.generator_model_name, prompt, stream=False)
-                extracted_code = self._extract_code_from_response(response_text)
+        # [REFACTORED] Parallel/Serial execution logic is now centralized here.
+        if num_workers > 1:
+            print(
+                Fore.MAGENTA
+                + f"\nStarting parallel test case generation with {num_workers} workers..."
+                + Style.RESET_ALL
+            )
+            try:
+                with multiprocessing.Pool(processes=num_workers) as pool:
+                    # map_async is used to show progress, but simple map works too
+                    results = pool.map(UnitTestGenerator._generation_worker, tasks)
+            except Exception as e:
+                print(Fore.RED + f"A critical error occurred during parallel processing: {e}")
+                return None
+        else:
+            print(Fore.MAGENTA + "\nStarting serial test case generation..." + Style.RESET_ALL)
+            results = [UnitTestGenerator._generation_worker(task) for task in tasks]
 
-                if extracted_code:
-                    newly_generated_code = extracted_code
-                    print(Fore.GREEN + f"Successfully generated test case for '{target_func}'")
+        # Aggregate results
+        generated_code = None
+        for i, code_snippet in enumerate(results):
+            if code_snippet:
+                print(Fore.GREEN + f"Successfully generated code for case {i + 1}/{len(tasks)}." + Style.RESET_ALL)
+                if generated_code is None:
+                    generated_code = code_snippet
                 else:
-                    print(Fore.RED + f"Failed to extract code for test case of '{target_func}'")
-                    continue
+                    # Merge the new snippet into the accumulated code
+                    generated_code = self._merge_tests(
+                        existing_code=generated_code,
+                        new_code_block=code_snippet,
+                        output_path=tasks[0]["output_file_abs_path"],
+                    )
+                    if not generated_code:
+                        print(
+                            Fore.RED
+                            + f"Failed to merge code from case {i + 1}. Aborting further merges."
+                            + Style.RESET_ALL
+                        )
+                        break
+            else:
+                print(Fore.RED + f"Failed to generate code for case {i + 1}/{len(tasks)}." + Style.RESET_ALL)
 
-        return newly_generated_code
+        return generated_code
+
+    @staticmethod
+    def _generation_worker(task: Dict) -> Optional[str]:
+        """
+        [NEW] Static worker for parallel test generation. It's self-contained.
+        It generates a *complete, runnable* code block for a single test case.
+        """
+        # Unpack task dictionary
+        target_func = task["target_func"]
+        call_record = task["call_record"]
+        case_num = task["case_number"]
+        call_idx = task["call_index"]
+        total_calls = task["total_calls"]
+
+        # Re-create a minimal generator instance inside the worker process
+        # This is necessary because the full instance isn't picklable.
+        # We pass model names and trace settings to reconstruct it.
+        worker_generator = UnitTestGenerator(
+            report_path="",  # Not needed, as we have the record
+            model_name=task["generator_model_name"],
+            checker_model_name=task["checker_model_name"],
+            trace_llm=task["trace_llm"],
+            llm_trace_dir=str(task["trace_dir"]) if task["trace_dir"] else "llm_traces",
+        )
+        # Hack to avoid re-reading the report
+        worker_generator.analysis_data = {}
+
+        print(
+            Fore.CYAN + f"[Worker-{os.getpid()}] Generating Test Case {case_num} for '{target_func}' "
+            f"(call {call_idx}/{total_calls})" + Style.RESET_ALL
+        )
+
+        prompt = worker_generator._build_prompt(
+            target_func=target_func,
+            call_record=call_record,
+            # For the first case, `existing_code` is None. For subsequent merges,
+            # the main process will handle it. Here, we generate a self-contained block.
+            existing_code=None,
+            **{
+                k: v
+                for k, v in task.items()
+                if k
+                in [
+                    "test_class_name",
+                    "module_to_test",
+                    "project_root_path",
+                    "output_file_abs_path",
+                    "target_file_path",
+                    "file_content",
+                    "symbol_context",
+                ]
+            },
+        )
+
+        response_text = worker_generator.model_switch.query(task["generator_model_name"], prompt, stream=False)
+        return worker_generator._extract_code_from_response(response_text)
 
     def _handle_existing_file(self, output_path: Path, new_code: str, auto_confirm: bool) -> Optional[str]:
         """Handle existing test file with merge/overwrite options."""
@@ -954,6 +1168,13 @@ def parse_args():
         default="llm_traces",
         help="Directory to save LLM traces if --trace-llm is enabled. (Default: 'llm_traces')",
     )
+    # [NEW] Argument for parallel processing
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="Number of worker processes for parallel test generation. Default: 0 (serial execution).",
+    )
     return parser.parse_args()
 
 
@@ -969,6 +1190,7 @@ def main():
     print(f"{'Generator Model:':<20} {args.model}")
     print(f"{'Checker Model:':<20} {args.checker_model}")
     print(f"{'Symbol Service:':<20} {'Enabled' if args.use_symbol_service else 'Disabled'}")
+    print(f"{'Parallel Workers:':<20} {args.num_workers if args.num_workers > 0 else 'Serial'}")
     if args.auto_confirm:
         print(f"{'Auto Confirm:':<20} {Fore.YELLOW}Enabled{Style.RESET_ALL}")
     if args.trace_llm:
@@ -987,6 +1209,7 @@ def main():
         output_dir=args.output_dir,
         auto_confirm=args.auto_confirm,
         use_symbol_service=args.use_symbol_service,
+        num_workers=args.num_workers,
     )
 
 
