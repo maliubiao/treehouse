@@ -26,8 +26,14 @@ def complex_sub_function(a, b):
 
 
 # 使用装饰器自动生成单元测试
+# - target_functions: 指定为同一个文件中的两个函数，它们将被批量处理
+# - auto_confirm: 自动接受所有LLM建议，无需手动确认
+# - trace_llm: 启用LLM交互日志，方便调试
 @generate_unit_tests(
-    target_functions=["complex_sub_function", "faulty_sub_function"], output_dir="generated_tests", auto_confirm=True
+    target_functions=["complex_sub_function", "faulty_sub_function"],
+    output_dir="generated_tests",
+    auto_confirm=True,
+    trace_llm=True,
 )
 def main_entrypoint(val1, val2):
     """演示的主入口函数"""

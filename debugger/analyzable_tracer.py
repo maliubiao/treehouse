@@ -120,13 +120,24 @@ def analyzable_trace(
     ignore_system_paths: bool = True,
     source_base_dir: Optional[Path] = None,
     disable_html: bool = False,
+    include_stdlibs: Optional[List[str]] = None,
 ):
     """
     一个功能强大的函数跟踪装饰器，集成了调用分析功能。
 
     Args:
         analyzer: 一个 CallAnalyzer 实例，用于收集和分析数据。
-        ... (其他参数与 tracer.trace 装饰器相同)
+        target_files: 目标文件模式列表，支持通配符
+        line_ranges: 文件行号范围字典，key为文件名，value为 (start_line, end_line) 元组列表
+        capture_vars: 要捕获的变量表达式列表
+        report_name: 报告文件名
+        exclude_functions: 要排除的函数名列表
+        enable_var_trace: 是否启用变量操作跟踪
+        ignore_self: 是否忽略跟踪器自身
+        ignore_system_paths: 是否忽略系统路径和第三方包路径
+        source_base_dir: 源代码根目录，用于在报告中显示相对路径
+        disable_html: 是否禁用HTML报告
+        include_stdlibs: 特别包含的标准库模块列表（即使ignore_system_paths=True）
     """
     # 如果未指定目标文件，则自动将装饰器所在的文件设为目标
     if not target_files:
@@ -156,8 +167,8 @@ def analyzable_trace(
                 start_function=None,
                 source_base_dir=source_base_dir,
                 disable_html=disable_html,
+                include_stdlibs=include_stdlibs,
             )
-
             # 使用新的启动函数，并传入 analyzer
             t = start_analyzable_trace(analyzer=analyzer, config=config)
 

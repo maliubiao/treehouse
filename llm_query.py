@@ -3412,7 +3412,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
     _process_script(setup_script, "project_setup.sh")
 
     # 6. 生成原始文件和影子文件之间的差异
-    diff_content = ""
+    diffs_by_file = {}
     # 对路径排序以确保diff输出的确定性
     sorted_paths = sorted(list(path_mapping.keys()), key=lambda p: str(p))
     for original_path in sorted_paths:
@@ -3431,13 +3431,65 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         if original_content == shadow_content:
             continue
 
+        relative_path = str(original_path.relative_to(project_root))
         diff = _generate_unified_diff(original_path, shadow_path, original_content, shadow_content)
-        diff_content += diff + "\n\n"
+        diffs_by_file[relative_path] = diff
 
-    if diff_content.strip():
-        diff_file = _save_diff_content(diff_content)
-        if diff_file:
-            display_and_apply_diff(diff_file, auto_apply=auto_apply)
+    if not diffs_by_file:
+        return
+
+    # 7. 应用补丁 - 根据文件数量和auto_apply标志选择不同策略
+    if len(diffs_by_file) > 1 and not auto_apply:
+        # 多文件交互模式
+        combined_diff = "\n\n".join(diffs_by_file.values())
+        highlighted_diff = highlight(combined_diff, DiffLexer(), TerminalFormatter())
+        print("\n高亮显示的diff内容：")
+        print(highlighted_diff)
+
+        print("\n检测到对多个文件的更改。请选择要应用的补丁：")
+        file_list = sorted(diffs_by_file.keys())
+        for i, f in enumerate(file_list):
+            print(f"  [{i + 1}] {f}")
+        print("请输入文件编号（如 '1,3'），或 'all' 应用全部，或按Enter键取消。")
+
+        user_input = input("> ").strip().lower()
+        if not user_input:
+            print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+            return
+
+        selected_paths = []
+        if user_input == "all":
+            selected_paths = file_list
+        else:
+            try:
+                indices = [int(i.strip()) - 1 for i in user_input.split(",")]
+                selected_paths = [file_list[i] for i in indices if 0 <= i < len(file_list)]
+            except ValueError:
+                print(Fore.RED + "无效输入，操作已取消。" + ColorStyle.RESET_ALL)
+                return
+
+        if not selected_paths:
+            print(Fore.YELLOW + "未选择任何文件。" + ColorStyle.RESET_ALL)
+            return
+
+        applied_count = 0
+        for path in selected_paths:
+            if path in diffs_by_file:
+                temp_file = shadowroot / (path.replace("/", "_") + ".diff")
+                temp_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(temp_file, "w+", encoding="utf-8") as f:
+                    f.write(diffs_by_file[path])
+                _apply_patch(temp_file)
+                temp_file.unlink()
+                applied_count += 1
+        print(Fore.GREEN + f"已成功应用对 {applied_count} 个文件的补丁。" + ColorStyle.RESET_ALL)
+    else:
+        # 单文件模式或自动应用模式
+        diff_content = "\n\n".join(diffs_by_file.values())
+        if diff_content.strip():
+            diff_file = _save_diff_content(diff_content)
+            if diff_file:
+                display_and_apply_diff(diff_file, auto_apply=auto_apply)
 
 
 def process_response(prompt, content, file_path, save=True, obsidian_doc=None, ask_param=None):

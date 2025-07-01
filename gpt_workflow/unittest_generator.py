@@ -31,7 +31,14 @@ class UnitTestGenerator:
     produced by the CallAnalyzer.
     """
 
-    def __init__(self, report_path: str, model_name: str = "deepseek-r1", checker_model_name: str = "deepseek-checker"):
+    def __init__(
+        self,
+        report_path: str,
+        model_name: str = "deepseek-r1",
+        checker_model_name: str = "deepseek-checker",
+        trace_llm: bool = False,
+        llm_trace_dir: str = "llm_traces",
+    ):
         """
         Initializes the UnitTestGenerator.
 
@@ -39,9 +46,11 @@ class UnitTestGenerator:
             report_path: Path to the call_analysis_report.json file.
             model_name: The name of the language model to use for core test generation.
             checker_model_name: The name of the model for utility tasks (naming, merging).
+            trace_llm: If True, log LLM prompts and responses.
+            llm_trace_dir: Directory to save LLM traces.
         """
         self.report_path = Path(report_path)
-        self.model_switch = ModelSwitch()
+        self.model_switch = ModelSwitch(trace_llm=trace_llm, trace_dir=llm_trace_dir)
         self.formatter = CodeFormatter()
         self.generator_model_name = model_name
         self.checker_model_name = checker_model_name
@@ -105,7 +114,7 @@ class UnitTestGenerator:
         return all_calls
 
     def _suggest_test_file_and_class_names(
-        self, file_path: str, target_func: str, file_content: Optional[str] = None
+        self, file_path: str, target_funcs: List[str], file_content: Optional[str] = None
     ) -> Tuple[Optional[str], Optional[str]]:
         """Asks the LLM to suggest a filename and class name for the test suite."""
         # If file content is not provided, we can't provide context to the LLM.
@@ -118,16 +127,16 @@ class UnitTestGenerator:
 {file_content}
 ```
 """
-
+        target_funcs_str = ", ".join(f"`{f}`" for f in target_funcs)
         prompt = dedent(f"""
-            You are a Python testing expert. Based on the following function and its source file, suggest a suitable filename and a `unittest.TestCase` class name for its test suite.
+            You are a Python testing expert. Based on the following functions and their source file, suggest a suitable filename and a `unittest.TestCase` class name for their test suite.
 
             **Source File Path:** {file_path}
-            **Target Function Name:** {target_func}
+            **Target Function Names:** {target_funcs_str}
             {source_code_context}
 
             **Your Task:**
-            Provide your suggestions in a JSON format. The filename must follow the `test_*.py` convention. The class name should be descriptive.
+            Provide your suggestions in a JSON format. The filename must follow the `test_*.py` convention. The class name should be descriptive and encompass all target functions.
 
             **Example Output:**
             ```json
@@ -500,30 +509,40 @@ class UnitTestGenerator:
         - **How to Patch:** When using `unittest.mock.patch`, the path must be based on the module where the dependency is *used*. For example, to patch `dependency_func` which is imported and used in `{module_to_test}`, use `patch('{module_to_test}.dependency_func', ...)`.
         """).strip()
 
-    def generate(self, target_func: str, output_dir: str, auto_confirm: bool = False, use_symbol_service: bool = True):
+    def generate(
+        self, target_funcs: List[str], output_dir: str, auto_confirm: bool = False, use_symbol_service: bool = True
+    ):
         """
-        Generates the unit test file for the specified function.
+        Generates the unit test file for the specified functions.
 
         Args:
-            target_func: The name of the function to generate tests for.
+            target_funcs: The names of the functions to generate tests for.
             output_dir: Directory to save the generated test file(s).
             auto_confirm: If True, automatically accept all suggestions without prompting the user.
             use_symbol_service: If True, use symbol service to get precise context.
         """
-        all_calls = self._find_all_calls_for_function(target_func)
-        if not all_calls:
-            print(Fore.RED + f"No call records found for function '{target_func}'")
+        if not target_funcs:
+            print(Fore.RED + "No target functions specified.")
             return False
 
-        target_file_path = self._resolve_target_file_path(all_calls[0]["original_filename"])
+        all_calls_by_func = {func: self._find_all_calls_for_function(func) for func in target_funcs}
+        all_calls_by_func = {f: calls for f, calls in all_calls_by_func.items() if calls}
+
+        if not all_calls_by_func:
+            print(Fore.RED + f"No call records found for specified functions: {', '.join(target_funcs)}")
+            return False
+
+        first_func = next(iter(all_calls_by_func))
+        target_file_path = self._resolve_target_file_path(all_calls_by_func[first_func][0]["original_filename"])
         if not target_file_path:
             return False
 
         symbol_context = None
         file_content = None
+        all_calls_flat = [call for calls in all_calls_by_func.values() for call in calls]
         if use_symbol_service:
             print(Fore.CYAN + "\nUsing symbol service to gather precise code context...")
-            symbol_context = self._get_symbols_for_calls(all_calls)
+            symbol_context = self._get_symbols_for_calls(all_calls_flat)
             if not symbol_context:
                 print(Fore.YELLOW + "Warning: Failed to get symbol context. Falling back to full file content.")
                 file_content = self._read_file_content(target_file_path)
@@ -535,7 +554,7 @@ class UnitTestGenerator:
                 return False
 
         suggested_file, suggested_class = self._suggest_test_file_and_class_names(
-            str(target_file_path), target_func, file_content
+            str(target_file_path), list(all_calls_by_func.keys()), file_content
         )
         if not (suggested_file and suggested_class):
             print(Fore.RED + "Could not get suggestions for file/class names.")
@@ -552,8 +571,7 @@ class UnitTestGenerator:
             return False
 
         newly_generated_code = self._generate_test_cases(
-            all_calls=all_calls,
-            target_func=target_func,
+            all_calls_by_func=all_calls_by_func,
             target_file_path=target_file_path,
             file_content=file_content,
             symbol_context=symbol_context,
@@ -610,7 +628,7 @@ class UnitTestGenerator:
         search_results = FileSearchResults(results=file_results)
 
         print(Fore.CYAN + f"Querying symbol service for {len(locations)} unique locations...")
-        symbol_results = query_symbol_service(search_results, 128 * 1024)
+        symbol_results = query_symbol_service(search_results, 128 * 1024, model_switch=self.model_switch)
 
         if symbol_results and isinstance(symbol_results, dict):
             print(Fore.GREEN + f"Successfully retrieved {len(symbol_results)} symbols.")
@@ -672,8 +690,7 @@ class UnitTestGenerator:
 
     def _generate_test_cases(
         self,
-        all_calls: list,
-        target_func: str,
+        all_calls_by_func: Dict[str, List[Dict]],
         target_file_path: Path,
         test_class_name: str,
         module_to_test: str,
@@ -681,36 +698,44 @@ class UnitTestGenerator:
         file_content: Optional[str],
         symbol_context: Optional[Dict[str, Dict]],
     ) -> Optional[str]:
-        """Generate test cases for all call records."""
+        """Generate test cases for all call records, accumulating them."""
         newly_generated_code = None
-        total_cases = len(all_calls)
+        case_counter = 0
 
-        for i, call_record in enumerate(all_calls):
-            print(Fore.CYAN + f"\nGenerating Test Case {i + 1}/{total_cases} for '{target_func}'")
-            print(Fore.CYAN + f"Querying LLM ({self.generator_model_name})...")
-
-            prompt = self._build_prompt(
-                file_path=str(target_file_path),
-                file_content=file_content,
-                symbol_context=symbol_context,
-                target_func=target_func,
-                call_record=call_record,
-                test_class_name=test_class_name,
-                module_to_test=module_to_test,
-                project_root_path=str(project_root.resolve()),
-                output_file_abs_path=str(output_path.resolve()),
-                existing_code=newly_generated_code,
-            )
-
-            response_text = self.model_switch.query(self.generator_model_name, prompt, stream=False)
-            extracted_code = self._extract_code_from_response(response_text)
-
-            if extracted_code:
-                newly_generated_code = extracted_code
-                print(Fore.GREEN + f"Successfully generated test case {i + 1}")
-            else:
-                print(Fore.RED + f"Failed to extract code for test case {i + 1}")
+        for target_func, call_records in all_calls_by_func.items():
+            if not call_records:
                 continue
+
+            for i, call_record in enumerate(call_records):
+                case_counter += 1
+                print(
+                    Fore.CYAN
+                    + f"\nGenerating Test Case {case_counter} for '{target_func}' (call {i + 1}/{len(call_records)})"
+                )
+                print(Fore.CYAN + f"Querying LLM ({self.generator_model_name})...")
+
+                prompt = self._build_prompt(
+                    file_path=str(target_file_path),
+                    file_content=file_content,
+                    symbol_context=symbol_context,
+                    target_func=target_func,
+                    call_record=call_record,
+                    test_class_name=test_class_name,
+                    module_to_test=module_to_test,
+                    project_root_path=str(project_root.resolve()),
+                    output_file_abs_path=str(output_path.resolve()),
+                    existing_code=newly_generated_code,
+                )
+
+                response_text = self.model_switch.query(self.generator_model_name, prompt, stream=False)
+                extracted_code = self._extract_code_from_response(response_text)
+
+                if extracted_code:
+                    newly_generated_code = extracted_code
+                    print(Fore.GREEN + f"Successfully generated test case for '{target_func}'")
+                else:
+                    print(Fore.RED + f"Failed to extract code for test case of '{target_func}'")
+                    continue
 
         return newly_generated_code
 
@@ -776,9 +801,10 @@ def parse_args():
         help="Path to the call_analysis_report.json file generated by the tracer.",
     )
     parser.add_argument(
-        "--target-function",
+        "--target-functions",
+        nargs="+",
         required=True,
-        help="The name of the function to generate tests for.",
+        help="One or more names of the functions to generate tests for.",
     )
     parser.add_argument(
         "--output-dir",
@@ -809,6 +835,16 @@ def parse_args():
         action="store_true",
         help="Automatically confirm all interactive prompts, such as file/class name suggestions and merge choices.",
     )
+    parser.add_argument(
+        "--trace-llm",
+        action="store_true",
+        help="Enable logging of LLM prompts and responses to a directory. (Default: disabled)",
+    )
+    parser.add_argument(
+        "--llm-trace-dir",
+        default="llm_traces",
+        help="Directory to save LLM traces if --trace-llm is enabled. (Default: 'llm_traces')",
+    )
     return parser.parse_args()
 
 
@@ -819,20 +855,26 @@ def main():
     print(Fore.BLUE + Style.BRIGHT + "\nStarting Unit Test Generation Workflow")
     print(Fore.BLUE + "=" * 50)
     print(f"{'Report File:':<20} {args.report_file}")
-    print(f"{'Target Function:':<20} {args.target_function}")
+    print(f"{'Target Functions:':<20} {', '.join(args.target_functions)}")
     print(f"{'Output Directory:':<20} {args.output_dir}")
     print(f"{'Generator Model:':<20} {args.model}")
     print(f"{'Checker Model:':<20} {args.checker_model}")
     print(f"{'Symbol Service:':<20} {'Enabled' if args.use_symbol_service else 'Disabled'}")
     if args.auto_confirm:
-        print(f"{'Auto Confirm:':<20} {Fore.YELLOW}Enabled")
+        print(f"{'Auto Confirm:':<20} {Fore.YELLOW}Enabled{Style.RESET_ALL}")
+    if args.trace_llm:
+        print(f"{'LLM Tracing:':<20} {Fore.YELLOW}Enabled (dir: {args.llm_trace_dir}){Style.RESET_ALL}")
     print(Fore.BLUE + "=" * 50)
 
     generator = UnitTestGenerator(
-        report_path=args.report_file, model_name=args.model, checker_model_name=args.checker_model
+        report_path=args.report_file,
+        model_name=args.model,
+        checker_model_name=args.checker_model,
+        trace_llm=args.trace_llm,
+        llm_trace_dir=args.llm_trace_dir,
     )
     generator.generate(
-        target_func=args.target_function,
+        target_funcs=args.target_functions,
         output_dir=args.output_dir,
         auto_confirm=args.auto_confirm,
         use_symbol_service=args.use_symbol_service,

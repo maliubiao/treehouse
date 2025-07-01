@@ -135,6 +135,7 @@ class TraceConfig:
         start_function: Optional[Tuple[str, int]] = None,
         source_base_dir: Optional[Path] = None,
         disable_html: bool = False,
+        include_stdlibs: Optional[List[str]] = None,  # 新增参数
     ):
         """
         初始化跟踪配置
@@ -152,6 +153,7 @@ class TraceConfig:
             start_function: 指定开始跟踪的函数 (文件名, 行号)
             source_base_dir: 源代码根目录，用于在报告中显示相对路径
             disable_html: 是否禁用HTML报告生成
+            include_stdlibs: 特别包含的标准库模块列表（即使ignore_system_paths=True）
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
@@ -167,6 +169,7 @@ class TraceConfig:
         self.start_function = start_function
         self.source_base_dir = source_base_dir
         self.disable_html = disable_html
+        self.include_stdlibs = include_stdlibs or []  # 初始化包含的标准库模块列表
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -191,6 +194,22 @@ class TraceConfig:
         # 过滤<frozen posixpath>这类特殊文件名
         if filename.startswith("<") and filename.endswith(">") or filename.endswith("sitecustomize.py"):
             return False
+
+        # 新增：检查是否属于特别包含的标准库模块
+        if self.ignore_system_paths and self.include_stdlibs:
+            try:
+                resolved = str(Path(filename).resolve())
+                # 检查是否属于系统路径
+                in_system_path = any(resolved.startswith(sys_path) for sys_path in self._system_paths)
+                # 检查是否属于需要特别包含的标准库模块
+                is_included_stdlib = any(f"/{module}/" in resolved for module in self.include_stdlibs)
+
+                if in_system_path and is_included_stdlib:
+                    # 即使位于系统路径，但属于特别包含的模块，允许跟踪
+                    return True
+            except (ValueError, OSError):
+                pass
+
         if self.ignore_system_paths:
             # 直接检查路径组件，使其对不存在的或合成的路径（如测试中的路径）同样有效
             if any(part.startswith(("site-packages", "dist-packages")) for part in Path(filename).parts):
@@ -245,6 +264,7 @@ class TraceConfig:
             exclude_functions=config_data.get("exclude_functions", []),
             ignore_system_paths=config_data.get("ignore_system_paths", True),
             source_base_dir=config_data.get("source_base_dir", None),
+            include_stdlibs=config_data.get("include_stdlibs", []),  # 新增配置项
         )
 
     @staticmethod
@@ -1901,6 +1921,7 @@ def trace(
     start_function: Optional[Tuple[str, int]] = None,
     source_base_dir: Optional[Path] = None,
     disable_html: bool = False,
+    include_stdlibs: Optional[List[str]] = None,
 ):
     """函数跟踪装饰器
 
@@ -1917,6 +1938,7 @@ def trace(
         start_function: 起始函数名和行号
         source_base_dir: 源代码根目录，用于在报告中显示相对路径
         disable_html: 是否禁用HTML报告
+        include_stdlibs: 同时trace一些标准库模块 ["unittest"] 比如
     """
     if not target_files:
         try:
@@ -1942,6 +1964,7 @@ def trace(
                 start_function=start_function,
                 source_base_dir=source_base_dir,
                 disable_html=disable_html,
+                include_stdlibs=include_stdlibs,
             )
             t = start_trace(config=config)
             try:

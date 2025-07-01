@@ -219,18 +219,21 @@ class ReplaceEngine:
 
     def _safe_create_file(self, path, content):
         """
-        安全地创建一个新文件，包括其父目录。
+        安全地创建或覆盖一个文件。
 
-        如果文件已存在，将抛出异常以防意外覆盖。
+        此行为对于在沙箱环境中或需要幂等文件操作的场景非常有用。
+        如果文件不存在，它会连同其父目录一起被创建。
+        此操作不执行备份，因为它被视为建立一个确定的状态，而非修改现有状态。
         """
         path_obj = Path(path)
-        if path_obj.exists():
-            raise FileExistsError(f"创建文件失败，路径已存在: {path}")
+        # 根据用户反馈，`created_file`指令现在可以覆盖现有文件，
+        # 以支持沙箱环境中的文件状态重置。
+        # 因此，移除了原有的FileExistsError检查。
 
         # 自动创建父目录，这比用户预期的更周到
         path_obj.parent.mkdir(parents=True, exist_ok=True)
 
-        # 直接写入，因为没有原始文件，无需备份
+        # 'w'模式会截断并写入文件，如果文件存在则覆盖，不存在则创建。
         with open(path_obj, "w", encoding="utf-8") as f:
             f.write(content)
 
@@ -604,7 +607,7 @@ def _run_tests():
     # Test 8: Randomized tag restoration
     run_test(
         "Randomized tag restoration",
-        "[overwrite whole file]: {file1.txt}\n[start]\nThis has [start.12] and [end.99] tags.\n[end]",
+        "[overwrite whole file]: {file1.txt}\n[start]\nThis has [start" + ".12] and [end" + ".99] tags.\n[end]",
         {"file1.txt": "Initial"},
         {"file1.txt": "This has [start] and [end] tags."},
     )

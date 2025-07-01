@@ -214,6 +214,7 @@ class TestAutoFix:
         ignore_self=False,
         ignore_system_paths=True,
         disable_html=True,
+        include_stdlibs=["unittest"],
     )
     def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
         """Run tests and return results in JSON format."""
