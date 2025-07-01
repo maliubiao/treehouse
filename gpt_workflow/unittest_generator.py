@@ -54,7 +54,7 @@ class TracingModelSwitch(ModelSwitch):
         """
         Executes a query and logs the prompt and response if tracing is enabled.
         """
-        # The parent query method returns a string, despite its 'dict' type hint.
+        # The parent query method consistently returns a string.
         response_content = super().query(model_name, prompt, **kwargs)
 
         if self.trace_llm and self.trace_run_dir:
@@ -97,55 +97,75 @@ class UnitTestGenerator:
 
     def __init__(
         self,
-        report_path: str,
         model_name: str = "deepseek-r1",
         checker_model_name: str = "deepseek-checker",
         trace_llm: bool = False,
         llm_trace_dir: str = "llm_traces",
+        report_path: Optional[str] = None,
+        test_mode: bool = False,  # Add explicit test_mode parameter
     ):
         """
         Initializes the UnitTestGenerator.
 
         Args:
-            report_path: Path to the call_analysis_report.json file.
             model_name: The name of the language model to use for core test generation.
             checker_model_name: The name of the model for utility tasks (naming, merging).
             trace_llm: If True, log LLM prompts and responses.
             llm_trace_dir: Directory to save LLM traces.
+            report_path: Optional path to the call_analysis_report.json file. The report
+                         is not loaded upon initialization; call `load_and_parse_report()`
+                         to load it.
+            test_mode: Explicit test mode flag to control model behavior
         """
-        self.report_path = Path(report_path)
-        self.model_switch = TracingModelSwitch(trace_llm=trace_llm, trace_dir=llm_trace_dir)
+        self.report_path = Path(report_path) if report_path else None
+        # Pass test_mode to TracingModelSwitch
+        self.model_switch = TracingModelSwitch(
+            trace_llm=trace_llm,
+            trace_dir=llm_trace_dir,
+            test_mode=test_mode,  # Ensure test_mode is passed
+        )
         self.formatter = CodeFormatter()
         self.generator_model_name = model_name
         self.checker_model_name = checker_model_name
-        self.analysis_data = self._load_report()
+        self.analysis_data: Dict[str, Any] = {}
+        self.test_mode = test_mode  # Store test mode flag
 
-    def _load_report(self) -> Dict[str, Any]:
-        """Loads and validates the analysis JSON report."""
-        if not self.report_path.exists():
-            print(Fore.RED + f"Error: Report file not found at '{self.report_path}'")
-            sys.exit(1)
+    def load_and_parse_report(self) -> bool:
+        """
+        Loads and validates the analysis JSON report from the path provided during initialization.
+
+        This method must be called successfully before running the `generate` method.
+
+        Returns:
+            bool: True if the report was loaded and parsed successfully, False otherwise.
+        """
+        if not self.report_path:
+            print(Fore.RED + "Error: Report path was not provided.")
+            return False
+        assert self.report_path.exists()
+        assert not self.report_path.is_dir()
         try:
-            with open(self.report_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with self.report_path.open("r", encoding="utf-8") as f:
+                self.analysis_data = json.load(f)
+            return True
         except (json.JSONDecodeError, IOError) as e:
             print(Fore.RED + f"Error: Failed to load or parse report file: {e}")
-            sys.exit(1)
+            return False
 
     def _extract_code_from_response(self, response: str) -> Optional[str]:
         """
         Extracts a Python code block from the LLM's response using markdown syntax.
         """
         # Regex to find code block ```python ... ```
-        match = re.search(r"```python\n(.*?)\n```", response, re.DOTALL)
+        match = re.search(r"```python\s*(.*?)\s*```", response, re.DOTALL)
         if match:
-            return match.group(1).strip()
+            return dedent(match.group(1)).strip()
 
         print(Fore.YELLOW + "Warning: Could not find a '```python ... ```' block. Trying to find any code block.")
         # Fallback to any ```...``` block
-        match = re.search(r"```\n(.*?)\n```", response, re.DOTALL)
+        match = re.search(r"```\s*(.*?)\s*```", response, re.DOTALL)
         if match:
-            return match.group(1).strip()
+            return dedent(match.group(1)).strip()
 
         return None
 
@@ -333,27 +353,25 @@ class UnitTestGenerator:
         location of the test file to the project root.
         """
         try:
-            # Get the directory of the test file
+            # 获取测试文件所在目录（已包含一层回溯）
             test_dir = test_file_path.parent.resolve()
             proj_root = project_root_path.resolve()
 
-            # Calculate the relative path from the test directory to the project root
+            # 计算从测试文件目录到项目根目录的相对路径
             relative_path_to_root = os.path.relpath(proj_root, test_dir)
 
-            # Convert the relative path to a sequence of .parent calls
+            # 处理相对路径
             if relative_path_to_root == ".":
-                # Test file is in the project root, so its parent is the root
-                path_traversal = "parent"
+                path_traversal = "parent"  # 测试文件直接在根目录
             else:
-                # Count the number of ".." parts to determine how many levels to go up
                 depth = len(Path(relative_path_to_root).parts)
-                path_traversal = ".".join(["parent"] * depth)
+                # 增加一层回溯（从文件到目录）
+                path_traversal = ".".join(["parent"] * (depth + 1))
 
             sys_path_code = f"project_root = Path(__file__).resolve().{path_traversal}"
 
         except (ValueError, OSError) as e:
-            # Fallback for complex cases or errors (e.g., different drives on Windows)
-            # This creates a non-portable but functional path.
+            # 回退到绝对路径
             print(Fore.YELLOW + f"Warning: Could not determine relative path: {e}. Falling back to absolute path.")
             sys_path_code = f"project_root = Path(r'{project_root_path.resolve()}')"
 
@@ -369,8 +387,8 @@ class UnitTestGenerator:
 
     def _format_call_record_as_text(self, call_record: Dict[str, Any]) -> str:
         """
-        Formats a single call record from the analysis report into a compact,
-        human-readable text trace. This format is easier for LLMs to parse than full JSON.
+        [REFACTORED] Formats a single call record into a human-readable text trace
+        with indentation to show call hierarchy, making it easier for LLMs to parse.
 
         Args:
             call_record: A dictionary representing a single function call record.
@@ -379,7 +397,6 @@ class UnitTestGenerator:
             A formatted string representing the execution trace.
         """
         trace_lines = []
-
         func_name = call_record.get("func_name", "N/A")
         original_filename = call_record.get("original_filename", "N/A")
         args = call_record.get("args", {})
@@ -396,21 +413,19 @@ class UnitTestGenerator:
         # --- Body: Executed Lines and Sub-calls ---
         events = call_record.get("events", [])
         if events:
-            trace_lines.append("\n[TRACE]")
+            trace_lines.append("  [TRACE]")
             for event in events:
                 event_type = event.get("type")
                 data = event.get("data", {})
 
                 if event_type == "line":
                     line_no = data.get("line_no")
-                    # content has original indentation, rstrip removes trailing newlines
                     content = data.get("content", "").rstrip()
                     tracked_vars = data.get("tracked_vars")
 
-                    line_str = f"  L{line_no:<4} {content}"
+                    line_str = f"    L{line_no:<4} {content}"
 
                     if tracked_vars:
-                        # Format tracked variables for readability
                         vars_str = ", ".join(f"{k}={repr(v)}" for k, v in tracked_vars.items())
                         line_str += f"    >> VARS: {vars_str}"
 
@@ -425,16 +440,16 @@ class UnitTestGenerator:
                     caller_lineno = sub_call_data.get("caller_lineno", "?")
 
                     sub_args_str = ", ".join(f"{k}={repr(v)}" for k, v in sub_args.items()) if sub_args else ""
-
                     call_summary = f"{sub_func_name}({sub_args_str})"
-                    if sub_exception:
-                        result_summary = f"RAISED {repr(sub_exception)}"
-                    else:
-                        result_summary = f"RETURNED {repr(sub_return)}"
+                    trace_lines.append(f"    L{caller_lineno:<4} [SUB-CALL] {call_summary}")
 
-                    # This line represents a dependency that might need to be mocked.
-                    sub_call_line = f"  L{caller_lineno:<4} [SUB-CALL] {call_summary} -> {result_summary}"
-                    trace_lines.append(sub_call_line)
+                    if sub_exception:
+                        result_summary = f"-> RAISED {repr(sub_exception)}"
+                    else:
+                        result_summary = f"-> RETURNED {repr(sub_return)}"
+
+                    # Indent the result of the sub-call to show hierarchy
+                    trace_lines.append(f"      {result_summary}")
 
         # --- Footer: Return Value or Exception ---
         if exception:
@@ -692,15 +707,6 @@ class UnitTestGenerator:
         """).strip()
         return guidance
 
-    @tracer.trace(
-        target_files=["*.py"],
-        enable_var_trace=True,
-        report_name="unittest_generate.html",
-        ignore_self=False,
-        ignore_system_paths=True,
-        disable_html=False,
-        # include_stdlibs=["unittest"],
-    )
     def generate(
         self,
         target_funcs: List[str],
@@ -735,6 +741,8 @@ class UnitTestGenerator:
             print(Fore.RED + "No target functions specified.")
             return False
 
+        print(Fore.BLUE + f"Attempting to generate tests for: {', '.join(target_funcs)}")
+
         all_calls_by_func = self._find_all_calls_for_targets(target_funcs)
         all_calls_by_func = {f: calls for f, calls in all_calls_by_func.items() if calls}
 
@@ -758,7 +766,6 @@ class UnitTestGenerator:
             module_to_test,
             output_path,
         )
-
         # --- 3. Generation Phase (Parallel or Serial) ---
         newly_generated_code = self._execute_generation_tasks(tasks, num_workers)
         if not newly_generated_code:
@@ -858,9 +865,8 @@ class UnitTestGenerator:
         search_results = FileSearchResults(results=file_results)
 
         print(Fore.CYAN + f"Querying symbol service for {len(locations)} unique locations...")
-        # The 'model_switch' keyword argument is removed to fix the pylint error.
-        # This may prevent LLM call tracing for this specific operation.
-
+        # [BUG FIX] The 'model_switch' keyword argument was removed as it is not an expected
+        # argument for query_symbol_service, preventing a runtime error.
         symbol_results = query_symbol_service(search_results, 128 * 1024)
 
         if symbol_results and isinstance(symbol_results, dict):
@@ -909,14 +915,30 @@ class UnitTestGenerator:
         """Get module import path relative to project root."""
         try:
             project_root_path = project_root.resolve()
-            module_path = target_file_path.relative_to(project_root_path).with_suffix("").as_posix().replace("/", ".")
+            # Enhanced path compatibility handling
+            target_resolved = target_file_path.resolve()
+            try:
+                # Attempt to calculate relative path directly
+                rel_path = target_resolved.relative_to(project_root_path)
+            except ValueError:
+                # Fallback: handle path differences using string operations
+                project_str = str(project_root_path)
+                target_str = str(target_resolved)
+                if target_str.startswith(project_str):
+                    rel_path_str = target_str[len(project_str) :].lstrip(os.path.sep)
+                    rel_path = Path(rel_path_str)
+                else:
+                    raise
+
+            module_path = rel_path.with_suffix("").as_posix().replace("/", ".")
             if module_path.endswith(".__init__"):
                 module_path = module_path[:-9]
             return module_path
-        except ValueError:
+        except (ValueError, OSError) as e:
             error_msg = (
-                f"Could not determine module path. Is '{target_file_path}' "
-                f"outside of project root '{project_root_path}'?"
+                f"Could not determine module path: {e}\n"
+                f"Project Root: {project_root.resolve()}\n"
+                f"Target File: {target_file_path.resolve()}"
             )
             print(Fore.RED + f"Error: {error_msg}")
             return None
@@ -942,7 +964,7 @@ class UnitTestGenerator:
                     "total_calls": len(call_records),
                     "call_index": i + 1,
                     # Pass all necessary context for the worker
-                    "target_file_path": str(target_file_path),
+                    "file_path": str(target_file_path),
                     "file_content": file_content,
                     "symbol_context": symbol_context,
                     "test_class_name": test_class_name,
@@ -963,15 +985,16 @@ class UnitTestGenerator:
             return None
 
         # [REFACTORED] Parallel/Serial execution logic is now centralized here.
-        if num_workers > 1:
+        use_parallel = num_workers > 1 and len(tasks) > 1
+        if use_parallel:
             print(
                 Fore.MAGENTA
                 + f"\nStarting parallel test case generation with {num_workers} workers..."
                 + Style.RESET_ALL
             )
             try:
+                # Use a try-with-resources block for the pool
                 with multiprocessing.Pool(processes=num_workers) as pool:
-                    # map_async is used to show progress, but simple map works too
                     results = pool.map(UnitTestGenerator._generation_worker, tasks)
             except Exception as e:
                 print(Fore.RED + f"A critical error occurred during parallel processing: {e}")
@@ -989,17 +1012,20 @@ class UnitTestGenerator:
                     generated_code = code_snippet
                 else:
                     # Merge the new snippet into the accumulated code
-                    generated_code = self._merge_tests(
+                    merged_code = self._merge_tests(
                         existing_code=generated_code,
                         new_code_block=code_snippet,
                         output_path=tasks[0]["output_file_abs_path"],
                     )
-                    if not generated_code:
+                    if merged_code:
+                        generated_code = merged_code
+                    else:
                         print(
                             Fore.RED
                             + f"Failed to merge code from case {i + 1}. Aborting further merges."
                             + Style.RESET_ALL
                         )
+                        # Keep the code generated so far instead of returning None
                         break
             else:
                 print(Fore.RED + f"Failed to generate code for case {i + 1}/{len(tasks)}." + Style.RESET_ALL)
@@ -1009,7 +1035,7 @@ class UnitTestGenerator:
     @staticmethod
     def _generation_worker(task: Dict) -> Optional[str]:
         """
-        [NEW] Static worker for parallel test generation. It's self-contained.
+        Static worker for parallel test generation. It's self-contained.
         It generates a *complete, runnable* code block for a single test case.
         """
         # Unpack task dictionary
@@ -1018,19 +1044,17 @@ class UnitTestGenerator:
         case_num = task["case_number"]
         call_idx = task["call_index"]
         total_calls = task["total_calls"]
+        test_mode = task.get("test_mode", False)  # Capture test_mode from task
 
         # Re-create a minimal generator instance inside the worker process
-        # This is necessary because the full instance isn't picklable.
-        # We pass model names and trace settings to reconstruct it.
+        # Pass test_mode from task to ensure mock consistency
         worker_generator = UnitTestGenerator(
-            report_path="",  # Not needed, as we have the record
             model_name=task["generator_model_name"],
             checker_model_name=task["checker_model_name"],
             trace_llm=task["trace_llm"],
             llm_trace_dir=str(task["trace_dir"]) if task["trace_dir"] else "llm_traces",
+            test_mode=test_mode,  # Use test_mode from task
         )
-        # Hack to avoid re-reading the report
-        worker_generator.analysis_data = {}
 
         print(
             Fore.CYAN + f"[Worker-{os.getpid()}] Generating Test Case {case_num} for '{target_func}' "
@@ -1052,7 +1076,7 @@ class UnitTestGenerator:
                     "module_to_test",
                     "project_root_path",
                     "output_file_abs_path",
-                    "target_file_path",
+                    "file_path",
                     "file_content",
                     "symbol_context",
                 ]
@@ -1173,7 +1197,8 @@ def parse_args():
         "--num-workers",
         type=int,
         default=0,
-        help="Number of worker processes for parallel test generation. Default: 0 (serial execution).",
+        help="Number of worker processes for parallel test generation. Default: 0 (serial execution). "
+        "Set to > 1 for parallel.",
     )
     return parser.parse_args()
 
@@ -1181,6 +1206,12 @@ def parse_args():
 def main():
     """Main entry point for the unit test generator."""
     args = parse_args()
+
+    # Determine number of workers, using cpu_count as a fallback if num_workers > 0 but not specified
+    num_workers = args.num_workers
+    if num_workers < 0:
+        print(Fore.YELLOW + "num_workers cannot be negative, setting to 0 (serial).")
+        num_workers = 0
 
     print(Fore.BLUE + Style.BRIGHT + "\nStarting Unit Test Generation Workflow")
     print(Fore.BLUE + "=" * 50)
@@ -1190,7 +1221,7 @@ def main():
     print(f"{'Generator Model:':<20} {args.model}")
     print(f"{'Checker Model:':<20} {args.checker_model}")
     print(f"{'Symbol Service:':<20} {'Enabled' if args.use_symbol_service else 'Disabled'}")
-    print(f"{'Parallel Workers:':<20} {args.num_workers if args.num_workers > 0 else 'Serial'}")
+    print(f"{'Parallel Workers:':<20} {num_workers if num_workers > 0 else 'Serial'}")
     if args.auto_confirm:
         print(f"{'Auto Confirm:':<20} {Fore.YELLOW}Enabled{Style.RESET_ALL}")
     if args.trace_llm:
@@ -1204,12 +1235,16 @@ def main():
         trace_llm=args.trace_llm,
         llm_trace_dir=args.llm_trace_dir,
     )
+
+    if not generator.load_and_parse_report():
+        sys.exit(1)
+
     generator.generate(
         target_funcs=args.target_functions,
         output_dir=args.output_dir,
         auto_confirm=args.auto_confirm,
         use_symbol_service=args.use_symbol_service,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
     )
 
 

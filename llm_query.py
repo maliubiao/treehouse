@@ -3777,11 +3777,12 @@ class ModelSwitch:
         self.test_mode = test_mode
         self._config_cache = None  # 配置缓存
         self.current_config: Optional[ModelConfig] = None
-        self.workflow = import_relative("gpt_workflow")
+        self.workflow = None
         self.model_name = ""
         self._usage_records = {}  # 计费记录
         self._usage_file = os.path.join(os.path.dirname(__file__), ".model_usage.yaml")
-        self._load_usage_from_file()  # 初始化时加载历史记录
+        if not test_mode:
+            self._load_usage_from_file()  # 初始化时加载历史记录
 
     def models(self) -> list[str]:
         """获取所有可用的模型名称列表"""
@@ -3914,6 +3915,10 @@ class ModelSwitch:
         返回:
             list: 包含所有任务执行结果的列表
         """
+        # Lazy load workflow to break circular import
+        if self.workflow is None:
+            self.workflow = import_relative("gpt_workflow")
+
         if self.test_mode:
             return ["test_response"]
 
@@ -4140,7 +4145,7 @@ class ModelSwitch:
 
         raise RuntimeError(f"API调用失败，重试次数已用尽: {max_retries}")
 
-    def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> dict:
+    def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> str:
         """
         根据模型名称查询API
 
@@ -4150,13 +4155,13 @@ class ModelSwitch:
             kwargs: 其他传递给query_gpt_api的参数
 
         返回:
-            dict: API响应结果
+            str: API响应中的内容字符串
 
         异常:
             ValueError: 当模型配置不存在或缺少必要字段时
         """
         if self.test_mode:
-            return {"choices": [{"message": {"content": "test_response"}}]}
+            return "test_response"
 
         # 获取模型配置
         config = self._get_model_config(model_name)
