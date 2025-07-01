@@ -138,7 +138,7 @@ class Tracer:
             self.logger.error("Unexpected error during attach: %s", str(e))
             return False
 
-    def run_cmd(self, cmd: str) -> None:
+    def run_cmd(self, cmd: str, raise_on_error: bool = True) -> None:
         """执行LLDB命令"""
         if not self.debugger:
             self.logger.error("Debugger is not initialized")
@@ -150,11 +150,22 @@ class Tracer:
         command_interpreter = self.debugger.GetCommandInterpreter()
         result = lldb.SBCommandReturnObject()
         command_interpreter.HandleCommand(cmd, result)
-        if result.Succeeded():
-            self.logger.info("Command output: %s", result.GetOutput())
-            return result
-        self.logger.error("Command failed: %s", result.GetError())
-        raise ValueError(f"Command failed: {result.GetError()}")  # 修复日志格式
+
+        # Always log output if it exists, as it can be useful for debugging.
+        output = result.GetOutput()
+        if output:
+            self.logger.info("Command output: %s", output.strip())
+
+        # A command is only considered to have failed if Succeeded() is false AND there's an error message.
+        if not result.Succeeded():
+            error_msg = result.GetError()
+            if error_msg:
+                error_msg_stripped = error_msg.strip()
+                if raise_on_error:
+                    self.logger.error("Command failed: %s", error_msg_stripped)
+                    raise ValueError(f"Command failed: {error_msg_stripped}")
+                else:
+                    self.logger.warning("Command failed (non-fatal): %s", error_msg_stripped)
 
     def _start_stdin_forwarding(self):
         """启动标准输入转发线程"""
@@ -280,9 +291,9 @@ class Tracer:
             self._start_stdin_forwarding()
         from .lldb_console import show_console
 
-        self.run_cmd("settings set use-color true")
+        self.run_cmd("settings set use-color true", raise_on_error=False)
         show_console(self.debugger)
-        self.run_cmd("settings set use-color false")
+        self.run_cmd("settings set use-color false", raise_on_error=False)
         assert self.process.GetState() == lldb.eStateStopped
 
         if self.config_manager.get_symbol_trace_patterns:
@@ -301,9 +312,9 @@ class Tracer:
     def install(self, target: lldb.SBTarget) -> None:
         self.target = target
         self.run_cmd("command script import --allow-reload tracer")
-        self.run_cmd("settings set target.use-fast-stepping true")
-        self.run_cmd("settings set target.process.follow-fork-mode child")
-        self.run_cmd("settings set use-color false")
+        self.run_cmd("settings set target.use-fast-stepping true", raise_on_error=False)
+        self.run_cmd("settings set target.process.follow-fork-mode child", raise_on_error=False)
+        self.run_cmd("settings set use-color false", raise_on_error=False)
         bp_config = self.config_manager.config.get("start_breakpoint", {})
         bp_type = bp_config.get("type", "entry")
 

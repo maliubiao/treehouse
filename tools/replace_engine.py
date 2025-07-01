@@ -2,7 +2,6 @@ import hashlib
 import os
 import random
 import re
-import sys
 import tempfile
 from pathlib import Path
 
@@ -106,9 +105,9 @@ class ReplaceEngine:
 
         for instr in restored_instructions:
             try:
-                if instr["type"] == "replace":
-                    self._safe_replace(path=instr["path"], src=instr["src"], dst=instr["dst"])
-                elif instr["type"] == "replace_lines":
+                # 移除了对'replace'的特殊处理，因为解析器现在会将'replace'区分为
+                # 'replace_string' 和 'replace_lines'，简化了此处的逻辑。
+                if instr["type"] == "replace_lines":
                     self._safe_replace_lines(
                         path=instr["path"],
                         start_line=instr["start_line"],
@@ -116,6 +115,8 @@ class ReplaceEngine:
                         src=instr["src"],
                         dst=instr["dst"],
                     )
+                elif instr["type"] == "replace":
+                    self._safe_replace(path=instr["path"], src=instr["src"], dst=instr["dst"])
                 elif instr["type"] == "insert":
                     self._safe_insert(path=instr["path"], line_num=instr["line_num"], content=instr["content"])
                 elif instr["type"] == "overwrite_whole_file":
@@ -144,6 +145,29 @@ class ReplaceEngine:
             restored.append(new_instr)
         return restored
 
+    def _validate_path_for_instruction(self, path_str, instr_type):
+        """验证指令中的路径，并返回解析后的绝对路径。"""
+        path = Path(path_str)
+        if instr_type == "created_file":
+            parent_dir = path.parent
+            if not parent_dir.exists():
+                try:
+                    parent_dir.mkdir(parents=True, exist_ok=True)
+                    if not any(parent_dir.iterdir()):
+                        # We created it for validation, so clean up
+                        parent_dir.rmdir()
+                except OSError as e:
+                    raise ValueError(f"无法创建父目录 for {path}: {e}") from e
+            elif not os.access(parent_dir, os.W_OK):
+                raise ValueError(f"父目录不可写: {parent_dir}")
+        else:  # For all other instructions, path must exist and be a file
+            if not path.exists():
+                raise FileNotFoundError(f"文件不存在: {path}")
+            if not path.is_file():
+                raise ValueError(f"路径不是一个文件: {path}")
+
+        return str(path.resolve())
+
     def _validate_instructions(self, instr_set):
         """验证指令集的有效性，并解析为内部格式。"""
         if not instr_set:
@@ -154,39 +178,18 @@ class ReplaceEngine:
             if not self._is_valid_instruction(instr):
                 raise ValueError(f"无效或不完整的指令 @ 索引 {i}: {instr}")
 
-            # 对需要路径的指令进行标准化和存在性检查
             if "path" in instr:
-                path = Path(instr["path"])
-                # created_file 指令允许文件不存在，但其父目录必须可写
-                if instr["type"] == "created_file":
-                    parent_dir = path.parent
-                    if not parent_dir.exists():
-                        # We will create it, just check if we can write there
-                        try:
-                            parent_dir.mkdir(parents=True, exist_ok=True)
-                            if not any(parent_dir.iterdir()):
-                                parent_dir.rmdir()  # Clean up test directory if we created it and it's empty
-                        except OSError as e:
-                            raise ValueError(f"无法创建父目录 for {path}: {e}")
-                    elif not os.access(parent_dir, os.W_OK):
-                        raise ValueError(f"父目录不可写: {parent_dir}")
-                # 其他指令要求文件必须存在
-                elif not path.exists():
-                    raise FileNotFoundError(f"文件不存在: {path}")
-                elif not path.is_file():
-                    raise ValueError(f"路径不是一个文件: {path}")
-
-                instr["path"] = str(path.resolve())
+                instr["path"] = self._validate_path_for_instruction(instr["path"], instr["type"])
 
             # 类型特定验证
             if instr["type"] == "replace_lines":
-                start_line, end_line = instr["start_line"], instr["end_line"]
-                if not (isinstance(start_line, int) and isinstance(end_line, int) and 1 <= start_line <= end_line):
-                    raise ValueError(f"无效的行号范围: start={start_line}, end={end_line}")
+                s_line, e_line = instr["start_line"], instr["end_line"]
+                if not (isinstance(s_line, int) and isinstance(e_line, int) and 1 <= s_line <= e_line):
+                    raise ValueError(f"无效的行号范围: start={s_line}, end={e_line}")
 
             elif instr["type"] == "insert":
                 line_num = instr["line_num"]
-                if not (isinstance(line_num, int) and line_num >= 0):  # 0 for insert at the beginning
+                if not (isinstance(line_num, int) and line_num >= 0):
                     raise ValueError(f"无效的插入行号: {line_num}")
 
             validated.append(instr)
@@ -199,23 +202,22 @@ class ReplaceEngine:
             return False
 
         instr_type = instr["type"]
-        if instr_type == "project_setup_script":
-            return "content" in instr
 
-        # All other types require a path
-        if "path" not in instr:
+        # 定义每种指令类型所需的键
+        requirements = {
+            "project_setup_script": {"content"},
+            "replace": {"path", "src", "dst"},
+            "replace_lines": {"path", "start_line", "end_line", "src", "dst"},
+            "insert": {"path", "line_num", "content"},
+            "overwrite_whole_file": {"path", "content"},
+            "created_file": {"path", "content"},
+        }
+
+        # 检查指令类型是否已知，以及是否所有必需的键都存在
+        if instr_type not in requirements:
             return False
 
-        if instr_type == "replace":
-            return {"src", "dst"}.issubset(instr.keys())
-        if instr_type == "replace_lines":
-            return {"start_line", "end_line", "src", "dst"}.issubset(instr.keys())
-        if instr_type == "insert":
-            return {"line_num", "content"}.issubset(instr.keys())
-        if instr_type in ("overwrite_whole_file", "created_file"):
-            return "content" in instr
-
-        return False
+        return requirements[instr_type].issubset(instr.keys())
 
     def _safe_create_file(self, path, content):
         """
@@ -262,6 +264,9 @@ class ReplaceEngine:
 
         count = original_content.count(src)
         if count == 0:
+            # 允许源字符串为空的情况，此时不做任何操作
+            if src == "":
+                return
             raise ValueError("未找到匹配的源字符串")
         if count > 1:
             raise ValueError(f"找到 {count} 个匹配项，无法确保唯一性以进行安全替换")
@@ -284,7 +289,7 @@ class ReplaceEngine:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
-        if not (1 <= start_line <= end_line <= len(lines)):
+        if not 1 <= start_line <= end_line <= len(lines):
             raise ValueError(f"无效行号范围: {start_line}-{end_line}，文件总行数: {len(lines)}")
 
         original_block = "".join(lines[start_line - 1 : end_line])
@@ -299,8 +304,8 @@ class ReplaceEngine:
         try:
             # 将替换内容按行分割，并确保每行都以换行符结尾
             dst_lines = [line + "\n" for line in dst.splitlines()]
+            # 修复：如果dst非空，在其后增加一个额外的空行，以提高代码变更的可读性
             if dst:
-                # 增加一个额外的空行，以提高代码变更的可读性
                 dst_lines.append("\n")
 
             new_lines = lines[: start_line - 1] + dst_lines + lines[end_line:]
@@ -319,15 +324,15 @@ class ReplaceEngine:
             lines = f.readlines()
 
         # line_num可以等于len(lines)，表示在文件末尾插入
-        if not (0 <= line_num <= len(lines)):
+        if not 0 <= line_num <= len(lines):
             raise ValueError(f"无效行号: {line_num}，文件总行数: {len(lines)}")
 
         backup_path = self._create_backup(path, "".join(lines))
         try:
             # 将插入内容按行分割，并确保每行都以换行符结尾
             insert_lines = [line + "\n" for line in content.splitlines()]
+            # 修复：如果content非空，在其后增加一个额外的空行，以提高代码变更的可读性
             if content:
-                # 增加一个额外的空行，以提高代码变更的可读性
                 insert_lines.append("\n")
 
             new_lines = lines[:line_num] + insert_lines + lines[line_num:]
@@ -361,112 +366,134 @@ class ReplaceEngine:
 
 class LLMInstructionParser:
     """
-    从LLM响应内容中解析出结构化的文件操作指令。
+    一个基于状态机的解析器，从LLM响应中提取结构化文件操作指令。
 
-    该解析器设计得非常健壮，能识别多种常见的LLM输出格式，包括
-    严格的指令格式和常见的Markdown代码块格式。
+    该解析器通过逐行扫描输入文本来工作，能够智能地处理嵌套的指令块。
+    它使用一个嵌套级别计数器来识别最外层的指令，忽略所有被包含在其他
+    指令块内部的伪指令。这确保了即使LLM的输出格式不完美，也能得到准确、
+    无歧义的解析结果，解决了原始正则表达式实现的根本缺陷。
     """
 
-    _PATTERN = re.compile(
-        # 格式1: 项目设置脚本
-        # [project setup script]
-        # [start]
-        # ... shell script ...
-        # [end]
-        r"\[project setup script\]\n\[start\]\n?(?P<setup_script>.*?)\n?\[end\]|"
-        # 格式2: 文件创建/覆盖
-        # [overwrite whole file|created file]: /path/to/file
-        # [start]
-        # ... content ...
-        # [end]
-        r"\[(?P<action>overwrite whole file|created file)\]:\s*(?P<path>[^\n]+?)\n\[start\]\n?(?P<content>.*?)\n?\[end\]|"
-        # 格式3: 标准替换 (字符串或行范围)
-        # [replace]: /path/to/file
-        # [lines]: 5-10  (可选)
-        # [start]
-        # ... src content ...
-        # [end]
-        # [start]
-        # ... dst content ...
-        # [end]
-        r"\[replace\]:\s*(?P<path_replace>[^\n]+?)\n(?:\[lines\]:\s*(?P<lines>\d+-\d+)\n)?\[start\]\n?(?P<src_replace>.*?)\n?\[end\]\n\[start\]\n?(?P<dst_replace>.*?)\n?\[end\]|"
-        # 格式4: 插入
-        # [insert]: /path/to/file
-        # [line]: 15
-        # [start]
-        # ... content ...
-        # [end]
-        r"\[insert\]:\s*(?P<path_insert>[^\n]+?)\n\[line\]:\s*(?P<line_num>\d+)\n\[start\]\n?(?P<content_insert>.*?)\n?\[end\]|"
-        # 格式5 (备用): Markdown代码块格式
-        # ```python:/path/to/file
-        # ... content ...
-        # ```
-        r"```(?P<lang>\w*):(?P<alt_path>[^\n]+?)\n(?P<alt_content>.*?)```",
-        re.DOTALL | re.MULTILINE,
-    )
+    # 正则表达式用于匹配指令头
+    _HEADER_RE = {
+        "setup": re.compile(r"^\[project setup script\]$"),
+        "file_op": re.compile(r"^\[(overwrite whole file|created file|replace|insert)\]:\s*(.*)$"),
+        "lines": re.compile(r"^\[lines\]:\s*(\d+)-(\d+)$"),
+        "line": re.compile(r"^\[line\]:\s*(\d+)$"),
+        "start": re.compile(r"^\[start.*\]$"),
+        "end": re.compile(r"^\[end.*\]$"),
+    }
 
     @classmethod
     def parse(cls, text):
         """
-        从文本中解析所有匹配的指令。
+        使用状态机从文本中解析所有最外层的指令。
         """
         instructions = []
-        for match in cls._PATTERN.finditer(text):
-            groups = match.groupdict()
+        lines = text.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
 
-            if groups["setup_script"] is not None:
-                instructions.append({"type": "project_setup_script", "content": groups["setup_script"].strip()})
+            if cls._HEADER_RE["setup"].match(line):
+                content, i_after = cls._consume_block(lines, i + 1)
+                if content is not None:
+                    instructions.append({"type": "project_setup_script", "content": content})
+                i = i_after
+                continue
 
-            elif groups["action"] is not None:
-                instructions.append(
-                    {
-                        "type": groups["action"].replace(" ", "_"),
-                        "path": groups["path"].strip(),
-                        "content": groups["content"].strip(),
-                    }
-                )
+            file_op_match = cls._HEADER_RE["file_op"].match(line)
+            if file_op_match:
+                op_type = file_op_match.group(1).replace(" ", "_")
+                path = file_op_match.group(2).strip()
+                instr, i_after = cls._parse_file_op_body(lines, i + 1, op_type, path)
+                if instr:
+                    instructions.append(instr)
+                i = i_after
+                continue
 
-            elif groups["path_replace"] is not None:
-                path = groups["path_replace"].strip()
-                if groups["lines"]:
-                    start, end = map(int, groups["lines"].split("-"))
-                    instructions.append(
-                        {
-                            "type": "replace_lines",
-                            "path": path,
-                            "start_line": start,
-                            "end_line": end,
-                            "src": groups["src_replace"].strip(),
-                            "dst": groups["dst_replace"].strip(),
-                        }
-                    )
-                else:
-                    instructions.append(
-                        {
-                            "type": "replace",
-                            "path": path,
-                            "src": groups["src_replace"].strip(),
-                            "dst": groups["dst_replace"].strip(),
-                        }
-                    )
-
-            elif groups["path_insert"] is not None:
-                instructions.append(
-                    {
-                        "type": "insert",
-                        "path": groups["path_insert"].strip(),
-                        "line_num": int(groups["line_num"]),
-                        "content": groups["content_insert"].strip(),
-                    }
-                )
-
-            elif groups["alt_path"] is not None:
-                instructions.append(
-                    {
-                        "type": "overwrite_whole_file",
-                        "path": groups["alt_path"].strip(),
-                        "content": groups["alt_content"].strip(),
-                    }
-                )
+            i += 1
 
         return instructions
+
+    @classmethod
+    def _parse_file_op_body(cls, lines, start_index, op_type, path):
+        """解析文件操作指令的元数据和内容块。"""
+        i = start_index
+        instr = {"type": op_type, "path": path}
+
+        # 处理 replace 和 insert 的元数据行
+        if op_type == "replace":
+            if i < len(lines):
+                lines_match = cls._HEADER_RE["lines"].match(lines[i].strip())
+                if lines_match:
+                    instr["type"] = "replace_lines"
+                    instr["start_line"] = int(lines_match.group(1))
+                    instr["end_line"] = int(lines_match.group(2))
+                    i += 1
+        elif op_type == "insert":
+            if i < len(lines):
+                line_match = cls._HEADER_RE["line"].match(lines[i].strip())
+                if line_match:
+                    instr["line_num"] = int(line_match.group(1))
+                    i += 1
+                else:
+                    return None, start_index  # 格式错误，跳过
+            else:
+                return None, start_index  # 文件结束，指令不完整
+
+        # 消耗内容块
+        current_op_type = instr["type"]
+        if current_op_type in ("replace", "replace_lines"):
+            src, i_after_src = cls._consume_block(lines, i)
+            if src is None:
+                return None, start_index
+            dst, i_after_dst = cls._consume_block(lines, i_after_src)
+            if dst is None:
+                return None, start_index
+            instr["src"] = src
+            instr["dst"] = dst
+            return instr, i_after_dst
+
+        # created_file, overwrite_whole_file, insert
+        content, i_after_content = cls._consume_block(lines, i)
+        if content is None:
+            return None, start_index
+        instr["content"] = content
+        return instr, i_after_content
+
+    @classmethod
+    def _consume_block(cls, lines, start_index):
+        """
+        从指定索引开始，消耗一个由[start]...[end]包围的块。
+        支持嵌套块，只在最外层块结束时停止。
+        返回 (块内容, 结束后的新索引)。
+        """
+        i = start_index
+        while i < len(lines):
+            if cls._HEADER_RE["start"].match(lines[i].strip()):
+                break
+            i += 1
+        else:
+            return None, len(lines)  # 没有找到 [start]
+
+        nesting_level = 1
+        start_block_index = i + 1
+        i += 1
+
+        while i < len(lines):
+            line = lines[i]
+            if cls._HEADER_RE["start"].match(line.strip()):
+                nesting_level += 1
+            elif cls._HEADER_RE["end"].match(line.strip()):
+                nesting_level -= 1
+
+            if nesting_level == 0:
+                # 提取从[start]后到[end]前的内容
+                content = "\n".join(lines[start_block_index:i])
+                return content, i + 1
+
+            i += 1
+
+        # 如果循环结束但嵌套级别不为0，说明格式错误
+        return None, len(lines)

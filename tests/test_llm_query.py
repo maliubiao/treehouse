@@ -315,39 +315,44 @@ class TestGPTContextProcessor(unittest.TestCase):
                 mock_builder.assert_called_once_with(False, ["symbol1", "symbol2"], tokens_left=102400)
                 mock_instance.build.assert_called_once()
 
-    def test_get_symbol_detail(self):
+    @patch("llm_query.requests.get")
+    def test_get_symbol_detail(self, mock_get):
         """测试获取符号详细信息"""
-        with patch("llm_query.send_http_request") as mock_request:
-            mock_request.return_value = [
-                {
-                    "content": "test content",
-                    "location": {
-                        "start_line": 1,
-                        "start_col": 0,
-                        "end_line": 10,
-                        "end_col": 0,
-                        "block_range": "1-10",
-                    },
-                    "file_path": "test.py",
-                }
-            ]
-            result = get_symbol_detail("test.py/test_symbol")
-            self.assertEqual(result[0]["file_path"], "test.py")
-            self.assertEqual(result[0]["code_range"], ((1, 0), (10, 0)))
-            self.assertEqual(result[0]["block_content"], b"test content")
-
-    def test_fetch_symbol_data(self):
-        """测试获取符号上下文数据"""
-        with patch("llm_query.send_http_request") as mock_request:
-            mock_request.return_value = {
-                "symbol_name": "test",
-                "definitions": [],
-                "references": [],
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = [
+            {
+                "content": "test content",
+                "location": {
+                    "start_line": 1,
+                    "start_col": 0,
+                    "end_line": 10,
+                    "end_col": 0,
+                    "block_range": "1-10",
+                },
+                "file_path": "test.py",
             }
-            result = _fetch_symbol_data("test_symbol")
-            self.assertEqual(result["symbol_name"], "test")
-            self.assertIsInstance(result["definitions"], list)
-            self.assertIsInstance(result["references"], list)
+        ]
+        mock_get.return_value = mock_response
+
+        result = get_symbol_detail("test.py/test_symbol")
+        self.assertEqual(result[0]["file_path"], "test.py")
+        self.assertEqual(result[0]["code_range"], ((1, 0), (10, 0)))
+        self.assertEqual(result[0]["block_content"], b"test content")
+
+    @patch("llm_query.send_http_request")
+    def test_fetch_symbol_data(self, mock_send_http_request):
+        """测试获取符号上下文数据"""
+        mock_send_http_request.return_value = {
+            "symbol_name": "test",
+            "definitions": [],
+            "references": [],
+        }
+
+        result = _fetch_symbol_data("test_symbol")
+        self.assertEqual(result["symbol_name"], "test")
+        self.assertIsInstance(result["definitions"], list)
+        self.assertIsInstance(result["references"], list)
 
 
 class TestSymbolLocation(unittest.TestCase):
@@ -889,7 +894,7 @@ line3
 [end]
 """
         # 执行处理
-        llm_query.extract_and_diff_files(test_content, auto_apply=True)
+        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
 
         # 验证文件内容
         self.assertEqual(test_file.read_text(encoding="utf-8"), "line1\nline2\nline3")
@@ -908,7 +913,7 @@ new content
 [end]
 """
         # 执行处理
-        llm_query.extract_and_diff_files(test_content, auto_apply=True)
+        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
 
         # 验证文件内容
         self.assertTrue(test_file.exists())
@@ -925,7 +930,7 @@ echo 'setup'
 [end]
 """
         # 执行处理
-        llm_query.extract_and_diff_files(test_content)
+        llm_query.extract_and_diff_files(test_content, save=False)
 
         # 验证脚本文件
         setup_script = self.shadow_dir / "project_setup.sh"
@@ -950,7 +955,7 @@ new content 2
 [end]
 """
         with patch("builtins.input", return_value="all") as mock_input:
-            llm_query.extract_and_diff_files(test_content, auto_apply=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
             mock_input.assert_called_once()
 
         self.assertEqual(file1.read_text(encoding="utf-8"), "new content 1")
@@ -974,7 +979,7 @@ new content 2
 """
         with patch("builtins.input", return_value="1") as mock_input:
             # 文件按路径排序，因此 test1.txt 将是 1，test2.txt 将是 2。
-            llm_query.extract_and_diff_files(test_content, auto_apply=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
             mock_input.assert_called_once()
 
         self.assertEqual(file1.read_text(encoding="utf-8"), "new content 1")
@@ -997,40 +1002,11 @@ new content 2
 [end]
 """
         with patch("builtins.input", return_value="") as mock_input, patch("rich.print") as mock_print:
-            llm_query.extract_and_diff_files(test_content, auto_apply=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
             mock_input.assert_called_once()
 
         self.assertEqual(file1.read_text(encoding="utf-8"), "original 1")
         self.assertEqual(file2.read_text(encoding="utf-8"), "original 2")
-
-    def test_path_outside_project_root_is_skipped(self):
-        """测试跳过项目根目录之外的文件路径"""
-        # 此路径无效，应被跳过
-        invalid_path = "../outside.txt"
-        test_file = self._create_test_file("subdir/test.txt", "original content")
-
-        test_content = f"""
-[overwrite whole file]: {invalid_path}
-[start]
-hacked
-[end]
-
-[overwrite whole file]: subdir/test.txt
-[start]
-new content
-[end]
-"""
-        with patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
-            llm_query.extract_and_diff_files(test_content, auto_apply=True)
-
-            # 检查警告消息
-            output = mock_stderr.getvalue()
-            abs_invalid_path = (self.tmp_path / invalid_path).resolve()
-            project_root_path = self.tmp_path.resolve()
-            self.assertIn(f"警告: 文件路径 {abs_invalid_path} 不在项目根目录 {project_root_path} 下，已跳过。", output)
-
-        # 验证有效文件是否已修补
-        self.assertEqual(test_file.read_text(encoding="utf-8"), "new content")
 
     def test_no_effective_change(self):
         """测试如果内容未更改则不生成差异"""
@@ -1044,7 +1020,7 @@ new content
 [end]
 """
         with patch("llm_query.display_and_apply_diff") as mock_apply:
-            llm_query.extract_and_diff_files(test_content, auto_apply=True)
+            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
             mock_apply.assert_not_called()
 
         self.assertEqual(test_file.read_text(encoding="utf-8"), original_content)

@@ -26,6 +26,36 @@ from llm_query import (
 _Call.__repr__ = lambda self: f"<Call id={id(self)}>"  # type: ignore
 
 
+def _reload_project_modules():
+    """
+    Unloads project-specific modules from sys.modules to force a reload.
+    This is critical for re-running tests after a code patch has been applied,
+    as Python's import system caches modules by default. It is especially
+    important to reload test modules so that `unittest.mock.patch` decorators
+    are re-applied to the newly-loaded application code.
+    """
+    # Define prefixes for modules that belong to the project and should be reloaded.
+    # This includes tests (typically starting with 'test_'), the main application
+    # logic ('gpt_workflow'), and supporting modules.
+    #
+    # Note on 'test_': unittest.discover finds tests in the 'tests/' directory
+    # and loads them as top-level modules (e.g., 'test_main', 'test_something').
+    # Therefore, we must match by 'test_' prefix, not the 'tests' directory name.
+    project_module_prefixes = ("test_", "gpt_workflow", "debugger", "llm_query")
+
+    modules_to_reload = [name for name in sys.modules if name.startswith(project_module_prefixes)]
+
+    if modules_to_reload:
+        print(Fore.CYAN + "\nReloading project modules to apply changes...")
+        reloaded_count = 0
+        # Sort for deterministic output and to potentially help with dependency order
+        for name in sorted(modules_to_reload):
+            if name in sys.modules:
+                del sys.modules[name]
+                reloaded_count += 1
+        print(Fore.BLUE + f"  Unloaded {reloaded_count} project modules to ensure a fresh state for the next test run.")
+
+
 class TestAutoFix:
     def __init__(self, test_results: Dict, user_requirement: str = None):
         self.test_results = test_results
@@ -207,6 +237,7 @@ class TestAutoFix:
         end = min(len(lines), line + context_lines)
         return [line.strip() for line in lines[start:end]]
 
+    @staticmethod
     @tracer.trace(
         target_files=["*.py"],
         enable_var_trace=True,
@@ -214,10 +245,15 @@ class TestAutoFix:
         ignore_self=False,
         ignore_system_paths=True,
         disable_html=True,
-        include_stdlibs=["unittest"],
+        # include_stdlibs=["unittest"],
     )
     def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
-        """Run tests and return results in JSON format."""
+        """
+        Run tests and return results in JSON format.
+        This static method is a wrapper around the actual test runner
+        to apply the tracer decorator.
+        The 'run_tests' function is imported at the end of the file.
+        """
         return run_tests(test_patterns=test_patterns, verbosity=verbosity, json_output=True, list_mode=list_tests)
 
 
@@ -371,6 +407,9 @@ def run_fix_loop(args: argparse.Namespace):
         fix_mode = "direct"
 
     while True:
+        # Reload project modules to ensure the latest code is used
+        _reload_project_modules()
+
         print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
         test_results = TestAutoFix.run_tests(
             test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=False

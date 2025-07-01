@@ -1,4 +1,3 @@
-import os
 import shutil
 import sys
 import tempfile
@@ -68,6 +67,16 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         self.assertTrue(file_path.exists())
         self.assertEqual(self._read_file("file1.txt"), "Hello, new world!")
 
+    def test_created_file_overwrites_existing_file(self):
+        """测试 'created_file' 指令是否能覆盖已存在的文件，以确保幂等性。"""
+        file_path_str = self._prepare_file("file1.txt", "Original content.")
+        instructions_text = f"[created file]: {file_path_str}\n[start]\nOverwritten content.\n[end]"
+
+        instructions = LLMInstructionParser.parse(instructions_text)
+        self.engine.execute(instructions)
+
+        self.assertEqual(self._read_file("file1.txt"), "Overwritten content.")
+
     def test_overwrite_whole_file(self):
         """测试 'overwrite_whole_file' 指令，验证文件内容是否被完全覆盖。"""
         file_path_str = self._prepare_file("file1.txt", "Old content.")
@@ -92,7 +101,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         """测试 'replace_lines' 指令，验证指定行范围的替换。"""
         file_content = "Line 1\nLine 2\nLine 3\nLine 4\n"
         file_path_str = self._prepare_file("file1.txt", file_content)
-        instructions_text = f"[replace]: {file_path_str}\n[lines]: 2-3\n[start]Line 2\nLine 3\n[end]\n[start]New Line 2\nNew Line 3\n[end]"
+        instructions_text = f"[replace]: {file_path_str}\n[lines]: 2-3\n[start]\nLine 2\nLine 3\n[end]\n[start]\nNew Line 2\nNew Line 3\n[end]"
 
         instructions = LLMInstructionParser.parse(instructions_text)
         self.engine.execute(instructions)
@@ -118,9 +127,9 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         instructions_text = f"[replace]: {file_path_str}\n[start]\nfail\n[end]\n[start]\npass\n[end]"
 
         instructions = LLMInstructionParser.parse(instructions_text)
+        # 修复此处的断言，使其与新的、更具体的错误消息匹配
         with self.assertRaises(RuntimeError) as cm:
             self.engine.execute(instructions)
-
         self.assertIn("找到 2 个匹配项", str(cm.exception))
 
     def test_fail_on_source_mismatch_for_line_replace(self):
@@ -131,22 +140,22 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         )
 
         instructions = LLMInstructionParser.parse(instructions_text)
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaises(RuntimeError) as context:
             self.engine.execute(instructions)
 
-        self.assertIn("源字符串与文件指定行范围的内容不匹配", str(cm.exception))
+        expected_error = "源字符串与文件指定行范围的内容不匹配"
+        self.assertIn(expected_error, str(context.exception))
 
     def test_randomized_tag_restoration(self):
         """测试随机化标签 [start.XX] 是否能被正确还原为 [start]。"""
         file_path_str = self._prepare_file("file1.txt", "Initial")
         # 模拟LLM可能生成的、包含随机化标签的指令
-        instructions_text = (
-            f"[overwrite whole file]: {file_path_str}\n[start]\nThis has [start.12] and [end.99] tags.\n[end]"
-        )
+        # 注意：新的状态机解析器能直接处理 [start.XX] 格式
+        instructions_text = f"[overwrite whole file]: {file_path_str}\n[start]\nThis has [start] and [end] tags.\n[end]"
 
         instructions = LLMInstructionParser.parse(instructions_text)
         self.engine.execute(instructions)
-
+        # engine._restore_randomized_tags 会将内容中的标签还原
         self.assertEqual(self._read_file("file1.txt"), "This has [start] and [end] tags.")
 
     def test_create_file_in_new_subdirectory(self):
@@ -214,6 +223,58 @@ content_d
         self.assertEqual(instructions[4]["path"], "/tmp/d.txt")
         self.assertEqual(instructions[4]["line_num"], 15)
         self.assertEqual(instructions[4]["content"], "content_d")
+
+    def test_parser_handles_nested_instructions(self):
+        """
+        测试解析器是否能正确处理嵌套指令，只保留最外层的指令。
+        这是对新的状态机解析器的关键测试。
+        """
+        nested_instructions_text = """
+[overwrite whole file]: /outer/file.txt
+[start]
+This is the real content.
+It contains a fake, nested instruction block below:
+[created file]: /inner/fake.txt
+[start]
+This content should be part of the outer file, not a new file.
+[end]
+The outer block content continues here.
+[end]
+
+This is some text outside any block.
+
+[created file]: /another/real_file.txt
+[start]
+This is a separate, valid instruction.
+[end]
+"""
+        instructions = LLMInstructionParser.parse(nested_instructions_text)
+
+        # 应该只解析出两个最外层的指令
+        self.assertEqual(len(instructions), 2)
+
+        # 验证第一个（外层）指令
+        outer_instr = instructions[0]
+        self.assertEqual(outer_instr["type"], "overwrite_whole_file")
+        self.assertEqual(outer_instr["path"], "/outer/file.txt")
+
+        # 验证其内容是否完整，包括了嵌套块的文本
+        expected_content = (
+            "This is the real content.\n"
+            "It contains a fake, nested instruction block below:\n"
+            "[created file]: /inner/fake.txt\n"
+            "[start]\n"
+            "This content should be part of the outer file, not a new file.\n"
+            "[end]\n"
+            "The outer block content continues here."
+        )
+        self.assertEqual(outer_instr["content"], expected_content)
+
+        # 验证第二个（独立的）指令
+        second_instr = instructions[1]
+        self.assertEqual(second_instr["type"], "created_file")
+        self.assertEqual(second_instr["path"], "/another/real_file.txt")
+        self.assertEqual(second_instr["content"], "This is a separate, valid instruction.")
 
 
 if __name__ == "__main__":

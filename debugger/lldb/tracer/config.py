@@ -96,7 +96,7 @@ class ConfigManager:
             self.config.get("symbol_trace_patterns", [])
         )
         self.config["source_base_dir"] = self._validate_source_base_dir(self.config.get("source_base_dir", ""))
-        # Add more validation as needed
+        self.config["expression_hooks"] = self._validate_expression_hooks(self.config.get("expression_hooks", []))
 
     def _validate_symbol_trace_patterns(self, patterns_config) -> List[SymbolTracePattern]:
         """Validates the structure of symbol trace patterns."""
@@ -119,6 +119,40 @@ class ConfigManager:
             self.logger.info("Converted relative source_base_dir '%s' to absolute path '%s'.", path, abs_path)
             return abs_path
         return path
+
+    def _validate_expression_hooks(self, hooks_config: List[Any]) -> List[Dict[str, Any]]:
+        """Validates and normalizes the expression_hooks configuration."""
+        if not isinstance(hooks_config, list):
+            self.logger.error("'expression_hooks' must be a list. Ignoring.")
+            return []
+
+        valid_hooks = []
+        for item in hooks_config:
+            if not isinstance(item, dict):
+                self.logger.error("Skipping invalid expression_hook item (not a dict): %s", item)
+                continue
+
+            # Check for required keys
+            if not all(k in item for k in ["path", "line", "expr"]):
+                self.logger.error("Skipping invalid expression_hook (missing 'path', 'line', or 'expr'): %s", item)
+                continue
+
+            # Check path type
+            if not isinstance(item["path"], str):
+                self.logger.error("Skipping invalid expression_hook ('path' must be a string): %s", item)
+                continue
+
+            # Create a copy to avoid modifying the original config dict in place
+            hook = item.copy()
+
+            # Normalize path to be absolute
+            if not os.path.isabs(hook["path"]):
+                abs_path = os.path.abspath(hook["path"])
+                self.logger.debug("Converted relative hook path '%s' to absolute path '%s'.", hook["path"], abs_path)
+                hook["path"] = abs_path
+
+            valid_hooks.append(hook)
+        return valid_hooks
 
     # --- Public Getters for Configuration Values ---
 
