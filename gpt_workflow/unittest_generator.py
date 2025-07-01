@@ -437,7 +437,7 @@ class UnitTestGenerator:
 
                     if tracked_vars:
                         vars_str = ", ".join(f"{k}={repr(v)}" for k, v in tracked_vars.items())
-                        line_str += f"    >> VARS: {vars_str}"
+                        line_str += f"    >> Debug: {vars_str}"
 
                     trace_lines.append(line_str)
 
@@ -559,10 +559,16 @@ class UnitTestGenerator:
 
         prompt_part2 = dedent(f"""
             **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
-            This is a compact text trace representing a single execution of the function.
+            This is a compact text trace representing a single, real-world execution of the function.
             It shows the arguments, the lines of code executed (`L...`), captured variable
-            states (`>> VARS:`), any sub-calls made to other functions (`[SUB-CALL]`),
-            and the final return value or exception. Use this to understand the test case.
+            states (`>> Debug:`), any sub-calls made to other functions (`[SUB-CALL]`),
+            and the final return value or exception.
+            It is the **blueprint** for the test case you must generate. Your task is to
+            create a unit test that meticulously replicates this exact scenario.
+
+            - **Inputs:** The test should call `{target_func}` with the exact arguments shown in the `[CALL]` line.
+            - **Behavior:** The test should mock any `[SUB-CALL]` dependencies to behave precisely as recorded in the trace (returning a value or raising an exception).
+            - **Outcome:** The test must assert that the final result matches the `[FINAL] RETURNS` or `[FINAL] RAISES` line.
 
             [Runtime Execution Trace]
             [start]
@@ -637,10 +643,13 @@ class UnitTestGenerator:
 
         prompt_part2 = dedent(f"""
             **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
-            This is a compact text trace representing a single execution of the function.
-            It shows the arguments, the lines of code executed (`L...`), captured variable
-            states (`>> VARS:`), any sub-calls made to other functions (`[SUB-CALL]`),
-            and the final return value or exception. Use this to understand the test case.
+            This is a compact text trace representing a single, real-world execution of the function.
+            It is the **blueprint** for the test case you must generate. Your task is to
+            create a unit test that meticulously replicates this exact scenario.
+
+            - **Inputs:** The test should call `{target_func}` with the exact arguments shown in the `[CALL]` line.
+            - **Behavior:** The test should mock any `[SUB-CALL]` dependencies to behave precisely as recorded in the trace (returning a value or raising an exception).
+            - **Outcome:** The test must assert that the final result matches the `[FINAL] RETURNS` or `[FINAL] RAISES` line.
 
             [Runtime Execution Trace]
             [start]
@@ -677,22 +686,26 @@ class UnitTestGenerator:
             )
             existing_code_section = ""
 
-        code_structure_guidance = (
-            "- **Framework:** Use Python's built-in `unittest` module.\n"
-            "- **Test Method:** Create a new, descriptively named test method (e.g., `test_..._case_N`).\n"
-            "- **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only the necessary\n"
-            "  dependencies, which are shown as `[SUB-CALL]` lines in the execution trace.\n"
-            "    - Configure mocks to behave exactly as recorded (return value or exception).\n"
-            "    - Verify mocks were called correctly using `mock_instance.assert_called_once_with(...)`.\n"
-            "- **Assertions:**\n"
-            "    - Use `self.assertEqual()` for return values.\n"
-            "    - Use `self.assertRaises()` for exceptions.\n"
-            "- **Code Structure:**\n"
-            "  - Generate a complete, runnable Python code snippet.\n"
-            "  - Include all necessary imports (`unittest`, `unittest.mock`, the `sys.path` setup, "
-            "and the function to be tested).\n"
-            f"  - {action_verb}"
-        )
+        code_structure_guidance = dedent(f'''
+            - **Framework:** Use Python's built-in `unittest` module.
+            - **Test Method:** Create a new, descriptively named test method (e.g., `test_..._case_N`).
+            - **Docstring:** CRITICAL - Each test method MUST have a clear and concise docstring that explains
+              the specific scenario being tested. The docstring should directly relate to the runtime trace.
+              For example: `"""Test that the function correctly processes a standard case with two sub-calls."""` or
+              `"""Test the function's error handling when a key dependency raises a ValueError."""`
+            - **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only the necessary
+              dependencies, which are shown as `[SUB-CALL]` lines in the execution trace.
+                - Configure mocks to behave exactly as recorded (return value or exception).
+                - Verify mocks were called correctly using `mock_instance.assert_called_once_with(...)`.
+            - **Assertions:**
+                - Use `self.assertEqual()` for return values.
+                - Use `self.assertRaises()` for exceptions.
+                - Your assertions MUST be based on the values from the provided runtime trace.
+            - **Code Structure:**
+              - Generate a complete, runnable Python code snippet.
+              - Include all necessary imports (`unittest`, `unittest.mock`, the `sys.path` setup, and the function to be tested).
+              - {action_verb}
+        ''').strip()
         return action_description, existing_code_section, code_structure_guidance
 
     def _get_mocking_guidance(self, target_func: str, module_to_test: str) -> str:
