@@ -906,26 +906,21 @@ line3
         self.assertEqual(shadow_file.read_text(encoding="utf-8"), "line1\nline2\nline3")
 
     def test_create_new_file_auto_apply(self):
-        """测试使用 auto_apply=True 创建一个新文件"""
-        # 确认测试文件尚不存在
         test_file = self.tmp_path / "new_test.txt"
         self.assertFalse(test_file.exists())
 
-        # 测试内容
         test_content = """
 [overwrite whole file]: new_test.txt
-[start.57]
+[start]
 new content
-[end.57]
+[end]
 """
-        # 执行处理
-        with patch("llm_query._apply_patch"):
-            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
 
-        # 验证shadow文件
-        shadow_file = self.shadow_dir / "new_test.txt"
-        self.assertTrue(shadow_file.exists())
-        self.assertEqual(shadow_file.read_text(encoding="utf-8"), "new content")
+        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
+
+        # 直接验证文件创建和内容写入
+        self.assertTrue(test_file.exists())
+        self.assertEqual(test_file.read_text(), "new content")
 
     def test_setup_script_processing(self):
         """测试处理项目设置脚本"""

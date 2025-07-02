@@ -135,8 +135,10 @@ class TestTruncateReprValue(unittest.TestCase):
     def test_truncate_long_string(self):
         long_str = "a" * (_MAX_VALUE_LENGTH + 100)
         result = truncate_repr_value(long_str)
-        self.assertTrue(len(result) <= _MAX_VALUE_LENGTH + len("..."))
-        self.assertTrue(result.endswith("..."))
+        # 修正断言：计算实际后缀长度
+        suffix = f"... (total length: {len(long_str)})"
+        self.assertTrue(len(result) <= _MAX_VALUE_LENGTH + len(suffix))
+        self.assertTrue(result.endswith(suffix))  # 同步修正结尾检查
 
     def test_truncate_list(self):
         long_list = list(range(100))

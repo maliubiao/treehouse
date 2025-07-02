@@ -12,10 +12,12 @@ import linecache
 import logging
 import os
 import queue
+import re
 import sys
 import threading
 import time
 import traceback
+import types
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
@@ -56,7 +58,8 @@ if TYPE_CHECKING:
 
 
 # Constants
-_MAX_VALUE_LENGTH = 512
+_MAX_VALUE_LENGTH = 256
+_MAX_SEQ_ITEMS = 10
 _INDENT = "  "
 _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -405,10 +408,11 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
     try:
         # [FIX] Explicitly handle strings to prevent double-quoting by `repr()`.
         # This is a common case and should be checked first for performance.
+        # Handle primitive and special types
         if isinstance(value, str):
-            # For strings, we use their value directly without adding extra quotes.
-            # Subsequent steps like JSON serialization will handle them correctly.
-            preview = value
+            if len(value) > _MAX_VALUE_LENGTH:
+                return value[:_MAX_VALUE_LENGTH] + f"... (total length: {len(value)})"
+            return value
         # Detect unittest.mock.Mock objects
         elif isinstance(value, Mock):
             # Provide a more informative representation for mock objects.
@@ -430,14 +434,26 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
             preview = str(value)
         # For simple objects, show their structure.
         elif hasattr(value, "__dict__"):
+            if inspect.ismodule(value):
+                return f"<module '{value.__name__}'>"
+            if inspect.isclass(value):
+                return f"<class '{getattr(value, '__module__', '?')}.{value.__name__}'>"
             preview = _truncate_object(value, keep_elements)
         # The final fallback is the default repr().
+        # Functions, methods, and other callables
+        elif callable(value):
+            s = repr(value)
+            # General cleanup for callables
+            s = re.sub(r"\s+at\s+0x[0-9a-fA-F]+", "", s)
+            s = re.sub(r"\s+of\s+<class\s+'.*?'>", "", s)
+            if len(s) > _MAX_VALUE_LENGTH:
+                s = s[:_MAX_VALUE_LENGTH] + "..."
+            return s
         else:
             preview = repr(value)
     except Exception as e:
         # Catch any error during representation generation to prevent the tracer from crashing.
         preview = f"[trace system error: {e}]"
-
     # Perform a final length check on all generated previews.
     if len(preview) > _MAX_VALUE_LENGTH:
         preview = preview[:_MAX_VALUE_LENGTH] + "..."
@@ -1304,6 +1320,7 @@ class TraceLogic:
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
         self.last_statement_vars = None
+        self._last_vars_by_frame = {}  # Cache for tracking variable changes
 
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         if self.config.disable_html:
@@ -1492,8 +1509,10 @@ class TraceLogic:
                 log_prefix = TraceTypes.PREFIX_MODULE
             else:
                 args, _, _, values = inspect.getargvalues(frame)
-                args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args]
+                args_to_show = [arg for arg in args if arg not in ("self", "cls")]
+                args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args_to_show]
                 log_prefix = TraceTypes.PREFIX_CALL
+
             parent_frame = frame.f_back
             parent_lineno = 0
             if parent_frame is not None:
@@ -1539,6 +1558,9 @@ class TraceLogic:
         frame_id = self._get_frame_id(frame)
         if frame_id in self._frame_data._frame_locals_map:
             del self._frame_data._frame_locals_map[frame_id]
+        if frame_id in self._last_vars_by_frame:
+            del self._last_vars_by_frame[frame_id]  # Clean up var cache
+
         self._add_to_buffer(
             {
                 "template": "{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]",
@@ -1589,7 +1611,7 @@ class TraceLogic:
 
     def trace_variables(self, frame, var_names):
         """
-        Trace variables in the given frame
+        Trace variables in the given frame, ignoring special/private ones.
 
         Args:
             frame: The current frame
@@ -1602,10 +1624,15 @@ class TraceLogic:
         if not var_names:
             return tracked_vars
 
+        # Filter out special (self, cls) and private (__var) variables
+        vars_to_track = [
+            v for v in var_names if v not in ("self", "cls") and not (v.startswith("__") and not v.endswith("__"))
+        ]
+
         locals_dict = frame.f_locals
         globals_dict = frame.f_globals
 
-        for var in var_names:
+        for var in vars_to_track:
             if var in locals_dict:
                 value = locals_dict[var]
             elif var in globals_dict:
@@ -1620,40 +1647,45 @@ class TraceLogic:
         return tracked_vars
 
     def handle_line(self, frame):
-        """处理行事件，现在能够感知多行语句。"""
+        """处理行事件，现在能够感知多行语句，并只报告变化的变量。"""
         lineno = frame.f_lineno
         filename = frame.f_code.co_filename
 
-        # 使用新的缓存模块获取完整语句及其行范围
         statement_info = get_statement_info(filename, lineno)
         if statement_info:
             full_statement, start_line, end_line = statement_info
         else:
-            # 如果缓存模块无法处理（例如，文件IO错误），则回退到linecache
             full_statement = linecache.getline(filename, lineno).strip("\n")
             if not full_statement:
-                return  # 不处理空行
+                return
             start_line = end_line = lineno
 
-        # 为避免重复记录同一语句，仅当事件是为语句的*第一*行触发时才继续。
         if lineno != start_line:
             return
 
         formatted_filename = self._get_formatted_filename(filename)
         frame_id = self._get_frame_id(frame)
         self._message_id += 1
-        tracked_vars = {}
+        changed_vars = {}
 
         if self.config.enable_var_trace:
-            # 在当前语句开始时，我们可以检查*上一条*语句执行后的状态。
             if self.last_statement_vars:
-                tracked_vars = self.trace_variables(frame, self.last_statement_vars)
+                # Get the current values of variables from the *previous* statement
+                all_traced_vars = self.trace_variables(frame, self.last_statement_vars)
 
-            # 确定*当前*语句的变量并存储它们。
-            # 它们将在*下一条*语句开始时被跟踪。
+                # Compare with cached values to find what changed
+                last_frame_vars = self._last_vars_by_frame.get(frame_id, {})
+                for name, value_repr in all_traced_vars.items():
+                    if last_frame_vars.get(name) != value_repr:
+                        changed_vars[name] = value_repr
+
+                # Update the cache for this frame with the latest values
+                last_frame_vars.update(all_traced_vars)
+                self._last_vars_by_frame[frame_id] = last_frame_vars
+
+            # Determine variables for the *current* statement for the next trace
             self.last_statement_vars = self._get_vars_in_range(frame.f_code, start_line, end_line)
 
-        # 为更好的日志格式，缩进语句的后续行。
         indented_statement = full_statement.replace("\n", "\n" + _INDENT * (self.stack_depth + 1))
 
         log_data = {
@@ -1662,27 +1694,25 @@ class TraceLogic:
             "data": {
                 "indent": _INDENT * self.stack_depth,
                 "filename": formatted_filename,
-                "lineno": start_line,  # 总是报告语句的起始行
+                "lineno": start_line,
                 "line": indented_statement,
-                "raw_line": full_statement,  # 为分析器提供原始行内容
+                "raw_line": full_statement,
                 "frame_id": frame_id,
                 "original_filename": filename,
-                "tracked_vars": tracked_vars,
+                "tracked_vars": changed_vars,
             },
         }
 
-        if tracked_vars:
+        if changed_vars:
             log_data["template"] += " # Debug: {vars}"
-            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in tracked_vars.items()])
+            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in changed_vars.items()])
 
         self._add_to_buffer(log_data, TraceTypes.COLOR_LINE)
 
-        # 处理语句中的特殊 #trace 注释
         for i, line_content in enumerate(full_statement.split("\n")):
             current_line_no = start_line + i
             self._process_trace_expression(frame, line_content, filename, current_line_no)
 
-        # 处理当前帧状态的变量捕获
         if self.config.capture_vars:
             self._process_captured_vars(frame)
 

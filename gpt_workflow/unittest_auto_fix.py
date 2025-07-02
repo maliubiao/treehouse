@@ -418,6 +418,7 @@ class TestAutoFix:
         ignore_self=False,
         ignore_system_paths=True,
         disable_html=True,
+        source_base_dir=Path(__file__).parent.parent,
     )
     def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
         """
