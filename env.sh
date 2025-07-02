@@ -391,7 +391,7 @@ function commitgpt() {
     echo "错误：存在未暂存的更改，请先使用git add添加更改"
     return 1
   fi
-
+  bash tools/pre-commit-check.sh
   newconversation
   askgpt @git-commit-message @git-stage @git-diff-summary.txt
   rm -f git-diff-summary.txt

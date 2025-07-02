@@ -41,7 +41,6 @@ from pygments import formatters, highlight, lexers, styles
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Node, Parser, Query
 
-from debugger.tracer import trace
 from lsp.client import GenericLSPClient, LSPFeatureError
 from lsp.language_id import LanguageId
 

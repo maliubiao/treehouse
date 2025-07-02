@@ -3,15 +3,13 @@ import glob
 import json
 import os
 import re
-import shutil
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
-from debugger.tracer import trace
-from llm_query import ModelSwitch, process_patch_response
+from llm_query import process_patch_response
 
 verify_lock = threading.Lock()
 repair_lock = threading.Lock()

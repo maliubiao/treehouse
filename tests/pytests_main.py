@@ -3,10 +3,10 @@ import json
 import os
 import sys
 import time
-import inspect
 import traceback
 from collections import defaultdict
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

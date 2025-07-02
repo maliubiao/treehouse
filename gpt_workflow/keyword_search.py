@@ -592,7 +592,7 @@ def main():
 
         # 自动打开浏览器
         if html_path and html_path.exists():
-            console.print(f"[bold green]正在浏览器中打开结果...[/bold green]")
+            console.print("[bold green]正在浏览器中打开结果...[/bold green]")
             try:
                 webbrowser.open(f"file://{html_path.absolute()}")
             except Exception as e:

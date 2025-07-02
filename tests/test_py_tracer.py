@@ -2,13 +2,11 @@ import dis
 import importlib.util
 import inspect
 import json
-import os
 import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 # Add project root to path to allow importing debugger modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -22,7 +20,6 @@ from debugger.tracer import (
     TraceLogExtractor,
     TraceLogic,
     start_trace,
-    trace,
     truncate_repr_value,
 )
 

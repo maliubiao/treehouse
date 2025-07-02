@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 from textwrap import dedent
-from unittest.mock import MagicMock, PropertyMock, call, patch
+from unittest.mock import MagicMock, call, patch
 
 from parameterized import parameterized
 from prompt_toolkit import PromptSession
@@ -27,7 +27,6 @@ from gpt_workflow import ArchitectMode, ChangelogMarkdown, CoverageTestPlan, Lin
 
 # 假设这些是你代码中实际的导入
 from llm_query import (
-    GLOBAL_MODEL_CONFIG,
     GPT_FLAG_PATCH,
     AutoGitCommit,
     BlockPatchResponse,

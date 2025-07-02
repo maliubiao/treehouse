@@ -5,10 +5,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 import yaml
-from colorama import Fore, Style, init
+from colorama import Fore, Style
 
 from llm_query import ModelSwitch
 

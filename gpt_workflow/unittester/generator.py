@@ -2,7 +2,6 @@ import json
 import multiprocessing
 from collections import defaultdict
 from pathlib import Path
-from textwrap import dedent
 from typing import Any, Dict, List, Optional, Tuple
 
 from colorama import Fore, Style
@@ -71,7 +70,7 @@ class UnitTestGenerator:
         print(Fore.BLUE + f"Attempting to generate tests for: {', '.join(target_funcs)}")
         all_calls = self._find_all_calls_for_targets(target_funcs)
         if not all_calls:
-            print(Fore.RED + f"No call records found for specified functions.")
+            print(Fore.RED + "No call records found for specified functions.")
             return False
 
         # --- 1. Setup Phase ---

@@ -6,14 +6,14 @@ Main translation workflow implementation
 import json
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from llm_query import ModelSwitch
 
 from .config import load_config, validate_paragraphs
 from .logging import TranslationLogger
 from .output import build_output, save_output
-from .translation import find_gaps, get_translation_prompt, is_blank_content, translate_parallel
+from .translation import get_translation_prompt, translate_parallel
 
 
 class TranslationWorkflow:

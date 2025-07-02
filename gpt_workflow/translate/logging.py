@@ -4,7 +4,6 @@ Logging and inspection functionality
 """
 
 from datetime import datetime
-from typing import Dict, List
 
 from colorama import Fore, Style
 

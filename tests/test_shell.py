@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import logging
 import os
 import shutil
 import sys
@@ -74,7 +73,6 @@ class TestShellCompletion(unittest.TestCase):
 
     def _capture_completion(self, prefix: str):
         """Helper to capture completion output"""
-        from io import StringIO
 
         saved_stdout = sys.stdout
         try:
@@ -238,8 +236,6 @@ class TestShellFunctions(unittest.TestCase):
         (self.test_dir / "other_file").touch()
 
     def tearDown(self):
-        import shutil
-
         shutil.rmtree(self.test_dir)
 
     @patch("builtins.print")

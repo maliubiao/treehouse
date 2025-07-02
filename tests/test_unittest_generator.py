@@ -1,10 +1,9 @@
 import json
-import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Add project root to sys.path to allow importing project modules.
 # This needs to be done before importing the module to be tested.

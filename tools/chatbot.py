@@ -22,7 +22,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from llm_query import GLOBAL_MODEL_CONFIG, GPTContextProcessor, query_gpt_api, ModelSwitch
+from llm_query import GPTContextProcessor, ModelSwitch
 
 
 # 定义UI样式

@@ -2,11 +2,10 @@ import fnmatch
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
-from colorama import Fore, Style, init
+from colorama import Fore, Style
 
-from llm_query import process_patch_response
 from tree import BlockPatch, ParserLoader, ParserUtil, SyntaxHighlight
 
 

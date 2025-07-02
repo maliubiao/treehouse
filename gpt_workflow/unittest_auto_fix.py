@@ -2,10 +2,9 @@ import argparse
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from unittest.mock import _Call
 
-import colorama
 from colorama import Fore, Style
 from report_generator import ReportGenerator
 
