@@ -182,7 +182,7 @@ class SourceHandler:
 
         # 2. If not, search in the configured source search paths.
         for search_path in self._source_search_paths:
-            candidate = os.path.join(search_path, candidate)
+            candidate = os.path.join(search_path, original_path)
             if os.path.exists(candidate):
                 resolved = str(Path(candidate).resolve())
                 self._resolved_path_cache[original_path] = resolved

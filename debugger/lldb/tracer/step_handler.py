@@ -402,10 +402,12 @@ class StepHandler:
             return f"{filepath}:<no line>"
         return f"{filepath}:{line_num}:{column}" if column > 0 else f"{filepath}:{line_num}"
 
-    def _get_source_line(self, frame: lldb.SBFrame, filepath: str, line_num: int) -> str:
+    def _get_source_line(self, frame: lldb.SBFrame, _filepath: str, _line_num: int) -> str:
         """获取源代码行"""
         try:
-            return self.source_handler.get_source_code_range(frame, filepath, line_num)
+            # The method was probably renamed to be more descriptive (get_source_code_for_statement).
+            # The new method correctly finds multi-line statements and gets all info from the frame.
+            return self.source_handler.get_source_code_for_statement(frame)
         except Exception as e:
             self.logger.warning("Failed to get source line: %s", str(e))
             return ""
@@ -422,12 +424,12 @@ class StepHandler:
         debug_values: List[str],
     ) -> None:
         """记录步骤信息"""
-        # if self.log_mode == "source" and source_info:
-        #     self._log_source_mode(indent, source_info, source_line, debug_values)
-        # else:
-        self._log_instruction_mode(
-            indent, pc, first_inst_offset, mnemonic, operands, source_info, source_line, debug_values
-        )
+        if self.log_mode == "source" and source_info:
+            self._log_source_mode(indent, source_info, source_line, debug_values)
+        else:
+            self._log_instruction_mode(
+                indent, pc, first_inst_offset, mnemonic, operands, source_info, source_line, debug_values
+            )
 
     def _update_lru_breakpoint(self, lr_value: int, oneshot: bool = True) -> bool:
         """设置返回地址断点，使用LRU缓存管理"""

@@ -180,6 +180,10 @@ class ConfigManager:
     def get_attach_pid(self) -> Optional[int]:
         return self.config.get("attach_pid")
 
+    def get_expression_hooks(self) -> List[Dict[str, Any]]:
+        """Gets the list of configured expression hooks."""
+        return self.config.get("expression_hooks", [])
+
     def get_libc_functions(self) -> List[str]:
         return self.config.get("libc_functions", [])
 
