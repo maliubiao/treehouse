@@ -2364,6 +2364,8 @@ class TestSymbolsAPI(unittest.TestCase):
 class TestExtractIdentifiablePath(unittest.TestCase):
     def setUp(self):
         self.cur_dir = os.path.dirname(os.path.abspath(__file__))
+        # 设置项目根目录为当前目录的父目录
+        tree.GLOBAL_PROJECT_CONFIG.project_root_dir = os.path.dirname(self.cur_dir)
 
     def test_relative_within_current_dir(self):
         rel_path = "test_data/sample.py"

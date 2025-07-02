@@ -88,6 +88,8 @@ class TestAutoFix:
         self.error_details = self._extract_error_details()
         self.uniq_references = set()
         self.trace_log = ""
+        self.exception_location: Optional[tuple] = None  # (file_path, line_no)
+        self.main_call_chain: Optional[List[Dict]] = None
 
     def _extract_error_details(self) -> List[Dict]:
         """Extract error details from test results in a structured format."""
@@ -187,7 +189,7 @@ class TestAutoFix:
     def display_selected_error_details(self, selected_error: Dict) -> None:
         """
         Display detailed information for the selected test error, including traceback and tracer logs.
-        This method populates `self.uniq_references` and `self.trace_log`.
+        This method populates `self.uniq_references`, `self.trace_log` and `self.exception_location`.
         """
         print(Fore.YELLOW + "\nAnalyzing selected issue:")
         print(Fore.YELLOW + "=" * 50)
@@ -210,11 +212,12 @@ class TestAutoFix:
 
     def lookup_reference(self, file_path: str, lineno: int) -> None:
         """Display reference information for a specific file and line."""
-
         self._display_tracer_logs(file_path, lineno)
 
     def _display_tracer_logs(self, file_path: str, line: int) -> None:
-        """Display relevant tracer logs for the error location."""
+        """
+        Display relevant tracer logs for the error location and identify the exception source.
+        """
         log_extractor = tracer.TraceLogExtractor(str(Path(__file__).parent.parent / "debugger/logs/run_all_tests.log"))
         try:
             logs, references_group = log_extractor.lookup(file_path, line)
@@ -224,50 +227,188 @@ class TestAutoFix:
                 print(Fore.BLUE + "-" * 30)
                 print(Fore.BLUE + f"{logs[0]}" + Style.RESET_ALL)
 
-                for references in references_group:
+                exception_found_in_trace = False
+                if references_group:
+                    self.main_call_chain = references_group[0]
                     print(Fore.BLUE + "\nCall Chain References:")
+
+                    call_stack = []
                     indent_level = 0
-                    for ref in references:
-                        if ref.get("type") == "call":
-                            self.uniq_references.add((ref.get("filename", "?"), ref.get("lineno", 0)))
+
+                    for ref in self.main_call_chain:
+                        ref_type = ref.get("type")
+                        func_name = ref.get("func", "?")
+
+                        if ref_type == "call":
+                            ref_loc = (ref.get("filename", "?"), ref.get("lineno", 0))
+                            call_stack.append(ref_loc)
+                            self.uniq_references.add(ref_loc)
                             print(
                                 Fore.CYAN
                                 + "  " * indent_level
-                                + f"→ {ref.get('func', '?')}() at {ref.get('filename', '?')}:{ref.get('lineno', '?')}"
+                                + f"→ {func_name}() at {ref.get('filename', '?')}:{ref.get('lineno', '?')}"
                             )
                             indent_level += 1
-                        elif ref.get("type") == "return":
+                        elif ref_type == "return":
+                            if call_stack:
+                                call_stack.pop()
                             indent_level = max(0, indent_level - 1)
-                            print(Fore.GREEN + "  " * indent_level + f"← {ref.get('func', '?')}() returned")
-                        elif ref.get("type") == "exception":
+                            print(Fore.GREEN + "  " * indent_level + f"← {func_name}() returned")
+                        elif ref_type == "exception":
                             indent_level = max(0, indent_level - 1)
-                            print(Fore.RED + "  " * indent_level + f"✗ {ref.get('func', '?')}() raised exception")
+                            print(Fore.RED + "  " * indent_level + f"✗ {func_name}() raised exception")
+                            if call_stack:
+                                self.exception_location = call_stack[-1]  # Deepest frame on stack
+                                exception_found_in_trace = True
+                                print(
+                                    Fore.MAGENTA
+                                    + f"  Pinpointed exception source from tracer log: {self.exception_location[0]}:{self.exception_location[1]}"
+                                )
+
+                if not exception_found_in_trace:
+                    self.exception_location = (file_path, line)
+                    print(
+                        Fore.YELLOW
+                        + f"\nCould not pinpoint exception in trace, using test report location as fallback: {file_path}:{line}"
+                    )
             else:
                 print(Fore.YELLOW + f"\nNo tracer logs found for this location, {file_path}:{line}")
+                self.exception_location = (file_path, line)  # Fallback
         except (FileNotFoundError, PermissionError, ValueError) as e:
             print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
+            self.exception_location = (file_path, line)  # Fallback
 
-    def get_symbol_info_for_references(self, references: list) -> dict:
-        """获取符号信息用于参考展示"""
+    def get_and_prioritize_symbols(self, model_switch: ModelSwitch) -> dict:
+        """
+        Fetches symbols and prioritizes them based on the call stack at the time of the exception.
+        It uses a layered approach, adding symbols from the call stack first (deepest to shallowest),
+        and then filling any remaining context budget with other referenced symbols.
+
+        1. The call stack at the moment of exception is reconstructed from the trace.
+        2. Symbols from this stack are added, starting from the exception source (deepest) and moving up.
+        3. If context budget remains, other symbols that were called during the trace are added, smallest first.
+        """
+        if not self.uniq_references:
+            return {}
+
+        print(Fore.CYAN + "\n" + "=" * 15 + " Building Smart Context " + "=" * 15)
+
+        # 1. Get model configuration and token budget
+        config = model_switch.current_config
+        MAX_SYMBOLS_TOKENS = (config.max_context_size or 32768) - 4096
+        print(
+            Fore.BLUE
+            + f"Model context limit: {config.max_context_size}, budget for symbols: {MAX_SYMBOLS_TOKENS} tokens (estimated)."
+        )
+
+        # 2. Fetch ALL referenced symbols to get their content and size
         file_to_lines = defaultdict(list)
-        for filename, lineno in references:
-            file_to_lines[filename].append(lineno)
+        for filename, lineno in self.uniq_references:
+            if filename and lineno:
+                file_to_lines[filename].append(lineno)
+
         file_results = []
         for filename, lines in file_to_lines.items():
             matches = [MatchResult(line=lineno, column_range=(0, 0), text="") for lineno in lines]
             file_results.append(FileSearchResult(file_path=filename, matches=matches))
 
-        search_results = FileSearchResults(results=file_results)
-        symbol_results = query_symbol_service(search_results, 128 * 1024)
+        all_symbols = query_symbol_service(FileSearchResults(results=file_results), 1024 * 1024)
+        if not all_symbols:
+            print(Fore.RED + "Could not retrieve any symbol information.")
+            return {}
+        for sym in all_symbols:
+            print("symbol service returns symbol: %s" % sym)
+        # 3. Create a lookup map for symbols with their approximate token counts
+        location_to_symbol_map = {}
+        for name, symbol_data in all_symbols.items():
+            content = symbol_data.get("code", "")
+            tokens = len(content) // 3
+            location_to_symbol_map[name] = {"name": name, "tokens": tokens, "data": symbol_data}
 
-        if symbol_results and isinstance(symbol_results, dict):
-            print(Fore.BLUE + "\nSymbol Information:")
-            print(Fore.BLUE + "-" * 30)
-            for name, symbol in symbol_results.items():
-                print(Fore.CYAN + f"Symbol: {name}")
-                print(Fore.BLUE + f"  File: {symbol['file_path']}:{symbol['start_line']}-{symbol['end_line']}")
+        # 4. Reconstruct the call stack at the point of exception
+        call_stack_at_exception = []
+        if self.main_call_chain:
+            temp_stack = []
+            for ref in self.main_call_chain:
+                ref_type = ref.get("type")
+                if ref_type == "call":
+                    temp_stack.append((ref.get("filename", "?"), ref.get("lineno", 0)))
+                elif ref_type == "return":
+                    if temp_stack:
+                        temp_stack.pop()
+                elif ref_type == "exception":
+                    call_stack_at_exception = list(temp_stack)
+                    break
 
-        return symbol_results
+        if not call_stack_at_exception and self.exception_location:
+            call_stack_at_exception.append(self.exception_location)
+
+        # 5. Prioritize and build the final list of symbols
+        final_symbols = {}
+        added_symbol_names = set()
+        current_tokens = 0
+
+        # 5a. Add symbols from the call stack, deepest first
+        if call_stack_at_exception:
+            print(Fore.CYAN + "\nAdding symbols from exception call stack (deepest first):")
+            for loc in reversed(call_stack_at_exception):
+                file_path, lineno = loc
+
+                containing_symbol = None
+                smallest_size = float("inf")
+                for symbol_info in location_to_symbol_map.values():
+                    s_file = symbol_info["data"]["file_path"]
+                    s_start = symbol_info["data"]["start_line"]
+                    s_end = symbol_info["data"]["end_line"]
+                    if s_file == file_path and s_start <= lineno <= s_end:
+                        symbol_size = s_end - s_start
+                        if symbol_size < smallest_size:
+                            containing_symbol = symbol_info
+                            smallest_size = symbol_size
+
+                if containing_symbol:
+                    name = containing_symbol["name"]
+                    tokens = containing_symbol["tokens"]
+                    if name in added_symbol_names:
+                        continue
+
+                    if current_tokens + tokens <= MAX_SYMBOLS_TOKENS:
+                        final_symbols[name] = containing_symbol["data"]
+                        current_tokens += tokens
+                        added_symbol_names.add(name)
+                        print(Fore.GREEN + f"  ✓ Added: {name} ({tokens} tokens)")
+                    else:
+                        print(Fore.YELLOW + f"  - Skipping {name} ({tokens} tokens) to fit context. Budget full.")
+                        break
+
+        # 5b. Fill remaining budget with other referenced symbols, smallest first
+        if current_tokens < MAX_SYMBOLS_TOKENS:
+            print(Fore.CYAN + "\nFilling remaining context with other referenced symbols (smallest first):")
+
+            other_symbols = []
+            for symbol_info in location_to_symbol_map.values():
+                if symbol_info["name"] not in added_symbol_names:
+                    other_symbols.append(symbol_info)
+
+            sorted_other_symbols = sorted(other_symbols, key=lambda x: x["tokens"])
+
+            for symbol in sorted_other_symbols:
+                if current_tokens + symbol["tokens"] <= MAX_SYMBOLS_TOKENS:
+                    final_symbols[symbol["name"]] = symbol["data"]
+                    current_tokens += symbol["tokens"]
+                    added_symbol_names.add(symbol["name"])
+                    print(Fore.GREEN + f"  ✓ Added: {symbol['name']} ({symbol['tokens']} tokens)")
+                else:
+                    break
+
+        total_symbols = len(final_symbols)
+        print(Fore.CYAN + f"\nSelected {total_symbols} symbols with a total of ~{current_tokens} tokens for context.")
+        print(Fore.CYAN + "=" * 54)
+
+        if not final_symbols and all_symbols:
+            print(Fore.RED + "Error: No symbols could be added. The primary exception symbol might be too large.")
+
+        return final_symbols
 
     @staticmethod
     @tracer.trace(
@@ -314,7 +455,14 @@ def parse_args():
     )
     parser.add_argument("--user-requirement", help="User's specific requirements to be added to the prompt", default="")
     parser.add_argument(
-        "--model", default="deepseek-r1", help="Specify the language model to use (e.g., deepseek-r1, gpt-4, etc.)"
+        "--model",
+        default="deepseek-r1",
+        help="Specify the language model for FIXING the code. This is the 'fixer' model.",
+    )
+    parser.add_argument(
+        "--analyzer-model",
+        default=None,
+        help="Specify the language model for ANALYZING the failure. This is the 'analyzer' model. If not provided, the fixer model will be used for analysis as well.",
     )
     parser.add_argument(
         "--direct-fix", action="store_true", help="Directly generate a fix without the interactive explanation step."
@@ -339,7 +487,7 @@ def _consume_stream_and_get_text(stream_generator, print_stream: bool = True) ->
     return "".join(text_chunks)
 
 
-def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch: ModelSwitch, user_req: str):
+def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_switch: ModelSwitch, user_req: str):
     """Performs a direct, one-step fix by analyzing the tracer log and generating a patch."""
     print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
 
@@ -355,11 +503,11 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch
     """
 
     GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=model_switch.current_config.max_context_size)
+    p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size)
     p.process_search_results(symbol_result)
     prompt = p.build(user_requirement=prompt_content)
     print(Fore.YELLOW + "正在生成修复方案...")
-    text = model_switch.query(model_switch.model_name, prompt, stream=True)
+    text = fixer_model_switch.query(fixer_model_switch.model_name, prompt, stream=True)
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
@@ -403,7 +551,9 @@ def _get_user_feedback_on_analysis(analysis_text: str) -> str:
             print(Fore.RED + "Invalid choice. Please enter 1, 2, 3, or q.")
 
 
-def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch: ModelSwitch):
+def _perform_two_step_fix(
+    auto_fix: TestAutoFix, symbol_result: dict, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch
+):
     """
     Performs an interactive, two-step fix:
     1. Analyzes the failure and presents the analysis.
@@ -411,6 +561,7 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
     3. Generates a patch based on the analysis and user's final command.
     """
     print(Fore.YELLOW + "\nStep 1: Generating failure analysis...")
+    print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
     # Load the specialized analysis prompt
     analyze_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
@@ -423,11 +574,11 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
 [trace log end]
 """
     p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=model_switch.current_config.max_context_size
+        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size
     )
     p_explain.process_search_results(symbol_result)
     prompt_explain = p_explain.build(user_requirement=analyze_prompt_content)
-    stream = model_switch.query(model_switch.model_name, prompt_explain, stream=True)
+    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, prompt_explain, stream=True)
     analysis_text = _consume_stream_and_get_text(stream)
 
     # Step 2: Get user feedback on the analysis
@@ -438,6 +589,7 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
 
     # Step 3: Generate the fix based on analysis and user directive
     print(Fore.YELLOW + "\nStep 2: Generating fix based on analysis and user directive...")
+    print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
     fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
         encoding="utf-8"
     )
@@ -453,11 +605,13 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
 [trace log end]
     """
     GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p_fix = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=model_switch.current_config.max_context_size)
+    p_fix = PatchPromptBuilder(
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size
+    )
     p_fix.process_search_results(symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
 
-    text = model_switch.query(model_switch.model_name, prompt_fix, stream=True)
+    text = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
@@ -465,11 +619,13 @@ def _perform_automated_fix_and_report(
     auto_fix: TestAutoFix,
     selected_error: dict,
     symbol_result: dict,
-    model_switch: ModelSwitch,
+    analyzer_model_switch: ModelSwitch,
+    fixer_model_switch: ModelSwitch,
     report_generator: ReportGenerator,
 ):
     """Analyzes an error, generates a report, and applies a fix in auto-pilot mode."""
     print(Fore.YELLOW + "Generating problem analysis for report...")
+    print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
     # Step 1: Get Explanation for the report
     explain_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
@@ -483,11 +639,11 @@ def _perform_automated_fix_and_report(
 [trace log end]
 """
     p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=model_switch.current_config.max_context_size
+        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size
     )
     p_explain.process_search_results(symbol_result)
     prompt_explain = p_explain.build(user_requirement=explain_prompt_content)
-    stream = model_switch.query(model_switch.model_name, prompt_explain, stream=True)
+    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, prompt_explain, stream=True)
     analysis_text = _consume_stream_and_get_text(stream, print_stream=True)
 
     # Step 2: Prepare the fix prompt (which will also be in the report)
@@ -507,7 +663,9 @@ def _perform_automated_fix_and_report(
 [trace log end]
     """
     GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p_fix = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=model_switch.current_config.max_context_size)
+    p_fix = PatchPromptBuilder(
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size
+    )
     p_fix.process_search_results(symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
 
@@ -517,14 +675,13 @@ def _perform_automated_fix_and_report(
 
     # Step 4: Generate and apply the fix
     print(Fore.YELLOW + "Generating and applying fix...")
-    text_fix = model_switch.query(model_switch.model_name, prompt_fix, stream=True)
+    print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
+    text_fix = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
     process_patch_response(text_fix, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
-def run_fix_loop(args: argparse.Namespace):
+def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch):
     """Main loop for interactive test fixing."""
-    model_switch = ModelSwitch()
-    model_switch.select(args.model)
     fix_mode = None
 
     if not args.direct_fix:
@@ -570,12 +727,16 @@ def run_fix_loop(args: argparse.Namespace):
             else:
                 break
 
-        symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
+        symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch)
+
+        if not symbol_result:
+            print(Fore.RED + "无法构建修复上下文，跳过此问题。")
+            continue
 
         if fix_mode == "direct":
-            _perform_direct_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
+            _perform_direct_fix(auto_fix, symbol_result, fixer_model_switch, args.user_requirement)
         elif fix_mode == "two_step":
-            _perform_two_step_fix(auto_fix, symbol_result, model_switch)
+            _perform_two_step_fix(auto_fix, symbol_result, analyzer_model_switch, fixer_model_switch)
 
         continue_choice = input(Fore.GREEN + "\n补丁已应用。是否继续修复下一个问题？ (y/n): ").strip().lower()
         if continue_choice != "y":
@@ -583,11 +744,9 @@ def run_fix_loop(args: argparse.Namespace):
             break
 
 
-def run_auto_pilot_loop(args: argparse.Namespace):
+def run_auto_pilot_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch):
     """Main loop for the fully automated test fixing and reporting workflow."""
     print(Fore.MAGENTA + "🚀 " + "=" * 20 + " Auto-Pilot Mode Engaged " + "=" * 20 + " 🚀")
-    model_switch = ModelSwitch()
-    model_switch.select(args.model)
     report_generator = ReportGenerator()
     failure_tracker = FailureTracker(max_attempts=2)
 
@@ -629,8 +788,14 @@ def run_auto_pilot_loop(args: argparse.Namespace):
             print(Fore.YELLOW + "\n未找到错误的有效引用，无法自动修复。跳过此错误。")
             continue
 
-        symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
-        _perform_automated_fix_and_report(auto_fix, selected_error, symbol_result, model_switch, report_generator)
+        symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch)
+        if not symbol_result:
+            print(Fore.RED + "无法构建修复上下文，跳过此问题。")
+            continue
+
+        _perform_automated_fix_and_report(
+            auto_fix, selected_error, symbol_result, analyzer_model_switch, fixer_model_switch, report_generator
+        )
 
         print(Fore.GREEN + "\n补丁已应用。将自动重新运行测试以验证修复效果...")
 
@@ -660,10 +825,27 @@ def main():
                 print(test_id)
         return
 
-    if args.auto_pilot:
-        run_auto_pilot_loop(args)
+    # --- Model setup ---
+    fixer_model_name = args.model
+    analyzer_model_name = args.analyzer_model if args.analyzer_model else fixer_model_name
+
+    print(Fore.CYAN + f"\nUsing Analyzer Model: {analyzer_model_name}")
+    print(Fore.CYAN + f"Using Fixer Model   : {fixer_model_name}" + Style.RESET_ALL)
+
+    analyzer_model_switch = ModelSwitch()
+    analyzer_model_switch.select(analyzer_model_name)
+
+    if analyzer_model_name == fixer_model_name:
+        fixer_model_switch = analyzer_model_switch
     else:
-        run_fix_loop(args)
+        fixer_model_switch = ModelSwitch()
+        fixer_model_switch.select(fixer_model_name)
+    # --- End model setup ---
+
+    if args.auto_pilot:
+        run_auto_pilot_loop(args, analyzer_model_switch, fixer_model_switch)
+    else:
+        run_fix_loop(args, analyzer_model_switch, fixer_model_switch)
 
 
 if __name__ == "__main__":

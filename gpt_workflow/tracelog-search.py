@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import re
 import shlex
@@ -17,132 +18,7 @@ from llm_query import ModelSwitch
 
 console = Console()
 
-MAIN_PROMPT = """
-你需要根据用户的需求，决定要执行什么命令处理日志，以获取需要的上下文，你可能需要执行多次命令逼近目标。
-有一份很大的trace log, 包括程序每一行执行了什么东西， 你需要搜索这个tracelog, 获取上下文，满足用户的需求，
-获取的上下文不能太大，以免超过你的上下文总长度。
-每次返回一个的命令过来，请求用正则表达式搜索日志，然后这个命令的执行结果会在下一次反馈给你。
-命令中可以使用rg, awk, sed, head tail, 但必须是one liner。
-使用rg的时候要求它的输出带行号, sed -n '10,20p' filename 可以获取行号范围的文本, awk 'NR>=10 && NR<=20' filename 也可以。
-用户可能会提供一个目录树，或者终端的程序输出信息，或者其它相关信息， 都可以做为搜索的依据，最主要的还是用户的需求描述。
-通常来说需要把用户需求转成英文，因为源代码是英文写的，以确认合适的搜索条件。
-要搜索的log名为{log_name}，
-你上次搜索到什么东西，会作为附件给你，根据它，规划下一次搜索，逼近目标，
-当需求已经满足，不再需要搜索内容你需要回复，`yes`，
-关键字的范围显示控制在30行以上, 写的不够模糊的正则很难收获很好的结果，能搜索到信息总比啥也搜索不好。
-禁止使用跨行正则, 禁用使用-A -B -n -e 之外的rg选项。
-你必须在结论中([conclusion start])记录你在日志里搜索到重要信息，要不然下次就看不到它们了，以指导下一次如何搜索日志，
-关于日志格式的重要信息，日志中涉及到的术语，文件名，函数名, 变量名, 典型的日志行样本, 至少记录20条这些内容，如果不是已经记录的话, 关
-内容以中文回复。
-
-输入解读:
-[last command start]
-command 
-[last command end]
-
-[last search result start]
-command's search result
-[last search result end]
-
-输出规范:
-
-你对问题的分析，决定搜索哪些词
-
-[why search these words start] 
-为什么要搜索这些词，让用户能理解你的目的
-[why search these words end] 
-
-[command start]
-command to search
-[command end]
-
-[problem solved start]
-如果不需要更多次搜索，设为yes,不然设为no
-[problem solved end]
-
-[conclusion start]
-本轮的结论，你找到了什么，下一步做什么
-[conclusion end]
-
-"""
-
-MINI_PROMPT = """
-你需要通过多次执行命令行工具（rg/awk/sed/head/tail）搜索大型跟踪日志文件 `{log_name}`，逐步逼近用户需求目标。每次返回**单个单行命令**，当获取到足够上下文时回复`yes`。
-
-**核心约束**
-1. 输出限制：每次搜索结果控制在30-50行（避免上下文超长）
-2. 命令规范：
-   - 必须为单行命令（one liner）
-   - 使用`rg`时必须包含`-n`显示行号（例：`rg -n 'pattern'`）
-   - 允许范围提取（例：`sed -n '10,20p'` 或 `awk 'NR>=10&&NR<=20'`）
-   - 禁用跨行正则和复杂选项（仅允许rg的`-A/-B/-e`）
-3. 搜索策略：
-   - 优先使用英文关键词（源代码为英文）
-   - 正则表达式需适度模糊（避免过度精确导致零结果）
-   - 基于上次结果迭代优化搜索
-4. 结论要求：
-   - **必须用中文记录**
-   - 包含至少20条关键信息（术语/文件名/函数名/变量名）
-   - 包含5个以上典型日志行样本
-   - 记录日志格式特征（时间戳、消息结构等）
-
-**输入数据**
-[last command start]
-[上次执行的命令]
-[last command end]
-
-[last search result start]
-[上次命令的搜索结果]
-[last search result end]
-
-**输出规范**
-1. 问题分析：解读用户需求与日志特征的关联性
-2. 搜索词说明：解释关键词选择逻辑（中英对照）
-3. 单行命令：可直接执行的搜索命令
-4. 状态标记：是否需要继续搜索
-5. 结论记录：
-   - 累计发现的关键信息（≥20条）
-   - 新发现的日志结构特征
-   - 典型日志行样本（≥5个）
-   - 明确的后续计划
-
-**严格遵循的回复格式**
-[问题分析]
-当前搜索意图分析...
-
-[why search these words start]
-1. 选择关键词A的原因：... (Reason for choosing keyword A: ...)
-2. 选择关键词B的原因：... (Reason for choosing keyword B: ...)
-[why search these words end]
-
-[command start]
-[单行命令，如：rg -n 'error|fail' {log_name} | head -30]
-[command end]
-
-[problem solved start]
-[yes/no]
-[problem solved end]
-
-[conclusion start]
-## 关键信息记录（累计≥20条）
-1. 日志结构：时间戳格式[HH:mm:ss.SSS]
-2. 关键术语：
-   - 函数名: `parse_request()`, `handle_timeout()`
-   - 文件名: `network.c`, `utils.h`
-   - 变量名: `retry_count`, `max_buffer`
-   - 错误码: `ERR_TIMEOUT=0x5`, `ERR_MEMORY=0x7`
-   - 模块名: `NETWORK`, `STORAGE`
-3. 典型样本：
-   [15:32:45.123] INFO: Loading module: NETWORK
-   [15:33:01.456] ERROR: Invalid input at parse_request():102
-   [15:33:05.789] DEBUG: Retry count: 3, max_buffer=4096
-   [15:33:10.234] WARN: Memory threshold exceeded (75%)
-   [15:33:15.678] TRACE: Entering handle_timeout()
-## 后续计划
-1. 搜索`NETWORK`模块的错误日志
-2. 检查`handle_timeout()`相关调用链
-[conclusion end]
-"""
+# The mini prompt was removed as it was less structured.
 
 GEMINI_PROMPT = """
 # 角色与目标
@@ -214,7 +90,6 @@ GEMINI_PROMPT = """
 [conclusion start]
 根据“状态管理”指南，总结你本轮的发现。这是你进入下一轮的记忆。
 [conclusion end]
-
 """
 
 SUMMARY_PROMPT = """
@@ -288,7 +163,7 @@ class TraceLogSearcher:
 
     def _build_prompt(self, user_query: str) -> str:
         """构建包含历史信息的完整提示词"""
-        prompt = f"# 用户需求\n{user_query}\n\n"  # 使用传入的user_query参数
+        prompt = f"# 用户需求\n{user_query}\n\n"
 
         if self.state.round == 0:
             try:
@@ -304,171 +179,160 @@ class TraceLogSearcher:
                         prompt += initial_context
                     else:
                         prompt += f"## 日志文件 ({self.log_path.name})\n```\n{''.join(lines)}\n```\n"
-            except (IOError, UnicodeDecodeError) as e:  # 更具体的异常捕获
+            except (IOError, UnicodeDecodeError) as e:
                 prompt += f"无法读取日志文件预览: {e}\n"
 
         if self.state.round > 0:
-            prompt += "## 搜索历史\n"
-            # History of all rounds except the last one
-            for res in self.state.all_results[:-1]:
-                prompt += f"### 第 {res.round} 轮\n"
-                prompt += "[why search these words start]\n"
-                prompt += f"{res.why_search}\n"
-                prompt += "[why search these words end]\n\n"
-                prompt += "[command start]\n"
-                prompt += f"{res.command}\n"
-                prompt += "[command end]\n\n"
-                prompt += "[conclusion start]\n"
-                prompt += f"{res.conclusion}\n"
-                prompt += "[conclusion end]\n\n"
+            # For past rounds, show a summary to save space
+            if len(self.state.all_results) > 1:
+                prompt += "## 历史搜索摘要\n"
+                for res in self.state.all_results[:-1]:
+                    prompt += f"### 第 {res.round} 轮\n"
+                    prompt += f"**分析**: {res.why_search}\n"
+                    prompt += f"**命令**: `{res.command}`\n"
+                    prompt += f"**结论**: {res.conclusion}\n\n"
 
-            # Last round details
+            # For the most recent round, show full details
             last_res = self.state.all_results[-1]
-            prompt += f"## 上一轮（第 {last_res.round} 轮）的搜索与结果\n"
-            prompt += "[why search these words start]\n"
-            prompt += f"{last_res.why_search}\n"
-            prompt += "[why search these words end]\n\n"
+            prompt += f"## 上一轮（第 {last_res.round} 轮）的详细信息\n"
             prompt += "[last command start]\n"
             prompt += last_res.command + "\n"
             prompt += "[last command end]\n\n"
+
             prompt += "[last search result start]\n"
             result = last_res.result
-            if len(result) > 65536:
-                result = result[:32768] + "\n\n... [结果截断] ...\n\n" + result[-32768:]
+            # Truncate long results to avoid excessive prompt length
+            if len(result) > 8000:
+                result = result[:4000] + "\n\n... [结果过长，已截断] ...\n\n" + result[-4000:]
             prompt += result + "\n"
             prompt += "[last search result end]\n\n"
+
             prompt += "[conclusion start]\n"
             prompt += f"{last_res.conclusion}\n"
             prompt += "[conclusion end]\n\n"
-        prompt += GEMINI_PROMPT.format(log_name=str(self.log_path))
+
+        # Append the main instruction prompt
+        main_instructions = GEMINI_PROMPT.format(log_name=shlex.quote(str(self.log_path)))
+        prompt += f"\n---\n{main_instructions}"
+
         return prompt
 
-    def _parse_model_response(self, response: str) -> ModelResponse:
+    def _parse_model_response(self, response: str) -> Optional[ModelResponse]:
         """Parse the model's response to extract structured data."""
 
         def extract_block(tag: str, text: str) -> str:
-            # 增强模式：兼容标签行前后的markdown标识符(**)和可选的###前缀
-            pattern = re.compile(
-                rf"(?:\*\*)?(?:###\s*)?\[{tag} start\](?:\*\*)?(.*?)(?:\*\*)?(?:###\s*)?\[{tag} end\](?:\*\*)?",
-                re.DOTALL,
-            )
+            pattern = re.compile(rf"\[{tag} start\](.*?)\[{tag} end\]", re.DOTALL)
             match = pattern.search(text)
-            if match:
-                return match.group(1).strip()
-            return ""
+            return match.group(1).strip() if match else ""
 
-        why_search = extract_block("why search these words", response) or "No analysis provided"
+        try:
+            why_search = extract_block("why search these words", response)
+            command_str = extract_block("command", response)
+            # Clean up potential markdown code blocks
+            command = re.sub(r"^\s*```(?:\w+)?\n|```\s*$", "", command_str, flags=re.MULTILINE).strip()
 
-        # 处理rg command：从代码块中提取实际命令
-        command_block = extract_block("command", response)
-        command = ""
-        if command_block:
-            # 尝试从代码块中提取命令（去除```bash等标记）
-            code_match = re.search(r"```(?:bash)?\s*(.*?)\s*```", command_block, re.DOTALL)
-            if code_match:
-                command = code_match.group(1).strip()
-            else:
-                command = command_block.strip()
+            solved_str = extract_block("problem solved", response).lower().strip()
+            solved = solved_str == "yes"
+            conclusion = extract_block("conclusion", response)
 
-        solved_str = extract_block("problem solved", response).lower()
-        solved = solved_str == "yes"
-        conclusion = extract_block("conclusion", response) or "No conclusion provided for this round."
-
-        return ModelResponse(why_search=why_search, command=command, solved=solved, conclusion=conclusion)
+            # A valid response must have a command or be solved.
+            if command or solved:
+                return ModelResponse(
+                    why_search=why_search or "无分析",
+                    command=command,
+                    solved=solved,
+                    conclusion=conclusion or "无结论",
+                )
+            return None
+        except Exception:
+            return None
 
     def _is_command_allowed(self, command: str) -> bool:
-        """
-        Check if all parts of a piped command are in the whitelist.
-        This version correctly handles pipes within quoted arguments.
-        """
+        """Check if all parts of a piped command are in the whitelist."""
+        if not command.strip():
+            return False
         try:
-            tokens = shlex.split(command)
-            current_segment_tokens = []
-
-            for token in tokens:
-                if token == "|":
-                    if not current_segment_tokens:
-                        # This means we have something like `| command` or `command || command`
-                        return False
-
-                    # Check the command in the completed segment
-                    cmd_executable = current_segment_tokens[0]
-                    if cmd_executable not in self.allowed_commands:
-                        return False
-
-                    # Reset for the next segment
-                    current_segment_tokens = []
-                else:
-                    current_segment_tokens.append(token)
-
-            # Check the last (or only) segment
-            if not current_segment_tokens:
-                # This could happen if the command ends with a pipe `command |`
-                return False
-
-            cmd_executable = current_segment_tokens[0]
-            if cmd_executable not in self.allowed_commands:
-                return False
-
+            # Split the command by pipes
+            segments = command.split("|")
+            for segment in segments:
+                if not segment.strip():
+                    return False  # Empty segment like `cmd || cmd`
+                # Use shlex to correctly handle quotes
+                tokens = shlex.split(segment)
+                if not tokens:
+                    return False  # Segment with only whitespace
+                cmd_executable = tokens[0]
+                if cmd_executable not in self.allowed_commands:
+                    console.print(
+                        f"[bold red]错误: 命令 '{cmd_executable}' 不在允许的列表中: {self.allowed_commands}[/bold red]"
+                    )
+                    return False
             return True
-        except ValueError:
-            # shlex.split can fail on unclosed quotes (e.g., "rg 'hello")
+        except ValueError as e:
+            # shlex.split can fail on unclosed quotes
+            console.print(f"[bold red]命令语法错误: {e}[/bold red]")
             return False
 
     def _execute_shell_command(self, command: str) -> Tuple[bool, str, float]:
-        """安全地执行单行shell命令并返回结果"""
+        """Safely execute a one-liner shell command and return the result."""
         if not self._is_command_allowed(command):
-            return False, f"错误: 命令 '{command}' 包含不允许的程序。只允许: {self.allowed_commands}", 0.0
+            return False, f"命令 '{command}' 包含不允许的程序。", 0.0
+
+        start_time = time.time()
         try:
-            start_time = time.time()
-
-            # 2. 创建并执行临时脚本以避免shell注入问题
-            with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".sh") as tmp_script:
+            # Use a temporary script to handle pipes and ensure safety
+            with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".sh", encoding="utf-8") as tmp_script:
                 tmp_script.write("#!/bin/bash\n")
-                tmp_script.write("set -o pipefail\n")  # Important for getting error from any part of the pipe
+                tmp_script.write("set -o pipefail\n")
                 tmp_script.write(command)
-                tmp_script_path = tmp_script.name
+                script_path = tmp_script.name
 
-            os.chmod(tmp_script_path, 0o755)
+            os.chmod(script_path, 0o755)
 
             process = subprocess.run(
-                ["bash", tmp_script_path], capture_output=True, text=True, check=False, cwd=self.log_path.parent
+                ["/bin/bash", script_path],
+                capture_output=True,
+                text=True,
+                check=False,  # We check returncode manually
+                cwd=self.log_path.parent,
+                encoding="utf-8",
+                errors="ignore",
             )
 
-            os.unlink(tmp_script_path)
-
+            os.unlink(script_path)
             end_time = time.time()
-
-            output = process.stdout.strip()
+            duration = end_time - start_time
 
             if process.returncode != 0:
+                # Combine stdout and stderr for better error context
+                error_message = f"命令执行失败，返回码: {process.returncode}\n"
+                if process.stdout:
+                    error_message += f"--- STDOUT ---\n{process.stdout.strip()}\n"
                 if process.stderr:
-                    if output:
-                        output += "\n"
-                    output += process.stderr.strip()
+                    error_message += f"--- STDERR ---\n{process.stderr.strip()}\n"
+                return True, error_message.strip(), duration
 
-            if not output.strip():
-                output = "未找到匹配结果"
+            output = process.stdout.strip()
+            if not output:
+                output = "未找到匹配结果。"
 
-            return True, output.strip(), end_time - start_time
-        except FileNotFoundError:
-            return False, "错误: 'bash' 命令未找到。请确保bash shell已安装并在您的 PATH 中。", 0.0
-        except subprocess.SubprocessError as e:
-            return False, f"子进程执行错误: {str(e)}", 0.0
-        except OSError as e:
-            return False, f"系统操作错误: {str(e)}", 0.0
+            return True, output, duration
 
-    def _update_state(self, model_response: ModelResponse, command: str, result: str, duration: float):
-        """更新搜索状态"""
+        except Exception as e:
+            end_time = time.time()
+            return False, f"执行命令时发生意外错误: {str(e)}", end_time - start_time
+
+    def _update_state(self, model_response: ModelResponse, result: str, duration: float):
+        """Updates the search state."""
         self.state.round += 1
-        self.state.last_command = command
+        self.state.last_command = model_response.command
         self.state.last_result = result
         self.state.solved = model_response.solved
         self.state.all_results.append(
             SearchRoundResult(
                 round=self.state.round,
                 why_search=model_response.why_search,
-                command=command,
+                command=model_response.command,
                 result=result,
                 conclusion=model_response.conclusion,
                 duration=duration,
@@ -476,14 +340,14 @@ class TraceLogSearcher:
         )
 
     def _generate_summary_prompt(self, user_query: str, results: List[SearchRoundResult]) -> str:
-        """为生成最终总结报告构建提示词"""
+        """Builds the prompt for generating the final summary report."""
         history = f"**用户原始需求**: {user_query}\n\n"
         for result in results:
             history += f"### 第 {result.round} 轮\n"
             history += f"**搜索原因**: {result.why_search}\n"
             history += f"**执行的命令**: `{result.command}`\n"
             history += f"**结论**: {result.conclusion}\n"
-            # 限制每轮结果的长度，避免prompt过长
+            # Limit the length of each round's result to avoid an overly long prompt
             result_text = result.result
             if len(result_text) > 2000:
                 result_text = result_text[:1000] + "\n...[结果截断]...\n" + result_text[-1000:]
@@ -492,183 +356,152 @@ class TraceLogSearcher:
         return f"{SUMMARY_PROMPT}\n{history}"
 
     def summarize_results(self, user_query: str, results: List[SearchRoundResult]) -> str:
-        """调用LLM生成最终的分析报告总结"""
+        """Calls the LLM to generate a final analysis report summary."""
         if not results:
-            console.print("[bold yellow]没有搜索结果，无法生成总结报告。[/bold yellow]")
-            return ""
+            return "没有搜索记录，无法生成总结。"
 
         console.print("\n[bold blue]正在生成最终的分析报告总结...[/bold blue]")
         prompt = self._generate_summary_prompt(user_query, results)
 
-        raw_summary_response = self.model_switch.query(self.model_name, prompt, stream=True)
+        # Use a different model or settings for summarization if needed
+        summary_response = self.model_switch.query(self.model_name, prompt, stream=True)
+        return summary_response
 
-        # Extract the actual summary from within the conclusion tags
-        summary = self._parse_model_response(raw_summary_response).conclusion  # Re-using extract_block logic
+    def _get_and_parse_model_response(self) -> Optional[ModelResponse]:
+        """Queries the model, parses the response, and handles retries."""
+        prompt = self._build_prompt(self.state.user_query)
+        response_text = self.model_switch.query(self.model_name, prompt, stream=True)
+        model_response = self._parse_model_response(response_text)
 
-        return summary
+        if model_response:
+            return model_response
 
-    def _handle_unparseable_response(self, response: str) -> Optional[Union[ModelResponse, str]]:
-        """Handles cases where the model response is not as expected, interacts with the user."""
-        console.print("\n[bold red]Model response could not be parsed.[/bold red]")
-        console.print("[bold yellow]Original Response:[/bold yellow]")
-        console.print(Markdown(f"```markdown\n{response}\n```"))
-
-        action = console.input("Choose action: [m]anual command, [r]etry, [a]bort: ").lower().strip()
-
-        if action == "m":
-            command = console.input("Enter rg command: ").strip()
-            if not command:
-                console.print("[red]No command entered, aborting search.[/red]")
-                return None
-            return ModelResponse(
-                why_search="User manual input", command=command, solved=False, conclusion="User provided manual command"
-            )
-        if action == "r":
-            console.print("[yellow]Retrying...[/yellow]")
-            return "retry"
-        console.print("[red]Aborting search.[/red]")
+        # Handle unparseable response
+        console.print("\n[bold red]模型未能生成有效的、可解析的响应。[/bold red]")
+        console.print("[bold yellow]原始响应:[/bold yellow]")
+        console.print(Markdown(f"```markdown\n{response_text}\n```"))
+        # In a real scenario, you might add retry logic here. For now, we abort.
         return None
 
-    def _get_and_parse_model_response(self) -> Optional[Union[ModelResponse, str]]:
-        """Queries the model, parses the response, and handles retries."""
-        while True:
-            prompt = self._build_prompt(self.state.user_query)
-            print(prompt)
-            response_text = self.model_switch.query(self.model_name, prompt, stream=True)
-            try:
-                model_response = self._parse_model_response(response_text)
-                if model_response.command or model_response.solved:
-                    return model_response
-            except (ValueError, json.JSONDecodeError) as e:  # 更具体的异常类型
-                print(f"Failed to parse model response: {e}")
-
-            user_choice = self._handle_unparseable_response(response_text)
-            if user_choice == "retry":
-                continue
-            return user_choice
-
-    def _execute_and_update(self, model_response: ModelResponse) -> bool:
-        """Executes the command, updates state, and prints info. Returns True to continue."""
-        command = model_response.command
-        console.print("\n[bold cyan]Model suggests executing:[/bold cyan]")
-        console.print(f"[yellow]{command}[/yellow]")
-        if not self.auto_confirm:
-            confirm = console.input("Execute? ([y]/n/e)dit): ").lower().strip()
-
-            if confirm == "n":
-                console.print("[red]User cancelled execution. Aborting.[/red]")
-                return False
-            if confirm == "e":
-                command = console.input("Enter new command: ").strip()
-
-        if not command:
-            console.print("[red]No command to execute. Aborting.[/red]")
-            return False
-        _, result, duration = self._execute_shell_command(command)
-
-        self._update_state(model_response, command, result, duration)
-
-        self._print_round_info(self.state.all_results[-1])
-        return True
-
-    def _print_round_info(self, round_result: SearchRoundResult):
-        """Prints the information for a completed search round."""
-        console.print("\n[bold cyan]Round {round} Search[/bold cyan]".format(round=round_result.round))
-        console.print("[yellow]Reason:[/yellow] {why_search}".format(why_search=round_result.why_search))
-        console.print("[yellow]Duration:[/yellow] {duration:.2f}s".format(duration=round_result.duration))
-        console.print("[yellow]Command:[/yellow] {command}".format(command=round_result.command))
-        console.print("[yellow]Result:[/yellow]")
-        result_summary = round_result.result[:1000]
-        if len(round_result.result) > 1000:
-            result_summary += "\n..."
-        console.print(Markdown(f"```\n{result_summary}\n```"))
-
     def search(self, user_query: str) -> List[SearchRoundResult]:
-        """执行多轮搜索流程"""
-        console.print(f"[bold green]Starting analysis for: {user_query}[/bold green]")
+        """Executes the multi-round search process."""
+        console.print(f"[bold green]开始分析: {user_query}[/bold green]")
 
-        # 检查rg命令是否存在
         if not self._check_rg_exists():
-            console.print("[bold red]Error: 'rg' (ripgrep) not found. Please install and add to PATH.[/bold red]")
+            console.print(
+                "[bold red]错误: 'rg' (ripgrep) 命令未找到。请先安装 ripgrep 并确保它在您的 PATH 中。[/bold red]"
+            )
             return []
 
         self.state = SearchState(user_query=user_query)
 
         while self.state.round < self.max_rounds and not self.state.solved:
+            console.print(f"\n[bold magenta]--- 第 {self.state.round + 1}/{self.max_rounds} 轮 ---[/bold magenta]")
+
             model_response = self._get_and_parse_model_response()
 
-            if model_response is None:
+            if not model_response:
+                console.print("[bold red]无法从模型获取有效指令，搜索中止。[/bold red]")
                 break
-
-            if isinstance(model_response, str) and model_response == "retry":
-                continue
 
             if model_response.solved:
-                console.print("[bold green]Model indicates problem is solved.[/bold green]")
+                console.print("[bold green]模型判断问题已解决。[/bold green]")
                 self.state.solved = True
+                # Even if solved, we should record the final conclusion
+                self._update_state(model_response, "问题已解决，无执行结果。", 0.0)
                 break
 
-            if not self._execute_and_update(model_response):
-                break
+            command = model_response.command
+            console.print("\n[bold blue]模型建议的分析步骤:[/bold blue]")
+            console.print(f"  [cyan]分析:[/cyan] {model_response.why_search}")
+            console.print(f"  [cyan]命令:[/cyan] [yellow]{command}[/yellow]")
+
+            if not self.auto_confirm:
+                action = console.input("请确认操作: ([y]es/n/e)dit/a)bort: ").lower().strip()
+                if action in ("n", "a", "abort"):
+                    console.print("[red]用户取消，搜索中止。[/red]")
+                    break
+                elif action in ("e", "edit"):
+                    command = console.input(f"  [cyan]编辑命令:[/cyan] ").strip()
+                    if not command:
+                        console.print("[red]无有效命令，搜索中止。[/red]")
+                        break
+                    model_response.command = command  # Update the command to be executed
+
+            success, result, duration = self._execute_shell_command(command)
+
+            console.print(f"\n[bold blue]命令执行结果 ({duration:.2f}s):[/bold blue]")
+            result_summary = result
+            if len(result_summary) > 1000:
+                result_summary = result_summary[:500] + "\n...\n" + result_summary[-500:]
+            console.print(Markdown(f"```\n{result_summary}\n```"))
+
+            self._update_state(model_response, result, duration)
 
         return self.state.all_results
 
     def generate_report(
-        self, results: List[SearchRoundResult], output_path: Optional[str] = None, summary: Optional[str] = None
+        self,
+        user_query: str,
+        results: List[SearchRoundResult],
+        output_path: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> Path:
-        """生成搜索报告"""
+        """Generates a search report."""
         if not output_path:
             output_dir = Path("doc") / "tracelog_search"
             output_dir.mkdir(parents=True, exist_ok=True)
             timestamp = time.strftime("%Y%m%d-%H%M%S")
-            output_path = output_dir / f"tracelog_search_{timestamp}.md"
+            safe_query = re.sub(r"[\W_]+", "_", user_query.strip())[:50]
+            output_path = output_dir / f"report_{timestamp}_{safe_query}.md"
         else:
             output_path = Path(output_path)
 
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write("# Trace Log 搜索报告\n\n")
-            f.write(f"**用户需求**: {self.state.user_query}\n\n")
-            f.write(
-                f"**解决状态**: {'已解决' if self.state.solved else f'未解决（达到最大轮次 {self.max_rounds}）'}\n\n"
-            )
+            f.write("# Trace Log 分析报告\n\n")
+            f.write(f"**查询**: `{user_query}`\n\n")
+            status = "已解决" if self.state.solved else f"未解决 (已达最大轮次 {self.max_rounds})"
+            f.write(f"**最终状态**: {status}\n\n")
 
             if summary:
-                f.write("## 最终分析总结\n\n")
+                f.write("## 智能总结\n\n")
                 f.write(summary)
                 f.write("\n\n---\n\n")
 
+            f.write("## 详细搜索过程\n\n")
             for result in results:
-                f.write("## 详细搜索过程\n\n")
-                f.write(f"## 第 {result.round} 轮搜索\n\n")
-                f.write(f"### 搜索原因\n{result.why_search}\n\n")
-                f.write(f"### 执行命令\n```bash\n{result.command}\n```\n\n")
-                f.write(f"### 耗时\n{result.duration:.2f} 秒\n\n")
-                f.write(f"### 搜索结果\n```\n{result.result}\n```\n\n")
+                f.write(f"### 第 {result.round} 轮\n\n")
+                f.write(f"**分析与理由**:\n\n> {result.why_search}\n\n")
+                f.write(f"**执行命令**:\n```bash\n{result.command}\n```\n\n")
+                f.write(f"**执行耗时**: {result.duration:.2f} 秒\n\n")
+                f.write(f"**本轮结论 (模型记忆)**:\n\n> {result.conclusion}\n\n")
+                f.write(f"**搜索结果**:\n```log\n{result.result}\n```\n\n")
+                f.write("---\n\n")
 
-            f.write(f"---\n*生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}*\n")
+            f.write(f"*报告生成于: {time.strftime('%Y-%m-%d %H:%M:%S')}*\n")
 
         return output_path
 
     def _check_rg_exists(self) -> bool:
-        """检查rg命令是否存在"""
+        """Checks if the 'rg' command exists."""
         try:
-            subprocess.run(["rg", "--version"], capture_output=True, check=True)
+            subprocess.run(["rg", "--version"], capture_output=True, check=True, text=True)
             return True
-        except FileNotFoundError:
+        except (FileNotFoundError, subprocess.CalledProcessError):
             return False
 
 
 def parse_arguments():
-    """解析命令行参数"""
+    """Parses command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Trace Log搜索分析工具", formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        description="使用LLM进行智能Trace Log分析的工具", formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("query", nargs="+", help="搜索需求描述")
-    parser.add_argument("-m", "--model", type=str, default="deepseek-r1", help="使用的LLM模型名称")
-    parser.add_argument("-l", "--log-path", type=str, default="trace_report.log", help="trace log文件路径")
+    parser.add_argument("query", nargs="+", help="您的分析需求，例如: '找出导致请求超时的原因'")
+    parser.add_argument("-m", "--model", type=str, default="deepseek-r1", help="指定使用的LLM模型")
+    parser.add_argument("-l", "--log-path", type=str, default="trace_report.log", help="要分析的trace log文件路径")
     parser.add_argument("-r", "--max-rounds", type=int, default=8, help="最大搜索轮次")
-    parser.add_argument("-o", "--output", type=str, default=None, help="报告输出路径")
-    parser.add_argument("--auto-confirm", action="store_true", help="自动确认并执行建议的命令。")
+    parser.add_argument("-o", "--output", type=str, default=None, help="指定报告输出路径 (可选)")
+    parser.add_argument("-y", "--auto-confirm", action="store_true", help="自动确认并执行模型建议的命令，无须手动确认")
     return parser.parse_args()
 
 
@@ -677,46 +510,46 @@ def main():
     user_query = " ".join(args.query)
 
     try:
-        # 初始化搜索器
         searcher = TraceLogSearcher(
-            model_name=args.model, log_path=args.log_path, max_rounds=args.max_rounds, auto_confirm=args.auto_confirm
+            model_name=args.model,
+            log_path=args.log_path,
+            max_rounds=args.max_rounds,
+            auto_confirm=args.auto_confirm,
         )
 
-        # 执行搜索
         results = searcher.search(user_query)
-
-        # 新增：生成总结报告
         summary = None
         if results:
-            confirm_summary = console.input("\n是否需要LLM对整个过程进行总结并生成报告? ([y]/n): ").lower().strip()
-            if confirm_summary != "n":
+            if not args.auto_confirm:
+                confirm = console.input("\n是否需要LLM对整个过程进行总结? ([y]/n): ").lower().strip()
+                if confirm != "n":
+                    summary = searcher.summarize_results(user_query, results)
+            else:
                 summary = searcher.summarize_results(user_query, results)
 
-        # 生成报告
-        report_path = searcher.generate_report(results, args.output, summary)
-        console.print(f"\n[bold green]搜索报告已保存至: {report_path}[/bold green]")
-
-        # 显示最终状态
-        if searcher.state and searcher.state.solved:
-            console.print(Markdown("# ✅ 搜索完成: 问题已解决"))
-            if results:
-                console.print(Markdown(f"最终搜索结果:\n```\n{results[-1].result}\n```"))
+        if searcher.state:
+            report_path = searcher.generate_report(user_query, results, args.output, summary)
+            console.print(f"\n[bold green]分析报告已保存至: {report_path.resolve()}[/bold green]")
         else:
-            console.print(Markdown("# ⚠️ 搜索完成: 达到最大轮次但问题未完全解决"))
-            console.print("建议尝试以下方法:")
-            console.print("- 提供更多关于问题的细节")
-            console.print("- 修改搜索关键词")
-            console.print("- 增加搜索轮次 (使用 --max-rounds 参数)")
+            console.print("\n[bold yellow]未进行任何搜索，不生成报告。[/bold yellow]")
+
+        if searcher.state and searcher.state.solved:
+            console.print(Markdown("# ✅ 分析完成: 问题已解决"))
+        else:
+            console.print(Markdown("# ⚠️ 分析结束: 可能未完全解决"))
+            console.print("建议: 增加搜索轮次 (--max-rounds), 或提供更具体的初始问题。")
 
     except FileNotFoundError as e:
-        console.print(f"[bold red]错误: {str(e)}[/bold red]")
+        console.print(f"[bold red]文件错误: {e}[/bold red]")
+        sys.exit(1)
     except Exception as e:
-        console.print(f"[bold red]未处理的错误: {str(e)}[/bold red]")
-        raise
-    finally:
-        # 确保程序正常退出，即使在异常情况下
-        console.print("[bold blue]程序执行完毕。[/bold blue]")
-        sys.exit(0)
+        console.print(f"[bold red]发生未知错误: {e}[/bold red]")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
+
+    console.print("[bold blue]程序执行完毕。[/bold blue]")
 
 
 if __name__ == "__main__":

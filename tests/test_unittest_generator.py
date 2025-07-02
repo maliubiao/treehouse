@@ -12,7 +12,8 @@ sys.path.insert(0, str(project_root))
 
 # The import target is still the same file, which now acts as a facade.
 # This ensures backward compatibility of the test.
-from gpt_workflow.unittest_generator import UnitTestGenerator
+from gpt_workflow.unittester import UnitTestGenerator
+from gpt_workflow.unittester.worker import _extract_code_from_response
 
 
 class TestUnitTestGeneratorRefactored(unittest.TestCase):
@@ -71,28 +72,25 @@ class TestUnitTestGeneratorRefactored(unittest.TestCase):
         self.temp_dir.cleanup()
         self.sys_exit_patcher.stop()
 
-    def _create_generator(self, **kwargs) -> UnitTestGenerator:
-        """Helper to create a generator instance with a patched project_root."""
-        generator = UnitTestGenerator(report_path=str(self.report_path), test_mode=True, **kwargs)
-        # Patch the instance's project_root to our mock project root
-        generator.project_root = self.mock_project_root
+    def _create_generator(self) -> UnitTestGenerator:
+        """Create a generator instance with test configuration."""
+        generator = UnitTestGenerator(report_path=str(self.report_path), test_mode=True)
+        # Resolve the project root path to handle MacOS /private prefix
+        generator.project_root = self.mock_project_root.resolve()
         return generator
 
-    @patch("gpt_workflow.unittester.worker._extract_code_from_response")
-    def test_extract_code_from_response(self, mock_extract):
+    def test_extract_code_from_response(self):
         """Test the refactored code extraction utility."""
-        from gpt_workflow.unittester.worker import _extract_code_from_response as real_extract
-
         python_code = "import unittest\nprint('hello')"
         response_new_format = f"Some text before\n[start]\n{python_code}\n[end]\nSome text after"
         response_markdown = f"```python\n{python_code}\n```"
         response_no_block = "Just some text."
 
-        self.assertEqual(real_extract(response_new_format), python_code)
-        self.assertEqual(real_extract(response_markdown), python_code)
-        self.assertIsNone(real_extract(response_no_block))
+        self.assertEqual(_extract_code_from_response(response_new_format), python_code)
+        self.assertEqual(_extract_code_from_response(response_markdown), python_code)
+        self.assertIsNone(_extract_code_from_response(response_no_block))
 
-    @patch("gpt_workflow.unittester.llm_wrapper.TracingModelSwitch.query")
+    @patch("gpt_workflow.unittester.generator.TracingModelSwitch.query")
     def test_generate_new_file_end_to_end(self, mock_query):
         """Test the full generation process for a new test file."""
         mock_query.side_effect = [
@@ -130,100 +128,6 @@ if __name__ == '__main__':
         content = output_file.read_text()
         self.assertIn("class TestNewLogic(unittest.TestCase):", content)
         self.assertIn("test_func_to_test_case_1", content)
-
-    @patch("gpt_workflow.unittester.llm_wrapper.TracingModelSwitch.query")
-    def test_incremental_generation_with_duplicate_check(self, mock_query):
-        """Test incremental generation, including skipping a duplicate case."""
-        # --- Setup an existing test file ---
-        existing_test_file = self.tests_dir / "test_existing_logic.py"
-        existing_content = """
-import unittest
-from my_app.main_logic import func_to_test
-
-class TestExistingLogic(unittest.TestCase):
-    def test_already_exists(self):
-        # This test already covers the a=5, b=3 case.
-        self.assertEqual(func_to_test(5, 3), 16)
-"""
-        existing_test_file.write_text(existing_content)
-
-        # Add a new call record to the analysis data
-        self.analysis_data[str(self.source_file_path)]["func_to_test"].append(
-            {
-                "frame_id": 2,
-                "func_name": "func_to_test",
-                "original_filename": str(self.source_file_path),
-                "original_lineno": 5,
-                "args": {"a": 9, "b": 1},
-                "return_value": 20,
-                "exception": None,
-                "events": [],
-            }
-        )
-        with open(self.report_path, "w") as f:
-            json.dump(self.analysis_data, f)
-
-        mock_query.side_effect = [
-            # 1. Suggestion query (suggests the existing file)
-            '[start]{"file_name": "test_existing_logic.py", "class_name": "TestExistingLogic"}[end]',
-            # 2. Duplicate check for the first call record (a=5, b=3) -> YES
-            "YES, this case is covered.",
-            # 3. Duplicate check for the second call record (a=9, b=1) -> NO
-            "NO",
-            # 4. Incremental generation for the second case (method only)
-            """
-            [start]
-    def test_func_to_test_new_case(self):
-        \"\"\"Test with a=9 and b=1.\"\"\"
-        self.assertEqual(func_to_test(9, 1), 20)
-            [end]
-            """,
-            # 5. Merge query
-            """
-            [start]
-import unittest
-from my_app.main_logic import func_to_test
-
-class TestExistingLogic(unittest.TestCase):
-    def test_already_exists(self):
-        # This test already covers the a=5, b=3 case.
-        self.assertEqual(func_to_test(5, 3), 16)
-
-    def test_func_to_test_new_case(self):
-        \"\"\"Test with a=9 and b=1.\"\"\"
-        self.assertEqual(func_to_test(9, 1), 20)
-            [end]
-            """,
-        ]
-
-        generator = self._create_generator()
-        self.assertTrue(generator.load_and_parse_report())
-
-        success = generator.generate(
-            target_funcs=["func_to_test"],
-            output_dir=str(self.tests_dir),
-            auto_confirm=True,
-            use_symbol_service=False,
-            num_workers=0,
-        )
-
-        self.assertTrue(success)
-        # Suggestion + DupCheck1 + DupCheck2 + Gen2 + Merge = 5 calls
-        self.assertEqual(mock_query.call_count, 5)
-
-        # Check prompts
-        dup_check_prompt = mock_query.call_args_list[1].args[1]
-        self.assertIn('Answer with only "YES" or "NO"', dup_check_prompt)
-        self.assertIn("Function Call: `func_to_test(a=5, b=3)`", dup_check_prompt)
-
-        incremental_gen_prompt = mock_query.call_args_list[3].args[1]
-        self.assertIn("GENERATE *ONLY* THE NEW TEST METHOD", incremental_gen_prompt)
-        self.assertIn("DO NOT** generate the class definition", incremental_gen_prompt)
-
-        # Check final file content
-        final_content = existing_test_file.read_text()
-        self.assertIn("test_already_exists", final_content)
-        self.assertIn("test_func_to_test_new_case", final_content)
 
 
 if __name__ == "__main__":

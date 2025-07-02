@@ -3302,6 +3302,9 @@ def _apply_patch(diff_file):
         print("已成功应用变更")
     except subprocess.CalledProcessError as e:
         print(f"应用变更失败: {e}")
+        error_msg = f"应用变更失败: {e}\n命令输出: {e.stdout}\n错误输出: {e.stderr}"
+        print(error_msg)
+        raise RuntimeError(error_msg) from e
 
 
 def extract_and_diff_files(content, auto_apply=False, save=True):
@@ -3518,7 +3521,29 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
 
         print("\n检测到对多个文件的更改。请选择要应用的补丁：")
         file_list = sorted(diffs_by_file.keys())
-        selected_paths = file_list
+        for i, f in enumerate(file_list):
+            print(f"  [{i + 1}] {f}")
+        print("请输入文件编号（如 '1,3'），或 'all' 应用全部，或按Enter键取消。")
+
+        user_input = input("> ").strip().lower()
+        if not user_input:
+            print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+            return
+
+        selected_paths = []
+        if user_input == "all":
+            selected_paths = file_list
+        else:
+            try:
+                indices = [int(i.strip()) - 1 for i in user_input.split(",")]
+                selected_paths = [file_list[i] for i in indices if 0 <= i < len(file_list)]
+            except ValueError:
+                print(Fore.RED + "无效输入，操作已取消。" + ColorStyle.RESET_ALL)
+                return
+
+        if not selected_paths:
+            print(Fore.YELLOW + "未选择任何文件。" + ColorStyle.RESET_ALL)
+            return
 
         applied_count = 0
         for path in selected_paths:

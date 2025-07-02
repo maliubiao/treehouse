@@ -47,10 +47,8 @@ def run_re_patch(response_file_path: Path, project_root_path: Path) -> bool:
     # 更新提示信息以反映交互模式
     print(f"正在从 '{response_file_path}' 以交互模式重新应用补丁...")
 
-    # 调用核心函数，并设置 auto_apply=False 以启用交互式确认流程。
-    # 这可以正确处理新文件的创建，包括其父目录。
-    # save=False 因为我们是从一个已存在的文件中读取，无需再次保存响应内容。
-    extract_and_diff_files(content, auto_apply=False, save=False)
+    # 调用核心函数，并设置 auto_apply=True
+    extract_and_diff_files(content, auto_apply=True, save=False)
 
     print("\n补丁应用流程已完成。")
     return True

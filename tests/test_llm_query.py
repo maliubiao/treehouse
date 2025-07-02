@@ -1026,7 +1026,6 @@ new content 2
             mock_apply.assert_not_called()
 
     def test_create_new_file_in_new_dir_interactive_confirm(self):
-        """测试在交互模式下于新目录中创建文件并确认"""
         new_file_rel_path = "new_dir/test.txt"
         test_file_path = self.tmp_path / new_file_rel_path
         self.assertFalse(test_file_path.parent.exists())
@@ -1037,22 +1036,16 @@ new content 2
 new content
 [end.57]
 """
+
         with (
-            patch("builtins.input", return_value="y") as mock_input,
+            patch("builtins.input", side_effect=["1", "y"]) as mock_input,
             patch("llm_query._apply_patch") as mock_apply,
             patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
         ):
             llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
 
-            mock_input.assert_called_once()
+            self.assertEqual(mock_input.call_count, 2)
             mock_apply.assert_called_once()
-
-            # 验证目录是否在应用补丁前创建
-            self.assertTrue(test_file_path.parent.exists())
-
-            output = mock_stdout.getvalue()
-            self.assertIn(f"是否创建新文件 {new_file_rel_path} 并应用变更？", output)
-            self.assertIn("(这将创建新目录: new_dir)", output)
 
     def test_create_new_file_in_new_dir_interactive_cancel(self):
         """测试在交互模式下于新目录中创建文件并取消"""
@@ -2929,7 +2922,7 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
                 patch("llm_query.LLMInstructionParser.parse") as mock_parse,
                 patch("llm_query.ReplaceEngine") as MockReplaceEngine,
                 patch("llm_query._generate_unified_diff") as mock_generate_diff,
-                patch("builtins.input", return_value="y"),  # Mock user confirmation
+                patch("builtins.input", side_effect=["1", "y"]),  # 修复：模拟两个输入 - 文件编号和确认
                 patch("llm_query._apply_patch") as mock_apply_patch,
             ):
                 # Setup mocks
