@@ -1,5 +1,7 @@
 import time
 
+# [NEW] 为了更清晰的API，我们通常会创建一个 presets.py 文件来存放快捷装饰器。
+# 此处为了演示，我们直接从主模块导入别名。
 from debugger.unit_test_generator_decorator import generate_unit_tests
 
 
@@ -40,13 +42,11 @@ def complex_sub_function(a, b):
     return result
 
 
-# [REFACTORED] 使用装饰器为目标函数自动生成单元测试。
-# - target_functions: [FIXED] 此参数现在可以正常工作。它指定了需要生成测试的函数列表，
-#   装饰器会自动将被装饰的函数（'main_entrypoint'）也作为目标，无需手动添加。
-# - auto_confirm: 自动接受所有LLM的建议，便于自动化流程。
-# - trace_llm: 启用LLM交互日志，将提示和响应保存在 'llm_traces' 目录。
-# - num_workers: [REFACTORED] 设置为2，启用并行测试生成。UnitTestGenerator 将在内部处理并行逻辑。
-#                设为0或1则为顺序执行。
+# [REFACTORED] 使用更智能的装饰器。
+# - 我们不再需要手动指定 `target_files`。装饰器会自动将被装饰函数所在的文件加入追踪列表。
+# - 我们仍然可以覆盖默认参数，比如 `target_functions`, `auto_confirm` 等。
+# - `target_functions` 指定了我们关心的具体函数。新版装饰器会自动把被装饰的
+#   入口函数 'main_entrypoint' 也加入到生成列表中，如果提供了该列表。
 @generate_unit_tests(
     target_functions=["complex_sub_function", "faulty_sub_function"],
     output_dir="generated_tests",
@@ -89,7 +89,7 @@ def main_entrypoint(val1, val2):
     print("第三次调用 complex_sub_function 完成。")
 
     # 由于入口函数 'main_entrypoint' 被自动加入测试目标，也会为其生成测试。
-    # [预期测试 5]: main_entrypoint(10, 20) -> returns -10 (因为 `final_result` 被返回)。
+    # [预期测试 5]: main_entrypoint(10, 20) -> returns final_result。
     print("\n--- 主函数执行完毕 ---")
     return final_result
 

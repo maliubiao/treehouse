@@ -1,9 +1,14 @@
 import atexit
+import errno
+import hashlib
 import json
 import multiprocessing
 import os
 import re
+import subprocess
 import sys
+import tempfile
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -14,33 +19,122 @@ from debugger.analyzable_tracer import analyzable_trace
 from debugger.call_analyzer import CallAnalyzer
 
 
+class _LockAcquisitionError(Exception):
+    """Custom exception for when a process lock cannot be acquired."""
+
+    pass
+
+
+class _ProcessLock:
+    """
+    A simple cross-platform process lock using a file to ensure only one
+    test generation process runs at a time. It includes stale lock detection
+    by checking the PID written in the lock file.
+    """
+
+    def __init__(self, lock_file_name: str = "tllm_generator.lock"):
+        self.lock_file = Path(tempfile.gettempdir()) / lock_file_name
+        self.pid = os.getpid()
+        self._is_locked = False
+
+    def _is_pid_running(self, pid: int) -> bool:
+        """Check if a process with the given PID is running."""
+        if sys.platform == "win32":
+            try:
+                # On Windows, use 'tasklist' to check for the PID.
+                # CREATE_NO_WINDOW flag prevents a console window from popping up.
+                output = subprocess.check_output(
+                    ["tasklist", "/FI", f"PID eq {pid}"],
+                    stderr=subprocess.DEVNULL,
+                    creationflags=0x08000000,
+                ).decode("utf-8", "ignore")
+                return str(pid) in output
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return False
+        else:  # POSIX systems
+            try:
+                # A signal of 0 tests for process existence without sending a signal.
+                os.kill(pid, 0)
+            except OSError as e:
+                # ESRCH means the process does not exist.
+                return e.errno != errno.ESRCH
+            return True
+
+    def acquire(self):
+        """
+        Attempt to acquire the lock. Raises _LockAcquisitionError on failure.
+        Handles stale lock files left by crashed processes.
+        """
+        retry_count = 3
+        for i in range(retry_count):
+            try:
+                # Atomically create and open the file in exclusive mode.
+                with open(self.lock_file, "x", encoding="utf-8") as f:
+                    f.write(str(self.pid))
+                self._is_locked = True
+                return  # Lock acquired
+            except FileExistsError:
+                try:
+                    with open(self.lock_file, "r", encoding="utf-8") as f:
+                        stale_pid_str = f.read().strip()
+
+                    if not stale_pid_str.isdigit():
+                        os.remove(self.lock_file)
+                        continue  # Retry
+
+                    stale_pid = int(stale_pid_str)
+                    if not self._is_pid_running(stale_pid):
+                        print(
+                            f"{Fore.YELLOW}Detected stale lock from non-existent PID {stale_pid}. Cleaning up.{Style.RESET_ALL}"
+                        )
+                        os.remove(self.lock_file)
+                        continue  # Retry
+                    else:
+                        raise _LockAcquisitionError(
+                            f"Another instance (PID {stale_pid}) holds the lock: {self.lock_file}"
+                        )
+                except (IOError, ValueError):
+                    time.sleep(0.2 * (i + 1))
+                    continue
+            except IOError as e:
+                raise _LockAcquisitionError(f"I/O error while acquiring lock {self.lock_file}: {e}")
+        raise _LockAcquisitionError(f"Failed to acquire lock {self.lock_file} after multiple retries.")
+
+    def release(self):
+        """Release the lock if it is held by the current process."""
+        if self._is_locked and self.lock_file.exists():
+            try:
+                with open(self.lock_file, "r", encoding="utf-8") as f:
+                    pid_in_file = int(f.read().strip())
+                if pid_in_file == self.pid:
+                    os.remove(self.lock_file)
+                    self._is_locked = False
+            except (IOError, ValueError, PermissionError) as e:
+                print(
+                    f"{Fore.YELLOW}Warning: Could not release lock file {self.lock_file}. Reason: {e}{Style.RESET_ALL}"
+                )
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+
 class UnitTestGeneratorDecorator:
     """
     为函数添加单元测试生成能力的装饰器类。
 
     该装饰器会自动追踪指定文件模式下所有函数的执行，并在程序退出时，
-    提供一个交互式界面，让用户选择为哪些函数生成单元测试。
+    通过一个跨进程锁确保只有一个实例会启动交互式界面，让用户选择为哪些函数生成单元测试。
 
-    使用示例:
-        # 示例 1: 追踪文件，交互式选择函数
-        @generate_unit_tests(
-            target_files=["my_app/**/*.py"], # 追踪 my_app 下所有 .py 文件
-            auto_confirm=False,
-        )
-        def main_entrypoint():
-            # ... 你的应用主逻辑 ...
-            # main_entrypoint 自身及其调用的、在 target_files 范围内的函数都会被追踪。
-
-        # 示例 2: 预先指定要生成测试的函数
-        @generate_unit_tests(
-            target_functions=["my_func1", "my_func2"], # 直接指定目标函数
-            auto_confirm=True, # 通常与非交互模式一起使用
-        )
-        def run_specific_tests():
-            # ...
+    NOTE: 为了更方便使用，建议使用 `debugger.presets` 中提供的快捷装饰器，
+    例如 `generate_for_file`, `generate_for_function`。
     """
 
     _registry = defaultdict(dict)
+    _lock: Optional[_ProcessLock] = None
 
     def __init__(
         self,
@@ -61,14 +155,14 @@ class UnitTestGeneratorDecorator:
         初始化装饰器。
 
         Args:
-            target_files: 需要追踪的文件模式列表 (支持 glob 通配符, e.g., ["project_name/**/*.py"])。
-                          如果为 None, 默认为 ["*.py"]。
-            target_functions: [新] 需要生成单元测试的函数名列表。如果提供此参数，
-                              将跳过交互式选择，并自动为这些函数（以及被装饰的函数）生成测试。
-                              这优先于 `auto_confirm`（对于函数选择）。
+            target_files: 需要追踪的文件模式列表 (e.g., ["project_name/**/*.py"])。
+                          如果为 `[]`，则仅追踪被装饰函数所在的文件。
+                          如果为 `None` (默认), 则使用 `["*.py"]` 作为默认值。
+            target_functions: 预设要生成测试的函数列表。如果为 `[]`，则仅为被装饰的函数生成测试。
+                              如果为 `None` (默认), 则进入交互模式或自动选择所有函数。
             output_dir: 生成的单元测试文件输出目录。
             report_dir: 调用分析报告存储目录。
-            auto_confirm: 是否自动确认所有LLM建议和文件覆盖提示。如果提供了 `target_functions`，此参数对函数选择无效。
+            auto_confirm: 是否自动确认所有LLM建议和文件覆盖提示。
             enable_var_trace: 是否启用变量跟踪。
             model_name: 用于生成测试的核心语言模型名称。
             checker_model_name: 用于辅助任务（如命名、合并）的模型名称。
@@ -77,6 +171,7 @@ class UnitTestGeneratorDecorator:
             llm_trace_dir: LLM跟踪日志的存储目录。
             num_workers: 并行生成单元测试的工作进程数。0或1表示顺序执行。
         """
+        # 如果为 None，使用默认值。如果提供了列表(即使是空的)，则使用该列表。
         self.target_files = target_files if target_files is not None else ["*.py"]
         self.target_functions = target_functions
         self.output_dir = output_dir
@@ -97,21 +192,31 @@ class UnitTestGeneratorDecorator:
             atexit.register(self._generate_all_tests_on_exit)
             UnitTestGeneratorDecorator._atexit_registered = True
 
+        if UnitTestGeneratorDecorator._lock is None:
+            try:
+                report_dir_abs = str(Path(self.report_dir).resolve())
+                dir_hash = hashlib.md5(report_dir_abs.encode("utf-8")).hexdigest()[:8]
+                lock_file_name = f"tllm_unittest_gen_{dir_hash}.lock"
+                UnitTestGeneratorDecorator._lock = _ProcessLock(lock_file_name)
+            except Exception as e:
+                print(
+                    f"{Fore.YELLOW}Warning: Could not create unique lock file name, using default. Error: {e}{Style.RESET_ALL}"
+                )
+                UnitTestGeneratorDecorator._lock = _ProcessLock()
+
     def __call__(self, func: Callable) -> Callable:
         """装饰器调用方法，设置并启动追踪。"""
         analyzer = CallAnalyzer()
         func_name = func.__name__
-
-        # 确保被装饰的函数本身一定在追踪范围内
         decorated_func_file = func.__code__.co_filename
+
+        # 核心逻辑：总是将被装饰函数所在的文件加入追踪列表
         final_target_files = list(set(self.target_files + [decorated_func_file]))
 
-        # [NEW] Handle target_functions to determine generation targets ahead of time
+        # 核心逻辑：如果提供了 target_functions 列表(即使为空)，就自动把被装饰函数加进去
         final_target_functions = list(self.target_functions) if self.target_functions is not None else None
-        if final_target_functions is not None:
-            # Automatically add the decorated function to the generation targets if not already present
-            if func_name not in final_target_functions:
-                final_target_functions.append(func_name)
+        if final_target_functions is not None and func_name not in final_target_functions:
+            final_target_functions.append(func_name)
 
         traced_func = analyzable_trace(
             analyzer=analyzer,
@@ -138,14 +243,11 @@ class UnitTestGeneratorDecorator:
                 "target_functions": final_target_functions,
             },
         }
-
         return traced_func
 
     @classmethod
     def _interactive_target_selection(cls, all_discovered_calls: Dict[str, Dict[str, Any]]) -> Optional[List[str]]:
-        """
-        提供一个交互式界面，让用户选择要为其生成测试的函数。
-        """
+        """提供一个交互式界面，让用户选择要为其生成测试的函数。"""
         if not all_discovered_calls:
             print(Fore.YELLOW + "No executed functions found in the trace report.")
             return []
@@ -180,33 +282,61 @@ class UnitTestGeneratorDecorator:
 
         try:
             user_input = input(prompt).strip().upper()
-        except EOFError:  # Handle non-interactive environments
+        except EOFError:
             print(Fore.YELLOW + "No input received, defaulting to selecting all functions.")
             user_input = "A"
 
         if user_input == "Q":
             return None
         if user_input == "A" or not user_input:
-            selected_funcs = [func for funcs in all_discovered_calls.values() for func in funcs.keys()]
-            return list(set(selected_funcs))
+            return list({func for funcs in all_discovered_calls.values() for func in funcs.keys()})
 
         selected_targets = set()
         parts = [p.strip() for p in user_input.split(",")]
         for part in parts:
             if part in file_map:
-                filename = file_map[part]
-                selected_targets.update(all_discovered_calls[filename].keys())
+                selected_targets.update(all_discovered_calls[file_map[part]].keys())
             elif part in func_map:
                 selected_targets.add(func_map[part])
             elif part:
                 print(Fore.YELLOW + f"Warning: Invalid selection '{part}' ignored.")
-
         return list(selected_targets)
 
     @classmethod
     def _generate_all_tests_on_exit(cls):
         """
-        [REFACTORED] 程序退出时，发现并选择目标，然后为每个文件启动一次测试生成。
+        [REFACTORED] 程序退出时，获取进程锁并启动测试生成工作流。
+        如果锁被其他进程持有，则优雅退出。
+        """
+        if not cls._registry:
+            return
+
+        if cls._lock is None:
+            print(
+                f"{Fore.YELLOW}Warning: Lock not initialized. Proceeding without single-instance guarantee.{Style.RESET_ALL}"
+            )
+            cls._do_generation()
+            return
+
+        try:
+            with cls._lock:
+                print(f"{Fore.CYAN}Acquired process lock. Starting test generation...{Style.RESET_ALL}")
+                cls._do_generation()
+        except _LockAcquisitionError as e:
+            print(
+                f"{Fore.YELLOW}Could not acquire lock: {e}. Another process is likely handling test generation.{Style.RESET_ALL}"
+            )
+        except Exception as e:
+            import traceback
+
+            print(
+                f"{Fore.RED}An unexpected error occurred during the locked generation process: {e}\n{traceback.format_exc()}{Style.RESET_ALL}"
+            )
+
+    @classmethod
+    def _do_generation(cls):
+        """
+        [NEW] 执行测试生成的核心逻辑，由持有锁的进程调用。
         """
         from gpt_workflow.unittest_generator import UnitTestGenerator
 
@@ -228,18 +358,12 @@ class UnitTestGeneratorDecorator:
                 print(f"{Fore.YELLOW}No unique function executions found for this entry point.{Style.RESET_ALL}")
                 continue
 
-            # [REFACTORED] Determine generation targets based on priority:
-            # 1. `target_functions` if provided.
-            # 2. Interactive selection if not in `auto_confirm` mode.
-            # 3. All discovered functions if in `auto_confirm` mode.
-            targets_for_generation = None
             all_discovered_funcs = {func for funcs in final_test_cases.values() for func in funcs.keys()}
-
-            if target_functions:
+            if target_functions is not None:
                 targets_for_generation = [f for f in target_functions if f in all_discovered_funcs]
             elif not config["auto_confirm"]:
                 targets_for_generation = cls._interactive_target_selection(final_test_cases)
-            else:  # auto_confirm is True and no target_functions
+            else:
                 targets_for_generation = list(all_discovered_funcs)
 
             if targets_for_generation is None:
@@ -250,8 +374,7 @@ class UnitTestGeneratorDecorator:
                 continue
 
             print(
-                f"\n{Fore.GREEN}Targets selected for generation: "
-                f"{Style.BRIGHT}{', '.join(targets_for_generation)}{Style.RESET_ALL}"
+                f"\n{Fore.GREEN}Targets selected for generation: {Style.BRIGHT}{', '.join(targets_for_generation)}{Style.RESET_ALL}"
             )
 
             file_to_funcs_map = defaultdict(list)
@@ -262,8 +385,7 @@ class UnitTestGeneratorDecorator:
 
             for filename, funcs_to_test in file_to_funcs_map.items():
                 print(
-                    f"\n{Fore.MAGENTA}--- Generating tests for file: '{filename}' ---\n"
-                    f"Functions: {', '.join(funcs_to_test)}{Style.RESET_ALL}"
+                    f"\n{Fore.MAGENTA}--- Generating tests for file: '{filename}' ---\nFunctions: {', '.join(funcs_to_test)}{Style.RESET_ALL}"
                 )
                 try:
                     generator = UnitTestGenerator(
@@ -275,7 +397,6 @@ class UnitTestGeneratorDecorator:
                     )
                     if not generator.load_and_parse_report():
                         continue
-
                     generator.generate(
                         target_funcs=list(set(funcs_to_test)),
                         output_dir=config["output_dir"],
@@ -286,16 +407,15 @@ class UnitTestGeneratorDecorator:
                 except Exception as e:
                     import traceback
 
-                    error_msg = f"Failed to generate tests for '{filename}': {e}\n{traceback.format_exc()}"
-                    print(f"{Fore.RED}{error_msg}{Style.RESET_ALL}")
+                    print(
+                        f"{Fore.RED}Failed to generate tests for '{filename}': {e}\n{traceback.format_exc()}{Style.RESET_ALL}"
+                    )
 
         print(f"\n{Fore.GREEN}{Style.BRIGHT}=== Unit Test Generation Workflow Finished ==={Style.RESET_ALL}")
 
     @staticmethod
     def _deduplicate_and_load_calls(report_path: str) -> Dict[str, Dict[str, List[Dict]]]:
-        """
-        [REFACTORED] 读取报告，根据执行路径去重，并返回所有唯一的、可测试的函数调用。
-        """
+        """读取报告，根据执行路径去重，并返回所有唯一的、可测试的函数调用。"""
         try:
             with open(report_path, "r", encoding="utf-8") as f:
                 call_trees = json.load(f)
@@ -308,8 +428,6 @@ class UnitTestGeneratorDecorator:
 
         for filename, funcs in call_trees.items():
             for func_name, records in funcs.items():
-                # [FIX] Filter out special function names like '<module>' or '<lambda>'
-                # that are not suitable for test generation.
                 if re.match(r"^<.*?>$", func_name):
                     continue
 
@@ -329,8 +447,7 @@ class UnitTestGeneratorDecorator:
 
         if total_calls > 0:
             print(
-                f"{Fore.BLUE}Trace analysis: Found {unique_calls} unique execution paths "
-                f"from {total_calls} total function calls.{Style.RESET_ALL}"
+                f"{Fore.BLUE}Trace analysis: Found {unique_calls} unique execution paths from {total_calls} total function calls.{Style.RESET_ALL}"
             )
         return final_test_cases
 

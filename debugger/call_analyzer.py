@@ -237,7 +237,7 @@ class CallAnalyzer:
 
             if event_type == "line":
                 line_event: LineEvent = item
-                vars_str = f"  // Vars: {line_event['tracked_vars']}" if line_event["tracked_vars"] else ""
+                vars_str = f"  // Debug: {line_event['tracked_vars']}" if line_event["tracked_vars"] else ""
                 line_content = line_event["content"].rstrip()
                 output.append(f"{prefix}  - L{line_event['line_no']}: {line_content}{vars_str}")
             elif event_type == "call":
