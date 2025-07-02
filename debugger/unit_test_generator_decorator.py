@@ -338,7 +338,7 @@ class UnitTestGeneratorDecorator:
         """
         [NEW] 执行测试生成的核心逻辑，由持有锁的进程调用。
         """
-        from gpt_workflow.unittest_generator import UnitTestGenerator
+        from gpt_workflow.unittester import UnitTestGenerator
 
         print(f"\n{Fore.CYAN}{Style.BRIGHT}=== Starting Unit Test Generation Workflow ===")
         print(f"Detected {len(cls._registry)} decorated entry point(s)...{Style.RESET_ALL}")

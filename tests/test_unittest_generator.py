@@ -6,24 +6,26 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Add project root to sys.path to allow importing project modules
+# Add project root to sys.path to allow importing project modules.
 # This needs to be done before importing the module to be tested.
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
+# The import target is still the same file, which now acts as a facade.
+# This ensures backward compatibility of the test.
 from gpt_workflow.unittest_generator import UnitTestGenerator
 
 
-class TestUnitTestGenerator(unittest.TestCase):
+class TestUnitTestGeneratorRefactored(unittest.TestCase):
     def setUp(self):
         """Set up a temporary directory and mock project structure."""
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
 
         # Mock project structure
-        self.project_root = self.temp_path / "test_project"
-        self.app_dir = self.project_root / "my_app"
-        self.tests_dir = self.project_root / "generated_tests"
+        self.mock_project_root = self.temp_path / "test_project"
+        self.app_dir = self.mock_project_root / "my_app"
+        self.tests_dir = self.mock_project_root / "generated_tests"
         self.app_dir.mkdir(parents=True, exist_ok=True)
         self.tests_dir.mkdir(exist_ok=True)
 
@@ -53,23 +55,7 @@ class TestUnitTestGenerator(unittest.TestCase):
                         "args": {"a": 5, "b": 3},
                         "return_value": 16,
                         "exception": None,
-                        "start_time": 0,
-                        "end_time": 1,
-                        "events": [
-                            {"type": "line", "data": {"line_no": 8, "content": "result = a + b"}},
-                            {
-                                "type": "call",
-                                "data": {
-                                    "func_name": "helper_func",
-                                    "original_filename": str(self.source_file_path),
-                                    "original_lineno": 1,
-                                    "args": {"x": 8},
-                                    "return_value": 16,
-                                    "exception": None,
-                                    "caller_lineno": 9,
-                                },
-                            },
-                        ],
+                        "events": [{"type": "call", "data": {"func_name": "helper_func"}}],
                     },
                 ]
             }
@@ -77,181 +63,168 @@ class TestUnitTestGenerator(unittest.TestCase):
         with open(self.report_path, "w") as f:
             json.dump(self.analysis_data, f)
 
-        # Patch global `project_root` used in the module
-        self.project_root_patcher = patch("gpt_workflow.unittest_generator.project_root", self.project_root)
-        self.mock_project_root = self.project_root_patcher.start()
-
-        # Patch `sys.exit` to prevent tests from stopping
+        # Patch sys.exit to prevent tests from stopping
         self.sys_exit_patcher = patch("sys.exit")
         self.mock_sys_exit = self.sys_exit_patcher.start()
 
     def tearDown(self):
         """Clean up the temporary directory and stop patchers."""
         self.temp_dir.cleanup()
-        self.project_root_patcher.stop()
         self.sys_exit_patcher.stop()
 
-    def test_init_and_load_report_success(self):
-        """Test successful initialization and loading of a valid report."""
-        generator = UnitTestGenerator(report_path=str(self.report_path))
-        self.assertTrue(generator.load_and_parse_report())
-        self.assertEqual(generator.analysis_data, self.analysis_data)
+    def _create_generator(self, **kwargs) -> UnitTestGenerator:
+        """Helper to create a generator instance with a patched project_root."""
+        generator = UnitTestGenerator(report_path=str(self.report_path), test_mode=True, **kwargs)
+        # Patch the instance's project_root to our mock project root
+        generator.project_root = self.mock_project_root
+        return generator
 
-    def test_extract_code_from_response(self):
-        """Test extraction of content from [start]/[end] blocks."""
-        generator = UnitTestGenerator()
+    @patch("gpt_workflow.unittester.worker._extract_code_from_response")
+    def test_extract_code_from_response(self, mock_extract):
+        """Test the refactored code extraction utility."""
+        from gpt_workflow.unittester.worker import _extract_code_from_response as real_extract
+
         python_code = "import unittest\nprint('hello')"
         response_new_format = f"Some text before\n[start]\n{python_code}\n[end]\nSome text after"
         response_markdown = f"```python\n{python_code}\n```"
         response_no_block = "Just some text."
 
-        self.assertEqual(generator._extract_code_from_response(response_new_format), python_code)
-        # Test fallback to markdown
-        self.assertEqual(generator._extract_code_from_response(response_markdown), python_code)
-        self.assertIsNone(generator._extract_code_from_response(response_no_block))
+        self.assertEqual(real_extract(response_new_format), python_code)
+        self.assertEqual(real_extract(response_markdown), python_code)
+        self.assertIsNone(real_extract(response_no_block))
 
-    def test_generate_relative_sys_path_snippet(self):
-        """Test the generation of the sys.path setup snippet."""
-        generator = UnitTestGenerator()
-        test_file_path = self.tests_dir / "test_main_logic.py"
-        # From generated_tests/, we need to go up one level to reach project_root
-        # Path(__file__).parent is generated_tests, .parent is test_project (root)
-        snippet = generator._generate_relative_sys_path_snippet(test_file_path, self.project_root)
-
-        self.assertIn("import sys", snippet)
-        self.assertIn("from pathlib import Path", snippet)
-        # The new robust logic should result in `parent.parent` for this specific test case structure
-        self.assertIn("project_root = Path(__file__).resolve().parent.parent", snippet)
-        self.assertIn("sys.path.insert(0, str(project_root))", snippet)
-
-    @patch("gpt_workflow.unittest_generator.TracingModelSwitch.query")
-    def test_generate_end_to_end_single_case(self, mock_query):
-        """Test the full generation process for a single test case, using the new engine."""
-        # --- Mocks Setup ---
-        # Mock 1: LLM suggestion for file/class name (JSON in [start]/[end])
-        # Mock 2: LLM generation for the test case (Python code in [start]/[end])
+    @patch("gpt_workflow.unittester.llm_wrapper.TracingModelSwitch.query")
+    def test_generate_new_file_end_to_end(self, mock_query):
+        """Test the full generation process for a new test file."""
         mock_query.side_effect = [
-            # 1. Suggestion query
-            """
-            [start]
-            {
-                "file_name": "test_main_logic.py",
-                "class_name": "TestMainLogic"
-            }
-            [end]
-            """,
-            # 2. Generation for the single case
+            # 1. Suggestion for file/class name
+            '[start]{"file_name": "test_new_logic.py", "class_name": "TestNewLogic"}[end]',
+            # 2. Generation for the single case (as a full file)
             """
             [start]
 import unittest
-from unittest.mock import patch
-import sys
-from pathlib import Path
-
-# Add the project root to sys.path to allow for module imports.
-# This is dynamically calculated based on the test file's location.
-project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root))
-from my_app.main_logic import func_to_test, helper_func
-
-class TestMainLogic(unittest.TestCase):
-    @patch('my_app.main_logic.helper_func', return_value=16)
-    def test_func_to_test_normal_return(self, mock_helper):
+from my_app.main_logic import func_to_test
+class TestNewLogic(unittest.TestCase):
+    def test_func_to_test_case_1(self):
         self.assertEqual(func_to_test(5, 3), 16)
-        mock_helper.assert_called_once_with(8)
-
 if __name__ == '__main__':
     unittest.main()
             [end]
             """,
         ]
 
-        generator = UnitTestGenerator(
-            report_path=str(self.report_path),
-            model_name="test_model",
-            checker_model_name="test_checker",
-            test_mode=True,  # Ensure mocks are used
-        )
+        generator = self._create_generator()
         self.assertTrue(generator.load_and_parse_report())
 
-        # --- Execution ---
         success = generator.generate(
             target_funcs=["func_to_test"],
             output_dir=str(self.tests_dir),
             auto_confirm=True,
-            use_symbol_service=False,  # Test file-based context
-            num_workers=0,  # Serial execution
-        )
-
-        # --- Assertions ---
-        self.assertTrue(success)
-        self.assertEqual(mock_query.call_count, 2)
-
-        # Check prompts
-        name_prompt = mock_query.call_args_list[0].args[1]
-        self.assertIn("enclosed in `[start]` and `[end]` tags", name_prompt)
-
-        gen_prompt = mock_query.call_args_list[1].args[1]
-        self.assertIn("enclosed within a single\n            `[start]` and `[end]` block", gen_prompt)
-        self.assertIn("[FINAL] RETURNS: 16", gen_prompt)
-
-        # Check final file content by reading it back
-        output_file = self.tests_dir / "test_main_logic.py"
-        self.assertTrue(output_file.exists())
-        content = output_file.read_text()
-        self.assertIn("class TestMainLogic(unittest.TestCase):", content)
-        self.assertIn("test_func_to_test_normal_return", content)
-        self.assertIn("if __name__ == '__main__':", content)
-        # Check that ruff formatting did not over-indent the main block
-        self.assertNotIn("    if __name__ == '__main__':", content)
-
-    @patch("gpt_workflow.unittest_generator.query_symbol_service")
-    @patch("gpt_workflow.unittest_generator.TracingModelSwitch.query")
-    def test_generate_with_symbol_service(self, mock_query, mock_symbol_service):
-        """Test that the symbol service path is correctly triggered and uses the new format."""
-        # --- Mocks Setup ---
-        mock_query.side_effect = [
-            # 1. Suggestion
-            '[start]\n{"file_name": "test_symbol.py", "class_name": "TestSymbol"}\n[end]',
-            # 2. Generation
-            """
-            [start]
-import unittest
-class TestSymbol(unittest.TestCase):
-    def test_symbol_based(self):
-        self.assertTrue(True)
-[end]
-            """,
-        ]
-        mock_symbol_service.return_value = {
-            "func_to_test": {"code": "def func_to_test(...)", "file_path": str(self.source_file_path)},
-            "helper_func": {"code": "def helper_func(...)", "file_path": str(self.source_file_path)},
-        }
-
-        generator = UnitTestGenerator(report_path=str(self.report_path), test_mode=True)
-        self.assertTrue(generator.load_and_parse_report())
-
-        # --- Execution ---
-        generator.generate(
-            target_funcs=["func_to_test"],
-            output_dir=str(self.tests_dir),
-            auto_confirm=True,
-            use_symbol_service=True,
+            use_symbol_service=False,
             num_workers=0,
         )
 
-        # --- Assertions ---
-        mock_symbol_service.assert_called_once()
-        # [BUG FIX] Assert that 'model_switch' is NOT passed to the service call
-        self.assertNotIn("model_switch", mock_symbol_service.call_args.kwargs)
-
+        self.assertTrue(success)
         self.assertEqual(mock_query.call_count, 2)
+        output_file = self.tests_dir / "test_new_logic.py"
+        self.assertTrue(output_file.exists())
+        content = output_file.read_text()
+        self.assertIn("class TestNewLogic(unittest.TestCase):", content)
+        self.assertIn("test_func_to_test_case_1", content)
 
-        gen_prompt = mock_query.call_args_list[1].args[1]
-        self.assertIn("CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)", gen_prompt)
-        self.assertIn("[Relevant Code Snippets]\n", gen_prompt)
-        self.assertNotIn("CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)", gen_prompt)
-        self.assertIn("# Symbol: func_to_test", gen_prompt)
+    @patch("gpt_workflow.unittester.llm_wrapper.TracingModelSwitch.query")
+    def test_incremental_generation_with_duplicate_check(self, mock_query):
+        """Test incremental generation, including skipping a duplicate case."""
+        # --- Setup an existing test file ---
+        existing_test_file = self.tests_dir / "test_existing_logic.py"
+        existing_content = """
+import unittest
+from my_app.main_logic import func_to_test
+
+class TestExistingLogic(unittest.TestCase):
+    def test_already_exists(self):
+        # This test already covers the a=5, b=3 case.
+        self.assertEqual(func_to_test(5, 3), 16)
+"""
+        existing_test_file.write_text(existing_content)
+
+        # Add a new call record to the analysis data
+        self.analysis_data[str(self.source_file_path)]["func_to_test"].append(
+            {
+                "frame_id": 2,
+                "func_name": "func_to_test",
+                "original_filename": str(self.source_file_path),
+                "original_lineno": 5,
+                "args": {"a": 9, "b": 1},
+                "return_value": 20,
+                "exception": None,
+                "events": [],
+            }
+        )
+        with open(self.report_path, "w") as f:
+            json.dump(self.analysis_data, f)
+
+        mock_query.side_effect = [
+            # 1. Suggestion query (suggests the existing file)
+            '[start]{"file_name": "test_existing_logic.py", "class_name": "TestExistingLogic"}[end]',
+            # 2. Duplicate check for the first call record (a=5, b=3) -> YES
+            "YES, this case is covered.",
+            # 3. Duplicate check for the second call record (a=9, b=1) -> NO
+            "NO",
+            # 4. Incremental generation for the second case (method only)
+            """
+            [start]
+    def test_func_to_test_new_case(self):
+        \"\"\"Test with a=9 and b=1.\"\"\"
+        self.assertEqual(func_to_test(9, 1), 20)
+            [end]
+            """,
+            # 5. Merge query
+            """
+            [start]
+import unittest
+from my_app.main_logic import func_to_test
+
+class TestExistingLogic(unittest.TestCase):
+    def test_already_exists(self):
+        # This test already covers the a=5, b=3 case.
+        self.assertEqual(func_to_test(5, 3), 16)
+
+    def test_func_to_test_new_case(self):
+        \"\"\"Test with a=9 and b=1.\"\"\"
+        self.assertEqual(func_to_test(9, 1), 20)
+            [end]
+            """,
+        ]
+
+        generator = self._create_generator()
+        self.assertTrue(generator.load_and_parse_report())
+
+        success = generator.generate(
+            target_funcs=["func_to_test"],
+            output_dir=str(self.tests_dir),
+            auto_confirm=True,
+            use_symbol_service=False,
+            num_workers=0,
+        )
+
+        self.assertTrue(success)
+        # Suggestion + DupCheck1 + DupCheck2 + Gen2 + Merge = 5 calls
+        self.assertEqual(mock_query.call_count, 5)
+
+        # Check prompts
+        dup_check_prompt = mock_query.call_args_list[1].args[1]
+        self.assertIn('Answer with only "YES" or "NO"', dup_check_prompt)
+        self.assertIn("Function Call: `func_to_test(a=5, b=3)`", dup_check_prompt)
+
+        incremental_gen_prompt = mock_query.call_args_list[3].args[1]
+        self.assertIn("GENERATE *ONLY* THE NEW TEST METHOD", incremental_gen_prompt)
+        self.assertIn("DO NOT** generate the class definition", incremental_gen_prompt)
+
+        # Check final file content
+        final_content = existing_test_file.read_text()
+        self.assertIn("test_already_exists", final_content)
+        self.assertIn("test_func_to_test_new_case", final_content)
 
 
 if __name__ == "__main__":

@@ -54,6 +54,8 @@ def complex_sub_function(a, b):
     auto_confirm=True,
     trace_llm=True,
     num_workers=2,
+    model_name="deepseek-v3",
+    checker_model_name="deepseek-v3",
 )
 def main_entrypoint(val1, val2):
     """

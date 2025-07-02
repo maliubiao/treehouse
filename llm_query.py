@@ -3328,9 +3328,6 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         else:
             file_instructions.append(instr)
 
-    if not file_instructions and not setup_script:
-        return
-
     # 2. 路径验证和受影响路径收集
     project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).absolute()
     path_mapping = {}  # original_path (Path) -> shadow_path (Path)
@@ -3357,6 +3354,80 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         instr["path"] = str(abs_path)
         valid_file_instructions.append(instr)
         path_mapping[abs_path] = None  # 暂存，稍后填充影子路径
+
+    # 2.5. 对新文件创建进行预先审批
+    new_file_paths = [p for p in path_mapping.keys() if not p.exists()]
+    approved_new_file_paths = []
+
+    if new_file_paths:
+        if auto_apply:
+            approved_new_file_paths = new_file_paths
+        else:
+            print("\nLLM请求创建以下新文件：")
+            relative_new_paths = sorted([str(p.relative_to(project_root)) for p in new_file_paths])
+            new_dirs_to_create = set()
+
+            for rel_path in relative_new_paths:
+                parent_dir = (project_root / rel_path).parent
+                if not parent_dir.exists():
+                    new_dirs_to_create.add(str(parent_dir.relative_to(project_root)))
+
+            for i, f in enumerate(relative_new_paths):
+                print(f"  [{i + 1}] {f}")
+
+            if new_dirs_to_create:
+                print(Fore.YELLOW + "\n注意：创建这些文件将创建以下新目录：" + ColorStyle.RESET_ALL)
+                for d in sorted(list(new_dirs_to_create)):
+                    print(f"  - {d}/")
+
+            print("\n请输入要创建的文件编号（如 '1,3'），或 'all' 创建全部，或按Enter键跳过创建新文件。")
+            user_input = input("> ").strip().lower()
+
+            selected_relative_paths = []
+            if not user_input:
+                print(Fore.YELLOW + "操作已取消，将跳过创建新文件。" + ColorStyle.RESET_ALL)
+            elif user_input == "all":
+                selected_relative_paths = relative_new_paths
+            else:
+                try:
+                    indices = [int(i.strip()) - 1 for i in user_input.split(",")]
+                    selected_relative_paths = [
+                        relative_new_paths[i] for i in indices if 0 <= i < len(relative_new_paths)
+                    ]
+                except ValueError:
+                    print(Fore.RED + "无效输入，将跳过创建新文件。" + ColorStyle.RESET_ALL)
+
+            if selected_relative_paths:
+                approved_new_file_paths = [project_root / p for p in selected_relative_paths]
+                print(Fore.GREEN + f"已批准创建 {len(approved_new_file_paths)} 个新文件。" + ColorStyle.RESET_ALL)
+            elif user_input:
+                print(Fore.YELLOW + "未选择任何新文件进行创建。" + ColorStyle.RESET_ALL)
+
+        # 在主项目中为已批准的新文件创建存根
+        if approved_new_file_paths:
+            for new_file_path in approved_new_file_paths:
+                try:
+                    # 确保父目录存在
+                    new_file_path.parent.mkdir(parents=True, exist_ok=True)
+                    # 创建一个空的存根文件
+                    new_file_path.touch()
+                except Exception as e:
+                    print(
+                        Fore.RED + f"创建文件存根时出错 {new_file_path}: {e}" + ColorStyle.RESET_ALL,
+                        file=sys.stderr,
+                    )
+
+    # 2.6. 基于审批结果过滤指令和路径
+    unapproved_new_paths = set(new_file_paths) - set(approved_new_file_paths)
+    if unapproved_new_paths:
+        path_mapping = {k: v for k, v in path_mapping.items() if k not in unapproved_new_paths}
+        valid_file_instructions = [
+            instr for instr in valid_file_instructions if Path(instr["path"]) not in unapproved_new_paths
+        ]
+
+    if not valid_file_instructions and not setup_script:
+        print(Fore.YELLOW + "没有文件被选中进行处理，且没有设置脚本。" + ColorStyle.RESET_ALL)
+        return
 
     # 3. 在沙箱中准备影子文件
     shadow_root_path = Path(shadowroot)
@@ -3422,8 +3493,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         if original_path.exists() and original_path.is_file():
             with open(original_path, "r", encoding="utf-8") as f:
                 original_content = f.read()
-        if not original_path.exists():
-            original_path.touch()
+
         shadow_content = ""
         if shadow_path.exists() and shadow_path.is_file():
             with open(shadow_path, "r", encoding="utf-8") as f:
@@ -3449,33 +3519,15 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
 
         print("\n检测到对多个文件的更改。请选择要应用的补丁：")
         file_list = sorted(diffs_by_file.keys())
-        for i, f in enumerate(file_list):
-            print(f"  [{i + 1}] {f}")
-        print("请输入文件编号（如 '1,3'），或 'all' 应用全部，或按Enter键取消。")
-
-        user_input = input("> ").strip().lower()
-        if not user_input:
-            print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
-            return
-
-        selected_paths = []
-        if user_input == "all":
-            selected_paths = file_list
-        else:
-            try:
-                indices = [int(i.strip()) - 1 for i in user_input.split(",")]
-                selected_paths = [file_list[i] for i in indices if 0 <= i < len(file_list)]
-            except ValueError:
-                print(Fore.RED + "无效输入，操作已取消。" + ColorStyle.RESET_ALL)
-                return
-
-        if not selected_paths:
-            print(Fore.YELLOW + "未选择任何文件。" + ColorStyle.RESET_ALL)
-            return
+        selected_paths = file_list
 
         applied_count = 0
         for path in selected_paths:
             if path in diffs_by_file:
+                full_path = project_root / path
+                if not full_path.exists():
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+
                 temp_file = shadowroot / (path.replace("/", "_") + ".diff")
                 temp_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(temp_file, "w+", encoding="utf-8") as f:
@@ -3486,11 +3538,38 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
         print(Fore.GREEN + f"已成功应用对 {applied_count} 个文件的补丁。" + ColorStyle.RESET_ALL)
     else:
         # 单文件模式或自动应用模式
-        diff_content = "\n\n".join(diffs_by_file.values())
-        if diff_content.strip():
-            diff_file = _save_diff_content(diff_content)
-            if diff_file:
-                display_and_apply_diff(diff_file, auto_apply=auto_apply)
+        for relative_path, diff_content in diffs_by_file.items():
+            full_path = project_root / relative_path
+            is_new_file = not full_path.exists()
+
+            if not auto_apply:
+                highlighted_diff = highlight(diff_content, DiffLexer(), TerminalFormatter())
+                print("\n高亮显示的diff内容：")
+                print(highlighted_diff)
+
+            choice = "y"
+            if not auto_apply:
+                prompt = f"\n是否应用对 {relative_path} 的变更？"
+                if is_new_file:
+                    prompt = f"\n是否创建新文件 {relative_path} 并应用变更？"
+                    parent_dir = full_path.parent
+                    if not parent_dir.exists():
+                        prompt += f"\n(这将创建新目录: {parent_dir.relative_to(project_root)})"
+
+                choice = input(f"{prompt} [Y/n]: ").lower().strip()
+
+            if choice in ("y", ""):
+                if is_new_file:
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+
+                temp_file = shadowroot / (relative_path.replace("/", "_") + ".diff")
+                with open(temp_file, "w+", encoding="utf-8") as f:
+                    f.write(diff_content)
+                _apply_patch(temp_file)
+                temp_file.unlink()
+                print(Fore.GREEN + f"已成功应用对 {relative_path} 的补丁。" + ColorStyle.RESET_ALL)
+            else:
+                print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
 
 
 def process_response(prompt, content, file_path, save=True, obsidian_doc=None, ask_param=None):

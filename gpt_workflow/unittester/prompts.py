@@ -1,0 +1,444 @@
+from pathlib import Path
+from textwrap import dedent
+from typing import Any, Dict, List, Optional, Tuple
+
+from .file_utils import generate_relative_sys_path_snippet
+
+
+def build_suggestion_prompt(file_path: str, target_funcs: List[str], file_content: Optional[str] = None) -> str:
+    """Builds the prompt to ask the LLM for test file and class name suggestions."""
+    source_code_context = ""
+    if file_content:
+        source_code_context = f"""
+**Source Code (for context):**
+```python
+{file_content}
+```
+"""
+    target_funcs_str = ", ".join(f"`{f}`" for f in target_funcs)
+    return dedent(f"""
+        You are a Python testing expert. Based on the following functions and their source file, suggest a suitable
+        filename and a `unittest.TestCase` class name for their test suite.
+
+        **Source File Path:** {file_path}
+        **Target Function Names:** {target_funcs_str}
+        {source_code_context}
+
+        **Your Task:**
+        Provide your suggestions in a JSON object. The filename must follow the `test_*.py` convention.
+        The JSON object MUST be enclosed in `[start]` and `[end]` tags.
+
+        **Example Output:**
+        [start]
+        {{
+          "file_name": "test_my_module.py",
+          "class_name": "TestMyModuleFunctionality"
+        }}
+        [end]
+
+        **Response:**
+    """).strip()
+
+
+def build_merge_prompt(existing_code: str, new_code_snippets: List[str], output_path: str) -> str:
+    """Builds the prompt to ask the LLM to merge new test cases into existing code."""
+    new_blocks_str = ""
+    for i, snippet in enumerate(new_code_snippets):
+        new_blocks_str += dedent(f"""
+        ---
+        [New Test Case(s) Block {i + 1}]
+        ---
+        [start]
+        {snippet}
+        [end]
+        """)
+
+    task_description = "intelligently merge new test cases into an existing test file."
+    if len(new_code_snippets) > 1:
+        task_description = "intelligently merge MULTIPLE new test cases from several blocks into an existing test file."
+
+    return dedent(f"""
+        You are an expert Python developer specializing in refactoring and maintaining test suites.
+        Your task is to {task_description}
+
+        **1. CONTEXT: EXISTING TEST FILE**
+        This is the current content of the test file.
+
+        [File Path]: {output_path}
+        [Existing Code]:
+        [start]
+        {existing_code}
+        [end]
+
+        **2. CONTEXT: NEWLY GENERATED TEST CASES**
+        These are new test cases that need to be added to the file.
+        Each block might contain one or more test cases within a complete, runnable script, OR just a single new test method.
+
+        [New Test Code to Add]:
+        {new_blocks_str.strip()}
+
+        **3. YOUR TASK: MERGE THE CODE**
+        - **Combine Imports:** Merge the imports from the existing code and ALL new blocks, removing duplicates.
+        - **Merge into Class:** Add the new test methods from all new code blocks into the existing `unittest.TestCase`
+          class. If the class names differ, use the existing class name.
+        - **Preserve Structure:** Maintain the overall structure and style of the existing file.
+        - **Do Not Remove Existing Tests:** Ensure all original tests are kept.
+        - **Completeness:** The final output must be a single, complete, and runnable Python file.
+
+        **IMPORTANT**: Your entire response MUST be only the merged Python code, enclosed within a single
+        `[start]` and `end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap the merged Python code.
+    """).strip()
+
+
+def build_prompt_for_generation(
+    target_func: str,
+    call_record: Dict,
+    test_class_name: str,
+    module_to_test: str,
+    project_root_path: Path,
+    output_file_abs_path: Path,
+    is_incremental: bool,
+    file_path: Optional[str] = None,
+    file_content: Optional[str] = None,
+    symbol_context: Optional[Dict[str, Dict]] = None,
+    existing_code: Optional[str] = None,
+) -> str:
+    """Dispatcher for building the generation prompt based on context and mode (full/incremental)."""
+    if is_incremental:
+        return _build_incremental_generation_prompt(
+            target_func=target_func,
+            call_record=call_record,
+            test_class_name=test_class_name,
+            module_to_test=module_to_test,
+            project_root_path=project_root_path,
+            output_file_abs_path=output_file_abs_path,
+            symbol_context=symbol_context,
+            file_path=file_path,
+            file_content=file_content,
+        )
+    if symbol_context:
+        return _build_symbol_based_prompt(
+            symbol_context=symbol_context,
+            target_func=target_func,
+            call_record=call_record,
+            test_class_name=test_class_name,
+            module_to_test=module_to_test,
+            project_root_path=project_root_path,
+            output_file_abs_path=output_file_abs_path,
+            existing_code=existing_code,
+        )
+    if file_content and file_path:
+        return _build_file_based_prompt(
+            file_path=file_path,
+            file_content=file_content,
+            target_func=target_func,
+            call_record=call_record,
+            test_class_name=test_class_name,
+            module_to_test=module_to_test,
+            project_root_path=project_root_path,
+            output_file_abs_path=output_file_abs_path,
+            existing_code=existing_code,
+        )
+    raise ValueError("Either symbol_context or file_content must be provided to build a prompt.")
+
+
+def _build_file_based_prompt(
+    file_path: str,
+    file_content: str,
+    target_func: str,
+    call_record: Dict,
+    test_class_name: str,
+    module_to_test: str,
+    project_root_path: Path,
+    output_file_abs_path: Path,
+    existing_code: Optional[str] = None,
+) -> str:
+    """Constructs the detailed prompt for the LLM using full file content."""
+    sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
+    call_record_text = format_call_record_as_text(call_record)
+    action_description, existing_code_section, code_structure_guidance = _get_common_prompt_sections(
+        test_class_name, existing_code
+    )
+
+    prompt_part1 = dedent(f"""
+        You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
+        Your task is to {action_description} for the function `{target_func}`.
+        **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+        You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
+        - **Project Root Directory:** `{project_root_path}`
+        - **Module to Test:** `{module_to_test}`
+        - **How to Import the Target Function:** `from {module_to_test} import {target_func}`
+        - **`sys.path` Setup:** To ensure the import works correctly, you MUST include this exact code snippet at the top of the test file.
+          ```python
+          {sys_path_setup_snippet}
+          ```
+        **2. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
+        [File Path]: {file_path}
+        [File Content]:
+        [start]
+        {file_content}
+        [end]
+    """).strip()
+
+    prompt_part2 = dedent(f"""
+        **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+        This is a compact text trace of the function's execution. It is the **blueprint** for the test case you must generate.
+        [Runtime Execution Trace]
+        [start]
+        {call_record_text}
+        [end]
+        **4. INTELLIGENT MOCKING STRATEGY**
+        {_get_mocking_guidance(target_func, module_to_test)}
+        **5. YOUR TASK: GENERATE THE TEST CODE**
+        {code_structure_guidance}
+        {existing_code_section}
+        **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single `[start]` and `[end]` block.
+    """).strip()
+    return f"{prompt_part1}\n\n{prompt_part2}"
+
+
+def _build_symbol_based_prompt(
+    symbol_context: Dict[str, Dict],
+    target_func: str,
+    call_record: Dict,
+    test_class_name: str,
+    module_to_test: str,
+    project_root_path: Path,
+    output_file_abs_path: Path,
+    existing_code: Optional[str] = None,
+) -> str:
+    """Constructs the detailed prompt for the LLM using precise symbol context."""
+    sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
+    call_record_text = format_call_record_as_text(call_record)
+    context_code_str = ""
+    for name, data in symbol_context.items():
+        context_code_str += f"# Symbol: {name}\n# File: {data.get('file_path', '?')}:{data.get('start_line', '?')}\n{data.get('code', '# Code not found')}\n\n"
+    action_description, existing_code_section, code_structure_guidance = _get_common_prompt_sections(
+        test_class_name, existing_code
+    )
+
+    prompt_part1 = dedent(f"""
+        You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
+        Your task is to {action_description} for the function `{target_func}`.
+        **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+        - **Project Root Directory:** `{project_root_path}`
+        - **Module to Test:** `{module_to_test}`
+        - **`sys.path` Setup:** You MUST include this exact code snippet at the top of the test file.
+          ```python
+          {sys_path_setup_snippet}
+          ```
+        **2. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
+        [Relevant Code Snippets]
+        [start]
+        {context_code_str.strip()}
+        [end]
+    """).strip()
+
+    prompt_part2 = dedent(f"""
+        **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+        This is a compact text trace of the function's execution. It is the **blueprint** for the test case.
+        [Runtime Execution Trace]
+        [start]
+        {call_record_text}
+        [end]
+        **4. INTELLIGENT MOCKING STRATEGY**
+        {_get_mocking_guidance(target_func, module_to_test)}
+        **5. YOUR TASK: GENERATE THE TEST CODE**
+        {code_structure_guidance}
+        {existing_code_section}
+        **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single `[start]` and `[end]` block.
+    """).strip()
+    return f"{prompt_part1}\n\n{prompt_part2}"
+
+
+def _build_incremental_generation_prompt(
+    target_func: str,
+    call_record: Dict,
+    test_class_name: str,
+    module_to_test: str,
+    project_root_path: Path,
+    output_file_abs_path: Path,
+    symbol_context: Optional[Dict[str, Dict]] = None,
+    file_path: Optional[str] = None,
+    file_content: Optional[str] = None,
+) -> str:
+    """[NEW] Builds a prompt to generate only a single new test method."""
+    call_record_text = format_call_record_as_text(call_record)
+
+    # Context can come from symbols (preferred) or the full file
+    if symbol_context:
+        context_code_str = ""
+        for name, data in symbol_context.items():
+            context_code_str += f"# Symbol: {name}\n# File: {data.get('file_path', '?')}:{data.get('start_line', '?')}\n{data.get('code', '# Code not found')}\n\n"
+        context_section = f"""
+        **2. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
+        [Relevant Code Snippets]
+        [start]
+        {context_code_str.strip()}
+        [end]
+        """
+    elif file_content and file_path:
+        context_section = f"""
+        **2. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
+        [File Path]: {file_path}
+        [File Content]:
+        [start]
+        {file_content}
+        [end]
+        """
+    else:
+        context_section = "**2. CONTEXT: SOURCE CODE**\nNo source code provided."
+
+    return dedent(f"""
+        You are an expert Python developer writing a new test case for an existing test suite.
+        Your task is to generate a SINGLE new test method for the function `{target_func}`.
+
+        **1. CONTEXT: HOW THE FUNCTION IS IMPORTED**
+        - The function `{target_func}` is imported from the module `{module_to_test}`.
+        - You will need `unittest.mock.patch` to mock dependencies.
+
+        {context_section}
+
+        **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+        This trace is the **blueprint** for the new test case.
+        [Runtime Execution Trace]
+        [start]
+        {call_record_text}
+        [end]
+
+        **4. INTELLIGENT MOCKING STRATEGY**
+        {_get_mocking_guidance(target_func, module_to_test)}
+
+        **5. YOUR TASK: GENERATE *ONLY* THE NEW TEST METHOD**
+        - The test file and class (`{test_class_name}`) already exist.
+        - You must **ONLY** generate the Python code for the new test method.
+        - **DO NOT** generate the class definition (`class ...:`).
+        - **DO NOT** generate imports or `sys.path` setup.
+        - **DO NOT** generate `if __name__ == '__main__':`.
+        - Your output must be a single, complete `def test_...` method, correctly indented to be placed inside a class.
+        - The method MUST have a clear docstring explaining the test case.
+
+        **Example of correct output:**
+        [start]
+            def test_func_to_test_with_specific_input(self):
+                \"\"\"Test func_to_test with a=5 and b=3, expecting return value 16.\"\"\"
+                # ... test logic with mocks and assertions ...
+                self.assertEqual(func_to_test(5, 3), 16)
+        [end]
+
+        **IMPORTANT**: Your entire response must be only the Python method, enclosed within a `[start]` and `[end]` block.
+    """).strip()
+
+
+def build_duplicate_check_prompt(existing_code: str, call_record: Dict) -> str:
+    """[NEW] Builds a prompt to ask the LLM if a test case already exists."""
+    call_record_text = format_call_record_as_text(call_record)
+    func_name = call_record.get("func_name", "N/A")
+    args = call_record.get("args", {})
+    args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
+    result = (
+        repr(call_record.get("return_value"))
+        if not call_record.get("exception")
+        else f"raise {repr(call_record.get('exception'))}"
+    )
+
+    return dedent(f"""
+        You are a meticulous code analysis expert. Your task is to determine if a specific test scenario is already covered in a given test file.
+
+        **1. Existing Test File Content:**
+        Here is the code for the existing test file.
+        [start]
+        {existing_code}
+        [end]
+
+        **2. New Test Scenario to Check:**
+        I want to add a test for the function `{func_name}`.
+        - **Function Call:** `{func_name}({args_str})`
+        - **Expected Outcome:** The call should result in: `{result}`.
+        - **Full Execution Trace (for detailed context):**
+          {call_record_text}
+
+        **3. Your Task:**
+        Analyze the "Existing Test File Content" and determine if it already contains a test method that validates this exact scenario (same function, same inputs, and same expected outcome).
+
+        **Answer with only "YES" or "NO".** Do not provide any explanation.
+    """).strip()
+
+
+def _get_common_prompt_sections(test_class_name: str, existing_code: Optional[str]) -> Tuple[str, str, str]:
+    """Generates common prompt sections for action, existing code, and structure."""
+    if existing_code:
+        action_description = f"add a new test method to the existing `unittest.TestCase` class `{test_class_name}`"
+        action_verb = "Add the new method to the existing class."
+        existing_code_section = f"""
+[Existing Test File Content]
+[start]
+{existing_code}
+[end]
+"""
+    else:
+        action_description = f"create a new `unittest.TestCase` class named `{test_class_name}`"
+        action_verb = "Define the test class and a main execution block (`if __name__ == '__main__': unittest.main()`)."
+        existing_code_section = ""
+
+    code_structure_guidance = dedent(f"""
+        - **Framework:** Use Python's built-in `unittest` module.
+        - **Test Method:** Create a new, descriptively named test method (e.g., `test_..._case_N`).
+        - **Docstring:** CRITICAL - Each test method MUST have a clear and concise docstring that explains the specific scenario being tested.
+        - **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only necessary dependencies (`[SUB-CALL]`).
+        - **Assertions:** Use `self.assertEqual()` for return values and `self.assertRaises()` for exceptions, based on the runtime trace.
+        - **Code Structure:**
+          - Generate a complete, runnable Python code snippet.
+          - Include all necessary imports (`unittest`, `unittest.mock`, the `sys.path` setup, and the function to be tested).
+          - {action_verb}
+    """).strip()
+    return action_description, existing_code_section, code_structure_guidance
+
+
+def _get_mocking_guidance(target_func: str, module_to_test: str) -> str:
+    """Generates the standard mocking guidance section for the prompt."""
+    return dedent(f"""
+    Your goal is to create a valuable and robust test.
+    - **DO Mock:** External services (network, DB), non-deterministic functions (`datetime.now`), or complex dependencies shown as `[SUB-CALL]`.
+    - **DO NOT Mock:** Simple, pure, deterministic helper functions within your own project.
+    - **How to Patch:** Use `patch('{module_to_test}.dependency_func', ...)` to patch dependencies where they are *used*.
+    """).strip()
+
+
+def format_call_record_as_text(call_record: Dict[str, Any]) -> str:
+    """Formats a single call record into a human-readable text trace for the LLM."""
+    trace_lines = []
+    func_name = call_record.get("func_name", "N/A")
+    original_filename = call_record.get("original_filename", "N/A")
+    args = call_record.get("args", {})
+    return_value = call_record.get("return_value")
+    exception = call_record.get("exception")
+
+    trace_lines.append(f"Execution trace for `{func_name}` from `{original_filename}`:")
+    args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items()) if args else ""
+    trace_lines.append(f"\n[CALL] {func_name}({args_str})")
+
+    events = call_record.get("events", [])
+    if events:
+        trace_lines.append("  [TRACE]")
+        for event in events:
+            if event.get("type") == "line":
+                data = event.get("data", {})
+                line_no, content = data.get("line_no"), data.get("content", "").rstrip()
+                trace_lines.append(f"    L{line_no:<4} {content}")
+            elif event.get("type") == "call":
+                data = event.get("data", {})
+                sub_func_name = data.get("func_name", "N/A")
+                sub_args = ", ".join(f"{k}={repr(v)}" for k, v in data.get("args", {}).items())
+                caller_lineno = data.get("caller_lineno", "?")
+                trace_lines.append(f"    L{caller_lineno:<4} [SUB-CALL] {sub_func_name}({sub_args})")
+                if data.get("exception"):
+                    trace_lines.append(f"      -> RAISED {repr(data.get('exception'))}")
+                else:
+                    trace_lines.append(f"      -> RETURNED {repr(data.get('return_value'))}")
+
+    if exception:
+        trace_lines.append(f"\n[FINAL] RAISES: {repr(exception)}")
+    else:
+        trace_lines.append(f"\n[FINAL] RETURNS: {repr(return_value)}")
+    return "\n".join(trace_lines)

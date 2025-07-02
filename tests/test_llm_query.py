@@ -859,6 +859,10 @@ class TestExtractAndDiffFiles(unittest.TestCase):
         self.shadow_dir = self.tmp_path / "shadow"
         self.shadow_dir.mkdir(exist_ok=True)
 
+        # 导入 llm_query 模块
+        global llm_query
+        import llm_query
+
         # 公共补丁
         self.shadow_patch = patch("llm_query.shadowroot", self.shadow_dir)
         self.project_patch = patch("llm_query.GLOBAL_PROJECT_CONFIG.project_root_dir", str(self.tmp_path))
@@ -887,47 +891,52 @@ class TestExtractAndDiffFiles(unittest.TestCase):
         # 测试内容
         test_content = """
 [overwrite whole file]: test.txt
-[start]
+[start.57]
 line1
 line2
 line3
-[end]
+[end.57]
 """
         # 执行处理
-        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
+        with patch("llm_query._apply_patch"):
+            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
 
         # 验证文件内容
-        self.assertEqual(test_file.read_text(encoding="utf-8"), "line1\nline2\nline3")
+        # _apply_patch is mocked, so we check shadow content to verify logic up to diffing
+        shadow_file = self.shadow_dir / "test.txt"
+        self.assertEqual(shadow_file.read_text(encoding="utf-8"), "line1\nline2\nline3")
 
     def test_create_new_file_auto_apply(self):
         """测试使用 auto_apply=True 创建一个新文件"""
         # 确认测试文件尚不存在
-        test_file = self.tmp_path / "test.txt"
+        test_file = self.tmp_path / "new_test.txt"
         self.assertFalse(test_file.exists())
 
         # 测试内容
         test_content = """
-[overwrite whole file]: test.txt
-[start]
+[overwrite whole file]: new_test.txt
+[start.57]
 new content
-[end]
+[end.57]
 """
         # 执行处理
-        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
+        with patch("llm_query._apply_patch"):
+            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
 
-        # 验证文件内容
-        self.assertTrue(test_file.exists())
-        self.assertEqual(test_file.read_text(encoding="utf-8"), "new content")
+        # 验证shadow文件
+        shadow_file = self.shadow_dir / "new_test.txt"
+        self.assertTrue(shadow_file.exists())
+        self.assertEqual(shadow_file.read_text(encoding="utf-8"), "new content")
 
     def test_setup_script_processing(self):
         """测试处理项目设置脚本"""
         # 测试内容
         test_content = """
 [project setup script]
-[start]
+[start.57]
 #!/bin/bash
 echo 'setup'
-[end]
+[end.57]
 """
         # 执行处理
         llm_query.extract_and_diff_files(test_content, save=False)
@@ -940,90 +949,131 @@ echo 'setup'
 
     def test_multiple_files_interactive_all(self):
         """测试处理多个文件并以交互方式应用所有更改"""
-        file1 = self._create_test_file("test1.txt", "original 1")
-        file2 = self._create_test_file("test2.txt", "original 2")
+        self._create_test_file("test1.txt", "original 1")
+        self._create_test_file("test2.txt", "original 2")
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start]
+[start.57]
 new content 1
-[end]
+[end.57]
 
 [overwrite whole file]: test2.txt
-[start]
+[start.57]
 new content 2
-[end]
+[end.57]
 """
-        with patch("builtins.input", return_value="all") as mock_input:
+        with patch("builtins.input", return_value="all") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
             mock_input.assert_called_once()
-
-        self.assertEqual(file1.read_text(encoding="utf-8"), "new content 1")
-        self.assertEqual(file2.read_text(encoding="utf-8"), "new content 2")
+            self.assertEqual(mock_apply.call_count, 2)
 
     def test_multiple_files_interactive_subset(self):
         """测试处理多个文件并以交互方式应用部分更改"""
-        file1 = self._create_test_file("test1.txt", "original 1")
-        file2 = self._create_test_file("test2.txt", "original 2")
+        self._create_test_file("test1.txt", "original 1")
+        self._create_test_file("test2.txt", "original 2")
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start]
+[start.57]
 new content 1
-[end]
+[end.57]
 
 [overwrite whole file]: test2.txt
-[start]
+[start.57]
 new content 2
-[end]
+[end.57]
 """
-        with patch("builtins.input", return_value="1") as mock_input:
+        with patch("builtins.input", return_value="1") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             # 文件按路径排序，因此 test1.txt 将是 1，test2.txt 将是 2。
             llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
             mock_input.assert_called_once()
-
-        self.assertEqual(file1.read_text(encoding="utf-8"), "new content 1")
-        self.assertEqual(file2.read_text(encoding="utf-8"), "original 2")
+            mock_apply.assert_called_once()
 
     def test_multiple_files_interactive_cancel(self):
         """测试处理多个文件并取消操作"""
-        file1 = self._create_test_file("test1.txt", "original 1")
-        file2 = self._create_test_file("test2.txt", "original 2")
+        self._create_test_file("test1.txt", "original 1")
+        self._create_test_file("test2.txt", "original 2")
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start]
+[start.57]
 new content 1
-[end]
+[end.57]
 
 [overwrite whole file]: test2.txt
-[start]
+[start.57]
 new content 2
-[end]
+[end.57]
 """
-        with patch("builtins.input", return_value="") as mock_input, patch("rich.print") as mock_print:
+        with patch("builtins.input", return_value="") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
             mock_input.assert_called_once()
-
-        self.assertEqual(file1.read_text(encoding="utf-8"), "original 1")
-        self.assertEqual(file2.read_text(encoding="utf-8"), "original 2")
+            mock_apply.assert_not_called()
 
     def test_no_effective_change(self):
         """测试如果内容未更改则不生成差异"""
         original_content = "line1\nline2"
-        test_file = self._create_test_file("test.txt", original_content)
+        self._create_test_file("test.txt", original_content)
 
         test_content = f"""
 [overwrite whole file]: test.txt
-[start]
+[start.57]
 {original_content}
-[end]
+[end.57]
 """
-        with patch("llm_query.display_and_apply_diff") as mock_apply:
+        with patch("llm_query._apply_patch") as mock_apply:
             llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
             mock_apply.assert_not_called()
 
-        self.assertEqual(test_file.read_text(encoding="utf-8"), original_content)
+    def test_create_new_file_in_new_dir_interactive_confirm(self):
+        """测试在交互模式下于新目录中创建文件并确认"""
+        new_file_rel_path = "new_dir/test.txt"
+        test_file_path = self.tmp_path / new_file_rel_path
+        self.assertFalse(test_file_path.parent.exists())
+
+        test_content = f"""
+[overwrite whole file]: {new_file_rel_path}
+[start.57]
+new content
+[end.57]
+"""
+        with (
+            patch("builtins.input", return_value="y") as mock_input,
+            patch("llm_query._apply_patch") as mock_apply,
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+
+            mock_input.assert_called_once()
+            mock_apply.assert_called_once()
+
+            # 验证目录是否在应用补丁前创建
+            self.assertTrue(test_file_path.parent.exists())
+
+            output = mock_stdout.getvalue()
+            self.assertIn(f"是否创建新文件 {new_file_rel_path} 并应用变更？", output)
+            self.assertIn("(这将创建新目录: new_dir)", output)
+
+    def test_create_new_file_in_new_dir_interactive_cancel(self):
+        """测试在交互模式下于新目录中创建文件并取消"""
+        new_file_rel_path = "new_dir/test.txt"
+        test_file_path = self.tmp_path / new_file_rel_path
+        self.assertFalse(test_file_path.parent.exists())
+
+        test_content = f"""
+[overwrite whole file]: {new_file_rel_path}
+[start.57]
+new content
+[end.57]
+"""
+        with patch("builtins.input", return_value="n") as mock_input, patch("llm_query._apply_patch") as mock_apply:
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+
+            mock_input.assert_called_once()
+            mock_apply.assert_not_called()
+            self.assertFalse(test_file_path.parent.exists())
+            self.assertFalse(test_file_path.exists())
 
 
 class TestPyLintParser(unittest.TestCase):
@@ -2861,10 +2911,10 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
             '1. 输出"Hello World"信息\n'
             "2. 遵循bash脚本最佳实践\n"
             "[created file]: /project/helloworld.sh\n"
-            "[start]\n"
+            "[start.57]\n"
             "#!/bin/bash\n"
             'echo "Hello World"\n'
-            "[end]"
+            "[end.57]"
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2880,8 +2930,8 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
                 patch("llm_query.LLMInstructionParser.parse") as mock_parse,
                 patch("llm_query.ReplaceEngine") as MockReplaceEngine,
                 patch("llm_query._generate_unified_diff") as mock_generate_diff,
-                patch("llm_query._save_diff_content") as mock_save_diff,
-                patch("llm_query.display_and_apply_diff") as mock_display,
+                patch("builtins.input", return_value="y"),  # Mock user confirmation
+                patch("llm_query._apply_patch") as mock_apply_patch,
             ):
                 # Setup mocks
                 mock_config.project_root_dir = str(project_root)
@@ -2907,7 +2957,6 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
                 mock_generate_diff.return_value = (
                     '--- a/helloworld.sh\n+++ b/helloworld.sh\n@@ -0,0 +1,2 @@\n+#!/bin/bash\n+echo "Hello World"'
                 )
-                mock_save_diff.return_value = MagicMock(spec=Path)
 
                 # Execute function
                 extract_and_diff_files(content, auto_apply=False, save=True)
@@ -2928,8 +2977,7 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
 
                 # Verify diff processing
                 mock_generate_diff.assert_called_once()
-                mock_save_diff.assert_called_once_with(mock_generate_diff.return_value)
-                mock_display.assert_called_once_with(mock_save_diff.return_value, auto_apply=False)
+                mock_apply_patch.assert_called_once()
 
 
 if __name__ == "__main__":
