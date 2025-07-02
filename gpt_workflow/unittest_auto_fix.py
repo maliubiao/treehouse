@@ -7,6 +7,7 @@ from unittest.mock import _Call
 
 import colorama
 from colorama import Fore, Style
+from report_generator import ReportGenerator
 
 from debugger import tracer
 from llm_query import (
@@ -26,6 +27,39 @@ from llm_query import (
 _Call.__repr__ = lambda self: f"<Call id={id(self)}>"  # type: ignore
 
 
+class FailureTracker:
+    """
+    Tracks repeated failures for the same error location to avoid infinite loops.
+    """
+
+    def __init__(self, max_attempts: int):
+        self._attempts = defaultdict(int)
+        self._max_attempts = max_attempts
+
+    def record_attempt(self, error: dict) -> None:
+        """Increments the attempt counter for a given error."""
+        key = self._get_key(error)
+        self._attempts[key] += 1
+
+    def has_exceeded_limit(self, error: dict) -> bool:
+        """Checks if an error has reached the maximum attempt limit."""
+        key = self._get_key(error)
+        return self._attempts[key] >= self._max_attempts
+
+    def get_attempt_count(self, error: dict) -> int:
+        """Returns the current attempt count for an error."""
+        return self._attempts[self._get_key(error)]
+
+    @staticmethod
+    def _get_key(error: dict) -> tuple:
+        """Creates a unique key for an error based on its location."""
+        return (error.get("file_path", "unknown"), error.get("line", 0))
+
+    def get_skipped_errors(self) -> list:
+        """Gets a list of all error keys that have been skipped."""
+        return [key for key, count in self._attempts.items() if count >= self._max_attempts]
+
+
 def _reload_project_modules():
     """
     Unloads project-specific modules from sys.modules to force a reload.
@@ -34,13 +68,6 @@ def _reload_project_modules():
     important to reload test modules so that `unittest.mock.patch` decorators
     are re-applied to the newly-loaded application code.
     """
-    # Define prefixes for modules that belong to the project and should be reloaded.
-    # This includes tests (typically starting with 'test_'), the main application
-    # logic ('gpt_workflow'), and supporting modules.
-    #
-    # Note on 'test_': unittest.discover finds tests in the 'tests/' directory
-    # and loads them as top-level modules (e.g., 'test_main', 'test_something').
-    # Therefore, we must match by 'test_' prefix, not the 'tests' directory name.
     project_module_prefixes = ("test_", "gpt_workflow", "debugger", "llm_query")
 
     modules_to_reload = [name for name in sys.modules if name.startswith(project_module_prefixes)]
@@ -48,7 +75,6 @@ def _reload_project_modules():
     if modules_to_reload:
         print(Fore.CYAN + "\nReloading project modules to apply changes...")
         reloaded_count = 0
-        # Sort for deterministic output and to potentially help with dependency order
         for name in sorted(modules_to_reload):
             if name in sys.modules:
                 del sys.modules[name]
@@ -72,7 +98,6 @@ class TestAutoFix:
             for category in ["errors", "failures"]:
                 for error in self.test_results.get("results", {}).get(category, []):
                     if isinstance(error, dict):
-                        # 添加文件存在性检查
                         file_path = error.get("file_path", "unknown")
                         if file_path != "unknown" and not Path(file_path).exists():
                             print(Fore.YELLOW + f"Warning: File path from test results does not exist: {file_path}")
@@ -203,10 +228,7 @@ class TestAutoFix:
                 for references in references_group:
                     print(Fore.BLUE + "\nCall Chain References:")
                     indent_level = 0
-                    # 获取符号信息
-
                     for ref in references:
-                        # 在符号字典中查找匹配信息
                         if ref.get("type") == "call":
                             self.uniq_references.add((ref.get("filename", "?"), ref.get("lineno", 0)))
                             print(
@@ -227,37 +249,18 @@ class TestAutoFix:
             print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
 
     def get_symbol_info_for_references(self, references: list) -> dict:
-        """获取符号信息用于参考展示
-        Args:
-            references: 引用位置列表，格式为[(filename, lineno), ...]
-        Returns:
-            符号信息字典
-        """
-        # 按filename分组建立映射
+        """获取符号信息用于参考展示"""
         file_to_lines = defaultdict(list)
         for filename, lineno in references:
             file_to_lines[filename].append(lineno)
-        # 创建分组后的FileSearchResult对象
         file_results = []
         for filename, lines in file_to_lines.items():
-            # 为每个行号创建MatchResult
-            matches = [
-                MatchResult(
-                    line=lineno,
-                    column_range=(0, 0),
-                    text="",  # 列信息未知时使用默认值
-                )
-                for lineno in lines
-            ]
+            matches = [MatchResult(line=lineno, column_range=(0, 0), text="") for lineno in lines]
             file_results.append(FileSearchResult(file_path=filename, matches=matches))
 
-        # 创建FileSearchResults容器
         search_results = FileSearchResults(results=file_results)
-
-        # 调用符号查询API
         symbol_results = query_symbol_service(search_results, 128 * 1024)
 
-        # 构建符号字典
         if symbol_results and isinstance(symbol_results, dict):
             print(Fore.BLUE + "\nSymbol Information:")
             print(Fore.BLUE + "-" * 30)
@@ -267,16 +270,6 @@ class TestAutoFix:
 
         return symbol_results
 
-    def get_error_context(self, file_path: str, line: int, context_lines: int = 5) -> Optional[List[str]]:
-        """Get context around the error line from source file."""
-
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        start = max(0, line - context_lines - 1)
-        end = min(len(lines), line + context_lines)
-        return [line.strip() for line in lines[start:end]]
-
     @staticmethod
     @tracer.trace(
         target_files=["*.py"],
@@ -285,14 +278,10 @@ class TestAutoFix:
         ignore_self=False,
         ignore_system_paths=True,
         disable_html=True,
-        # include_stdlibs=["unittest"],
     )
     def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
         """
         Run tests and return results in JSON format.
-        This static method is a wrapper around the actual test runner
-        to apply the tracer decorator.
-        The 'run_tests' function is imported at the end of the file.
         """
         return run_tests(test_patterns=test_patterns, verbosity=verbosity, json_output=True, list_mode=list_tests)
 
@@ -317,11 +306,7 @@ def parse_args():
         default=1,
         help="Output verbosity (0=quiet, 1=default, 2=verbose)",
     )
-    parser.add_argument(
-        "--list-tests",
-        action="store_true",
-        help="List all available test cases without running them",
-    )
+    parser.add_argument("--list-tests", action="store_true", help="List all available test cases without running them")
     parser.add_argument(
         "--lookup",
         nargs=2,
@@ -330,28 +315,37 @@ def parse_args():
     )
     parser.add_argument("--user-requirement", help="User's specific requirements to be added to the prompt", default="")
     parser.add_argument(
-        "--model",
-        default="deepseek-r1",
-        help="Specify the language model to use (e.g., deepseek-r1, gpt-4, etc.)",
+        "--model", default="deepseek-r1", help="Specify the language model to use (e.g., deepseek-r1, gpt-4, etc.)"
     )
     parser.add_argument(
-        "--direct-fix",
-        action="store_true",
-        help="Directly generate a fix without the interactive explanation step.",
+        "--direct-fix", action="store_true", help="Directly generate a fix without the interactive explanation step."
+    )
+    parser.add_argument(
+        "--auto-pilot", action="store_true", help="Enable fully automated regression analysis and fix mode."
     )
     return parser.parse_args()
 
 
+def _consume_stream_and_get_text(stream_generator, print_stream: bool = True) -> str:
+    """Consumes a generator, prints its content, and returns the full text."""
+    text_chunks = []
+    if print_stream:
+        print(Fore.BLUE + "--- AI Analysis ---" + Style.RESET_ALL)
+    for chunk in stream_generator:
+        if print_stream:
+            print(chunk, end="", flush=True)
+        text_chunks.append(chunk)
+    if print_stream:
+        print("\n" + Fore.BLUE + "-------------------" + Style.RESET_ALL)
+    return "".join(text_chunks)
+
+
 def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch: ModelSwitch, user_req: str):
-    """
-    Performs a direct, one-step fix by analyzing the tracer log and generating a patch.
-    """
+    """Performs a direct, one-step fix by analyzing the tracer log and generating a patch."""
     print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
 
     if not user_req:
         user_req = "分析并解决用户遇到的问题，修复test_*符号中的错误"
-
-    tokens_left = model_switch.current_config.max_context_size
 
     prompt_content = f"""
 请根据以下tracer的报告, 分析问题原因并直接修复testcase相关问题。请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据。
@@ -362,7 +356,7 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch
     """
 
     GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=tokens_left)
+    p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=model_switch.current_config.max_context_size)
     p.process_search_results(symbol_result)
     prompt = p.build(user_requirement=prompt_content)
     print(Fore.YELLOW + "正在生成修复方案...")
@@ -370,15 +364,118 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
-def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch: ModelSwitch, user_req: str):
+def _get_user_feedback_on_analysis(analysis_text: str) -> str:
     """
-    Performs an interactive, two-step fix: first explains the issue, then generates a patch.
-    """
-    print(Fore.YELLOW + "正在生成问题原因解释...")
-    tokens_left = model_switch.current_config.max_context_size
+    Presents the AI's analysis to the user and asks for feedback on how to proceed with the fix.
 
-    # Step 1: Explanation
-    explain_prompt_template = (Path(__file__).parent.parent / "prompts/python-tracer").read_text(encoding="utf-8")
+    Returns:
+        A string containing the user's directive for the fix, or an empty string to abort.
+    """
+    print(Fore.YELLOW + "\n" + "=" * 15 + " User Review and Direction " + "=" * 15)
+    print(Fore.CYAN + "The AI has analyzed the issue. Please review its findings and provide direction for the fix.")
+    print(Fore.YELLOW + "=" * 54)
+
+    print(Fore.GREEN + "Please choose a course of action:")
+    print(Fore.CYAN + "  1. Accept the analysis and proceed with the recommended fix.")
+    print(Fore.CYAN + "  2. The analysis is correct, but I want to provide a specific instruction.")
+    print(Fore.CYAN + "  3. The analysis seems wrong. I will provide a new direction.")
+    print(Fore.CYAN + "  q. Quit the fix process.")
+
+    while True:
+        choice = input(Fore.GREEN + "Your choice (1/2/3/q): ").strip().lower()
+
+        if choice == "1":
+            return "按照上述技术专家的分析，解决用户遇到的问题，修复单元测试中的错误，使其能够成功通过。"
+        elif choice == "2":
+            user_instruction = input(Fore.GREEN + "Please provide your specific instruction: ").strip()
+            if user_instruction:
+                return user_instruction
+            else:
+                print(Fore.RED + "Instruction cannot be empty. Please try again.")
+        elif choice == "3":
+            user_instruction = input(Fore.GREEN + "Please describe the correct analysis and how to fix it: ").strip()
+            if user_instruction:
+                return user_instruction
+            else:
+                print(Fore.RED + "Direction cannot be empty. Please try again.")
+        elif choice == "q":
+            return ""  # Empty string signals to abort
+        else:
+            print(Fore.RED + "Invalid choice. Please enter 1, 2, 3, or q.")
+
+
+def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_switch: ModelSwitch):
+    """
+    Performs an interactive, two-step fix:
+    1. Analyzes the failure and presents the analysis.
+    2. Gets user feedback and direction.
+    3. Generates a patch based on the analysis and user's final command.
+    """
+    print(Fore.YELLOW + "\nStep 1: Generating failure analysis...")
+
+    # Load the specialized analysis prompt
+    analyze_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
+        encoding="utf-8"
+    )
+    analyze_prompt_content = f"""
+{analyze_prompt_template}
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+"""
+    p_explain = PatchPromptBuilder(
+        use_patch=False, symbols=[], tokens_left=model_switch.current_config.max_context_size
+    )
+    p_explain.process_search_results(symbol_result)
+    prompt_explain = p_explain.build(user_requirement=analyze_prompt_content)
+    stream = model_switch.query(model_switch.model_name, prompt_explain, stream=True)
+    analysis_text = _consume_stream_and_get_text(stream)
+
+    # Step 2: Get user feedback on the analysis
+    user_directive = _get_user_feedback_on_analysis(analysis_text)
+    if not user_directive:
+        print(Fore.RED + "User aborted the fix process.")
+        return
+
+    # Step 3: Generate the fix based on analysis and user directive
+    print(Fore.YELLOW + "\nStep 2: Generating fix based on analysis and user directive...")
+    fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
+        encoding="utf-8"
+    )
+    fix_prompt_content = f"""
+{fix_prompt_template}
+
+[技术专家的分析报告]
+{analysis_text}
+[用户最终指令]
+{user_directive}
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+    """
+    GPT_FLAGS[GPT_FLAG_PATCH] = True
+    p_fix = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=model_switch.current_config.max_context_size)
+    p_fix.process_search_results(symbol_result)
+    prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
+
+    text = model_switch.query(model_switch.model_name, prompt_fix, stream=True)
+    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+
+
+def _perform_automated_fix_and_report(
+    auto_fix: TestAutoFix,
+    selected_error: dict,
+    symbol_result: dict,
+    model_switch: ModelSwitch,
+    report_generator: ReportGenerator,
+):
+    """Analyzes an error, generates a report, and applies a fix in auto-pilot mode."""
+    print(Fore.YELLOW + "Generating problem analysis for report...")
+
+    # Step 1: Get Explanation for the report
+    explain_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
+        encoding="utf-8"
+    )
     explain_prompt_content = f"""
 {explain_prompt_template}
 请根据以下tracer的报告, 按照分析要求，解释问题的原因, 请以中文回复
@@ -386,52 +483,54 @@ def _perform_two_step_fix(auto_fix: TestAutoFix, symbol_result: dict, model_swit
 {auto_fix.trace_log}
 [trace log end]
 """
-    p_explain = PatchPromptBuilder(use_patch=False, symbols=[], tokens_left=tokens_left)
+    p_explain = PatchPromptBuilder(
+        use_patch=False, symbols=[], tokens_left=model_switch.current_config.max_context_size
+    )
     p_explain.process_search_results(symbol_result)
     prompt_explain = p_explain.build(user_requirement=explain_prompt_content)
-    explain_text = model_switch.query(model_switch.model_name, prompt_explain, stream=True)
+    stream = model_switch.query(model_switch.model_name, prompt_explain, stream=True)
+    analysis_text = _consume_stream_and_get_text(stream, print_stream=True)
 
-    # Step 2: Fix
-    user_req_for_fix = user_req
-    if not user_req_for_fix:
-        user_req_for_fix = input(Fore.GREEN + "请输入测试的目的（或按回车键跳过）: ")
-
-    if not user_req_for_fix:
-        user_req_for_fix = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
-
+    # Step 2: Prepare the fix prompt (which will also be in the report)
+    user_req_for_fix = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
+    fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
+        encoding="utf-8"
+    )
     fix_prompt_content = f"""
-请根据以下tracer的报告, 修复testcase相关问题, 请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据
-技术专家的分析:
-{explain_text}
-用户的要求: {user_req_for_fix}
+{fix_prompt_template}
+
+[技术专家的分析报告]
+{analysis_text}
+[用户最终指令]
+{user_req_for_fix}
 [trace log start]
 {auto_fix.trace_log}
 [trace log end]
     """
-    tokens_left = model_switch.current_config.max_context_size
-
     GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p_fix = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=tokens_left)
+    p_fix = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=model_switch.current_config.max_context_size)
     p_fix.process_search_results(symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
 
-    print(Fore.YELLOW + "正在根据分析生成修复方案...")
-    text = model_switch.query(model_switch.model_name, prompt_fix, stream=True)
-    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+    # Step 3: Generate and save the report
+    report_path = report_generator.create_report(test_info=selected_error, analysis=analysis_text, prompt=prompt_fix)
+    print(Fore.GREEN + f"Analysis report saved to: {report_path}")
+
+    # Step 4: Generate and apply the fix
+    print(Fore.YELLOW + "Generating and applying fix...")
+    text_fix = model_switch.query(model_switch.model_name, prompt_fix, stream=True)
+    process_patch_response(text_fix, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
 def run_fix_loop(args: argparse.Namespace):
-    """
-    Main loop for continuous test fixing.
-    Runs tests, allows user to select an error, fixes it, and repeats.
-    """
+    """Main loop for interactive test fixing."""
     model_switch = ModelSwitch()
     model_switch.select(args.model)
     fix_mode = None
 
     if not args.direct_fix:
         print(Fore.YELLOW + "\n请选择修复模式：")
-        print(Fore.CYAN + "1. 解释并修复 (两步)")
+        print(Fore.CYAN + "1. 解释并修复 (两步, 包含用户反馈)")
         print(Fore.CYAN + "2. 直接修复 (一步)")
         print(Fore.CYAN + "3. 退出")
         choice = input(Fore.GREEN + "请选择 (1/2/3): ").strip()
@@ -448,13 +547,9 @@ def run_fix_loop(args: argparse.Namespace):
 
     while True:
         _reload_project_modules()
-
         print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
-        test_results = TestAutoFix.run_tests(
-            test_patterns=args.test_patterns, verbosity=args.verbosity, list_tests=False
-        )
+        test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity)
         auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
-
         selected_error = auto_fix.select_error_interactive()
 
         if not selected_error:
@@ -464,10 +559,8 @@ def run_fix_loop(args: argparse.Namespace):
                 print(Fore.RED + "\n用户选择退出修复流程。")
             break
 
-        # Reset state for the selected error to ensure a clean analysis
         auto_fix.uniq_references = set()
         auto_fix.trace_log = ""
-
         auto_fix.display_selected_error_details(selected_error)
 
         if not auto_fix.uniq_references:
@@ -476,7 +569,6 @@ def run_fix_loop(args: argparse.Namespace):
             if continue_choice == "y":
                 continue
             else:
-                print(Fore.RED + "用户选择退出修复流程。")
                 break
 
         symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
@@ -484,7 +576,7 @@ def run_fix_loop(args: argparse.Namespace):
         if fix_mode == "direct":
             _perform_direct_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
         elif fix_mode == "two_step":
-            _perform_two_step_fix(auto_fix, symbol_result, model_switch, args.user_requirement)
+            _perform_two_step_fix(auto_fix, symbol_result, model_switch)
 
         continue_choice = input(Fore.GREEN + "\n补丁已应用。是否继续修复下一个问题？ (y/n): ").strip().lower()
         if continue_choice != "y":
@@ -492,11 +584,62 @@ def run_fix_loop(args: argparse.Namespace):
             break
 
 
+def run_auto_pilot_loop(args: argparse.Namespace):
+    """Main loop for the fully automated test fixing and reporting workflow."""
+    print(Fore.MAGENTA + "🚀 " + "=" * 20 + " Auto-Pilot Mode Engaged " + "=" * 20 + " 🚀")
+    model_switch = ModelSwitch()
+    model_switch.select(args.model)
+    report_generator = ReportGenerator()
+    failure_tracker = FailureTracker(max_attempts=2)
+
+    while True:
+        _reload_project_modules()
+        print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
+        test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity)
+        auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
+        auto_fix._print_stats()
+
+        if not auto_fix.error_details:
+            print(Fore.GREEN + "\n🎉 恭喜！所有测试均已通过。Auto-Pilot完成任务。")
+            break
+
+        selected_error = None
+        for error in auto_fix.error_details:
+            if not failure_tracker.has_exceeded_limit(error):
+                selected_error = error
+                break
+
+        if not selected_error:
+            print(Fore.RED + "\n所有剩余错误已达到最大重试次数，无法继续自动修复。")
+            skipped = failure_tracker.get_skipped_errors()
+            print(Fore.YELLOW + f"被放弃的错误 ({len(skipped)}):")
+            for i, (file_path, line) in enumerate(skipped):
+                print(f"  {i + 1}. {file_path}:{line}")
+            print(Fore.MAGENTA + "Auto-Pilot 退出。")
+            break
+
+        failure_tracker.record_attempt(selected_error)
+        attempt_count = failure_tracker.get_attempt_count(selected_error)
+        print(Fore.CYAN + f"\n▶️ 开始处理错误 (第 {attempt_count}/2 次尝试):")
+
+        auto_fix.uniq_references = set()
+        auto_fix.trace_log = ""
+        auto_fix.display_selected_error_details(selected_error)
+
+        if not auto_fix.uniq_references:
+            print(Fore.YELLOW + "\n未找到错误的有效引用，无法自动修复。跳过此错误。")
+            continue
+
+        symbol_result = auto_fix.get_symbol_info_for_references(list(auto_fix.uniq_references))
+        _perform_automated_fix_and_report(auto_fix, selected_error, symbol_result, model_switch, report_generator)
+
+        print(Fore.GREEN + "\n补丁已应用。将自动重新运行测试以验证修复效果...")
+
+
 def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
 
-    # Handle one-off commands that do not enter the fix loop
     if args.lookup:
         file_path, line = args.lookup
         try:
@@ -514,15 +657,14 @@ def main():
         )
         if "test_cases" in test_results:
             print("\nAvailable test cases:")
-            print("=" * 50)
             for test_id in test_results["test_cases"]:
                 print(test_id)
-            print("=" * 50)
-            print(f"Total: {len(test_results['test_cases'])} tests")
         return
 
-    # Enter the main continuous fixing loop
-    run_fix_loop(args)
+    if args.auto_pilot:
+        run_auto_pilot_loop(args)
+    else:
+        run_fix_loop(args)
 
 
 if __name__ == "__main__":
