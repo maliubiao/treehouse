@@ -56,6 +56,11 @@ class SourceHandler:
         num_entries = compile_unit.GetNumLineEntries()
         entries = []
 
+        # 添加空列表检查：当没有条目时直接返回
+        if num_entries <= 0:
+            self._line_entries_cache[cache_key] = entries
+            return entries
+
         # Use a progress bar for large compile units to provide user feedback.
         if num_entries > 500:
             with Progress(
@@ -77,8 +82,11 @@ class SourceHandler:
                 if entry.IsValid() and entry.GetLine() > 0:
                     entries.append(entry)
 
-        # Sort entries by line and then column for predictable order.
-        entries.sort(key=lambda e: (e.GetLine(), e.GetColumn()))
+        # 仅在列表非空时执行排序
+        if entries:
+            # Sort entries by line and then column for predictable order.
+            entries.sort(key=lambda e: (e.GetLine(), e.GetColumn()))
+
         self._line_entries_cache[cache_key] = entries
         return entries
 

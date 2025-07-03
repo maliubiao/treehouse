@@ -50,12 +50,11 @@ def generate_relative_sys_path_snippet(test_file_path: Path, project_root_path: 
         # Calculate the relative path from the test directory up to the project root.
         relative_path_to_root = os.path.relpath(proj_root, test_dir)
 
-        # Count the number of '..' segments to determine the depth.
-        depth = relative_path_to_root.count("..")
+        # To construct the Path().parent chain, we need to go up from the test file's location.
+        # The number of `parent` calls needed is the number of directory levels to go up.
+        # os.path.normpath is used to resolve '.' and handle path separators correctly.
+        num_parents = len(Path(os.path.normpath(relative_path_to_root)).parts)
 
-        # From the test file, we need to go up one level to its directory,
-        # then 'depth' more levels to reach the project root.
-        num_parents = 1 + depth
         path_traversal = ".".join(["parent"] * num_parents)
         sys_path_code = f"project_root = Path(__file__).resolve().{path_traversal}"
 
@@ -109,11 +108,10 @@ def get_module_path(target_file_path: Path, project_root_path: Path) -> Optional
 
 def read_file_content(file_path: Path) -> Optional[str]:
     """Read and return file content with error handling."""
+    if not file_path.exists():
+        return None
     try:
         return file_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # This is not an error, just means the file doesn't exist yet.
-        return None
     except UnicodeDecodeError as e:
         print(Fore.RED + f"Encoding error in {file_path}: {e}")
         return None

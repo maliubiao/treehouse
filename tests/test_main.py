@@ -174,7 +174,7 @@ class JSONTestResult(unittest.TextTestResult):
         line = method.__code__.co_firstlineno
         func_name = method.__name__
         for i in reversed(traceback.extract_tb(err[-1])):
-            if "/unittest/" not in i.filename:
+            if method_name == i.name:
                 file_path = i.filename
                 line = i._code.co_firstlineno
                 func_name = i.name

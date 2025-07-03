@@ -20,7 +20,7 @@ def generation_worker(task: Dict) -> Optional[str]:
     call_idx = task["call_index"]
     total_calls = task["total_calls"]
     existing_code = task.get("existing_code")
-    is_incremental = existing_code is not None
+    is_incremental = task.get("is_incremental", False)
     from .generator import UnitTestGenerator
 
     # Re-create a minimal generator instance inside the worker process
@@ -34,7 +34,7 @@ def generation_worker(task: Dict) -> Optional[str]:
     )
 
     log_prefix = f"[Worker-{os.getpid()}]"
-    log_msg = f"{log_prefix} Generating Test Case {case_num} for '{target_func}' (call {call_idx}/{total_calls})"
+    log_msg = f"{log_prefix} Processing Test Case {case_num}/{total_calls} for '{target_func}'"
 
     if is_incremental:
         print(Fore.MAGENTA + f"{log_msg} [INCREMENTAL MODE]" + Style.RESET_ALL)
@@ -54,30 +54,36 @@ def generation_worker(task: Dict) -> Optional[str]:
         print(Fore.CYAN + log_msg + Style.RESET_ALL)
 
     # 2. Build the appropriate prompt (full or incremental)
-    prompt = build_prompt_for_generation(
-        target_func=target_func,
-        call_record=call_record,
-        is_incremental=is_incremental,
-        **{
-            k: v
-            for k, v in task.items()
-            if k
-            in [
-                "test_class_name",
-                "module_to_test",
-                "project_root_path",
-                "output_file_abs_path",
-                "file_path",
-                "file_content",
-                "symbol_context",
-                "existing_code",
-            ]
-        },
-    )
+    prompt_args = {
+        "target_func": target_func,
+        "call_record": call_record,
+        "is_incremental": is_incremental,
+    }
+    # Add all relevant context from the task dictionary
+    for key in [
+        "test_class_name",
+        "module_to_test",
+        "project_root_path",
+        "output_file_abs_path",
+        "file_path",
+        "file_content",
+        "symbol_context",
+        "existing_code",
+    ]:
+        if key in task:
+            prompt_args[key] = task[key]
+
+    prompt = build_prompt_for_generation(**prompt_args)
 
     # 3. Query the LLM and extract code
     response_text = worker_generator.model_switch.query(task["generator_model_name"], prompt, stream=False)
-    return _extract_code_from_response(response_text)
+    extracted_code = _extract_code_from_response(response_text)
+
+    if not extracted_code:
+        print(Fore.RED + f"{log_prefix} Failed to extract code from LLM response for '{target_func}'.")
+        return None
+
+    return extracted_code
 
 
 def _extract_code_from_response(response: str) -> Optional[str]:
@@ -93,12 +99,19 @@ def _extract_code_from_response(response: str) -> Optional[str]:
         end_index = response.find(end_tag, start_index)
         if end_index != -1:
             code = response[start_index + len(start_tag) : end_index]
+            # Use textwrap.dedent to clean up indentation from prompts
             return dedent(code).strip()
 
     # Fallback for old markdown format
     print(Fore.YELLOW + "Warning: Could not find a '[start]...[end]' block. Trying markdown block.")
     match = re.search(r"```(?:python)?\s*(.*?)\s*```", response, re.DOTALL)
     if match:
-        return dedent(match.group(1)).strip()
+        code = match.group(1)
+        return dedent(code).strip()
+
+    # If no tags or markdown, and response is non-empty, maybe the model returned just code
+    if response and "def test_" in response:
+        print(Fore.YELLOW + "Warning: No block syntax found. Returning raw response as code.")
+        return response.strip()
 
     return None

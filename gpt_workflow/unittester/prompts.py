@@ -40,8 +40,13 @@ def build_suggestion_prompt(file_path: str, target_funcs: List[str], file_conten
     """).strip()
 
 
-def build_merge_prompt(existing_code: str, new_code_snippets: List[str], output_path: str) -> str:
-    """Builds the prompt to ask the LLM to merge new test cases into existing code."""
+def build_merge_prompt(
+    existing_code: str, new_code_snippets: List[str], output_path: str, generation_guidance: str
+) -> str:
+    """
+    [MODIFIED] Builds the prompt to ask the LLM to merge new test cases into existing code.
+    It now includes the original generation guidance to ensure consistency.
+    """
     new_blocks_str = ""
     for i, snippet in enumerate(new_code_snippets):
         new_blocks_str += dedent(f"""
@@ -77,16 +82,47 @@ def build_merge_prompt(existing_code: str, new_code_snippets: List[str], output_
         [New Test Code to Add]:
         {new_blocks_str.strip()}
 
-        **3. YOUR TASK: MERGE THE CODE**
-        - **Combine Imports:** Merge the imports from the existing code and ALL new blocks, removing duplicates.
-        - **Merge into Class:** Add the new test methods from all new code blocks into the existing `unittest.TestCase`
-          class. If the class names differ, use the existing class name.
-        - **Preserve Structure:** Maintain the overall structure and style of the existing file.
+        **3. STANDARDS FOR THE MERGED CODE**
+        The new test code was generated following specific rules. You MUST ensure the final, merged code also adheres to these standards, particularly regarding mocking, docstrings, and import style. These rules supersede any conflicting styles in the existing code.
+
+        [Generation Standards]:
+        [start]
+        {generation_guidance}
+        [end]
+
+        **4. YOUR TASK: MERGE THE CODE**
+        - **Combine Imports:** Merge imports from the existing code and ALL new blocks, removing duplicates. Follow the import grouping style from the standards.
+        - **Merge into Class:** Add new test methods into the existing `unittest.TestCase` class.
+        - **Apply Standards:** Ensure all new methods have clear docstrings and that mocking follows the specified rules (e.g., use `with` blocks or decorators).
+        - **Preserve Structure:** Maintain the overall structure of the existing file but apply the coding standards where possible.
         - **Do Not Remove Existing Tests:** Ensure all original tests are kept.
         - **Completeness:** The final output must be a single, complete, and runnable Python file.
+        - **Mocking Validation:** Re-validate all mock usage. All mocks MUST be scoped using `with` blocks or decorators. Remove any global mocks.
 
         **IMPORTANT**: Your entire response MUST be only the merged Python code, enclosed within a single
         `[start]` and `end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap the merged Python code.
+    """).strip()
+
+
+def build_generation_guidance(
+    module_to_test: str,
+    test_class_name: str,
+    existing_code: Optional[str] = None,
+) -> str:
+    """
+    [REFACTORED] Assembles the core guidance for test generation, to be used in both
+    generation and merge prompts for consistency. The unnecessary `target_func`
+    parameter has been removed.
+    """
+    _, _, code_structure_guidance = _get_common_prompt_sections(test_class_name, existing_code)
+    mocking_guidance = _get_mocking_guidance(module_to_test)
+
+    return dedent(f"""
+        **INTELLIGENT MOCKING STRATEGY**
+        {mocking_guidance}
+
+        **YOUR TASK: GENERATE THE TEST CODE**
+        {code_structure_guidance}
     """).strip()
 
 
@@ -110,8 +146,6 @@ def build_prompt_for_generation(
             call_record=call_record,
             test_class_name=test_class_name,
             module_to_test=module_to_test,
-            project_root_path=project_root_path,
-            output_file_abs_path=output_file_abs_path,
             symbol_context=symbol_context,
             file_path=file_path,
             file_content=file_content,
@@ -153,12 +187,15 @@ def _build_file_based_prompt(
     output_file_abs_path: Path,
     existing_code: Optional[str] = None,
 ) -> str:
-    """Constructs the detailed prompt for the LLM using full file content."""
+    """
+    [REFACTORED] Constructs the detailed prompt for the LLM using full file content.
+    Now uses the centralized `build_generation_guidance` function.
+    """
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
     call_record_text = format_call_record_as_text(call_record)
-    action_description, existing_code_section, code_structure_guidance = _get_common_prompt_sections(
-        test_class_name, existing_code
-    )
+    action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
+
+    generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code)
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
@@ -167,7 +204,7 @@ def _build_file_based_prompt(
         You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
         - **Project Root Directory:** `{project_root_path}`
         - **Module to Test:** `{module_to_test}`
-        - **How to Import the Target Function:** `from {module_to_test} import {target_func}`
+        - **How to Import the Target Function:** `from {module_to_test} import {target_func.split(".")[-1]}`
         - **`sys.path` Setup:** To ensure the import works correctly, you MUST include this exact code snippet at the top of the test file.
           ```python
           {sys_path_setup_snippet}
@@ -187,11 +224,11 @@ def _build_file_based_prompt(
         [start]
         {call_record_text}
         [end]
-        **4. INTELLIGENT MOCKING STRATEGY**
-        {_get_mocking_guidance(target_func, module_to_test)}
-        **5. YOUR TASK: GENERATE THE TEST CODE**
-        {code_structure_guidance}
+
+        **4. TEST GENERATION REQUIREMENTS**
+        {generation_guidance}
         {existing_code_section}
+
         **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single `[start]` and `[end]` block.
     """).strip()
     return f"{prompt_part1}\n\n{prompt_part2}"
@@ -207,15 +244,19 @@ def _build_symbol_based_prompt(
     output_file_abs_path: Path,
     existing_code: Optional[str] = None,
 ) -> str:
-    """Constructs the detailed prompt for the LLM using precise symbol context."""
+    """
+    [REFACTORED] Constructs the detailed prompt for the LLM using precise symbol context.
+    Now uses the centralized `build_generation_guidance` function.
+    """
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
     call_record_text = format_call_record_as_text(call_record)
     context_code_str = ""
     for name, data in symbol_context.items():
         context_code_str += f"# Symbol: {name}\n# File: {data.get('file_path', '?')}:{data.get('start_line', '?')}\n{data.get('code', '# Code not found')}\n\n"
-    action_description, existing_code_section, code_structure_guidance = _get_common_prompt_sections(
-        test_class_name, existing_code
-    )
+
+    action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
+
+    generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code)
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
@@ -241,11 +282,11 @@ def _build_symbol_based_prompt(
         [start]
         {call_record_text}
         [end]
-        **4. INTELLIGENT MOCKING STRATEGY**
-        {_get_mocking_guidance(target_func, module_to_test)}
-        **5. YOUR TASK: GENERATE THE TEST CODE**
-        {code_structure_guidance}
+
+        **4. TEST GENERATION REQUIREMENTS**
+        {generation_guidance}
         {existing_code_section}
+
         **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single `[start]` and `[end]` block.
     """).strip()
     return f"{prompt_part1}\n\n{prompt_part2}"
@@ -256,8 +297,6 @@ def _build_incremental_generation_prompt(
     call_record: Dict,
     test_class_name: str,
     module_to_test: str,
-    project_root_path: Path,
-    output_file_abs_path: Path,
     symbol_context: Optional[Dict[str, Dict]] = None,
     file_path: Optional[str] = None,
     file_content: Optional[str] = None,
@@ -307,7 +346,7 @@ def _build_incremental_generation_prompt(
         [end]
 
         **4. INTELLIGENT MOCKING STRATEGY**
-        {_get_mocking_guidance(target_func, module_to_test)}
+        {_get_mocking_guidance(module_to_test)}
 
         **5. YOUR TASK: GENERATE *ONLY* THE NEW TEST METHOD**
         - The test file and class (`{test_class_name}`) already exist.
@@ -317,13 +356,16 @@ def _build_incremental_generation_prompt(
         - **DO NOT** generate `if __name__ == '__main__':`.
         - Your output must be a single, complete `def test_...` method, correctly indented to be placed inside a class.
         - The method MUST have a clear docstring explaining the test case.
+        - **MOCKING MUST BE SCOPED:** Use `with` blocks for mocks to ensure they are cleaned up after use.
 
         **Example of correct output:**
         [start]
-            def test_func_to_test_with_specific_input(self):
-                \"\"\"Test func_to_test with a=5 and b=3, expecting return value 16.\"\"\"
-                # ... test logic with mocks and assertions ...
-                self.assertEqual(func_to_test(5, 3), 16)
+    def test_func_to_test_with_specific_input(self):
+        \"\"\"Test func_to_test with a=5 and b=3, expecting return value 16.\"\"\"
+        with patch('module.dependency') as mock_dep:
+            mock_dep.return_value = 10
+            result = func_to_test(5, 3)
+            self.assertEqual(result, 16)
         [end]
 
         **IMPORTANT**: Your entire response must be only the Python method, enclosed within a `[start]` and `[end]` block.
@@ -366,7 +408,7 @@ def build_duplicate_check_prompt(existing_code: str, call_record: Dict) -> str:
 
 
 def _get_common_prompt_sections(test_class_name: str, existing_code: Optional[str]) -> Tuple[str, str, str]:
-    """Generates common prompt sections for action, existing code, and structure."""
+    """[REFACTORED] Generates common prompt sections with improved code style guidance."""
     if existing_code:
         action_description = f"add a new test method to the existing `unittest.TestCase` class `{test_class_name}`"
         action_verb = "Add the new method to the existing class."
@@ -387,21 +429,58 @@ def _get_common_prompt_sections(test_class_name: str, existing_code: Optional[st
         - **Docstring:** CRITICAL - Each test method MUST have a clear and concise docstring that explains the specific scenario being tested.
         - **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only necessary dependencies (`[SUB-CALL]`).
         - **Assertions:** Use `self.assertEqual()` for return values and `self.assertRaises()` for exceptions, based on the runtime trace.
-        - **Code Structure:**
-          - Generate a complete, runnable Python code snippet.
-          - Include all necessary imports (`unittest`, `unittest.mock`, the `sys.path` setup, and the function to be tested).
+        - **Code Structure and Style:**
+          - Generate a complete, runnable Python script.
+          - **Imports:** Place all imports (`unittest`, `unittest.mock`, the `sys.path` snippet, the function to test) at the top of the file. Group them logically (standard library, third-party, local) and combine imports from the same module (e.g., `from unittest.mock import patch, MagicMock`).
           - {action_verb}
     """).strip()
     return action_description, existing_code_section, code_structure_guidance
 
 
-def _get_mocking_guidance(target_func: str, module_to_test: str) -> str:
-    """Generates the standard mocking guidance section for the prompt."""
+def _get_mocking_guidance(module_to_test: str) -> str:
+    """
+    [REFACTORED] Generates enhanced mocking guidance. The unnecessary `target_func`
+    parameter has been removed to make this function more generic.
+    """
     return dedent(f"""
-    Your goal is to create a valuable and robust test.
-    - **DO Mock:** External services (network, DB), non-deterministic functions (`datetime.now`), or complex dependencies shown as `[SUB-CALL]`.
-    - **DO NOT Mock:** Simple, pure, deterministic helper functions within your own project.
-    - **How to Patch:** Use `patch('{module_to_test}.dependency_func', ...)` to patch dependencies where they are *used*.
+    Your goal is to create a valuable and robust test, not a brittle one that just checks implementation details.
+    - **Principle: Test Behavior, Not Implementation.** Focus on the *outcome* of the function (its return value, state changes, or exceptions) based on the provided inputs. The `[SUB-CALL]` entries in the trace are *candidates* for mocking, not a mandate to mock everything.
+    - **What to Mock (Good Candidates):**
+      - **External Systems:** Any interaction with networks, databases, or the file system.
+      - **Non-deterministic Code:** Functions like `datetime.now()` or `random.random()`.
+      - **Slow or Complex Dependencies:** Components that are slow, require complicated setup, or are outside the scope of the current test.
+    - **What to AVOID Mocking (Bad Candidates):**
+      - **Internal Helpers:** Do not mock simple, pure, deterministic helper functions within your own project. Testing the function with its real helpers provides more value.
+      - **Data Objects:** Avoid mocking simple data structures or classes.
+    - **How to Patch:**
+      - Patch dependencies where they are *used*, not where they are defined. For a function in `{module_to_test}`, you will likely be patching targets like `patch('{module_to_test}.dependency_name', ...)`.
+      - **Avoid excessive `assert_called_with`**. Only verify calls if the *interaction itself* is a critical part of the function's contract. A test that only checks mocks is often a poor test.
+    - **CRITICAL MOCKING RULES:**
+      - **SCOPED MOCKS ONLY:** All mocks MUST be contained within the smallest possible scope. Use `with unittest.mock.patch(...):` blocks or the `@patch` decorator on individual test methods.
+      - **NO GLOBAL MOCKS:** NEVER mock at the module level (e.g., by altering `sys.modules` or setting global variables). This includes avoiding any mock setup outside of test methods.
+      - **MOCKS MUST BE CLEANED UP:** Ensure mocks are automatically cleaned up when leaving their scope. Context managers (`with` blocks) are preferred for this reason.
+      - **Example of Correct Mocking:**
+        ```python
+        # Good: Using a context manager within a test
+        def test_my_function(self):
+            with patch('mymodule.other_function', return_value=42):
+                result = my_function()
+                self.assertEqual(result, 42)
+
+        # Good: Using a decorator
+        @patch('mymodule.other_function', return_value=42)
+        def test_my_function(self, mock_other):
+            result = my_function()
+            self.assertEqual(result, 42)
+
+        # BAD: Global mock that affects other tests (STRICTLY FORBIDDEN)
+        # At the top of the test file: 
+        #   import sys
+        #   sys.modules['rich'] = MagicMock()
+        #
+        # Or in setUp method:
+        #   self.global_mock = patch('module.dependency').start()
+        ```
     """).strip()
 
 
@@ -425,7 +504,12 @@ def format_call_record_as_text(call_record: Dict[str, Any]) -> str:
             if event.get("type") == "line":
                 data = event.get("data", {})
                 line_no, content = data.get("line_no"), data.get("content", "").rstrip()
-                trace_lines.append(f"    L{line_no:<4} {content}")
+                debug_text = ""
+                if data.get("tracked_vars"):
+                    debug_text = "# Debug " + "\n".join(
+                        ["%s=%s" % (key, value) for key, value in data["tracked_vars"].items()]
+                    )
+                trace_lines.append(f"    L{line_no:<4} {content} {debug_text})")
             elif event.get("type") == "call":
                 data = event.get("data", {})
                 sub_func_name = data.get("func_name", "N/A")

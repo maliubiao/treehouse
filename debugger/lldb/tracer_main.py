@@ -52,6 +52,16 @@ def parse_args():
     return args
 
 
+from debugger.presets import generate_for_project
+
+
+@generate_for_project(
+    project_glob="*/tracer/*py",
+    model_name="deepseek-r1",
+    checker_model_name="deepseek-v3",
+    num_workers=10,
+    trace_llm=True,
+)
 def main():
     args = parse_args()
     tracer = Tracer(

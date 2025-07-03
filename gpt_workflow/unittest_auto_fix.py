@@ -1,12 +1,15 @@
 import argparse
+import concurrent.futures
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 from unittest.mock import _Call
 
 from colorama import Fore, Style
 from report_generator import ReportGenerator
+from tqdm import tqdm
 
 from debugger import tracer
 from llm_query import (
@@ -186,35 +189,37 @@ class TestAutoFix:
             except ValueError:
                 print(Fore.RED + "Invalid input. Please enter a number or 'q'.")
 
-    def display_selected_error_details(self, selected_error: Dict) -> None:
+    def display_selected_error_details(self, selected_error: Dict, silent: bool = False) -> None:
         """
         Display detailed information for the selected test error, including traceback and tracer logs.
         This method populates `self.uniq_references`, `self.trace_log` and `self.exception_location`.
+        If `silent` is True, it will not print to stdout.
         """
-        print(Fore.YELLOW + "\nAnalyzing selected issue:")
-        print(Fore.YELLOW + "=" * 50)
+        if not silent:
+            print(Fore.YELLOW + "\nAnalyzing selected issue:")
+            print(Fore.YELLOW + "=" * 50)
 
-        print(Fore.RED + f"\nIssue ({selected_error.get('issue_type', 'unknown')}):")
-        print(Fore.CYAN + f"File: {selected_error['file_path']}")
-        print(Fore.CYAN + f"Line: {selected_error['line']}")
-        print(Fore.CYAN + f"Function: {selected_error['function']}")
-        print(Fore.MAGENTA + f"Type: {selected_error['error_type']}")
-        print(Fore.MAGENTA + f"Message: {selected_error['error_message']}")
+            print(Fore.RED + f"\nIssue ({selected_error.get('issue_type', 'unknown')}):")
+            print(Fore.CYAN + f"File: {selected_error['file_path']}")
+            print(Fore.CYAN + f"Line: {selected_error['line']}")
+            print(Fore.CYAN + f"Function: {selected_error['function']}")
+            print(Fore.MAGENTA + f"Type: {selected_error['error_type']}")
+            print(Fore.MAGENTA + f"Message: {selected_error['error_message']}")
 
-        if selected_error.get("traceback"):
-            print(Fore.YELLOW + "\nTraceback:")
-            print(Fore.YELLOW + "-" * 30)
-            print(Fore.RED + selected_error["traceback"])
-            print(Fore.YELLOW + "-" * 30)
+            if selected_error.get("traceback"):
+                print(Fore.YELLOW + "\nTraceback:")
+                print(Fore.YELLOW + "-" * 30)
+                print(Fore.RED + selected_error["traceback"])
+                print(Fore.YELLOW + "-" * 30)
 
         if selected_error.get("file_path") and selected_error.get("line"):
-            self._display_tracer_logs(selected_error["file_path"], selected_error["line"])
+            self._display_tracer_logs(selected_error["file_path"], selected_error["line"], silent=silent)
 
     def lookup_reference(self, file_path: str, lineno: int) -> None:
         """Display reference information for a specific file and line."""
         self._display_tracer_logs(file_path, lineno)
 
-    def _display_tracer_logs(self, file_path: str, line: int) -> None:
+    def _display_tracer_logs(self, file_path: str, line: int, silent: bool = False) -> None:
         """
         Display relevant tracer logs for the error location and identify the exception source.
         """
@@ -223,14 +228,16 @@ class TestAutoFix:
             logs, references_group = log_extractor.lookup(file_path, line)
             if logs:
                 self.trace_log = logs[0]
-                print(Fore.BLUE + "\nTracer Logs:")
-                print(Fore.BLUE + "-" * 30)
-                print(Fore.BLUE + f"{logs[0]}" + Style.RESET_ALL)
+                if not silent:
+                    print(Fore.BLUE + "\nTracer Logs:")
+                    print(Fore.BLUE + "-" * 30)
+                    print(Fore.BLUE + f"{logs[0]}" + Style.RESET_ALL)
 
                 exception_found_in_trace = False
                 if references_group:
                     self.main_call_chain = references_group[0]
-                    print(Fore.BLUE + "\nCall Chain References:")
+                    if not silent:
+                        print(Fore.BLUE + "\nCall Chain References:")
 
                     call_stack = []
                     indent_level = 0
@@ -243,42 +250,49 @@ class TestAutoFix:
                             ref_loc = (ref.get("filename", "?"), ref.get("lineno", 0))
                             call_stack.append(ref_loc)
                             self.uniq_references.add(ref_loc)
-                            print(
-                                Fore.CYAN
-                                + "  " * indent_level
-                                + f"→ {func_name}() at {ref.get('filename', '?')}:{ref.get('lineno', '?')}"
-                            )
+                            if not silent:
+                                print(
+                                    Fore.CYAN
+                                    + "  " * indent_level
+                                    + f"→ {func_name}() at {ref.get('filename', '?')}:{ref.get('lineno', '?')}"
+                                )
                             indent_level += 1
                         elif ref_type == "return":
                             if call_stack:
                                 call_stack.pop()
                             indent_level = max(0, indent_level - 1)
-                            print(Fore.GREEN + "  " * indent_level + f"← {func_name}() returned")
+                            if not silent:
+                                print(Fore.GREEN + "  " * indent_level + f"← {func_name}() returned")
                         elif ref_type == "exception":
                             indent_level = max(0, indent_level - 1)
-                            print(Fore.RED + "  " * indent_level + f"✗ {func_name}() raised exception")
+                            if not silent:
+                                print(Fore.RED + "  " * indent_level + f"✗ {func_name}() raised exception")
                             if call_stack:
                                 self.exception_location = call_stack[-1]  # Deepest frame on stack
                                 exception_found_in_trace = True
-                                print(
-                                    Fore.MAGENTA
-                                    + f"  Pinpointed exception source from tracer log: {self.exception_location[0]}:{self.exception_location[1]}"
-                                )
+                                if not silent:
+                                    print(
+                                        Fore.MAGENTA
+                                        + f"  Pinpointed exception source from tracer log: {self.exception_location[0]}:{self.exception_location[1]}"
+                                    )
 
                 if not exception_found_in_trace:
                     self.exception_location = (file_path, line)
-                    print(
-                        Fore.YELLOW
-                        + f"\nCould not pinpoint exception in trace, using test report location as fallback: {file_path}:{line}"
-                    )
+                    if not silent:
+                        print(
+                            Fore.YELLOW
+                            + f"\nCould not pinpoint exception in trace, using test report location as fallback: {file_path}:{line}"
+                        )
             else:
-                print(Fore.YELLOW + f"\nNo tracer logs found for this location, {file_path}:{line}")
+                if not silent:
+                    print(Fore.YELLOW + f"\nNo tracer logs found for this location, {file_path}:{line}")
                 self.exception_location = (file_path, line)  # Fallback
         except (FileNotFoundError, PermissionError, ValueError) as e:
-            print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
+            if not silent:
+                print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
             self.exception_location = (file_path, line)  # Fallback
 
-    def get_and_prioritize_symbols(self, model_switch: ModelSwitch) -> dict:
+    def get_and_prioritize_symbols(self, model_switch: ModelSwitch, silent: bool = False) -> dict:
         """
         Fetches symbols and prioritizes them based on the call stack at the time of the exception.
         It uses a layered approach, adding symbols from the call stack first (deepest to shallowest),
@@ -291,15 +305,17 @@ class TestAutoFix:
         if not self.uniq_references:
             return {}
 
-        print(Fore.CYAN + "\n" + "=" * 15 + " Building Smart Context " + "=" * 15)
+        if not silent:
+            print(Fore.CYAN + "\n" + "=" * 15 + " Building Smart Context " + "=" * 15)
 
         # 1. Get model configuration and token budget
         config = model_switch.current_config
         MAX_SYMBOLS_TOKENS = (config.max_context_size or 32768) - 4096
-        print(
-            Fore.BLUE
-            + f"Model context limit: {config.max_context_size}, budget for symbols: {MAX_SYMBOLS_TOKENS} tokens (estimated)."
-        )
+        if not silent:
+            print(
+                Fore.BLUE
+                + f"Model context limit: {config.max_context_size}, budget for symbols: {MAX_SYMBOLS_TOKENS} tokens (estimated)."
+            )
 
         # 2. Fetch ALL referenced symbols to get their content and size
         file_to_lines = defaultdict(list)
@@ -314,10 +330,12 @@ class TestAutoFix:
 
         all_symbols = query_symbol_service(FileSearchResults(results=file_results), 1024 * 1024)
         if not all_symbols:
-            print(Fore.RED + "Could not retrieve any symbol information.")
+            if not silent:
+                print(Fore.RED + "Could not retrieve any symbol information.")
             return {}
-        for sym in all_symbols:
-            print("symbol service returns symbol: %s" % sym)
+        if not silent:
+            for sym in all_symbols:
+                print("symbol service returns symbol: %s" % sym)
         # 3. Create a lookup map for symbols with their approximate token counts
         location_to_symbol_map = {}
         for name, symbol_data in all_symbols.items():
@@ -350,7 +368,8 @@ class TestAutoFix:
 
         # 5a. Add symbols from the call stack, deepest first
         if call_stack_at_exception:
-            print(Fore.CYAN + "\nAdding symbols from exception call stack (deepest first):")
+            if not silent:
+                print(Fore.CYAN + "\nAdding symbols from exception call stack (deepest first):")
             for loc in reversed(call_stack_at_exception):
                 file_path, lineno = loc
 
@@ -376,14 +395,17 @@ class TestAutoFix:
                         final_symbols[name] = containing_symbol["data"]
                         current_tokens += tokens
                         added_symbol_names.add(name)
-                        print(Fore.GREEN + f"  ✓ Added: {name} ({tokens} tokens)")
+                        if not silent:
+                            print(Fore.GREEN + f"  ✓ Added: {name} ({tokens} tokens)")
                     else:
-                        print(Fore.YELLOW + f"  - Skipping {name} ({tokens} tokens) to fit context. Budget full.")
+                        if not silent:
+                            print(Fore.YELLOW + f"  - Skipping {name} ({tokens} tokens) to fit context. Budget full.")
                         break
 
         # 5b. Fill remaining budget with other referenced symbols, smallest first
         if current_tokens < MAX_SYMBOLS_TOKENS:
-            print(Fore.CYAN + "\nFilling remaining context with other referenced symbols (smallest first):")
+            if not silent:
+                print(Fore.CYAN + "\nFilling remaining context with other referenced symbols (smallest first):")
 
             other_symbols = []
             for symbol_info in location_to_symbol_map.values():
@@ -397,16 +419,21 @@ class TestAutoFix:
                     final_symbols[symbol["name"]] = symbol["data"]
                     current_tokens += symbol["tokens"]
                     added_symbol_names.add(symbol["name"])
-                    print(Fore.GREEN + f"  ✓ Added: {symbol['name']} ({symbol['tokens']} tokens)")
+                    if not silent:
+                        print(Fore.GREEN + f"  ✓ Added: {symbol['name']} ({symbol['tokens']} tokens)")
                 else:
                     break
 
         total_symbols = len(final_symbols)
-        print(Fore.CYAN + f"\nSelected {total_symbols} symbols with a total of ~{current_tokens} tokens for context.")
-        print(Fore.CYAN + "=" * 54)
+        if not silent:
+            print(
+                Fore.CYAN + f"\nSelected {total_symbols} symbols with a total of ~{current_tokens} tokens for context."
+            )
+            print(Fore.CYAN + "=" * 54)
 
         if not final_symbols and all_symbols:
-            print(Fore.RED + "Error: No symbols could be added. The primary exception symbol might be too large.")
+            if not silent:
+                print(Fore.RED + "Error: No symbols could be added. The primary exception symbol might be too large.")
 
         return final_symbols
 
@@ -470,6 +497,14 @@ def parse_args():
     )
     parser.add_argument(
         "--auto-pilot", action="store_true", help="Enable fully automated regression analysis and fix mode."
+    )
+    parser.add_argument(
+        "--parallel-analysis",
+        nargs="?",
+        const=os.cpu_count() or 4,
+        type=int,
+        metavar="N",
+        help="Enable parallel analysis of all failed tests with N concurrent workers. If N is not specified, it defaults to the number of CPU cores.",
     )
     return parser.parse_args()
 
@@ -801,9 +836,203 @@ def run_auto_pilot_loop(args: argparse.Namespace, analyzer_model_switch: ModelSw
         print(Fore.GREEN + "\n补丁已应用。将自动重新运行测试以验证修复效果...")
 
 
+class AnalyzedError(NamedTuple):
+    """Data class to hold the results of a single error analysis."""
+
+    error_detail: dict
+    analysis_text: str
+    trace_log: str
+    symbol_result: dict
+    success: bool
+
+
+def analyze_error_task(
+    error_detail: dict, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch
+) -> AnalyzedError:
+    """
+    Analyzes a single test error. Designed to be run in a separate thread.
+    This function is self-contained and does not print to stdout.
+    """
+    # Create a temporary instance to manage state for this specific error
+    auto_fix = TestAutoFix(test_results={}, user_requirement="")
+
+    # Populate internal state like trace_log, uniq_references by running analysis silently
+    auto_fix.display_selected_error_details(error_detail, silent=True)
+    if not auto_fix.uniq_references:
+        return AnalyzedError(error_detail, "Failed to find references in tracer logs.", "", {}, False)
+
+    # Get symbol context silently
+    symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch, silent=True)
+    if not symbol_result:
+        return AnalyzedError(error_detail, "Failed to build symbol context.", auto_fix.trace_log, {}, False)
+
+    # Perform the analysis query (without printing stream)
+    analyze_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
+        encoding="utf-8"
+    )
+    analyze_prompt_content = f"""
+{analyze_prompt_template}
+[trace log start]
+{auto_fix.trace_log}
+[trace log end]
+"""
+    p_explain = PatchPromptBuilder(
+        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size
+    )
+    p_explain.process_search_results(symbol_result)
+    prompt_explain = p_explain.build(user_requirement=analyze_prompt_content)
+    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, prompt_explain, stream=True)
+    analysis_text = _consume_stream_and_get_text(stream, print_stream=False)
+
+    return AnalyzedError(error_detail, analysis_text, auto_fix.trace_log, symbol_result, True)
+
+
+def select_analysis_to_fix_interactive(analyzed_errors: List[AnalyzedError]) -> Optional[AnalyzedError]:
+    """Displays a list of analyzed errors and prompts the user to select one."""
+    print(Fore.YELLOW + "\n" + "=" * 15 + " Parallel Analysis Complete " + "=" * 15)
+    print(Fore.CYAN + "Please select an issue to fix based on the AI's analysis:")
+    print(Fore.YELLOW + "=" * 54)
+
+    for i, result in enumerate(analyzed_errors):
+        error = result.error_detail
+        issue_type = error.get("issue_type", "unknown").upper()
+        func_name = error.get("function", "unknown")
+        error_type = error.get("error_type", "UnknownError")
+        color = Fore.RED if issue_type == "FAILURE" else Fore.YELLOW
+
+        print(color + f"  {i + 1}: [{issue_type}] in {func_name} ({error_type})")
+        print(Fore.CYAN + f"     File: {error['file_path']}:{error['line']}")
+
+        analysis_snippet = result.analysis_text.replace("\n", " ").strip()
+        if len(analysis_snippet) > 120:
+            analysis_snippet = analysis_snippet[:117] + "..."
+        print(Fore.BLUE + f"     Analysis: {analysis_snippet}" + Style.RESET_ALL)
+
+    print(Fore.YELLOW + "=" * 54)
+
+    while True:
+        try:
+            choice_str = input(
+                Fore.GREEN + f"Enter the number of the issue to fix (1-{len(analyzed_errors)}), or 'q' to quit: "
+            ).strip()
+            if choice_str.lower() == "q":
+                return None
+            choice = int(choice_str)
+            if 1 <= choice <= len(analyzed_errors):
+                return analyzed_errors[choice - 1]
+            else:
+                print(Fore.RED + "Invalid choice. Please enter a number from the list.")
+        except ValueError:
+            print(Fore.RED + "Invalid input. Please enter a number or 'q'.")
+
+
+def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_model_switch: ModelSwitch):
+    """Takes a pre-analyzed error and walks the user through the fixing process."""
+    # 1. Present the pre-computed analysis and get user feedback
+    print(Fore.BLUE + "\n--- AI Analysis ---" + Style.RESET_ALL)
+    print(analyzed_error.analysis_text)
+    print(Fore.BLUE + "-------------------" + Style.RESET_ALL)
+
+    user_directive = _get_user_feedback_on_analysis(analyzed_error.analysis_text)
+    if not user_directive:
+        print(Fore.RED + "User aborted the fix process.")
+        return
+
+    # 2. Generate the fix based on analysis and user directive
+    print(Fore.YELLOW + "\nGenerating fix based on analysis and user directive...")
+    print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
+    fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
+        encoding="utf-8"
+    )
+    fix_prompt_content = f"""
+{fix_prompt_template}
+
+[技术专家的分析报告]
+{analyzed_error.analysis_text}
+[用户最终指令]
+{user_directive}
+[trace log start]
+{analyzed_error.trace_log}
+[trace log end]
+    """
+    GPT_FLAGS[GPT_FLAG_PATCH] = True
+    p_fix = PatchPromptBuilder(
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size
+    )
+    p_fix.process_search_results(analyzed_error.symbol_result)
+    prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
+
+    text = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
+    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+
+
+def run_parallel_analysis_workflow(
+    args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch
+):
+    """Main loop for the parallel analysis, sequential fix workflow."""
+    while True:
+        _reload_project_modules()
+        print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
+        test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity)
+        auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
+        auto_fix._print_stats()
+
+        if not auto_fix.error_details:
+            print(Fore.GREEN + "\n🎉 恭喜！所有测试均已通过。")
+            break
+
+        print(
+            Fore.CYAN
+            + f"\nFound {len(auto_fix.error_details)} issues. Starting parallel analysis with {args.parallel_analysis} workers..."
+        )
+
+        analyzed_results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel_analysis) as executor:
+            future_to_error = {
+                executor.submit(analyze_error_task, error, analyzer_model_switch, fixer_model_switch): error
+                for error in auto_fix.error_details
+            }
+            for future in tqdm(
+                concurrent.futures.as_completed(future_to_error),
+                total=len(auto_fix.error_details),
+                desc="Analyzing errors",
+            ):
+                analyzed_results.append(future.result())
+
+        successful_analyses = [r for r in analyzed_results if r.success]
+        failed_analyses = [r for r in analyzed_results if not r.success]
+
+        if failed_analyses:
+            print(Fore.RED + "\nSome analyses could not be completed:")
+            for result in failed_analyses:
+                func = result.error_detail.get("function", "unknown")
+                print(Fore.YELLOW + f"  - {func}: {result.analysis_text}")
+
+        if not successful_analyses:
+            print(Fore.RED + "\nNo errors could be analyzed successfully. Exiting workflow.")
+            break
+
+        selected_analysis = select_analysis_to_fix_interactive(successful_analyses)
+
+        if not selected_analysis:
+            print(Fore.RED + "\nUser chose to exit. Workflow stopped.")
+            break
+
+        _perform_interactive_fix_from_analysis(selected_analysis, fixer_model_switch)
+
+        print(Fore.GREEN + "\nPatch applied. The workflow will now re-run all tests to verify the fix...")
+
+
 def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
+
+    if args.parallel_analysis and (args.auto_pilot or args.direct_fix):
+        print(
+            Fore.RED
+            + "Error: --parallel-analysis is a distinct workflow and cannot be used with --auto-pilot or --direct-fix."
+        )
+        sys.exit(1)
 
     if args.lookup:
         file_path, line = args.lookup
@@ -845,6 +1074,8 @@ def main():
 
     if args.auto_pilot:
         run_auto_pilot_loop(args, analyzer_model_switch, fixer_model_switch)
+    elif args.parallel_analysis:
+        run_parallel_analysis_workflow(args, analyzer_model_switch, fixer_model_switch)
     else:
         run_fix_loop(args, analyzer_model_switch, fixer_model_switch)
 
