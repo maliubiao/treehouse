@@ -310,7 +310,15 @@ class StepHandler:
 
     def _cache_instruction_info(self, frame: lldb.SBFrame, _pc: int) -> None:
         """缓存指令信息"""
+        if not frame or not frame.symbol or not frame.symbol.IsValid():  # 更严格的无效帧检查
+            return
+
         instructions = frame.symbol.GetInstructions(self.tracer.target)
+        # Fix: If there are no instructions, there's no function start address to cache
+        # nor any instructions to process.
+        if instructions.GetSize() == 0:  # ▷ debugger/lldb/tracer/step_handler.py:317
+            return
+
         first_inst_loaded_addr = frame.symbol.GetStartAddress().GetLoadAddress(self.tracer.target)
         self.function_start_addrs.add(first_inst_loaded_addr)
         first_inst = instructions.GetInstructionAtIndex(0)

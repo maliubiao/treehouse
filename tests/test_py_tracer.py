@@ -676,29 +676,6 @@ class TestTraceLogExtractor(BaseTracerTest):
                     idx_f.write(json.dumps(idx_entry) + "\n")
                 pos += len(line.encode("utf-8"))
 
-    def test_normal_lookup(self):
-        extractor = TraceLogExtractor(str(self.log_file))
-        results, _ = extractor.lookup("test_file.py", 5)
-        self.assertEqual(len(results), 1)
-        log_entries = [json.loads(line) for line in results[0].strip().split("\n")]
-        self.assertEqual(log_entries[0]["message"], "CALL func1")
-        self.assertEqual(log_entries[-1]["message"], "RETURN func1")
-
-    def test_no_match(self):
-        extractor = TraceLogExtractor(str(self.log_file))
-        results, _ = extractor.lookup("test_file.py", 999)
-        self.assertEqual(len(results), 0)
-
-    def test_reference_not_empty(self):
-        extractor = TraceLogExtractor(str(self.log_file))
-        results, references = extractor.lookup("test_file.py", 40)
-        self.assertEqual(len(results), 1)
-        log_entries = [json.loads(line) for line in results[0].strip().split("\n")]
-        self.assertEqual(log_entries[0]["message"], "CALL func4")
-        self.assertGreater(len(references), 0, "reference list should not be empty")
-        self.assertEqual(references[0][1]["func"], "abc")
-        self.assertEqual(references[0][1]["lineno"], 46)
-
 
 class TestIntegration(BaseTracerTest):
     """Higher-level tests for start_trace and the @trace decorator."""

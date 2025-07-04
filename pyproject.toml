@@ -52,6 +52,8 @@ dependencies = [
     "markdown>=3.8",
     "google-genai>=1.20.0",
     "graphviz>=0.21",
+    "networkx>=3.5",
+    "pygraphviz>=1.14",
 ]
 
 [tool.black]

@@ -45,7 +45,9 @@ def build_merge_prompt(
 ) -> str:
     """
     [MODIFIED] Builds the prompt to ask the LLM to merge new test cases into existing code.
-    It now includes the original generation guidance to ensure consistency.
+    It now includes instructions for intelligent refactoring, such as splitting test cases
+    into multiple classes and using inheritance for shared setup. It also includes the original
+    generation guidance to ensure consistency.
     """
     new_blocks_str = ""
     for i, snippet in enumerate(new_code_snippets):
@@ -58,9 +60,11 @@ def build_merge_prompt(
         [end]
         """)
 
-    task_description = "intelligently merge new test cases into an existing test file."
+    task_description = (
+        "intelligently merge new test cases into an existing test file, refactoring for clarity and maintainability."
+    )
     if len(new_code_snippets) > 1:
-        task_description = "intelligently merge MULTIPLE new test cases from several blocks into an existing test file."
+        task_description = "intelligently merge MULTIPLE new test cases from several blocks into an existing test file, refactoring for clarity and maintainability."
 
     return dedent(f"""
         You are an expert Python developer specializing in refactoring and maintaining test suites.
@@ -83,24 +87,37 @@ def build_merge_prompt(
         {new_blocks_str.strip()}
 
         **3. STANDARDS FOR THE MERGED CODE**
-        The new test code was generated following specific rules. You MUST ensure the final, merged code also adheres to these standards, particularly regarding mocking, docstrings, and import style. These rules supersede any conflicting styles in the existing code.
+        The new test code was generated following specific rules. You MUST ensure the final, merged code also adheres to these standards. These rules supersede any conflicting styles in the existing code.
 
         [Generation Standards]:
         [start]
         {generation_guidance}
         [end]
 
-        **4. YOUR TASK: MERGE THE CODE**
-        - **Combine Imports:** Merge imports from the existing code and ALL new blocks, removing duplicates. Follow the import grouping style from the standards.
-        - **Merge into Class:** Add new test methods into the existing `unittest.TestCase` class.
-        - **Apply Standards:** Ensure all new methods have clear docstrings and that mocking follows the specified rules (e.g., use `with` blocks or decorators).
-        - **Preserve Structure:** Maintain the overall structure of the existing file but apply the coding standards where possible.
-        - **Do Not Remove Existing Tests:** Ensure all original tests are kept.
-        - **Completeness:** The final output must be a single, complete, and runnable Python file.
-        - **Mocking Validation:** Re-validate all mock usage. All mocks MUST be scoped using `with` blocks or decorators. Remove any global mocks.
+        **4. YOUR TASK: REFACTOR AND MERGE**
+        Your primary goal is to create a clean, well-organized, and robust test suite by integrating the new test cases.
 
-        **IMPORTANT**: Your entire response MUST be only the merged Python code, enclosed within a single
-        `[start]` and `end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap the merged Python code.
+        - **Step 1: Analyze All Test Cases:** Review all test methods, both from the "Existing Code" and all "New Test Code" blocks. Understand the purpose of each test.
+
+        - **Step 2: Group and Refactor into Classes:**
+          - **Group by Functionality:** Group test methods based on the specific behavior or scenario they test (e.g., API contract, edge cases, error handling).
+          - **Class Size Limit:** A single test class SHOULD NOT contain more than 10 test methods. If merging would exceed this limit, you MUST split the tests into multiple, logically-named classes (e.g., `TestFunctionSuccess`, `TestFunctionFailures`).
+          - **Use Inheritance for Common Setup:** If multiple test classes share common setup logic (e.g., creating a common object), create a base test class with a `setUp` method. The specialized test classes should then inherit from this base class to avoid code duplication.
+            *Example:* `class TestMyModuleBase(unittest.TestCase): ...`, then `class TestApiCases(TestMyModuleBase): ...`
+
+        - **Step 3: Combine and Clean Imports:** Merge all imports from the existing and new code. Remove duplicates and organize them according to PEP 8 (standard library, third-party, local application). Combine imports from the same module (e.g., `from unittest.mock import patch, MagicMock`).
+
+        - **Step 4: Apply and Validate Standards:**
+          - Ensure every test method (new and old) has a clear docstring.
+          - Re-validate all mocking against the "Generation Standards". All mocks MUST be correctly scoped using `with` blocks or decorators. Remove any invalid or global mocks.
+          - **Adhere to the "STRICT PROHIBITIONS" in the standards.** Do not mock mocks or non-existent objects.
+
+        - **Step 5: Preserve and Finalize:**
+          - **Do Not Remove Existing Tests:** Ensure all original test logic is preserved, even if it's moved to a different class.
+          - **Completeness:** The final output must be a single, complete, and runnable Python file, including the `if __name__ == '__main__':` block.
+
+        **IMPORTANT**: Your entire response MUST be only the merged and refactored Python code, enclosed within a single
+        `[start]` and `[end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap the merged Python code.
     """).strip()
 
 
@@ -440,7 +457,8 @@ def _get_common_prompt_sections(test_class_name: str, existing_code: Optional[st
 def _get_mocking_guidance(module_to_test: str) -> str:
     """
     [REFACTORED] Generates enhanced mocking guidance. The unnecessary `target_func`
-    parameter has been removed to make this function more generic.
+    parameter has been removed to make this function more generic. It now includes
+    strict prohibitions against invalid mocking patterns.
     """
     return dedent(f"""
     Your goal is to create a valuable and robust test, not a brittle one that just checks implementation details.
@@ -455,32 +473,38 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     - **How to Patch:**
       - Patch dependencies where they are *used*, not where they are defined. For a function in `{module_to_test}`, you will likely be patching targets like `patch('{module_to_test}.dependency_name', ...)`.
       - **Avoid excessive `assert_called_with`**. Only verify calls if the *interaction itself* is a critical part of the function's contract. A test that only checks mocks is often a poor test.
-    - **CRITICAL MOCKING RULES:**
-      - **SCOPED MOCKS ONLY:** All mocks MUST be contained within the smallest possible scope. Use `with unittest.mock.patch(...):` blocks or the `@patch` decorator on individual test methods.
-      - **NO GLOBAL MOCKS:** NEVER mock at the module level (e.g., by altering `sys.modules` or setting global variables). This includes avoiding any mock setup outside of test methods.
-      - **MOCKS MUST BE CLEANED UP:** Ensure mocks are automatically cleaned up when leaving their scope. Context managers (`with` blocks) are preferred for this reason.
-      - **Example of Correct Mocking:**
-        ```python
-        # Good: Using a context manager within a test
-        def test_my_function(self):
-            with patch('mymodule.other_function', return_value=42):
-                result = my_function()
-                self.assertEqual(result, 42)
 
-        # Good: Using a decorator
-        @patch('mymodule.other_function', return_value=42)
-        def test_my_function(self, mock_other):
+    **CRITICAL MOCKING RULES**
+    - **SCOPED MOCKS ONLY:** All mocks MUST be contained within the smallest possible scope. Use `with unittest.mock.patch(...):` blocks or the `@patch` decorator on individual test methods.
+    - **NO GLOBAL MOCKS:** NEVER mock at the module level (e.g., by altering `sys.modules` or setting global variables). This includes avoiding any mock setup outside of test methods.
+    - **MOCKS MUST BE CLEANED UP:** Ensure mocks are automatically cleaned up when leaving their scope. Context managers (`with` blocks) are preferred for this reason.
+
+    **STRICT PROHIBITIONS (VIOLATING THESE WILL CAUSE TEST FAILURES)**
+    1.  **DO NOT MOCK A MOCK OBJECT.** You cannot apply `patch` to an object that is already a mock. This indicates a deep misunderstanding of the code and results in nonsensical tests.
+    2.  **DO NOT MOCK NON-EXISTENT OBJECTS.** Only mock objects that are explicitly mentioned in the source code context or the `[SUB-CALL]` trace. Inventing a dependency to mock (e.g., `patch('some.module.that_does_not_exist')`) will cause the test to fail with an `AttributeError` or `ModuleNotFoundError`. This is an unacceptable error.
+
+    **Example of Correct Mocking:**
+    ```python
+    # Good: Using a context manager within a test
+    def test_my_function(self):
+        with patch('mymodule.other_function', return_value=42):
             result = my_function()
             self.assertEqual(result, 42)
 
-        # BAD: Global mock that affects other tests (STRICTLY FORBIDDEN)
-        # At the top of the test file: 
-        #   import sys
-        #   sys.modules['rich'] = MagicMock()
-        #
-        # Or in setUp method:
-        #   self.global_mock = patch('module.dependency').start()
-        ```
+    # Good: Using a decorator
+    @patch('mymodule.other_function', return_value=42)
+    def test_my_function(self, mock_other):
+        result = my_function()
+        self.assertEqual(result, 42)
+
+    # BAD: Global mock that affects other tests (STRICTLY FORBIDDEN)
+    # At the top of the test file:
+    #   import sys
+    #   sys.modules['rich'] = MagicMock()
+    #
+    # Or in setUp method without cleanup:
+    #   self.global_mock = patch('module.dependency').start()
+    ```
     """).strip()
 
 

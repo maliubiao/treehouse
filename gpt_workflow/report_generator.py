@@ -1,79 +1,104 @@
-import datetime
+import os
+from datetime import datetime
 from pathlib import Path
+from typing import Dict
 
 
 class ReportGenerator:
     """
-    Generates and saves markdown reports for test fix attempts.
+    Generates and saves test failure analysis reports in Markdown format.
     """
 
-    def __init__(self, reports_dir: str = "reports"):
+    def __init__(self, report_dir: str):
         """
         Initializes the ReportGenerator.
 
         Args:
-            reports_dir: The directory where reports will be saved.
+            report_dir: The base directory where reports will be saved.
         """
-        self.reports_dir = Path(reports_dir)
-        self.reports_dir.mkdir(exist_ok=True)
+        self.base_dir = Path(report_dir)
+        # Ensure the base directory exists
+        self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def _generate_filename(self, test_func_name: str) -> str:
+    def create_report(self, test_info: Dict, analysis: str, prompt: str) -> Path:
         """
-        Generates a unique, descriptive filename for the report.
+        Creates a detailed Markdown report for a failed test case and saves it.
 
-        Args:
-            test_func_name: The name of the test function being fixed.
-
-        Returns:
-            A string representing the filename.
-        """
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_func_name = "".join(c if c.isalnum() else "_" for c in test_func_name)
-        return f"fix_report_{safe_func_name}_{timestamp}.md"
-
-    def create_report(self, test_info: dict, analysis: str, prompt: str) -> Path:
-        """
-        Creates and saves a markdown report for a fix attempt.
+        The report is saved in a date-stamped subdirectory of the base_dir.
 
         Args:
             test_info: A dictionary containing details about the failed test.
-            analysis: The LLM-generated analysis of the issue.
-            prompt: The full prompt sent to the LLM to generate the fix.
+            analysis: The AI-generated analysis of the failure.
+            prompt: The full prompt used to generate the fix.
 
         Returns:
-            The path to the generated report file.
+            The Path object of the generated report file.
         """
-        filename = self._generate_filename(test_info.get("function", "unknown_test"))
-        filepath = self.reports_dir / filename
+        # 1. Determine directory and filename
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        report_subdir = self.base_dir / today_str
+        report_subdir.mkdir(exist_ok=True)
 
-        report_title = f"# 修复报告: {test_info.get('function', '未知测试')}"
+        test_function = test_info.get("function", "unknown_function").replace(".", "_")
+        timestamp_str = datetime.now().strftime("%H%M%S")
+        filename = f"{test_function}_{timestamp_str}.md"
+        report_path = report_subdir / filename
 
-        content = f"""{report_title}
+        # 2. Format the content into Markdown
+        markdown_content = self._format_markdown(test_info, analysis, prompt)
 
-## 问题摘要
+        # 3. Write to file
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
 
-- **测试函数**: `{test_info.get("function", "N/A")}`
-- **文件**: `{test_info.get("file_path", "N/A")}:{test_info.get("line", "N/A")}`
-- **问题类型**: `{test_info.get("issue_type", "N/A").upper()}`
-- **错误信息**: `{test_info.get("error_message", "N/A")}`
+        return report_path
+
+    @staticmethod
+    def _format_markdown(test_info: Dict, analysis: str, prompt: str) -> str:
+        """
+        Formats the collected data into a structured Markdown string.
+        """
+        traceback = test_info.get("traceback", "No traceback available.")
+        # Ensure traceback is formatted as a code block
+        if "```" not in traceback:
+            traceback = f"```python\n{traceback}\n```"
+
+        content = f"""
+# Test Failure Analysis Report
+
+- **Date:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+- **Test Case:** `{test_info.get("function", "N/A")}`
+- **File:** `{test_info.get("file_path", "N/A")}:{test_info.get("line", "N/A")}`
+- **Issue Type:** {test_info.get("issue_type", "N/A").capitalize()}
+- **Error Type:** `{test_info.get("error_type", "N/A")}`
 
 ---
 
-## AI 专家分析
+## Error Message
+
+> {test_info.get("error_message", "No message available.")}
+
+## Traceback
+
+{traceback}
+
+---
+
+## AI-Generated Analysis
 
 {analysis}
 
 ---
 
-## 修复建议 (原始提示词)
+## AI Fix Generation Prompt
 
-以下是用于生成修复方案的完整提示词。
+<details>
+<summary>Click to expand the full prompt used for generating the fix</summary>
 
-```prompt
+```
 {prompt}
 ```
-"""
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
 
-        return filepath
+</details>
+"""
+        return content.strip()

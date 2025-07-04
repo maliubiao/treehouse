@@ -225,7 +225,7 @@ class TestAutoFix:
         """
         log_extractor = tracer.TraceLogExtractor(str(Path(__file__).parent.parent / "debugger/logs/run_all_tests.log"))
         try:
-            logs, references_group = log_extractor.lookup(file_path, line)
+            logs, references_group = log_extractor.lookup(file_path, line, start_from_func="setUp")
             if logs:
                 self.trace_log = logs[0]
                 if not silent:
@@ -504,7 +504,21 @@ def parse_args():
         const=os.cpu_count() or 4,
         type=int,
         metavar="N",
-        help="Enable parallel analysis of all failed tests with N concurrent workers. If N is not specified, it defaults to the number of CPU cores.",
+        help="Enable parallel analysis of all failed tests with N concurrent workers, followed by INTERACTIVE fixing.",
+    )
+    parser.add_argument(
+        "--parallel-autofix",
+        nargs="?",
+        const=os.cpu_count() or 4,
+        type=int,
+        metavar="N",
+        help="Enable parallel analysis followed by AUTOMATED, sequential fixing of all detected issues using N workers for analysis.",
+    )
+    default_report_dir = Path(__file__).parent.parent / "doc/testcase-report"
+    parser.add_argument(
+        "--report-dir",
+        default=str(default_report_dir),
+        help=f"Directory to save analysis reports. Defaults to: {default_report_dir}",
     )
     return parser.parse_args()
 
@@ -783,7 +797,7 @@ def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, f
 def run_auto_pilot_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch):
     """Main loop for the fully automated test fixing and reporting workflow."""
     print(Fore.MAGENTA + "🚀 " + "=" * 20 + " Auto-Pilot Mode Engaged " + "=" * 20 + " 🚀")
-    report_generator = ReportGenerator()
+    report_generator = ReportGenerator(report_dir=args.report_dir)
     failure_tracker = FailureTracker(max_attempts=2)
 
     while True:
@@ -926,19 +940,10 @@ def select_analysis_to_fix_interactive(analyzed_errors: List[AnalyzedError]) -> 
             print(Fore.RED + "Invalid input. Please enter a number or 'q'.")
 
 
-def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_model_switch: ModelSwitch):
-    """Takes a pre-analyzed error and walks the user through the fixing process."""
-    # 1. Present the pre-computed analysis and get user feedback
-    print(Fore.BLUE + "\n--- AI Analysis ---" + Style.RESET_ALL)
-    print(analyzed_error.analysis_text)
-    print(Fore.BLUE + "-------------------" + Style.RESET_ALL)
-
-    user_directive = _get_user_feedback_on_analysis(analyzed_error.analysis_text)
-    if not user_directive:
-        print(Fore.RED + "User aborted the fix process.")
-        return
-
-    # 2. Generate the fix based on analysis and user directive
+def _generate_and_apply_patch_from_analysis(
+    analyzed_error: AnalyzedError, user_directive: str, fixer_model_switch: ModelSwitch
+):
+    """Generates and applies a patch based on a pre-computed analysis and a directive."""
     print(Fore.YELLOW + "\nGenerating fix based on analysis and user directive...")
     print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
     fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
@@ -966,11 +971,32 @@ def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
+def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_model_switch: ModelSwitch):
+    """Takes a pre-analyzed error and walks the user through the fixing process."""
+    # 1. Present the pre-computed analysis and get user feedback
+    print(Fore.BLUE + "\n--- AI Analysis ---" + Style.RESET_ALL)
+    print(analyzed_error.analysis_text)
+    print(Fore.BLUE + "-------------------" + Style.RESET_ALL)
+
+    user_directive = _get_user_feedback_on_analysis(analyzed_error.analysis_text)
+    if not user_directive:
+        print(Fore.RED + "User aborted the fix process.")
+        return
+
+    # 2. Generate the fix
+    _generate_and_apply_patch_from_analysis(analyzed_error, user_directive, fixer_model_switch)
+
+
 def run_parallel_analysis_workflow(
     args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch
 ):
     """Main loop for the parallel analysis, sequential fix workflow."""
-    while True:
+    # This outer loop controls a full test-and-analyze cycle.
+    run_new_cycle = True
+    while run_new_cycle:
+        # Default to exiting after this cycle, unless user chooses to continue.
+        run_new_cycle = False
+
         _reload_project_modules()
         print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
         test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity)
@@ -979,7 +1005,7 @@ def run_parallel_analysis_workflow(
 
         if not auto_fix.error_details:
             print(Fore.GREEN + "\n🎉 恭喜！所有测试均已通过。")
-            break
+            break  # Exit the workflow entirely
 
         print(
             Fore.CYAN
@@ -1009,28 +1035,163 @@ def run_parallel_analysis_workflow(
                 print(Fore.YELLOW + f"  - {func}: {result.analysis_text}")
 
         if not successful_analyses:
-            print(Fore.RED + "\nNo errors could be analyzed successfully. Exiting workflow.")
+            print(Fore.RED + "\nNo errors could be analyzed successfully. Re-running tests.")
+            run_new_cycle = True
+            continue  # Re-run the outer loop.
+
+        # This inner loop allows fixing multiple issues from the same analysis batch.
+        while successful_analyses:
+            selected_analysis = select_analysis_to_fix_interactive(successful_analyses)
+
+            if not selected_analysis:
+                # User quit the selection menu ('q').
+                print(Fore.YELLOW + "\nNo issue selected from the current batch.")
+                user_choice = (
+                    input(Fore.GREEN + "Do you want to re-run tests and start a new analysis cycle? (y/n): ")
+                    .strip()
+                    .lower()
+                )
+                if user_choice == "y":
+                    run_new_cycle = True
+                break  # Break inner loop, outer loop condition will be checked.
+
+            _perform_interactive_fix_from_analysis(selected_analysis, fixer_model_switch)
+
+            # Remove the issue that was just addressed
+            successful_analyses.remove(selected_analysis)
+
+            if not successful_analyses:
+                print(Fore.GREEN + "\nAll analyzed issues from this batch have been addressed.")
+                print(
+                    Fore.CYAN + "The workflow will now re-run all tests to verify the fixes and check for new issues."
+                )
+                run_new_cycle = True
+                break  # Inner loop terminates, outer loop will re-run.
+
+            print(Fore.GREEN + "\nPatch applied. What would you like to do next?")
+            print(Fore.CYAN + "  1. Fix another issue from the remaining list.")
+            print(Fore.CYAN + "  2. Re-run all tests to start a new analysis cycle.")
+            print(Fore.CYAN + "  q. Quit the workflow.")
+
+            user_choice = ""
+            while user_choice not in ["1", "2", "q"]:
+                user_choice = input(Fore.GREEN + "Your choice (1/2/q): ").strip().lower()
+                if user_choice not in ["1", "2", "q"]:
+                    print(Fore.RED + "Invalid choice. Please enter 1, 2, or q.")
+
+            if user_choice == "1":
+                # User wants to continue with this batch.
+                continue  # Continues the inner `while successful_analyses` loop
+            elif user_choice == "2":
+                # User wants to abandon this batch and start a new cycle.
+                run_new_cycle = True
+                break  # Breaks the inner loop
+            elif user_choice == "q":
+                # User wants to quit entirely.
+                run_new_cycle = False  # Ensure we exit
+                break  # Breaks the inner loop
+
+    if not run_new_cycle:
+        print(Fore.RED + "\nWorkflow finished.")
+
+
+def run_parallel_autofix_workflow(
+    args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch
+):
+    """Main loop for the parallel analysis and automated fix workflow."""
+    print(Fore.MAGENTA + "🚀 " + "=" * 20 + " Parallel Auto-Fix Mode Engaged " + "=" * 20 + " 🚀")
+    failure_tracker = FailureTracker(max_attempts=2)
+
+    while True:
+        _reload_project_modules()
+        print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
+        test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity)
+        auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
+        auto_fix._print_stats()
+
+        if not auto_fix.error_details:
+            print(Fore.GREEN + "\n🎉 恭喜！所有测试均已通过。Parallel Auto-Fix完成任务。")
             break
 
-        selected_analysis = select_analysis_to_fix_interactive(successful_analyses)
+        # Filter out errors that have exceeded the retry limit
+        errors_to_analyze = [e for e in auto_fix.error_details if not failure_tracker.has_exceeded_limit(e)]
 
-        if not selected_analysis:
-            print(Fore.RED + "\nUser chose to exit. Workflow stopped.")
+        if not errors_to_analyze:
+            print(Fore.RED + "\n所有剩余错误已达到最大重试次数，无法继续自动修复。")
+            skipped = failure_tracker.get_skipped_errors()
+            print(Fore.YELLOW + f"被放弃的错误 ({len(skipped)}):")
+            for i, (file_path, line) in enumerate(skipped):
+                print(f"  {i + 1}. {file_path}:{line}")
+            print(Fore.MAGENTA + "Parallel Auto-Fix 退出。")
             break
 
-        _perform_interactive_fix_from_analysis(selected_analysis, fixer_model_switch)
+        # Run parallel analysis
+        print(
+            Fore.CYAN
+            + f"\nFound {len(errors_to_analyze)} issues to analyze. Starting parallel analysis with {args.parallel_autofix} workers..."
+        )
+        analyzed_results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel_autofix) as executor:
+            future_to_error = {
+                executor.submit(analyze_error_task, error, analyzer_model_switch, fixer_model_switch): error
+                for error in errors_to_analyze
+            }
+            for future in tqdm(
+                concurrent.futures.as_completed(future_to_error),
+                total=len(errors_to_analyze),
+                desc="Analyzing errors",
+            ):
+                analyzed_results.append(future.result())
 
-        print(Fore.GREEN + "\nPatch applied. The workflow will now re-run all tests to verify the fix...")
+        successful_analyses = [r for r in analyzed_results if r.success]
+
+        if not successful_analyses:
+            print(Fore.RED + "\nNo errors could be analyzed successfully. Re-running test cycle.")
+            # Record an attempt for all errors we tried to analyze to prevent infinite loops on analysis failure
+            for error in errors_to_analyze:
+                failure_tracker.record_attempt(error)
+            continue
+
+        print(Fore.GREEN + f"\nAnalysis complete. Attempting to fix {len(successful_analyses)} issues sequentially.")
+
+        # Sequentially apply fixes for all successfully analyzed errors
+        for i, analyzed_error in enumerate(successful_analyses):
+            error_detail = analyzed_error.error_detail
+            func_name = error_detail.get("function", "unknown")
+            failure_tracker.record_attempt(error_detail)  # Record attempt before trying to fix
+            attempt_count = failure_tracker.get_attempt_count(error_detail)
+
+            print(Fore.YELLOW + "\n" + "-" * 70)
+            print(
+                Fore.CYAN
+                + f"Fixing issue {i + 1}/{len(successful_analyses)} in {func_name} (Attempt {attempt_count}/2)"
+            )
+            _consume_stream_and_get_text(iter([analyzed_error.analysis_text]), print_stream=True)
+
+            # The default directive, same as choice '1' in interactive mode
+            user_directive = "按照上述技术专家的分析，解决用户遇到的问题，修复单元测试中的错误，使其能够成功通过。"
+
+            _generate_and_apply_patch_from_analysis(analyzed_error, user_directive, fixer_model_switch)
+            print(Fore.GREEN + f"Patch applied for {func_name}.")
+
+        print(Fore.CYAN + "\nAll patches from this batch have been applied. Re-running tests to verify...")
 
 
 def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
 
-    if args.parallel_analysis and (args.auto_pilot or args.direct_fix):
+    # Check for mutually exclusive WORKFLOW modes.
+    # --direct-fix is a modifier for the default interactive workflow, not a standalone workflow.
+    active_workflows = [
+        bool(args.auto_pilot),
+        args.parallel_analysis is not None,
+        args.parallel_autofix is not None,
+    ]
+    if sum(active_workflows) > 1:
         print(
             Fore.RED
-            + "Error: --parallel-analysis is a distinct workflow and cannot be used with --auto-pilot or --direct-fix."
+            + "Error: --auto-pilot, --parallel-analysis, and --parallel-autofix are mutually exclusive workflow modes."
         )
         sys.exit(1)
 
@@ -1074,7 +1235,9 @@ def main():
 
     if args.auto_pilot:
         run_auto_pilot_loop(args, analyzer_model_switch, fixer_model_switch)
-    elif args.parallel_analysis:
+    elif args.parallel_autofix is not None:
+        run_parallel_autofix_workflow(args, analyzer_model_switch, fixer_model_switch)
+    elif args.parallel_analysis is not None:
         run_parallel_analysis_workflow(args, analyzer_model_switch, fixer_model_switch)
     else:
         run_fix_loop(args, analyzer_model_switch, fixer_model_switch)

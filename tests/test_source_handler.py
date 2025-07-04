@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, call, mock_open, patch
 
 project_root = Path(__file__).resolve().parent.parent / "debugger/lldb"
-print(project_root)
+
 sys.path.insert(0, str(project_root))
 from tracer.source_handler import SourceHandler
 
@@ -16,23 +16,15 @@ project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))
 
 
-# Mock lldb as a class decorator for TestSourceHandler to ensure it's available
-# for the SourceHandler import and subsequent uses within the test class,
-# adhering to the "scoped mocks only" principle as much as possible for a module
-# that imports a native library at its top level.
 @patch.dict("sys.modules", {"lldb": MagicMock()})
-class TestSourceHandler(unittest.TestCase):
-    """Test cases for SourceHandler initialization and functionality."""
+class TestSourceHandlerInitialization(unittest.TestCase):
+    """Test cases for SourceHandler initialization."""
 
     def setUp(self):
         """Set up test environment with mocked Tracer and dependencies."""
-        # Create mock Tracer with necessary attributes
         self.mock_tracer = MagicMock()
-        # Default source search paths to empty for general tests; specific tests can override via patch
         self.mock_tracer.config_manager.get_source_search_paths.return_value = []
         self.mock_tracer.logger = MagicMock(spec=logging.Logger)
-
-        # Initialize SourceHandler with mocked dependencies
         self.source_handler = SourceHandler(self.mock_tracer)
 
     def test_init_initializes_attributes_correctly(self):
@@ -75,6 +67,18 @@ class TestSourceHandler(unittest.TestCase):
         self.assertEqual(self.source_handler._resolved_path_cache, {})
         self.assertEqual(self.source_handler._line_entries_cache, {})
         self.assertEqual(self.source_handler._line_to_next_line_cache, {})
+
+
+@patch.dict("sys.modules", {"lldb": MagicMock()})
+class TestSourceHandlerFileReading(unittest.TestCase):
+    """Test cases for SourceHandler's file reading functionality."""
+
+    def setUp(self):
+        """Set up test environment with mocked Tracer and dependencies."""
+        self.mock_tracer = MagicMock()
+        self.mock_tracer.config_manager.get_source_search_paths.return_value = []
+        self.mock_tracer.logger = MagicMock(spec=logging.Logger)
+        self.source_handler = SourceHandler(self.mock_tracer)
 
     @patch("builtins.open", new_callable=mock_open, read_data=b"line1\nline2\nline3")
     def test_get_file_lines_success(self, mock_file_open):
@@ -134,6 +138,18 @@ class TestSourceHandler(unittest.TestCase):
         self.assertIn(filepath, formatted_msg)
         self.assertIn("Unexpected error", formatted_msg)
         self.assertTrue(kwargs.get("exc_info", False))
+
+
+@patch.dict("sys.modules", {"lldb": MagicMock()})
+class TestSourceHandlerPathResolution(unittest.TestCase):
+    """Test cases for SourceHandler's path resolution functionality."""
+
+    def setUp(self):
+        """Set up test environment with mocked Tracer and dependencies."""
+        self.mock_tracer = MagicMock()
+        self.mock_tracer.config_manager.get_source_search_paths.return_value = []
+        self.mock_tracer.logger = MagicMock(spec=logging.Logger)
+        self.source_handler = SourceHandler(self.mock_tracer)
 
     def test_resolve_source_path_absolute_exists(self):
         """Tests resolution when provided absolute path exists by mocking os.path."""
@@ -254,6 +270,18 @@ class TestSourceHandler(unittest.TestCase):
         with patch("tracer.source_handler.os.path.isabs") as mock_isabs:
             self.source_handler.resolve_source_path(test_path)
             mock_isabs.assert_not_called()
+
+
+@patch.dict("sys.modules", {"lldb": MagicMock()})
+class TestSourceHandlerLineMapBuilding(unittest.TestCase):
+    """Test cases for SourceHandler's line entry processing and line map building."""
+
+    def setUp(self):
+        """Set up test environment with mocked Tracer and dependencies."""
+        self.mock_tracer = MagicMock()
+        self.mock_tracer.config_manager.get_source_search_paths.return_value = []
+        self.mock_tracer.logger = MagicMock(spec=logging.Logger)
+        self.source_handler = SourceHandler(self.mock_tracer)
 
     @patch("tracer.source_handler.Progress")
     @patch("tracer.source_handler.TextColumn")
@@ -505,6 +533,18 @@ class TestSourceHandler(unittest.TestCase):
             # Verify
             self.assertEqual(result, {})
             self.assertEqual(self.source_handler._line_to_next_line_cache[mock_filepath], {})
+
+
+@patch.dict("sys.modules", {"lldb": MagicMock()})
+class TestSourceHandlerStatementExtraction(unittest.TestCase):
+    """Test cases for SourceHandler's statement extraction functionality."""
+
+    def setUp(self):
+        """Set up test environment with mocked Tracer and dependencies."""
+        self.mock_tracer = MagicMock()
+        self.mock_tracer.config_manager.get_source_search_paths.return_value = []
+        self.mock_tracer.logger = MagicMock(spec=logging.Logger)
+        self.source_handler = SourceHandler(self.mock_tracer)
 
     def test_get_source_code_for_statement_when_build_map_raises(self):
         """

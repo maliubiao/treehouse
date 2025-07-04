@@ -1189,7 +1189,7 @@ class TraceLogExtractor:
         except json.JSONDecodeError:
             return None
 
-    def lookup(self, filename: str, lineno: int) -> list:
+    def lookup(self, filename: str, lineno: int, start_from_func=None) -> list:
         """
         查找指定文件和行号的日志信息
 
@@ -1206,6 +1206,7 @@ class TraceLogExtractor:
         references_group = []
         references = []
         frame_call_start = {}
+        prev_call = None
         with open(self.index_file, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("#"):
@@ -1230,13 +1231,31 @@ class TraceLogExtractor:
                             "type": type_tag,
                         }
                     )
-
                 if file == filename and line_no == lineno and type_tag == TraceTypes.CALL:
                     target_frame_id = frame_id
                     if parent_frame_id in frame_call_start:
                         start_position = frame_call_start[parent_frame_id]
                     else:
                         start_position = position
+                    if start_from_func and prev_call:
+                        (
+                            prev_type_tag,
+                            prev_file,
+                            prev_line_no,
+                            prev_frame_id,
+                            prev_position,
+                            prev_func,
+                            prev_parent_frame_id,
+                        ) = prev_call
+                        references.append(
+                            {
+                                "filename": prev_file,
+                                "lineno": prev_line_no,
+                                "func": prev_func,
+                                "type": prev_type_tag,
+                            }
+                        )
+                        start_position = prev_position
                     references.append(
                         {
                             "filename": file,
@@ -1246,7 +1265,6 @@ class TraceLogExtractor:
                         }
                     )
                     continue
-
                 if (
                     target_frame_id is not None
                     and target_frame_id == frame_id
@@ -1259,7 +1277,9 @@ class TraceLogExtractor:
                     references = []
                     start_position = None
                     target_frame_id = None
-
+                if start_from_func and func in start_from_func:
+                    if type_tag == TraceTypes.CALL:
+                        prev_call = parsed
         if not pair:
             return [], []
 
