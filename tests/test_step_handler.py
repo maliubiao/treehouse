@@ -121,6 +121,10 @@ class TestStepHandlerCore(BaseStepHandlerTest):
         - Helper objects are initialized correctly
         - Expected LLDB commands are executed
         """
+        # Fix: Import 'call' from unittest.mock for assert_has_calls usage.
+        # This is a local import to adhere to the "overwrite whole symbol" output mode.
+        from unittest.mock import call
+
         # Mocks are already set up in self.setUp
         handler = self.step_handler
         mock_tracer = self.mock_tracer
