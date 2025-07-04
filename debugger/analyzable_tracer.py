@@ -1,16 +1,29 @@
 import functools
+import json
 import logging
 import sys
+import threading
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from gpt_workflow.unittester.imports_resolve import resolve_imports
+
 from .call_analyzer import CallAnalyzer
-from .tracer import SysMonitoringTraceDispatcher, TraceConfig, TraceDispatcher, TraceLogic, TraceTypes, color_wrap
+from .tracer import (
+    _LOG_DIR,
+    SysMonitoringTraceDispatcher,
+    TraceConfig,
+    TraceDispatcher,
+    TraceLogic,
+    TraceTypes,
+    color_wrap,
+)
 
 
 class AnalyzableTraceLogic(TraceLogic):
     """
-    一个继承自 TraceLogic 的特殊逻辑类，它将事件转发给一个 CallAnalyzer 实例。
+    一个增强的TraceLogic，它将事件转发给CallAnalyzer，并为单元测试生成目的解析模块导入。
     """
 
     def __init__(self, config: TraceConfig, analyzer: CallAnalyzer):
@@ -23,6 +36,43 @@ class AnalyzableTraceLogic(TraceLogic):
         """
         super().__init__(config)
         self.analyzer = analyzer
+        self._thread_local = threading.local()
+        self._lock = threading.Lock()
+        self.resolved_files = set()
+        self.resolved_imports = {}
+        self.import_map_file = Path(_LOG_DIR) / "import_map.json"
+
+    def handle_call(self, frame):
+        """
+        在处理函数调用前，先解析该文件中的导入依赖。
+        """
+        # 递归调用保护，防止在解析导入时触发新的跟踪事件
+        if getattr(self._thread_local, "is_resolving", False):
+            return
+
+        filename = frame.f_code.co_filename
+        if not (filename.startswith("<") and filename.endswith(">")):
+            with self._lock:
+                is_resolved = filename in self.resolved_files
+
+            if not is_resolved:
+                setattr(self._thread_local, "is_resolving", True)
+                try:
+                    print(color_wrap(f"Resolving imports for: {filename}", TraceTypes.COLOR_TRACE))
+                    imports = resolve_imports(frame)
+                    with self._lock:
+                        if imports:
+                            self.resolved_imports[filename] = imports
+                        self.resolved_files.add(filename)
+                except Exception as e:
+                    logging.error(f"Failed to resolve imports for {filename}: {e}\n{traceback.format_exc()}")
+                    with self._lock:
+                        self.resolved_files.add(filename)  # 即使失败也标记，避免重试
+                finally:
+                    setattr(self._thread_local, "is_resolving", False)
+
+        # 继续执行原始的跟踪逻辑
+        super().handle_call(frame)
 
     def _add_to_buffer(self, log_data: Any, color_type: str):
         """
@@ -44,21 +94,35 @@ class AnalyzableTraceLogic(TraceLogic):
             self.analyzer.process_event(log_data, event_type)
         except Exception as e:
             # 确保分析器的任何错误都不会中断正常的日志记录
-            import traceback
-
             error_msg = f"CallAnalyzer process_event failed: {e}\n{traceback.format_exc()}"
             super()._add_to_buffer({"template": "⚠ {error}", "data": {"error": error_msg}}, TraceTypes.ERROR)
 
         # 2. 调用父类方法，保持原有的日志输出功能
         super()._add_to_buffer(log_data, color_type)
 
+    def stop(self):
+        """
+        停止跟踪时，保存已解析的导入依赖映射，并调用父类的stop方法。
+        """
+        # 保存导入依赖映射
+        if self.resolved_imports:
+            try:
+                with self.import_map_file.open("w", encoding="utf-8") as f:
+                    json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
+                print(color_wrap(f"Import map saved to: {self.import_map_file}", TraceTypes.COLOR_RETURN))
+            except Exception as e:
+                logging.error(f"Could not save import map: {e}")
+
+        # 调用父类的stop方法来完成剩余的清理工作（如保存HTML报告）
+        super().stop()
+
 
 def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: TraceConfig = None, **kwargs):
     """
-    启动一个带有调用分析功能的调试跟踪会话。
+    启动一个带有调用分析和依赖解析功能的调试跟踪会话。
 
     此函数与 tracer.start_trace 类似，但它使用 AnalyzableTraceLogic
-    来注入 CallAnalyzer。
+    来注入 CallAnalyzer 和依赖解析逻辑。
 
     Args:
         analyzer: 用于分析事件的 CallAnalyzer 实例。
@@ -78,7 +142,6 @@ def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: Tra
     logic_instance = AnalyzableTraceLogic(config, analyzer)
 
     tracer = None
-    # 此处我们不能直接使用 get_tracer, 因为它内部创建了 TraceLogic
     # 我们需要直接创建 Dispatcher 并传入我们的 logic_instance
     if sys.version_info >= (3, 12):
         tracer = SysMonitoringTraceDispatcher(str(module_path), config)
@@ -96,8 +159,6 @@ def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: Tra
         caller_frame.f_trace_opcodes = True
         return tracer
     except Exception as e:
-        import traceback
-
         logging.error("💥 ANALYZER DEBUGGER INIT ERROR: %s\n%s", str(e), traceback.format_exc())
         print(
             color_wrap(
@@ -123,7 +184,7 @@ def analyzable_trace(
     include_stdlibs: Optional[List[str]] = None,
 ):
     """
-    一个功能强大的函数跟踪装饰器，集成了调用分析功能。
+    一个功能强大的函数跟踪装饰器，集成了调用分析和依赖解析功能。
 
     Args:
         analyzer: 一个 CallAnalyzer 实例，用于收集和分析数据。
@@ -141,7 +202,6 @@ def analyzable_trace(
     """
     # 如果未指定目标文件，则自动将装饰器所在的文件设为目标
     if not target_files:
-        # a bit of magic to get the filename of the decorated function
         try:
             target_files = [sys._getframe(1).f_code.co_filename]
         except (ValueError, AttributeError):

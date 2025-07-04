@@ -30,16 +30,19 @@ class UnitTestGenerator:
         trace_llm: bool = False,
         llm_trace_dir: str = "llm_traces",
         report_path: Optional[str] = None,
+        import_map_path: Optional[str] = None,
         test_mode: bool = False,
         project_root: Optional[Path] = None,
     ):
         self.report_path = Path(report_path) if report_path else None
+        self.import_map_path = Path(import_map_path) if import_map_path else None
         self.model_switch = TracingModelSwitch(trace_llm=trace_llm, trace_dir=llm_trace_dir, test_mode=test_mode)
         self.formatter = CodeFormatter()
         self.engine = ReplaceEngine()
         self.generator_model_name = model_name
         self.checker_model_name = checker_model_name
         self.analysis_data: Dict[str, Any] = {}
+        self.import_map_data: Dict[str, Any] = {}
         self.test_mode = test_mode
         if project_root:
             self.project_root = project_root.resolve()
@@ -62,6 +65,32 @@ class UnitTestGenerator:
             print(Fore.RED + f"Error: Failed to load or parse report file: {e}")
             return False
 
+    def load_import_map(self) -> bool:
+        """
+        Loads the import map JSON file.
+        This provides context on imported symbols for more accurate mocking.
+        """
+        # Infer path from report_path if not provided explicitly
+        path_to_load = self.import_map_path
+        if not path_to_load and self.report_path:
+            path_to_load = self.report_path.parent / "import_map.json"
+
+        if not path_to_load or not path_to_load.exists():
+            print(
+                Fore.YELLOW
+                + "Warning: import_map.json not found. Proceeding without specific import context for mocking."
+            )
+            return True  # Not a fatal error
+
+        try:
+            with path_to_load.open("r", encoding="utf-8") as f:
+                self.import_map_data = json.load(f)
+            print(Fore.GREEN + f"Successfully loaded import map from: {path_to_load}")
+            return True
+        except (json.JSONDecodeError, IOError) as e:
+            print(Fore.YELLOW + f"Warning: Found but failed to load or parse import map file '{path_to_load}': {e}")
+            return True  # Not a fatal error
+
     # @trace(
     # target_files=["*.py"],
     # enable_var_trace=True,
@@ -83,6 +112,10 @@ class UnitTestGenerator:
         """
         [REFACTORED] Groups functions by file and generates tests for each file.
         """
+        if not self.load_and_parse_report():
+            return False
+        self.load_import_map()  # Load import map, warnings on failure
+
         if not target_funcs:
             print(Fore.RED + "No target functions specified.")
             return False
@@ -151,6 +184,7 @@ class UnitTestGenerator:
                 print(Fore.YELLOW + "Warning: 'generation_guidance' not found in metadata. Reconstructing...")
                 module_to_test = metadata.get("module_to_test")
                 test_class_name = metadata.get("test_class_name")
+                import_context = metadata.get("import_context")
 
                 if not (module_to_test and test_class_name):
                     print(
@@ -164,6 +198,7 @@ class UnitTestGenerator:
                     module_to_test=module_to_test,
                     test_class_name=test_class_name,
                     existing_code=existing_code,
+                    import_context=import_context,
                 )
                 print(Fore.GREEN + "Successfully reconstructed generation guidance.")
 
@@ -285,6 +320,7 @@ class UnitTestGenerator:
             existing_code,
             session_dir,
             generation_guidance,
+            import_context,
         ) = setup_data
 
         tasks = self._prepare_generation_tasks(
@@ -296,6 +332,7 @@ class UnitTestGenerator:
             module_to_test,
             output_path,
             existing_code,
+            import_context,
         )
 
         generated_snippets = self._execute_generation_tasks(tasks, num_workers)
@@ -409,6 +446,11 @@ class UnitTestGenerator:
         if not target_file_path.is_absolute():
             target_file_path = (self.project_root / target_file_path).resolve()
 
+        # Get import context for the target file from the loaded import map.
+        import_context = self.import_map_data.get(str(target_file_path))
+        if import_context:
+            print(Fore.GREEN + f"Found import context for '{target_file_path}'.")
+
         symbol_context, file_content = None, None
         if use_symbol_service:
             print(Fore.CYAN + "\nUsing symbol service to gather precise code context...")
@@ -446,6 +488,7 @@ class UnitTestGenerator:
             module_to_test=module_to_test,
             test_class_name=final_class_name,
             existing_code=existing_code,
+            import_context=import_context,
         )
 
         # Create session dir and save metadata
@@ -459,6 +502,7 @@ class UnitTestGenerator:
             "test_class_name": final_class_name,
             "module_to_test": module_to_test,
             "generation_guidance": generation_guidance,
+            "import_context": import_context,
         }
         with (session_dir / "metadata.json").open("w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
@@ -473,6 +517,7 @@ class UnitTestGenerator:
             existing_code,
             session_dir,
             generation_guidance,
+            import_context,
         )
 
     def _get_user_confirmed_names(
@@ -545,6 +590,7 @@ class UnitTestGenerator:
         module_to_test,
         output_path,
         existing_code,
+        import_context,
     ) -> List[Dict]:
         tasks = []
         is_incremental = existing_code is not None
@@ -582,6 +628,7 @@ class UnitTestGenerator:
                     "test_mode": self.test_mode,
                     "existing_code": existing_code,
                     "is_incremental": is_incremental,
+                    "import_context": import_context,
                 }
             )
         return tasks

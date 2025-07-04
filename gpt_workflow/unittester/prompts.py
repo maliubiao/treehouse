@@ -121,26 +121,58 @@ def build_merge_prompt(
     """).strip()
 
 
+def _format_import_context(import_context: Optional[Dict[str, Dict]]) -> str:
+    """Formats the import context into a markdown block for the prompt."""
+    if not import_context:
+        return ""
+
+    lines = [
+        "The following symbols are imported from other modules into the file under test. This is critical for creating correct mock targets.",
+        "When you need to mock a function or object that was imported, you must patch it where it is *looked up*, which is in the namespace of the file under test.",
+        "",
+        f"**Example:** If the file under test is `my_app/logic.py` (module `my_app.logic`), and it contains `from my_app.utils import helper_func`, then a call to `helper_func()` inside `logic.py` must be mocked with `patch('my_app.logic.helper_func')`.",
+        "---",
+        "**Detected Imports:**",
+    ]
+    for symbol, info in sorted(import_context.items()):
+        lines.append(
+            f"- The name `{symbol}` is available in the file and comes from module `{info.get('module', 'N/A')}`."
+        )
+
+    return "\n".join(lines)
+
+
 def build_generation_guidance(
     module_to_test: str,
     test_class_name: str,
     existing_code: Optional[str] = None,
+    import_context: Optional[Dict[str, Dict]] = None,
 ) -> str:
     """
     [REFACTORED] Assembles the core guidance for test generation, to be used in both
-    generation and merge prompts for consistency. The unnecessary `target_func`
-    parameter has been removed.
+    generation and merge prompts for consistency. It now includes import context.
     """
     _, _, code_structure_guidance = _get_common_prompt_sections(test_class_name, existing_code)
     mocking_guidance = _get_mocking_guidance(module_to_test)
+    import_context_guidance = _format_import_context(import_context)
 
-    return dedent(f"""
+    guidance = f"""
         **INTELLIGENT MOCKING STRATEGY**
         {mocking_guidance}
+    """
+    if import_context_guidance:
+        guidance += f"""
+
+        **IMPORT CONTEXT AND MOCK TARGETS**
+        {import_context_guidance}
+        """
+
+    guidance += f"""
 
         **YOUR TASK: GENERATE THE TEST CODE**
         {code_structure_guidance}
-    """).strip()
+    """
+    return dedent(guidance).strip()
 
 
 def build_prompt_for_generation(
@@ -155,6 +187,7 @@ def build_prompt_for_generation(
     file_content: Optional[str] = None,
     symbol_context: Optional[Dict[str, Dict]] = None,
     existing_code: Optional[str] = None,
+    import_context: Optional[Dict[str, Dict]] = None,
 ) -> str:
     """Dispatcher for building the generation prompt based on context and mode (full/incremental)."""
     if is_incremental:
@@ -166,6 +199,7 @@ def build_prompt_for_generation(
             symbol_context=symbol_context,
             file_path=file_path,
             file_content=file_content,
+            import_context=import_context,
         )
     if symbol_context:
         return _build_symbol_based_prompt(
@@ -177,6 +211,7 @@ def build_prompt_for_generation(
             project_root_path=project_root_path,
             output_file_abs_path=output_file_abs_path,
             existing_code=existing_code,
+            import_context=import_context,
         )
     if file_content and file_path:
         return _build_file_based_prompt(
@@ -189,6 +224,7 @@ def build_prompt_for_generation(
             project_root_path=project_root_path,
             output_file_abs_path=output_file_abs_path,
             existing_code=existing_code,
+            import_context=import_context,
         )
     raise ValueError("Either symbol_context or file_content must be provided to build a prompt.")
 
@@ -203,6 +239,7 @@ def _build_file_based_prompt(
     project_root_path: Path,
     output_file_abs_path: Path,
     existing_code: Optional[str] = None,
+    import_context: Optional[Dict[str, Dict]] = None,
 ) -> str:
     """
     [REFACTORED] Constructs the detailed prompt for the LLM using full file content.
@@ -212,7 +249,7 @@ def _build_file_based_prompt(
     call_record_text = format_call_record_as_text(call_record)
     action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
 
-    generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code)
+    generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code, import_context)
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
@@ -260,6 +297,7 @@ def _build_symbol_based_prompt(
     project_root_path: Path,
     output_file_abs_path: Path,
     existing_code: Optional[str] = None,
+    import_context: Optional[Dict[str, Dict]] = None,
 ) -> str:
     """
     [REFACTORED] Constructs the detailed prompt for the LLM using precise symbol context.
@@ -273,7 +311,7 @@ def _build_symbol_based_prompt(
 
     action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
 
-    generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code)
+    generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code, import_context)
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
@@ -317,6 +355,7 @@ def _build_incremental_generation_prompt(
     symbol_context: Optional[Dict[str, Dict]] = None,
     file_path: Optional[str] = None,
     file_content: Optional[str] = None,
+    import_context: Optional[Dict[str, Dict]] = None,
 ) -> str:
     """[NEW] Builds a prompt to generate only a single new test method."""
     call_record_text = format_call_record_as_text(call_record)
@@ -345,6 +384,11 @@ def _build_incremental_generation_prompt(
     else:
         context_section = "**2. CONTEXT: SOURCE CODE**\nNo source code provided."
 
+    import_context_guidance = _format_import_context(import_context)
+    import_context_section = (
+        f"**4. IMPORT CONTEXT AND MOCK TARGETS**\n{import_context_guidance}" if import_context_guidance else ""
+    )
+
     return dedent(f"""
         You are an expert Python developer writing a new test case for an existing test suite.
         Your task is to generate a SINGLE new test method for the function `{target_func}`.
@@ -361,11 +405,12 @@ def _build_incremental_generation_prompt(
         [start]
         {call_record_text}
         [end]
+        {import_context_section}
 
-        **4. INTELLIGENT MOCKING STRATEGY**
+        **5. INTELLIGENT MOCKING STRATEGY**
         {_get_mocking_guidance(module_to_test)}
 
-        **5. YOUR TASK: GENERATE *ONLY* THE NEW TEST METHOD**
+        **6. YOUR TASK: GENERATE *ONLY* THE NEW TEST METHOD**
         - The test file and class (`{test_class_name}`) already exist.
         - You must **ONLY** generate the Python code for the new test method.
         - **DO NOT** generate the class definition (`class ...:`).

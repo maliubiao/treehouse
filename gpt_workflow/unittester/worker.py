@@ -69,6 +69,7 @@ def generation_worker(task: Dict) -> Optional[str]:
         "file_content",
         "symbol_context",
         "existing_code",
+        "import_context",
     ]:
         if key in task:
             prompt_args[key] = task[key]

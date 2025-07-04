@@ -44,17 +44,14 @@ def _is_std_lib_path(path: str) -> bool:
         if normalized_path.startswith(normalized_lib_path):
             return True
 
-    # 修复点：使用 sys.base_prefix 获取系统Python安装路径
-    base_python_path = sys.base_prefix
+    # 修复点：使用 sys.base_prefix 获取系统Python安装路径，这对于虚拟环境更可靠
+    base_python_path = getattr(sys, "base_prefix", sys.prefix)
     python_lib_path = os.path.join(base_python_path, f"lib/python{sys.version_info.major}.{sys.version_info.minor}")
     if normalized_path.startswith(os.path.normpath(python_lib_path)):
-        return True
-
-    # 修复点：添加系统标准库路径检测
-    stdlib_path = os.path.join(
-        base_python_path, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"
-    )
-    if normalized_path.startswith(os.path.normpath(stdlib_path)):
+        # Bug Fix: site-packages is for third-party modules, not standard library.
+        # We must ensure we are not in site-packages.
+        if "site-packages" in normalized_path or "dist-packages" in normalized_path:
+            return False
         return True
 
     return False
@@ -87,13 +84,12 @@ class _ImportVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:
         """Handles `import module` and `import module as alias`."""
         for alias in node.names:
+            module_name = alias.name
             if alias.asname:
                 injected_name = alias.asname
-                module_name = alias.name
             else:
-                # 关键修复：普通导入语句只使用顶级包名
-                injected_name = alias.name.split(".")[0]
-                module_name = alias.name.split(".")[0]  # 仅使用顶级包名
+                # For `import a.b.c`, the name 'a' is injected into the namespace.
+                injected_name = module_name.split(".")[0]
 
             self.imports.add((injected_name, module_name))
         self.generic_visit(node)
