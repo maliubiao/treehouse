@@ -27,7 +27,8 @@ repos:
         files: \.py$
         args: [
           "--rcfile=.pylintrc",
-          "--score=yes"
+          "--score=yes",
+          "--disable=import-error"
         ]
         require_serial: true
 

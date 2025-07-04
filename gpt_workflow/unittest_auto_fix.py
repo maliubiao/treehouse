@@ -1,6 +1,7 @@
 import argparse
 import concurrent.futures
 import os
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -109,6 +110,7 @@ class TestAutoFix:
 
                         error_details.append(
                             {
+                                "test_id": error.get("test_id", "unknown"),
                                 "file_path": file_path,
                                 "line": error.get("line"),
                                 "function": error.get("function", "unknown"),
@@ -157,9 +159,11 @@ class TestAutoFix:
             issue_type = error.get("issue_type", "unknown").upper()
             func_name = error.get("function", "unknown")
             error_type = error.get("error_type", "UnknownError")
+            test_id = error.get("test_id", "unknown")
             color = Fore.RED if issue_type == "FAILURE" else Fore.YELLOW
 
             print(color + f"  {i + 1}: [{issue_type}] in {func_name} ({error_type})")
+            print(Fore.CYAN + f"     ID:   {test_id}")
             print(Fore.CYAN + f"     File: {error['file_path']}:{error['line']}")
 
             error_message = error["error_message"]
@@ -223,9 +227,18 @@ class TestAutoFix:
         """
         Display relevant tracer logs for the error location and identify the exception source.
         """
-        log_extractor = tracer.TraceLogExtractor(str(Path(__file__).parent.parent / "debugger/logs/run_all_tests.log"))
+        from gpt_lib import graph_tracer
+
+        fn = str(Path(__file__).parent.parent / "debugger/logs/run_all_tests.log")
+        log_extractor = graph_tracer.GraphTraceLogExtractor(fn)
+        log_extractor.export_trace_graph_text(
+            graph_tracer.ROOT_FRAME_ID,
+            Path(__file__).parent.parent / "debugger/logs/run_all_tests.graph.txt",
+            show_full_trace=True,
+        )
+        # log_extractor = tracer.TraceLogExtractor(fn)
         try:
-            logs, references_group = log_extractor.lookup(file_path, line, start_from_func="setUp")
+            logs, references_group = log_extractor.lookup(file_path, line, sibling_func=["setUp"])
             if logs:
                 self.trace_log = logs[0]
                 if not silent:
@@ -513,6 +526,18 @@ def parse_args():
         type=int,
         metavar="N",
         help="Enable parallel analysis followed by AUTOMATED, sequential fixing of all detected issues using N workers for analysis.",
+    )
+    parser.add_argument(
+        "--isolated-fix",
+        action="store_true",
+        help="Run each failing test in an isolated subprocess for analysis and fixing. Overrides other workflow modes.",
+    )
+    parser.add_argument(
+        "--run-single-test",
+        metavar="TEST_ID",
+        help=argparse.SUPPRESS,  # Hide from help menu
+        default=None,
+        dest="single_test_id",
     )
     default_report_dir = Path(__file__).parent.parent / "doc/testcase-report"
     parser.add_argument(
@@ -1177,21 +1202,139 @@ def run_parallel_autofix_workflow(
         print(Fore.CYAN + "\nAll patches from this batch have been applied. Re-running tests to verify...")
 
 
+def run_isolated_fix_master(args: argparse.Namespace):
+    """The parent process in isolated mode. Finds failing tests and spawns child processes to fix them."""
+    print(Fore.MAGENTA + "🚀 " + "=" * 20 + " Isolated Fix Mode Engaged " + "=" * 20 + " 🚀")
+    print(Fore.CYAN + "\nRunning all tests once to find failures...")
+
+    # Run tests with low verbosity to get the list of failures
+    initial_test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=0)
+    failed_test_ids = set()
+    results = initial_test_results.get("results", {})
+    for category in ["errors", "failures"]:
+        for error in results.get(category, []):
+            test_id = error.get("test_id")
+            if test_id:
+                failed_test_ids.add(test_id)
+
+    if not failed_test_ids:
+        print(Fore.GREEN + "\n🎉 No failing tests found. Nothing to do.")
+        auto_fix = TestAutoFix(initial_test_results)
+        auto_fix._print_stats()
+        return
+
+    sorted_failed_ids = sorted(list(failed_test_ids))
+    print(Fore.YELLOW + f"\nFound {len(sorted_failed_ids)} failing tests to fix:")
+    for test_id in sorted_failed_ids:
+        print(Fore.RED + f"  - {test_id}")
+
+    fixed_count = 0
+    for i, test_id in enumerate(sorted_failed_ids):
+        print(Fore.CYAN + "\n" + "=" * 70)
+        print(Fore.CYAN + f"Spawning isolated process for: {test_id} ({i + 1}/{len(sorted_failed_ids)})")
+        print(Fore.CYAN + "=" * 70)
+
+        command = [sys.executable, __file__, "--run-single-test", test_id]
+        if args.user_requirement:
+            command.extend(["--user-requirement", args.user_requirement])
+        if args.model:
+            command.extend(["--model", args.model])
+        if args.analyzer_model:
+            command.extend(["--analyzer-model", args.analyzer_model])
+        command.extend(["-v", str(args.verbosity)])
+
+        process = subprocess.run(command)
+
+        if process.returncode == 0:
+            print(Fore.GREEN + f"\n✅ Successfully fixed and verified: {test_id}")
+            fixed_count += 1
+        else:
+            print(Fore.RED + f"\n❌ Failed to fix: {test_id}. See logs above. Moving to the next test.")
+
+    print(Fore.MAGENTA + "\n" + "=" * 20 + " Isolated Fix Workflow Complete " + "=" * 20)
+    print(Fore.CYAN + f"Summary: Attempted to fix {len(sorted_failed_ids)} tests, successfully fixed {fixed_count}.")
+    print(Fore.CYAN + "Re-running all tests to get the final status...")
+    final_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=args.verbosity)
+    auto_fix = TestAutoFix(final_results)
+    auto_fix._print_stats()
+
+
+def run_single_test_fix_loop(args: argparse.Namespace, test_id: str):
+    """The main loop for a child process, focusing on fixing a single test case."""
+    print(Fore.CYAN + f"--- Child Process for Test: {test_id} ---")
+
+    fixer_model_name = args.model
+    analyzer_model_name = args.analyzer_model if args.analyzer_model else fixer_model_name
+    analyzer_model_switch = ModelSwitch()
+    analyzer_model_switch.select(analyzer_model_name)
+
+    if analyzer_model_name == fixer_model_name:
+        fixer_model_switch = analyzer_model_switch
+    else:
+        fixer_model_switch = ModelSwitch()
+        fixer_model_switch.select(fixer_model_name)
+
+    failure_tracker = FailureTracker(max_attempts=2)
+
+    while True:
+        print(Fore.CYAN + "\n" + "=" * 20 + f" Running test: {test_id} " + "=" * 20)
+        test_results = TestAutoFix.run_tests(test_patterns=[test_id], verbosity=args.verbosity)
+        auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
+
+        if not auto_fix.error_details:
+            print(Fore.GREEN + "\n🎉 Test passed! Fix was successful.")
+            sys.exit(0)
+
+        selected_error = auto_fix.error_details[0]
+
+        if failure_tracker.has_exceeded_limit(selected_error):
+            print(Fore.RED + "\nMax attempts reached for this test. Aborting fix.")
+            sys.exit(1)
+
+        failure_tracker.record_attempt(selected_error)
+        attempt_count = failure_tracker.get_attempt_count(selected_error)
+        print(Fore.CYAN + f"\n▶️ Test failed. Starting fix attempt {attempt_count}/2...")
+
+        auto_fix.uniq_references = set()
+        auto_fix.trace_log = ""
+        auto_fix.display_selected_error_details(selected_error)
+
+        if not auto_fix.uniq_references:
+            print(Fore.YELLOW + "\nCould not find references in tracer log. Cannot fix automatically.")
+            sys.exit(1)
+
+        symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch)
+        if not symbol_result:
+            print(Fore.RED + "Could not build context. Cannot fix automatically.")
+            sys.exit(1)
+
+        # Use a simple, direct, automated fix approach for the child process
+        _perform_direct_fix(auto_fix, symbol_result, fixer_model_switch, args.user_requirement)
+
+        print(Fore.GREEN + "\nPatch applied. Re-running test to verify...")
+
+
 def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
 
+    # --- New Isolated Fix Workflow ---
+    if args.single_test_id:
+        # This script is running as a child process.
+        run_single_test_fix_loop(args, args.single_test_id)
+        return
+
     # Check for mutually exclusive WORKFLOW modes.
-    # --direct-fix is a modifier for the default interactive workflow, not a standalone workflow.
     active_workflows = [
         bool(args.auto_pilot),
         args.parallel_analysis is not None,
         args.parallel_autofix is not None,
+        args.isolated_fix,
     ]
     if sum(active_workflows) > 1:
         print(
             Fore.RED
-            + "Error: --auto-pilot, --parallel-analysis, and --parallel-autofix are mutually exclusive workflow modes."
+            + "Error: --auto-pilot, --parallel-analysis, --parallel-autofix, and --isolated-fix are mutually exclusive."
         )
         sys.exit(1)
 
@@ -1233,7 +1376,10 @@ def main():
         fixer_model_switch.select(fixer_model_name)
     # --- End model setup ---
 
-    if args.auto_pilot:
+    if args.isolated_fix:
+        # This script is the parent process in isolated mode.
+        run_isolated_fix_master(args)
+    elif args.auto_pilot:
         run_auto_pilot_loop(args, analyzer_model_switch, fixer_model_switch)
     elif args.parallel_autofix is not None:
         run_parallel_autofix_workflow(args, analyzer_model_switch, fixer_model_switch)

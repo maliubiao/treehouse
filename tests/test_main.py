@@ -190,6 +190,7 @@ class JSONTestResult(unittest.TextTestResult):
             "file_path": file_path,
             "line": line,
             "function": func_name,
+            "test_id": test_id,
         }
         self.results[category].append(error_entry)
         if category == "failures":
