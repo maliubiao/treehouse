@@ -164,8 +164,8 @@ import sys as system
         result = execute_and_resolve(code, "my_project.app", "my_project", self.project_root)
         # The 'expected' variable was unused, removed to clean up code.
         self.assertIn("my_project", result)
-        self.assertEqual(result["my_project"]["module"], "my_project")
-        self.assertEqual(os.path.normpath(result["my_project"]["path"]), os.path.normpath(self.files["init"]))
+        self.assertEqual(result["my_project"]["module"], "my_project.utils")
+        self.assertEqual(os.path.normpath(result["my_project"]["path"]), os.path.normpath(self.files["utils"]))
 
     def test_direct_import_with_alias(self):
         code = "import my_project.utils as u"

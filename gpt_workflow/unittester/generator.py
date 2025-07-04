@@ -445,7 +445,6 @@ class UnitTestGenerator:
         target_file_path = Path(all_calls_by_func[first_func][0]["original_filename"])
         if not target_file_path.is_absolute():
             target_file_path = (self.project_root / target_file_path).resolve()
-
         # Get import context for the target file from the loaded import map.
         import_context = self.import_map_data.get(str(target_file_path))
         if import_context:

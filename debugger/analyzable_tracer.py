@@ -26,7 +26,7 @@ class AnalyzableTraceLogic(TraceLogic):
     一个增强的TraceLogic，它将事件转发给CallAnalyzer，并为单元测试生成目的解析模块导入。
     """
 
-    def __init__(self, config: TraceConfig, analyzer: CallAnalyzer):
+    def __init__(self, config: TraceConfig, analyzer: CallAnalyzer, import_map_file: str | None):
         """
         初始化时，除了常规配置外，还需要一个 CallAnalyzer 实例。
 
@@ -40,7 +40,10 @@ class AnalyzableTraceLogic(TraceLogic):
         self._lock = threading.Lock()
         self.resolved_files = set()
         self.resolved_imports = {}
-        self.import_map_file = Path(_LOG_DIR) / "import_map.json"
+        if import_map_file is None:
+            self.import_map_file = Path(_LOG_DIR) / "import_map.json"
+        else:
+            self.import_map_file = import_map_file
 
     def handle_call(self, frame):
         """
@@ -106,12 +109,10 @@ class AnalyzableTraceLogic(TraceLogic):
         """
         # 保存导入依赖映射
         if self.resolved_imports:
-            try:
-                with self.import_map_file.open("w", encoding="utf-8") as f:
-                    json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
-                print(color_wrap(f"Import map saved to: {self.import_map_file}", TraceTypes.COLOR_RETURN))
-            except Exception as e:
-                logging.error(f"Could not save import map: {e}")
+            self.import_map_file.parent.mkdir(parents=True, exist_ok=True)
+            with self.import_map_file.open("w", encoding="utf-8") as f:
+                json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
+            print(color_wrap(f"Import map saved to: {self.import_map_file}", TraceTypes.COLOR_RETURN))
 
         # 调用父类的stop方法来完成剩余的清理工作（如保存HTML报告）
         super().stop()
@@ -139,7 +140,7 @@ def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: Tra
         config = TraceConfig(target_files=[caller_filename], **kwargs)
 
     # 使用我们自定义的 AnalyzableTraceLogic
-    logic_instance = AnalyzableTraceLogic(config, analyzer)
+    logic_instance = AnalyzableTraceLogic(config, analyzer, kwargs.get("import_map_file"))
 
     tracer = None
     # 我们需要直接创建 Dispatcher 并传入我们的 logic_instance
@@ -182,6 +183,7 @@ def analyzable_trace(
     source_base_dir: Optional[Path] = None,
     disable_html: bool = False,
     include_stdlibs: Optional[List[str]] = None,
+    import_map_file: str | None = None,
 ):
     """
     一个功能强大的函数跟踪装饰器，集成了调用分析和依赖解析功能。
@@ -230,7 +232,7 @@ def analyzable_trace(
                 include_stdlibs=include_stdlibs,
             )
             # 使用新的启动函数，并传入 analyzer
-            t = start_analyzable_trace(analyzer=analyzer, config=config)
+            t = start_analyzable_trace(analyzer=analyzer, config=config, import_map_file=import_map_file)
 
             try:
                 result = func(*args, **kwargs)

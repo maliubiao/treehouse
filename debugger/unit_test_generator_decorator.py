@@ -137,6 +137,7 @@ class UnitTestGeneratorDecorator:
     _lock: Optional[_ProcessLock] = None
     _atexit_registered = False
     default_source_base_dir = Path.cwd()
+    # Removed class-level `import_map_file` to avoid confusion with instance-level config.
 
     def __init__(
         self,
@@ -218,12 +219,16 @@ class UnitTestGeneratorDecorator:
         if final_target_functions is not None and func_name not in final_target_functions:
             final_target_functions.append(func_name)
 
+        # Calculate the import map file path and store it in the config.
+        import_map_file_path = self.default_source_base_dir / "logs/import_map.json"
+
         traced_func = analyzable_trace(
             analyzer=analyzer,
             target_files=final_target_files,
             ignore_system_paths=True,
             enable_var_trace=self.enable_var_trace,
             source_base_dir=self.default_source_base_dir,
+            import_map_file=import_map_file_path,
         )(func)
 
         unique_key = f"{decorated_func_file}::{func_name}"
@@ -242,6 +247,7 @@ class UnitTestGeneratorDecorator:
                 "llm_trace_dir": self.llm_trace_dir,
                 "num_workers": self.num_workers,
                 "target_functions": final_target_functions,
+                "import_map_file": import_map_file_path,  # Store in config
             },
         }
         return traced_func
@@ -356,7 +362,8 @@ class UnitTestGeneratorDecorator:
         master_call_tree = defaultdict(lambda: defaultdict(list))
         all_presets = set()
         is_any_preset_defined = False
-        # Use the config from the first registered decorator as the base
+        # Use the config from the first registered decorator as the base.
+        # This config will now correctly contain the 'import_map_file' path.
         base_config = next(iter(cls._registry.values()))["config"]
 
         for data in cls._registry.values():
@@ -437,6 +444,8 @@ class UnitTestGeneratorDecorator:
                 trace_llm=base_config["trace_llm"],
                 llm_trace_dir=base_config["llm_trace_dir"],
                 project_root=cls.default_source_base_dir,
+                # Read import_map_path from the unified base_config dictionary.
+                import_map_path=base_config.get("import_map_file"),
             )
             if not generator.load_and_parse_report():
                 return
