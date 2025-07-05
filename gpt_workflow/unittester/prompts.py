@@ -45,9 +45,8 @@ def build_merge_prompt(
 ) -> str:
     """
     [MODIFIED] Builds the prompt to ask the LLM to merge new test cases into existing code.
-    It now includes instructions for intelligent refactoring, such as splitting test cases
-    into multiple classes and using inheritance for shared setup. It also includes the original
-    generation guidance to ensure consistency.
+    It now includes instructions for intelligent refactoring and explicitly passes in the
+    original generation guidance to ensure consistency.
     """
     new_blocks_str = ""
     for i, snippet in enumerate(new_code_snippets):
@@ -571,45 +570,61 @@ def _get_mocking_guidance(module_to_test: str) -> str:
 
 
 def format_call_record_as_text(call_record: Dict[str, Any]) -> str:
-    """Formats a single call record into a human-readable text trace for the LLM."""
+    """
+    Formats a single call record into a human-readable text trace for the LLM.
+    This version correctly represents the nested structure and final outcomes.
+    """
     trace_lines = []
+
+    def _format_recursive(record: Dict, indent_str: str):
+        # 1. Print the entry point of this specific record
+        func_name = record.get("func_name", "N/A")
+        args = record.get("args", {})
+        caller_lineno = record.get("caller_lineno")
+        prefix = f"L{caller_lineno:<4} " if caller_lineno else ""
+
+        args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items()) if args else ""
+        call_header = f"[SUB-CALL] {func_name}({args_str})" if indent_str else f"[CALL] {func_name}({args_str})"
+        trace_lines.append(f"{indent_str}{prefix}{call_header}")
+
+        # 2. Iterate through the internal events of this record
+        for event in record.get("events", []):
+            event_type = event.get("type")
+            data = event.get("data", {})
+
+            if event_type == "line":
+                line_no, content = data.get("line_no"), data.get("content", "").rstrip()
+                trace_lines.append(f"{indent_str}  L{line_no:<4} {content}")
+            elif event_type == "call":
+                # If a sub-call event is found, recurse
+                _format_recursive(data, indent_str + "  ")
+
+        # 3. Print the final outcome of this specific record
+        exception = record.get("exception")
+        if exception:
+            exc_type = exception.get("type", "UnknownException")
+            exc_value = exception.get("value", "N/A")
+            outcome = (
+                f"-> SUB-CALL RAISED: {exc_type}: {exc_value}"
+                if indent_str
+                else f"[FINAL] RAISES: {exc_type}: {exc_value}"
+            )
+            trace_lines.append(f"{indent_str}  {outcome}")
+        else:
+            return_value = record.get("return_value")
+            outcome = (
+                f"-> SUB-CALL RETURNED: {repr(return_value)}"
+                if indent_str
+                else f"[FINAL] RETURNS: {repr(return_value)}"
+            )
+            trace_lines.append(f"{indent_str}  {outcome}")
+
+    # Start the formatting from the top-level record
     func_name = call_record.get("func_name", "N/A")
     original_filename = call_record.get("original_filename", "N/A")
-    args = call_record.get("args", {})
-    return_value = call_record.get("return_value")
-    exception = call_record.get("exception")
-
     trace_lines.append(f"Execution trace for `{func_name}` from `{original_filename}`:")
-    args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items()) if args else ""
-    trace_lines.append(f"\n[CALL] {func_name}({args_str})")
+    _format_recursive(call_record, "")
 
-    events = call_record.get("events", [])
-    if events:
-        trace_lines.append("  [TRACE]")
-        for event in events:
-            if event.get("type") == "line":
-                data = event.get("data", {})
-                line_no, content = data.get("line_no"), data.get("content", "").rstrip()
-                debug_suffix = ""
-                if data.get("tracked_vars"):
-                    tracked_vars_str = "\n".join(
-                        ["%s=%s" % (key, value) for key, value in data["tracked_vars"].items()]
-                    )
-                    debug_suffix = f" # Debug {tracked_vars_str})"
-                trace_lines.append(f"    L{line_no:<4} {content}{debug_suffix}")
-            elif event.get("type") == "call":
-                data = event.get("data", {})
-                sub_func_name = data.get("func_name", "N/A")
-                sub_args = ", ".join(f"{k}={repr(v)}" for k, v in data.get("args", {}).items())
-                caller_lineno = data.get("caller_lineno", "?")
-                trace_lines.append(f"    L{caller_lineno:<4} [SUB-CALL] {sub_func_name}({sub_args})")
-                if data.get("exception"):
-                    trace_lines.append(f"      -> RAISED {repr(data.get('exception'))}")
-                else:
-                    trace_lines.append(f"      -> RETURNED {repr(data.get('return_value'))}")
-
-    if exception:
-        trace_lines.append(f"\n[FINAL] RAISES: {repr(exception)}")
-    else:
-        trace_lines.append(f"\n[FINAL] RETURNS: {repr(return_value)}")
-    return "\n".join(trace_lines)
+    # Clean up the output slightly for better prompt injection
+    # Remove final line breaks and adjust spacing
+    return "\n".join(line.rstrip() for line in trace_lines).replace("\n  \n", "\n")

@@ -605,6 +605,19 @@ class UnitTestGenerator:
                     }
                 )
 
+        # Get max context sizes once to pass to workers
+        try:
+            generator_config = self.model_switch._get_model_config(self.generator_model_name)
+            generator_max_context = generator_config.max_context_size
+        except Exception:
+            generator_max_context = None
+
+        try:
+            checker_config = self.model_switch._get_model_config(self.checker_model_name)
+            checker_max_context = checker_config.max_context_size
+        except Exception:
+            checker_max_context = None
+
         for i, call_info in enumerate(flat_call_list):
             tasks.append(
                 {
@@ -622,6 +635,8 @@ class UnitTestGenerator:
                     "output_file_abs_path": output_path.resolve(),
                     "generator_model_name": self.generator_model_name,
                     "checker_model_name": self.checker_model_name,
+                    "generator_max_context_size": generator_max_context,
+                    "checker_max_context_size": checker_max_context,
                     "trace_llm": self.model_switch.trace_llm,
                     "trace_dir": self.model_switch.trace_run_dir.parent if self.model_switch.trace_run_dir else None,
                     "test_mode": self.test_mode,

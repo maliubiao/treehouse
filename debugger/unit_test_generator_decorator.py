@@ -137,7 +137,6 @@ class UnitTestGeneratorDecorator:
     _lock: Optional[_ProcessLock] = None
     _atexit_registered = False
     default_source_base_dir = Path.cwd()
-    # Removed class-level `import_map_file` to avoid confusion with instance-level config.
 
     def __init__(
         self,
@@ -219,18 +218,21 @@ class UnitTestGeneratorDecorator:
         if final_target_functions is not None and func_name not in final_target_functions:
             final_target_functions.append(func_name)
 
-        # Calculate the import map file path and store it in the config.
+        # 统一计算导入映射文件的路径，并将其存储在配置中
         import_map_file_path = self.default_source_base_dir / "logs/import_map.json"
 
-        traced_func = analyzable_trace(
-            analyzer=analyzer,
-            target_files=final_target_files,
-            ignore_system_paths=True,
-            enable_var_trace=self.enable_var_trace,
-            source_base_dir=self.default_source_base_dir,
-            import_map_file=import_map_file_path,
-        )(func)
+        # 将所有配置打包，传递给 analyzable_trace
+        config_for_tracer = {
+            "analyzer": analyzer,
+            "target_files": final_target_files,
+            "ignore_system_paths": True,
+            "enable_var_trace": self.enable_var_trace,
+            "source_base_dir": self.default_source_base_dir,
+            "import_map_file": import_map_file_path,  # 传递统一的路径
+        }
+        traced_func = analyzable_trace(**config_for_tracer)(func)
 
+        # 存储与此装饰器实例相关的配置和分析器
         unique_key = f"{decorated_func_file}::{func_name}"
         self._registry[unique_key] = {
             "analyzer": analyzer,
@@ -247,7 +249,7 @@ class UnitTestGeneratorDecorator:
                 "llm_trace_dir": self.llm_trace_dir,
                 "num_workers": self.num_workers,
                 "target_functions": final_target_functions,
-                "import_map_file": import_map_file_path,  # Store in config
+                "import_map_file": import_map_file_path,  # 在配置中也存储
             },
         }
         return traced_func
@@ -363,11 +365,12 @@ class UnitTestGeneratorDecorator:
         all_presets = set()
         is_any_preset_defined = False
         # Use the config from the first registered decorator as the base.
-        # This config will now correctly contain the 'import_map_file' path.
         base_config = next(iter(cls._registry.values()))["config"]
 
         for data in cls._registry.values():
             analyzer: CallAnalyzer = data["analyzer"]
+            # It's crucial to finalize each analyzer to process any remaining events in its stack.
+            analyzer.finalize()
             for filename, funcs in analyzer.call_trees.items():
                 for func_name, records in funcs.items():
                     master_call_tree[filename][func_name].extend(records)
@@ -402,8 +405,6 @@ class UnitTestGeneratorDecorator:
     @classmethod
     def _do_generation(cls):
         """Executes the unified test generation workflow, called by the lock-holding process."""
-        # This import is deferred to avoid circular dependencies and to only load
-        # this heavy module when it's actually needed at program exit.
         # pylint: disable=import-outside-toplevel
         from gpt_workflow.unittester import UnitTestGenerator
 
@@ -416,10 +417,14 @@ class UnitTestGeneratorDecorator:
         master_call_tree, base_config, all_presets, is_any_preset_defined = merged
 
         # 2. Generate and load a unified report
-        unified_analyzer = CallAnalyzer()
-        unified_analyzer.call_trees = master_call_tree
+        # We don't need a new analyzer; the master_call_tree is already the final data.
         report_path = str(Path(base_config["report_dir"]) / "unified_trace_report.json")
-        unified_analyzer.generate_report(report_path)
+        try:
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(master_call_tree, f, indent=2, ensure_ascii=False, default=str)
+        except (IOError, TypeError) as e:
+            print(f"{Fore.RED}Error writing unified report: {e}{Style.RESET_ALL}")
+            return
 
         all_discovered_calls = cls._load_calls_from_report(report_path)
         if not all_discovered_calls:
@@ -430,6 +435,40 @@ class UnitTestGeneratorDecorator:
         targets_by_file, final_target_funcs = cls._determine_targets(
             all_discovered_calls, base_config, all_presets, is_any_preset_defined
         )
+
+        # === TRACE VERIFICATION BLOCK (for debugging and user feedback) ===
+        try:
+            print(f"\n{Fore.MAGENTA}{Style.BRIGHT}--- Verifying Captured Traces ---{Style.RESET_ALL}")
+            print(
+                f"{Fore.MAGENTA}(This shows the final, processed trace data used for test generation){Style.RESET_ALL}"
+            )
+
+            processed_funcs = set()
+            target_funcs_to_print = final_target_funcs or [func for funcs in targets_by_file.values() for func in funcs]
+
+            for func_to_print in sorted(target_funcs_to_print):
+                if func_to_print in processed_funcs:
+                    continue
+                found = False
+                for filename, funcs in all_discovered_calls.items():
+                    if func_to_print in funcs:
+                        records = funcs[func_to_print]
+                        print(f"\n{Fore.YELLOW}Trace for: {filename}::{func_to_print}{Style.RESET_ALL}")
+                        for i, record in enumerate(records):
+                            print(f"{Fore.CYAN}--- Execution Record {i + 1}/{len(records)} ---{Style.RESET_ALL}")
+                            # Use CallAnalyzer's pretty_print for a structured, recursive view
+                            analyzer_for_printing = CallAnalyzer()
+                            print(analyzer_for_printing.pretty_print_call(record))
+                        found = True
+                        break
+                if found:
+                    processed_funcs.add(func_to_print)
+
+            print(f"\n{Fore.MAGENTA}{Style.BRIGHT}--- Trace Verification Finished ---{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}An error occurred during trace verification: {e}{Style.RESET_ALL}")
+            traceback.print_exc()
+        # === END: TRACE VERIFICATION BLOCK ===
 
         if not targets_by_file and not final_target_funcs:
             print(f"{Fore.BLUE}No functions selected or test generation cancelled.{Style.RESET_ALL}")
@@ -444,14 +483,11 @@ class UnitTestGeneratorDecorator:
                 trace_llm=base_config["trace_llm"],
                 llm_trace_dir=base_config["llm_trace_dir"],
                 project_root=cls.default_source_base_dir,
-                # Read import_map_path from the unified base_config dictionary.
                 import_map_path=base_config.get("import_map_file"),
             )
             if not generator.load_and_parse_report():
                 return
         except Exception:  # pylint: disable=broad-except
-            # Catching a broad exception is necessary here as UnitTestGenerator
-            # initialization can fail for various reasons (config, dependencies, etc.).
             print(f"{Fore.RED}Failed to initialize UnitTestGenerator:{Style.RESET_ALL}")
             traceback.print_exc()
             return
@@ -491,35 +527,11 @@ class UnitTestGeneratorDecorator:
         """Reads a report file and organizes all found function calls by file and function name."""
         try:
             with open(report_path, "r", encoding="utf-8") as f:
-                call_trees = json.load(f)
+                # The report now directly contains the final, nested call tree
+                return json.load(f)
         except (IOError, json.JSONDecodeError) as e:
             print(f"{Fore.RED}Error: Failed to read or parse report file {report_path}. Details: {e}{Style.RESET_ALL}")
             return {}
-
-        discovered_calls = defaultdict(lambda: defaultdict(list))
-
-        def find_calls_recursively(record):
-            if not isinstance(record, dict) or "func_name" not in record:
-                return
-
-            func_name = record.get("func_name", "N/A")
-            filename = record.get("original_filename")
-
-            # Ensure we only process valid, non-builtin functions from resolved file paths
-            if filename and Path(filename).is_absolute() and not re.match(r"^<.*?>$", func_name):
-                discovered_calls[filename][func_name].append(record)
-
-            for event in record.get("events", []):
-                if event.get("type") == "call":
-                    find_calls_recursively(event.get("data"))
-
-        # The report structure is {filename: {entry_func: [call_records]}}
-        for file_data in call_trees.values():
-            for func_records in file_data.values():
-                for record in func_records:
-                    find_calls_recursively(record)
-
-        return dict(discovered_calls)
 
 
 # This alias is intended for use as a decorator, where snake_case is idiomatic.

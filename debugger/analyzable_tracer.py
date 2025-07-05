@@ -40,7 +40,7 @@ class AnalyzableTraceLogic(TraceLogic):
         Args:
             config: 跟踪配置。
             analyzer: 用于分析事件的 CallAnalyzer 实例。
-            import_map_file: 用于存储导入映射的文件路径。
+            import_map_file: 用于存储导入映射的文件路径。此路径应由上层（如装饰器）提供。
         """
         super().__init__(config)
         self.analyzer = analyzer
@@ -49,12 +49,14 @@ class AnalyzableTraceLogic(TraceLogic):
         self.resolved_files = set()
         self.resolved_imports = {}
 
-        if import_map_file is None:
-            self.import_map_file = Path(_LOG_DIR) / "import_map.json"
-        elif isinstance(import_map_file, str):
+        # 路径应由调用者（装饰器）传入，确保单一来源。
+        if isinstance(import_map_file, str):
             self.import_map_file = Path(import_map_file)
-        else:
+        elif isinstance(import_map_file, Path):
             self.import_map_file = import_map_file
+        else:
+            # 提供一个合理的默认值，以防直接使用此模块。
+            self.import_map_file = Path(_LOG_DIR) / "import_map.json"
 
     def handle_call(self, frame):
         """
@@ -73,7 +75,6 @@ class AnalyzableTraceLogic(TraceLogic):
             if not is_resolved:
                 setattr(self._thread_local, "is_resolving", True)
                 try:
-                    # print(color_wrap(f"Resolving imports for: {filename}", TraceTypes.COLOR_TRACE))
                     imports = resolve_imports(frame)
                     with self._lock:
                         if imports:
@@ -97,11 +98,11 @@ class AnalyzableTraceLogic(TraceLogic):
         """
         try:
             event_map = {
-                TraceTypes.COLOR_CALL: TraceTypes.CALL,
-                TraceTypes.COLOR_RETURN: TraceTypes.RETURN,
-                TraceTypes.COLOR_LINE: TraceTypes.LINE,
-                TraceTypes.COLOR_EXCEPTION: TraceTypes.EXCEPTION,
-                TraceTypes.COLOR_ERROR: TraceTypes.ERROR,
+                TraceTypes.COLOR_CALL: "call",
+                TraceTypes.COLOR_RETURN: "return",
+                TraceTypes.COLOR_LINE: "line",
+                TraceTypes.COLOR_EXCEPTION: "exception",
+                TraceTypes.COLOR_ERROR: "error",
             }
             event_type = event_map.get(color_type, color_type)
             self.analyzer.process_event(log_data, event_type)
@@ -128,7 +129,6 @@ class AnalyzableTraceLogic(TraceLogic):
                 self.import_map_file.parent.mkdir(parents=True, exist_ok=True)
                 with self.import_map_file.open("w", encoding="utf-8") as f:
                     json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
-                print(color_wrap(f"Import map saved to: {self.import_map_file}", TraceTypes.COLOR_RETURN))
             except Exception as e:
                 logging.error(f"Failed to save import map: {e}")
 
@@ -146,6 +146,8 @@ def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: Tra
         analyzer: 用于分析事件的 CallAnalyzer 实例。
         module_path: 目标模块路径 (可选)。
         config: 跟踪配置实例 (可选)。
+        **kwargs: 将传递给 TraceConfig 构造函数。
+                  `import_map_file` 应在此处提供。
     """
     if not config:
         # 自动推断调用者文件名作为目标
@@ -156,7 +158,7 @@ def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: Tra
             kwargs["report_name"] = log_name + ".html"
         config = TraceConfig(target_files=[caller_filename], **kwargs)
 
-    # 使用我们自定义的 AnalyzableTraceLogic
+    # 使用我们自定义的 AnalyzableTraceLogic，并传入 import_map_file 路径
     logic_instance = AnalyzableTraceLogic(config, analyzer, kwargs.get("import_map_file"))
 
     tracer = None
@@ -209,16 +211,16 @@ def analyzable_trace(
     Args:
         analyzer: 一个 CallAnalyzer 实例，用于收集和分析数据。
         target_files: 目标文件模式列表，支持通配符
-        line_ranges: 文件行号范围字典，key为文件名，value为 (start_line, end_line) 元组列表
+        line_ranges: 文件行号范围字典
         capture_vars: 要捕获的变量表达式列表
         report_name: 报告文件名
         exclude_functions: 要排除的函数名列表
         enable_var_trace: 是否启用变量操作跟踪
         ignore_self: 是否忽略跟踪器自身
         ignore_system_paths: 是否忽略系统路径和第三方包路径
-        source_base_dir: 源代码根目录，用于在报告中显示相对路径
+        source_base_dir: 源代码根目录
         disable_html: 是否禁用HTML报告
-        include_stdlibs: 特别包含的标准库模块列表（即使ignore_system_paths=True）
+        include_stdlibs: 特别包含的标准库模块列表
         import_map_file: 用于存储导入映射的文件路径。
     """
     # 如果未指定目标文件，则自动将装饰器所在的文件设为目标
@@ -231,10 +233,9 @@ def analyzable_trace(
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            # If target_files is still empty, get it from the function object
+            # 如果 target_files 仍然为空，从函数对象获取
             final_target_files = target_files or [func.__code__.co_filename]
 
-            print(color_wrap("[start analyzable tracer]", TraceTypes.COLOR_CALL))
             config = TraceConfig(
                 target_files=final_target_files,
                 line_ranges=line_ranges,
@@ -250,7 +251,7 @@ def analyzable_trace(
                 disable_html=disable_html,
                 include_stdlibs=include_stdlibs,
             )
-            # 使用新的启动函数，并传入 analyzer
+            # 使用新的启动函数，并传入 analyzer 和 import_map_file
             t = start_analyzable_trace(analyzer=analyzer, config=config, import_map_file=import_map_file)
 
             try:
@@ -258,7 +259,6 @@ def analyzable_trace(
                 return result
             finally:
                 if t:
-                    print(color_wrap("[stop analyzable tracer]", TraceTypes.COLOR_RETURN))
                     t.stop()
 
         return wrapper

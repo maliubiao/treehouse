@@ -787,7 +787,8 @@ class SysMonitoringTraceDispatcher:
         """Handle PY_UNWIND event (stack unwinding)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
-            self._logic.flush_exception()
+            for exception in self._logic.exception_chain:
+                self._logic._add_to_buffer(exception[0], exception[1])
             self.active_frames.discard(frame)
 
     def _handle_reraise(self, _code, _offset, exc):
@@ -1833,7 +1834,7 @@ class TraceLogic:
         基础实现只是丢弃待处理的异常记录并恢复堆栈深度。
         """
         if len(self.exception_chain) > 0:
-            # 最近引发的异常就是被处理的那个
+            # 最近引发的异常就是被处理的那个, 不算数
             self.exception_chain.pop()
         # 恢复堆栈深度，因为函数没有终止
         self.stack_depth += 1

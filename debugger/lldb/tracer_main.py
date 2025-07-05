@@ -58,7 +58,7 @@ from debugger.presets import generate_for_project
 @generate_for_project(
     project_glob="*/tracer/*py",
     model_name="deepseek-r1",
-    checker_model_name="deepseek-v3",
+    checker_model_name="gemini-2.5-flash",
     num_workers=10,
     trace_llm=True,
 )
