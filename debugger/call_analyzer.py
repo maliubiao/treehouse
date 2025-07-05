@@ -213,6 +213,8 @@ class CallAnalyzer:
         """
         处理单个跟踪事件，并更新相应线程的调用树。
         这是挂载到 AnalyzableTraceLogic 上的核心处理函数。
+
+        新增: 忽略以 "DEBUG_STACK" 开头的调试事件
         """
         if not isinstance(log_data, dict) or "data" not in log_data:
             return

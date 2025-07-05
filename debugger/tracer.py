@@ -95,6 +95,7 @@ class TraceTypes:
     COLOR_TRACE = "trace"
     COLOR_RESET = "reset"
     COLOR_EXCEPTION = "exception"  # For consistency with event types
+    COLOR_DEBUG = "debug"
 
     # Log prefixes
     PREFIX_CALL = "CALL"
@@ -491,6 +492,9 @@ class TraceDispatcher:
 
     def is_target_frame(self, frame):
         """精确匹配目标模块路径"""
+        if frame.f_code.co_name.startswith("<genexpr>"):
+            # one line code, ignore
+            return False
         try:
             if not frame or not frame.f_code or not frame.f_code.co_filename:
                 frame.f_trace_lines = False
@@ -712,6 +716,7 @@ class SysMonitoringTraceDispatcher:
 
     def handle_py_start(self, _code, _offset):
         """Handle PY_START event (function entry)"""
+
         frame = sys._getframe(1)  # Get the frame of the function being called
         if not self.is_target_frame(frame):
             return self.monitoring_module.DISABLE
@@ -791,6 +796,9 @@ class SysMonitoringTraceDispatcher:
                 self._logic._add_to_buffer(exception[0], exception[1])
             self._logic.exception_chain = []
 
+            # 减少堆栈深度（函数因异常退出）
+            self._logic.decrement_stack_depth()
+
             # BUG FIX: Add resource cleanup for frames exiting via exception
             frame_id = self._logic._get_frame_id(frame)
             if frame_id in self._logic._frame_data._frame_locals_map:
@@ -810,6 +818,9 @@ class SysMonitoringTraceDispatcher:
         """Check if frame matches target files"""
         if self.config.is_excluded_function(frame.f_code.co_name):
             return
+        if frame.f_code.co_name.startswith("<genexpr>"):
+            # one line code, ignore
+            return False
         try:
             if not frame or not frame.f_code or not frame.f_code.co_filename:
                 return False
@@ -1347,7 +1358,6 @@ class TraceLogic:
 
     def __init__(self, config: TraceConfig):
         """初始化实例属性"""
-        self.stack_depth = 0
         self.config = config
         self._log_queue = queue.Queue()
         self._flush_event = threading.Event()
@@ -1364,10 +1374,15 @@ class TraceLogic:
         self._output = self._OutputHandlers(self)
         self.last_statement_vars = None
         self._last_vars_by_frame = {}  # Cache for tracking variable changes
+        self._local = threading.local()  # 线程本地存储
 
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         if self.config.disable_html:
             self.disable_output("html")
+
+    def decrement_stack_depth(self):
+        """减少堆栈深度（用于异常退出时调用）"""
+        self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
     def _get_frame_id(self, frame):
         """获取或为帧分配一个唯一的、持久的ID。"""
@@ -1543,6 +1558,9 @@ class TraceLogic:
 
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+
         try:
             args_info = []
             if frame.f_code.co_name == "<module>":
@@ -1567,7 +1585,7 @@ class TraceLogic:
                 {
                     "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}][thread:{thread_id}]",
                     "data": {
-                        "indent": _INDENT * self.stack_depth,
+                        "indent": _INDENT * self._local.stack_depth,
                         "prefix": log_prefix,
                         "filename": filename,
                         "original_filename": frame.f_code.co_filename,
@@ -1582,7 +1600,8 @@ class TraceLogic:
                 },
                 TraceTypes.COLOR_CALL,
             )
-            self.stack_depth += 1
+            self._local.stack_depth += 1
+
         except (AttributeError, TypeError) as e:
             traceback.print_exc()
             logging.error("Call logging error: %s", str(e))
@@ -1593,6 +1612,8 @@ class TraceLogic:
 
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
 
         return_str = truncate_repr_value(return_value)
         filename = self._get_formatted_filename(frame.f_code.co_filename)
@@ -1606,7 +1627,7 @@ class TraceLogic:
             {
                 "template": "{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]",
                 "data": {
-                    "indent": _INDENT * (self.stack_depth - 1),
+                    "indent": _INDENT * (self._local.stack_depth - 1),
                     "filename": filename,
                     "lineno": frame.f_lineno,
                     "return_value": return_str,
@@ -1618,7 +1639,7 @@ class TraceLogic:
             },
             TraceTypes.COLOR_RETURN,
         )
-        self.stack_depth = max(0, self.stack_depth - 1)
+        self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
     def _get_var_ops(self, code_obj):
         """获取代码对象的变量操作分析结果"""
@@ -1690,6 +1711,9 @@ class TraceLogic:
 
     def handle_line(self, frame):
         """处理行事件，现在能够感知多行语句，并只报告变化的变量。"""
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+
         lineno = frame.f_lineno
         filename = frame.f_code.co_filename
 
@@ -1730,13 +1754,13 @@ class TraceLogic:
             # Determine variables for the *current* statement for the next trace
             self.last_statement_vars = self._get_vars_in_range(frame.f_code, start_line, end_line)
 
-        indented_statement = full_statement.replace("\n", "\n" + _INDENT * (self.stack_depth + 1))
+        indented_statement = full_statement.replace("\n", "\n" + _INDENT * (self._local.stack_depth + 1))
 
         log_data = {
             "idx": self._message_id,
             "template": "{indent}▷ {filename}:{lineno} {line}",
             "data": {
-                "indent": _INDENT * self.stack_depth,
+                "indent": _INDENT * self._local.stack_depth,
                 "filename": formatted_filename,
                 "lineno": start_line,
                 "line": indented_statement,
@@ -1783,7 +1807,7 @@ class TraceLogic:
             {
                 "template": "{indent}↳ Debug Statement {expr}={value} [frame:{frame_id}]",
                 "data": {
-                    "indent": _INDENT * (self.stack_depth),
+                    "indent": _INDENT * (self._local.stack_depth),
                     "expr": cached_expr,
                     "value": formatted,
                     "frame_id": self._get_frame_id(frame),
@@ -1800,7 +1824,7 @@ class TraceLogic:
                 {
                     "template": "{indent}↳ 变量: {vars} [frame:{frame_id}]",
                     "data": {
-                        "indent": _INDENT * (self.stack_depth + 1),
+                        "indent": _INDENT * (self._local.stack_depth + 1),
                         "vars": ", ".join(f"{k}={v}" for k, v in captured_vars.items()),
                         "frame_id": self._get_frame_id(frame),
                     },
@@ -1820,6 +1844,10 @@ class TraceLogic:
         对于 sys.monitoring，此方法会将异常事件暂存到 exception_chain 中，
         以区分最终被捕获的异常和导致函数终止的异常。
         """
+        # 初始化线程本地堆栈深度
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self._get_frame_id(frame)
@@ -1836,7 +1864,7 @@ class TraceLogic:
                     "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
                 ),
                 "data": {
-                    "indent": _INDENT * (self.stack_depth - 1),
+                    "indent": _INDENT * (self._local.stack_depth - 1),
                     "filename": filename,
                     "lineno": lineno,
                     "exc_type": exc_type.__name__,
@@ -1855,19 +1883,21 @@ class TraceLogic:
         else:
             self.exception_chain.append(msg)
 
-        self.stack_depth = max(0, self.stack_depth - 1)
+        # 不再在此处减少堆栈深度，将在PY_UNWIND事件中处理
 
     def handle_exception_was_handled(self, frame):
         """
         当一个异常被 `try...except` 块捕获时调用此方法。
         这是 sys.monitoring 的 EXCEPTION_HANDLED 事件的钩子。
-        基础实现只是丢弃待处理的异常记录并恢复堆栈深度。
         """
+        # 初始化线程本地堆栈深度
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+
         if len(self.exception_chain) > 0:
             # 最近引发的异常就是被处理的那个, 不算数
             self.exception_chain.pop()
-        # 恢复堆栈深度，因为函数没有终止
-        self.stack_depth += 1
+        # 不再恢复堆栈深度，因为异常被捕获时不减少
 
     def capture_variables(self, frame):
         """捕获并计算变量表达式"""
