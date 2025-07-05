@@ -5,7 +5,7 @@ import sys
 import threading
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from gpt_workflow.unittester.imports_resolve import resolve_imports
 
@@ -24,15 +24,23 @@ from .tracer import (
 class AnalyzableTraceLogic(TraceLogic):
     """
     一个增强的TraceLogic，它将事件转发给CallAnalyzer，并为单元测试生成目的解析模块导入。
+    此版本通过重写 _add_to_buffer 方法，将所有最终的日志事件分发给分析器，
+    确保分析器与日志系统看到完全一致的事件流。
     """
 
-    def __init__(self, config: TraceConfig, analyzer: CallAnalyzer, import_map_file: str | Path | None):
+    def __init__(
+        self,
+        config: TraceConfig,
+        analyzer: CallAnalyzer,
+        import_map_file: Optional[Union[str, Path]],
+    ):
         """
         初始化时，除了常规配置外，还需要一个 CallAnalyzer 实例。
 
         Args:
             config: 跟踪配置。
             analyzer: 用于分析事件的 CallAnalyzer 实例。
+            import_map_file: 用于存储导入映射的文件路径。
         """
         super().__init__(config)
         self.analyzer = analyzer
@@ -41,7 +49,6 @@ class AnalyzableTraceLogic(TraceLogic):
         self.resolved_files = set()
         self.resolved_imports = {}
 
-        # 确保import_map_file是Path对象
         if import_map_file is None:
             self.import_map_file = Path(_LOG_DIR) / "import_map.json"
         elif isinstance(import_map_file, str):
@@ -58,19 +65,15 @@ class AnalyzableTraceLogic(TraceLogic):
             return
 
         filename = frame.f_code.co_filename
-        funcname = frame.f_code.co_name  # 获取函数名
-
-        # 关键修改：只有当文件名不是动态生成（非<>包围）且函数名不是模块初始化状态（非<>包围）时才解析
-        if not (filename.startswith("<") and filename.endswith(">")) and not (
-            funcname.startswith("<") and funcname.endswith(">")
-        ):
+        # 只有当文件名是真实文件路径（非<...>包围）时才解析
+        if not (filename.startswith("<") and filename.endswith(">")):
             with self._lock:
                 is_resolved = filename in self.resolved_files
 
             if not is_resolved:
                 setattr(self._thread_local, "is_resolving", True)
                 try:
-                    print(color_wrap(f"Resolving imports for: {filename}", TraceTypes.COLOR_TRACE))
+                    # print(color_wrap(f"Resolving imports for: {filename}", TraceTypes.COLOR_TRACE))
                     imports = resolve_imports(frame)
                     with self._lock:
                         if imports:
@@ -83,18 +86,16 @@ class AnalyzableTraceLogic(TraceLogic):
                 finally:
                     setattr(self._thread_local, "is_resolving", False)
 
-        # 继续执行原始的跟踪逻辑
         super().handle_call(frame)
 
     def _add_to_buffer(self, log_data: Any, color_type: str):
         """
-        重写此方法以实现"挂载"分析器。
+        重写此方法以实现对分析器的事件分发。
 
         在将日志数据添加到原始的输出缓冲区之前，先将其传递给 CallAnalyzer 进行处理。
+        这是连接跟踪器和分析器的核心枢纽。
         """
-        # 1. 将事件发送给分析器进行结构化处理
         try:
-            # 将事件类型从颜色转换为标准类型
             event_map = {
                 TraceTypes.COLOR_CALL: TraceTypes.CALL,
                 TraceTypes.COLOR_RETURN: TraceTypes.RETURN,
@@ -107,19 +108,23 @@ class AnalyzableTraceLogic(TraceLogic):
         except Exception as e:
             # 确保分析器的任何错误都不会中断正常的日志记录
             error_msg = f"CallAnalyzer process_event failed: {e}\n{traceback.format_exc()}"
-            super()._add_to_buffer({"template": "⚠ {error}", "data": {"error": error_msg}}, TraceTypes.ERROR)
+            logging.error(error_msg)
+            # 将分析器的错误也记录下来
+            super()._add_to_buffer(
+                {"template": "⚠ ANALYZER ERROR: {error}", "data": {"error": error_msg}}, TraceTypes.ERROR
+            )
 
-        # 2. 调用父类方法，保持原有的日志输出功能
+        # 调用父类方法，保持原有的日志输出功能（如HTML报告）
         super()._add_to_buffer(log_data, color_type)
 
     def stop(self):
         """
-        停止跟踪时，保存已解析的导入依赖映射，并调用父类的stop方法。
+        停止跟踪时，确保分析器完成处理，并保存已解析的导入依赖映射。
         """
-        # 保存导入依赖映射
+        self.analyzer.finalize()
+
         if self.resolved_imports:
             try:
-                # 安全创建目录
                 self.import_map_file.parent.mkdir(parents=True, exist_ok=True)
                 with self.import_map_file.open("w", encoding="utf-8") as f:
                     json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
@@ -127,7 +132,6 @@ class AnalyzableTraceLogic(TraceLogic):
             except Exception as e:
                 logging.error(f"Failed to save import map: {e}")
 
-        # 调用父类的stop方法来完成剩余的清理工作（如保存HTML报告）
         super().stop()
 
 
@@ -197,7 +201,7 @@ def analyzable_trace(
     source_base_dir: Optional[Path] = None,
     disable_html: bool = False,
     include_stdlibs: Optional[List[str]] = None,
-    import_map_file: str | Path | None = None,
+    import_map_file: Optional[Union[str, Path]] = None,
 ):
     """
     一个功能强大的函数跟踪装饰器，集成了调用分析和依赖解析功能。
@@ -215,6 +219,7 @@ def analyzable_trace(
         source_base_dir: 源代码根目录，用于在报告中显示相对路径
         disable_html: 是否禁用HTML报告
         include_stdlibs: 特别包含的标准库模块列表（即使ignore_system_paths=True）
+        import_map_file: 用于存储导入映射的文件路径。
     """
     # 如果未指定目标文件，则自动将装饰器所在的文件设为目标
     if not target_files:

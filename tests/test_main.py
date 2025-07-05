@@ -12,6 +12,10 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Global cache to store source information of tests before they run.
+# This helps to locate test source even if methods are mocked during execution.
+TEST_SOURCE_INFO_CACHE = {}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run unit tests with flexible selection")
@@ -48,6 +52,48 @@ def add_gpt_path_to_syspath():
     if gpt_path and os.path.isdir(gpt_path):
         sys.path.insert(0, gpt_path)
         print(f"Added GPT_PATH to sys.path: {gpt_path}")
+
+
+def _cache_test_source_info(suite):
+    """
+    Recursively traverse the test suite and cache source file and line number
+    for each test case. This is done before tests are run to ensure we can
+    locate the original source code, even if methods are mocked or decorated.
+    """
+    stack = [suite]
+    while stack:
+        current_suite = stack.pop()
+        for test in current_suite:
+            if isinstance(test, unittest.TestCase):
+                test_id = test.id()
+                if test_id in TEST_SOURCE_INFO_CACHE:
+                    continue
+                try:
+                    test_method_obj = getattr(test, test._testMethodName)
+
+                    # Use inspect.unwrap to get to the original function,
+                    # bypassing decorators like @mock.patch.
+                    original_func = inspect.unwrap(test_method_obj)
+
+                    # Now get source info from the unwrapped function object.
+                    file_path = inspect.getsourcefile(original_func)
+                    if not file_path:
+                        continue  # Cannot determine file path
+
+                    _, line_no = inspect.getsourcelines(original_func)
+                    func_name = original_func.__name__
+
+                    TEST_SOURCE_INFO_CACHE[test_id] = {
+                        "file_path": os.path.abspath(file_path),
+                        "line": line_no,
+                        "function": func_name,
+                    }
+                except (AttributeError, TypeError, OSError, inspect.Error):
+                    # This can fail for various reasons (e.g., dynamically generated tests),
+                    # so we silently pass. The fallback in _collect_error_details will handle it.
+                    pass
+            elif isinstance(test, unittest.TestSuite):
+                stack.append(test)
 
 
 def compile_pattern(pattern):
@@ -114,102 +160,139 @@ def filter_tests(suite, patterns):
 
 
 class JSONTestResult(unittest.TextTestResult):
+    """
+    A test result class that collects results in a machine-readable JSON format.
+    It is designed to be robust, especially against errors in setUp/tearDown.
+    """
+
     def __init__(self, stream, descriptions, verbosity):
         super().__init__(stream, descriptions, verbosity)
         self.results = defaultdict(list)
         self.all_issues = []
+        self._test_start_times = {}
 
     def startTest(self, test):
+        self._test_start_times[test.id()] = time.time()
         super().startTest(test)
-        self._start_at_time = time.time()
 
     def addSuccess(self, test):
         super().addSuccess(test)
-        elapsed = time.time() - self._start_at_time
-        print(f"\n{test.id()}: {elapsed:.3f}s")
+        elapsed = time.time() - self._test_start_times.get(test.id(), time.time())
+        # A simple check for slow tests, changed from "timeout" for clarity.
         if elapsed > 0.1:
-            self.all_issues.append(("timeout", test, f"Test {test.id()} took too long: {elapsed:.3f}s"))
+            self.all_issues.append(
+                {
+                    "type": "slow_test",
+                    "test": str(test),
+                    "details": f"Test execution was slow: {test.id()} took {elapsed:.3f}s",
+                }
+            )
 
     def addFailure(self, test, err):
-        self._add_error_details(test, err, "failures")
-        self.all_issues.append(("failure", test, err))
+        super().addFailure(test, err)
+        self._collect_error_details(test, err, "failures")
 
     def addError(self, test, err):
-        self._add_error_details(test, err, "errors")
-        self.all_issues.append(("error", test, err))
+        super().addError(test, err)
+        self._collect_error_details(test, err, "errors")
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
-        self.all_issues.append(("skip", test, reason))
+        self.all_issues.append({"type": "skip", "test": str(test), "details": reason})
 
     def addExpectedFailure(self, test, err):
         super().addExpectedFailure(test, err)
-        self.all_issues.append(("expected_failure", test, err))
+        tb_string = self._exc_info_to_string(err, test)
+        self.all_issues.append({"type": "expected_failure", "test": str(test), "details": tb_string})
 
     def addUnexpectedSuccess(self, test):
         super().addUnexpectedSuccess(test)
-        self.all_issues.append(("unexpected_success", test, None))
+        self.all_issues.append({"type": "unexpected_success", "test": str(test), "details": None})
 
-    def _get_test_start_line(self, test):
-        """Get the first line number of the test method."""
+    def _collect_error_details(self, test, err, category):
+        """
+        Robustly collects details about an error or failure.
+
+        It prioritizes locating the source of the test case itself using
+        pre-cached metadata. If that fails, it intelligently walks the traceback
+        to find the test function, which is far more reliable than just taking
+        the innermost frame of the stack.
+        """
         try:
-            test_method = getattr(test, test._testMethodName)
-            lines, start_line = inspect.getsourcelines(test_method)
-            return start_line
-        except (AttributeError, TypeError, OSError):
-            return None
+            test_id = test.id()
+            tb_string = self._exc_info_to_string(err, test)
+            err_type, err_value, err_tb = err
 
-    def _add_error_details(self, test, err, category):
-        test_id = test.id()
-        if test_id.count(".") == 2:
-            module, class_name, method_name = test_id.split(".")
-            method = getattr(getattr(sys.modules[module], class_name), method_name)
-        elif test_id.count(".") > 2:
-            module, class_name, method_name = test_id.rsplit(".", 2)
-            method = getattr(getattr(sys.modules[module], class_name), method_name)
-        else:
-            module, method_name = test_id.split(".")
-            method = getattr(sys.modules[module], method_name)
-        file_path = method.__code__.co_filename
-        line = method.__code__.co_firstlineno
-        func_name = method.__name__
-        for i in reversed(traceback.extract_tb(err[-1])):
-            if method_name == i.name:
-                file_path = i.filename
-                line = i._code.co_firstlineno
-                func_name = i.name
-                break
-        tb = self._exc_info_to_string(err, test)
-        # Use test method start line if available
-        error_type = type(err[1]).__name__ if err[1] else "UnknownError"
-        error_entry = {
-            "test": str(test),
-            "error_type": error_type,
-            "error_message": str(err[1]) if err[1] else "Unknown error occurred",
-            "traceback": tb,
-            "file_path": file_path,
-            "line": line,
-            "function": func_name,
-            "test_id": test_id,
-        }
-        self.results[category].append(error_entry)
-        if category == "failures":
-            self.failures.append((test, self._exc_info_to_string(err, test)))
-        elif category == "errors":
-            self.errors.append((test, self._exc_info_to_string(err, test)))
+            error_type_name = err_type.__name__ if hasattr(err_type, "__name__") else "UnknownError"
+            error_message = str(err_value)
 
-    def _parse_test_id(self, test_id, err=None):
-        parts = test_id.split(".")
-        base_module = parts[0]
+            # --- Robust location finding logic ---
+            file_path, line, func_name = "Unknown", 0, test_id
 
-        if base_module.startswith("test_"):
-            module_path = os.path.join("tests", f"{base_module}.py")
-        else:
-            module_path = base_module.replace(".", "/") + ".py"
-            if os.path.exists(os.path.join("tests", module_path)):
-                file_path = os.path.join("tests", module_path)
-                return file_path
-        return err[-1].tb_frame.f_code.co_filename, err[-1].tb_frame.f_lineno, err[-1].tb_frame.f_code.co_name
+            # 1. Use the cached test definition location as the primary source of truth.
+            if test_id in TEST_SOURCE_INFO_CACHE:
+                cached_info = TEST_SOURCE_INFO_CACHE[test_id]
+                file_path = cached_info["file_path"]
+                line = cached_info["line"]
+                func_name = cached_info["function"]
+
+            # 2. Fallback: If not cached, walk the traceback to find the test function.
+            #    This is more reliable than using the innermost frame, which could be
+            #    a library or helper function deep in the call stack.
+            elif err_tb:
+                tb_frames = traceback.extract_tb(err_tb)
+                found_test_frame = False
+                if tb_frames:
+                    # Iterate from the site of the error backwards up the call stack.
+                    for frame in reversed(tb_frames):
+                        # Use a heuristic: unittest methods are typically named 'test*'.
+                        # This helps pinpoint the test function itself.
+                        if frame.name.startswith("test"):
+                            file_path = frame.filename
+                            line = frame.lineno
+                            func_name = frame.name
+                            found_test_frame = True
+                            break  # Found the most likely frame, stop searching.
+
+                    # If the heuristic fails, fall back to the innermost frame as a last resort.
+                    if not found_test_frame:
+                        frame_to_report = tb_frames[-1]
+                        file_path = frame_to_report.filename
+                        line = frame_to_report.lineno
+                        func_name = frame_to_report.name
+
+            # 3. Ensure file path is absolute for consistency.
+            if file_path and file_path != "Unknown" and not os.path.isabs(file_path):
+                file_path = os.path.abspath(file_path)
+
+            error_entry = {
+                "test": str(test),
+                "test_id": test_id,
+                "error_type": error_type_name,
+                "error_message": error_message,
+                "traceback": tb_string,
+                "file_path": file_path,
+                "line": line,
+                "function": func_name,
+            }
+            self.results[category].append(error_entry)
+            self.all_issues.append({"type": category.rstrip("s"), "test": str(test), "details": tb_string})
+
+        except Exception as e:
+            # Failsafe: if our own error reporting fails, record a generic error.
+            internal_error_details = (
+                f"INTERNAL ERROR in JSONTestResult._collect_error_details: {e}\n"
+                f"{traceback.format_exc()}\n"
+                "--- Original Error Traceback ---\n"
+                f"{self._exc_info_to_string(err, test)}"
+            )
+            self.results["internal_errors"].append(
+                {
+                    "test_id": test.id() if hasattr(test, "id") else "unknown_test",
+                    "details": internal_error_details,
+                }
+            )
+            self.all_issues.append({"type": "internal_error", "test": str(test), "details": internal_error_details})
 
     def get_json_results(self):
         return {
@@ -221,14 +304,7 @@ class JSONTestResult(unittest.TextTestResult):
             "expected_failures": len(self.expectedFailures),
             "unexpected_successes": len(self.unexpectedSuccesses),
             "results": dict(self.results),
-            "all_issues": [
-                {
-                    "type": issue[0],
-                    "test": str(issue[1]),
-                    "details": str(issue[2]) if issue[2] else None,
-                }
-                for issue in self.all_issues
-            ],
+            "all_issues": self.all_issues,
         }
 
     def get_error_details(self):
@@ -254,6 +330,9 @@ def run_tests(test_patterns=None, verbosity=1, json_output=False, extract_errors
         # Always discover all tests first
         discovered = loader.discover(start_dir="tests", pattern="test*.py")
 
+        # IMPORTANT: Cache source info before any test runs or filtering.
+        _cache_test_source_info(discovered)
+
         # Apply test filters if any patterns provided
         if test_patterns:
             suite = filter_tests(discovered, test_patterns)
@@ -261,11 +340,9 @@ def run_tests(test_patterns=None, verbosity=1, json_output=False, extract_errors
             suite = discovered
 
         if list_mode:
-            # Collect test case names without running
             test_cases = []
 
             def collect_test_ids(test_suite):
-                """Recursively collect all test case IDs"""
                 for test in test_suite:
                     if isinstance(test, unittest.TestCase):
                         test_cases.append(test.id())
@@ -273,13 +350,14 @@ def run_tests(test_patterns=None, verbosity=1, json_output=False, extract_errors
                         collect_test_ids(test)
 
             collect_test_ids(suite)
-            # Sort by name and output
             for test_id in sorted(test_cases):
                 print(test_id)
             return {"test_cases": test_cases}
 
         if json_output:
-            runner = unittest.TextTestRunner(verbosity=verbosity, resultclass=JSONTestResult)
+            # Use a stream that doesn't interfere with the final JSON output
+            stream = open(os.devnull, "w") if verbosity < 2 else sys.stderr
+            runner = unittest.TextTestRunner(stream=stream, verbosity=verbosity, resultclass=JSONTestResult)
             result = runner.run(suite)
             if extract_errors:
                 return result.get_error_details()
@@ -312,7 +390,6 @@ def main():
         )
 
         if args.json:
-            print("capture error_details:")
             print(json.dumps(result, indent=2))
 
         exit_code = 0 if (isinstance(result, dict) or result.wasSuccessful()) else 1

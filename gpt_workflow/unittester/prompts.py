@@ -590,12 +590,13 @@ def format_call_record_as_text(call_record: Dict[str, Any]) -> str:
             if event.get("type") == "line":
                 data = event.get("data", {})
                 line_no, content = data.get("line_no"), data.get("content", "").rstrip()
-                debug_text = ""
+                debug_suffix = ""
                 if data.get("tracked_vars"):
-                    debug_text = "# Debug " + "\n".join(
+                    tracked_vars_str = "\n".join(
                         ["%s=%s" % (key, value) for key, value in data["tracked_vars"].items()]
                     )
-                trace_lines.append(f"    L{line_no:<4} {content} {debug_text})")
+                    debug_suffix = f" # Debug {tracked_vars_str})"
+                trace_lines.append(f"    L{line_no:<4} {content}{debug_suffix}")
             elif event.get("type") == "call":
                 data = event.get("data", {})
                 sub_func_name = data.get("func_name", "N/A")

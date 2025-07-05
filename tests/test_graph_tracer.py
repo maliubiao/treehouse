@@ -176,15 +176,15 @@ class TestGraphTraceLogExtractor(BaseTracerTest):
         self.assertEqual(refs[0][1]["type"], "return")
 
         # 测试查找 process 调用，要求其兄弟节点中有 service
-        # 引用链应包含 service(call/partial) 和 process(call/return)
+        # 引用链应包含 process(call/return) 和 service(call/partial)
         logs, refs = self.extractor.lookup("utils.py", 30, sibling_func=["service"])
         self.assertEqual(len(logs), 1)
         self.assertEqual(len(refs), 1)
         self.assertEqual(len(refs[0]), 4)
-        self.assertEqual(refs[0][0]["func"], "service")  # Sibling first
-        self.assertEqual(refs[0][1]["type"], "partial")
-        self.assertEqual(refs[0][2]["func"], "process")  # Then target
-        self.assertEqual(refs[0][3]["type"], "return")
+        self.assertEqual(refs[0][0]["func"], "process")  # Target first based on start_pos
+        self.assertEqual(refs[0][1]["type"], "return")
+        self.assertEqual(refs[0][2]["func"], "service")  # Then sibling
+        self.assertEqual(refs[0][3]["type"], "partial")
 
         # 测试不匹配的情况 - 要求兄弟节点中有不存在函数，但仍返回结果
         logs, refs = self.extractor.lookup("utils.py", 10, sibling_func=["nonexistent"])

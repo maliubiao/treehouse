@@ -221,6 +221,7 @@ class TestAutoFix:
         """
         from gpt_lib import graph_tracer
 
+        config = graph_tracer.SiblingConfig(before=1, after=1, functions=["setUp", "tearDown"])
         fn = str(Path(__file__).parent.parent / "debugger/logs/run_all_tests.log")
         log_extractor = graph_tracer.GraphTraceLogExtractor(fn)
         log_extractor.export_trace_graph_text(
@@ -230,7 +231,7 @@ class TestAutoFix:
         )
         # log_extractor = tracer.TraceLogExtractor(fn)
         try:
-            logs, references_group = log_extractor.lookup(file_path, line, sibling_func=["setUp"])
+            logs, references_group = log_extractor.lookup(file_path, line, sibling_config=config)
             if logs:
                 self.trace_log = logs[0]
                 if not silent:

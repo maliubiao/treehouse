@@ -57,6 +57,23 @@ class ReferenceInfo(TypedDict):
     type: str
 
 
+class SiblingConfig(TypedDict, total=False):
+    """
+    配置 `lookup` 方法中对兄弟函数的查找行为。
+
+    Attributes:
+        functions (List[str]): 必须匹配的兄弟函数名称列表。
+        before (Optional[int]): 在目标函数调用之前，按时间顺序查找最多N个兄弟函数。
+                                如果为 None，则查找所有之前的兄弟函数。
+        after (Optional[int]): 在目标函数调用之后，按时间顺序查找最多N个兄弟函数。
+                               如果为 None，则查找所有之后的兄弟函数。
+    """
+
+    functions: List[str]
+    before: Optional[int]
+    after: Optional[int]
+
+
 TRACE_LOG_NAME = "trace.log"
 # 虚拟根节点的特殊ID
 ROOT_FRAME_ID = 0
@@ -228,25 +245,41 @@ class GraphTraceLogExtractor:
         }
 
     def lookup(
-        self, filename: str, lineno: int, sibling_func: Optional[List[str]] = None
+        self,
+        filename: str,
+        lineno: int,
+        sibling_func: Optional[List[str]] = None,
+        sibling_config: Optional[SiblingConfig] = None,
     ) -> Tuple[List[str], List[List[ReferenceInfo]]]:
         """
         查找指定文件和行号的日志信息。
 
-        此方法经过重构，将复杂的逻辑拆分到辅助方法中，以降低复杂性并提高可读性。
+        此方法经过重构，以支持通过 `sibling_config` 精确控制对兄弟函数调用的查找，
+        例如限制数量或查找方向（调用前/后）。
 
         Args:
             filename (str): 文件名。
             lineno (int): 行号。
-            sibling_func (list[str], optional): 如果提供，则用于定位日志读取起点和构建引用链。
+            sibling_func (list[str], optional): [已弃用] 请使用 `sibling_config`。
+                                             为了向后兼容，此参数仍然有效，其行为
+                                             等同于 `sibling_config={'functions': sibling_func}`。
+            sibling_config (SiblingConfig, optional): 用于配置兄弟函数查找的字典。
+                - 'functions' (list[str]): 目标兄弟函数的名称。
+                - 'before' (int, optional): 在目标之前查找N个兄弟。
+                - 'after' (int, optional): 在目标之后查找N个兄弟。
 
         Returns:
             一个元组 (logs, references_group):
             - logs (list[str]): 匹配的日志块列表。
-            - references_group (list[list[dict]]): 每个日志块对应的函数引用链。
+            - references_group (list[list[dict]]): 每个日志块对应的函数引用链，
+                                                 按时间顺序排列。
         """
         self._build_graph()
         assert self._graph is not None, "Graph should be built by _build_graph"
+
+        # 向后兼容处理：如果提供了旧参数，则转换为新配置
+        if sibling_func and not sibling_config:
+            sibling_config = {"functions": sibling_func}
 
         matching_frame_ids = self._file_line_to_frames.get((filename, lineno), [])
         if not matching_frame_ids:
@@ -256,52 +289,92 @@ class GraphTraceLogExtractor:
         references_group: List[List[ReferenceInfo]] = []
 
         for frame_id in matching_frame_ids:
-            frame_data = self._frames.get(frame_id)
-            if not frame_data:
+            if frame_id not in self._frames:
                 continue
 
-            start_pos = frame_data["start_pos"]
-            end_pos = frame_data["end_pos"]
-            sib_id = None
-
-            if sibling_func:
+            # 1. 查找所有相关的帧（目标帧 + 兄弟帧）
+            relevant_frames = [frame_id]
+            if sibling_config and sibling_config.get("functions"):
                 predecessors = list(self._graph.predecessors(frame_id))
                 if predecessors:
                     parent_id = predecessors[0]
-                    for sib_candidate in self._graph.successors(parent_id):
-                        if sib_candidate != frame_id and self._graph.nodes[sib_candidate].get("func") in sibling_func:
-                            sib_id = sib_candidate
-                            start_pos = self._graph.nodes[sib_id]["start_pos"]
-                            break
+                    target_node_data = self._graph.nodes[frame_id]
 
+                    # 找到所有符合函数名条件的兄弟节点
+                    all_siblings = [sid for sid in self._graph.successors(parent_id) if sid != frame_id]
+                    candidate_siblings = [
+                        sid for sid in all_siblings if self._graph.nodes[sid].get("func") in sibling_config["functions"]
+                    ]
+
+                    # 根据时间戳分为调用前和调用后
+                    target_start_pos = target_node_data["start_pos"]
+                    before_siblings = sorted(
+                        [s for s in candidate_siblings if self._graph.nodes[s]["start_pos"] < target_start_pos],
+                        key=lambda s: self._graph.nodes[s]["start_pos"],
+                        reverse=True,
+                    )
+                    after_siblings = sorted(
+                        [s for s in candidate_siblings if self._graph.nodes[s]["start_pos"] > target_start_pos],
+                        key=lambda s: self._graph.nodes[s]["start_pos"],
+                    )
+
+                    # 根据 before/after 数量限制进行切片
+                    selected_siblings = []
+                    num_before = sibling_config.get("before")
+                    selected_siblings.extend(
+                        before_siblings[:num_before] if num_before is not None else before_siblings
+                    )
+
+                    num_after = sibling_config.get("after")
+                    selected_siblings.extend(after_siblings[:num_after] if num_after is not None else after_siblings)
+
+                    relevant_frames.extend(selected_siblings)
+
+            # 2. 根据所有相关帧确定日志的提取范围
+            sorted_by_start = sorted(relevant_frames, key=lambda fid: self._graph.nodes[fid]["start_pos"])
+            start_pos = self._graph.nodes[sorted_by_start[0]]["start_pos"]
+
+            # BUG修复：正确查找所有相关帧中最晚的结束位置
+            all_end_pos = [self._graph.nodes[fid].get("end_pos") for fid in relevant_frames]
+            valid_end_pos = [p for p in all_end_pos if p is not None]
+            end_pos = max(valid_end_pos) if valid_end_pos else None
+
+            # 3. 提取日志内容
             log_content = ""
             with open(self.log_file, "r", encoding="utf-8") as f:
                 f.seek(start_pos)
-                read_size = -1 if end_pos is None else end_pos - start_pos
+                read_size = -1
+                if end_pos is not None:
+                    read_size = end_pos - start_pos if end_pos >= start_pos else 0
+
                 if read_size != 0:
-                    log_content = f.read(read_size)
+                    log_content = f.read(read_size if read_size != -1 else None)
             logs.append(log_content)
 
-            # 构建引用链
+            # 4. 按时间顺序构建引用链
             references: List[ReferenceInfo] = []
-            if sib_id:
-                references.append(self._create_reference_event(sib_id, TraceTypes.CALL.value))
-                if status := self._graph.nodes[sib_id].get("status"):
-                    references.append(self._create_reference_event(sib_id, status))
+            for fid in sorted_by_start:
+                if fid == frame_id:  # 是目标帧
+                    references.append(self._create_reference_event(fid, TraceTypes.CALL.value))
 
-            references.append(self._create_reference_event(frame_id, TraceTypes.CALL.value))
+                    # 展开并添加其子调用
+                    children_ids = sorted(
+                        list(self._graph.successors(fid)),
+                        key=lambda cid: self._graph.nodes[cid].get("start_pos", 0),
+                    )
+                    for child_id in children_ids:
+                        references.append(self._create_reference_event(child_id, TraceTypes.CALL.value))
+                        if status := self._graph.nodes[child_id].get("status"):
+                            references.append(self._create_reference_event(child_id, status))
 
-            children_ids = sorted(
-                list(self._graph.successors(frame_id)), key=lambda cid: self._graph.nodes[cid].get("start_pos", 0)
-            )
-
-            for child_id in children_ids:
-                references.append(self._create_reference_event(child_id, TraceTypes.CALL.value))
-                if status := self._graph.nodes[child_id].get("status"):
-                    references.append(self._create_reference_event(child_id, status))
-
-            if status := frame_data.get("status"):
-                references.append(self._create_reference_event(frame_id, status))
+                    # 添加目标帧的关闭事件
+                    if status := self._graph.nodes[fid].get("status"):
+                        references.append(self._create_reference_event(fid, status))
+                else:  # 是兄弟帧
+                    references.append(self._create_reference_event(fid, TraceTypes.CALL.value))
+                    if status := self._graph.nodes[fid].get("status"):
+                        # 不展开兄弟帧的子调用
+                        references.append(self._create_reference_event(fid, status))
 
             references_group.append(references)
 

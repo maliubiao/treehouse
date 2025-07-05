@@ -630,39 +630,39 @@ class SysMonitoringTraceDispatcher:
             self.monitoring_module.register_callback(
                 self._tool_id,
                 self.monitoring_module.events.PY_START,
-                self._handle_py_start,
+                self.handle_py_start,
             )
             self.monitoring_module.register_callback(
                 self._tool_id,
                 self.monitoring_module.events.PY_RETURN,
-                self._handle_py_return,
+                self.handle_py_return,
             )
             self.monitoring_module.register_callback(
-                self._tool_id, self.monitoring_module.events.LINE, self._handle_line
+                self._tool_id, self.monitoring_module.events.LINE, self.handle_line
             )
             self.monitoring_module.register_callback(
-                self._tool_id, self.monitoring_module.events.RAISE, self._handle_raise
+                self._tool_id, self.monitoring_module.events.RAISE, self.handle_raise
             )
             self.monitoring_module.register_callback(
                 self._tool_id,
                 self.monitoring_module.events.EXCEPTION_HANDLED,
-                self._handle_exception_handled,
+                self.handle_exception_handled,
             )
             # Add handlers for previously unhandled events
             self.monitoring_module.register_callback(
                 self._tool_id,
                 self.monitoring_module.events.PY_YIELD,
-                self._handle_py_yield,
+                self.handle_py_yield,
             )
             self.monitoring_module.register_callback(
                 self._tool_id,
                 self.monitoring_module.events.PY_UNWIND,
-                self._handle_py_unwind,
+                self.handle_py_unwind,
             )
             self.monitoring_module.register_callback(
                 self._tool_id,
                 self.monitoring_module.events.PY_THROW,
-                self._handle_py_throw,
+                self.handle_py_throw,
             )
             self.monitoring_module.register_callback(
                 self._tool_id,
@@ -672,7 +672,7 @@ class SysMonitoringTraceDispatcher:
             self.monitoring_module.register_callback(
                 self._tool_id,
                 self.monitoring_module.events.PY_RESUME,
-                self._handle_py_resume,
+                self.handle_py_resume,
             )
 
         except (RuntimeError, ValueError) as e:
@@ -709,7 +709,7 @@ class SysMonitoringTraceDispatcher:
         except (RuntimeError, ValueError) as e:
             logging.error("Failed to unregister monitoring tool: %s", str(e))
 
-    def _handle_py_start(self, _code, _offset):
+    def handle_py_start(self, _code, _offset):
         """Handle PY_START event (function entry)"""
         frame = sys._getframe(1)  # Get the frame of the function being called
 
@@ -736,14 +736,14 @@ class SysMonitoringTraceDispatcher:
             self.active_frames.add(frame)
             self._logic.handle_call(frame)
 
-    def _handle_py_resume(self, _code, _offset):
+    def handle_py_resume(self, _code, _offset):
         """Handle PY_RESUME event (function resume)"""
         # frame = sys._getframe(1)
         # if frame in self.active_frames:
         #     print(" resume in active frame: %s", frame)
         pass
 
-    def _handle_py_return(self, _code, _offset, retval):
+    def handle_py_return(self, _code, _offset, retval):
         """Handle PY_RETURN event (function return)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
@@ -751,25 +751,25 @@ class SysMonitoringTraceDispatcher:
             self._logic.handle_return(frame, retval)
             self.active_frames.discard(frame)
 
-    def _handle_line(self, _code, _line_number):
+    def handle_line(self, _code, _line_number):
         """Handle LINE event"""
         frame = sys._getframe(1)  # Get the current frame
         if frame in self.active_frames:
             self._logic.handle_line(frame)
 
-    def _handle_raise(self, _code, _offset, exc):
+    def handle_raise(self, _code, _offset, exc):
         """Handle RAISE event (exception raised)"""
         frame = sys._getframe(1)  # Get the frame where exception was raised
         if frame in self.active_frames:
             self._logic.handle_exception(type(exc), exc, frame)
 
-    def _handle_exception_handled(self, _code, _offset, exc):
+    def handle_exception_handled(self, _code, _offset, exc):
         """Handle EXCEPTION_HANDLED event"""
         frame = sys._getframe(1)  # Get the frame where exception was handled
         if frame in self.active_frames:
             self._logic.handle_exception_was_handled(frame)
 
-    def _handle_py_yield(self, _code, _offset, value):
+    def handle_py_yield(self, _code, _offset, value):
         """Handle PY_YIELD event (generator yield)"""
         # frame = sys._getframe(1)
         # if frame in self.active_frames:
@@ -777,13 +777,13 @@ class SysMonitoringTraceDispatcher:
         #     pass
         pass
 
-    def _handle_py_throw(self, _code, _offset, exc):
+    def handle_py_throw(self, _code, _offset, exc):
         """Handle PY_THROW event (generator throw)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
             self._logic.handle_exception(type(exc), exc, frame)
 
-    def _handle_py_unwind(self, *args):
+    def handle_py_unwind(self, *args):
         """Handle PY_UNWIND event (stack unwinding)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
