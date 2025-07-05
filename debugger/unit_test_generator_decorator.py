@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from colorama import Fore, Style
 
-from debugger.analyzable_tracer import analyzable_trace
+from debugger.analyzable_tracer import AnalyzableTraceLogic, analyzable_trace
 from debugger.call_analyzer import CallAnalyzer
 
 
@@ -146,6 +146,7 @@ class UnitTestGeneratorDecorator:
         report_dir: str = "call_reports",
         auto_confirm: bool = False,
         enable_var_trace: bool = True,
+        verbose_trace: bool = False,
         model_name: str = "deepseek-r1",
         checker_model_name: str = "deepseek-v3",
         use_symbol_service: bool = True,
@@ -166,6 +167,7 @@ class UnitTestGeneratorDecorator:
             report_dir: 调用分析报告存储目录。
             auto_confirm: 是否自动确认所有LLM建议和文件覆盖提示。
             enable_var_trace: 是否启用变量跟踪。
+            verbose_trace: 是否在运行时实时打印详细的、带缩进的函数调用/返回日志。
             model_name: 用于生成测试的核心语言模型名称。
             checker_model_name: 用于辅助任务（如命名、合并）的模型名称。
             use_symbol_service: 是否使用符号服务获取更精确的代码上下文。
@@ -179,6 +181,7 @@ class UnitTestGeneratorDecorator:
         self.report_dir = report_dir
         self.auto_confirm = auto_confirm
         self.enable_var_trace = enable_var_trace
+        self.verbose_trace = verbose_trace
         self.model_name = model_name
         self.checker_model_name = checker_model_name
         self.use_symbol_service = use_symbol_service
@@ -207,7 +210,7 @@ class UnitTestGeneratorDecorator:
 
     def __call__(self, func: Callable) -> Callable:
         """装饰器调用方法，设置并启动追踪。"""
-        analyzer = CallAnalyzer()
+        analyzer = CallAnalyzer(verbose=self.verbose_trace)
         # Use qualname for better uniqueness, e.g., "MyClass.my_method"
         func_name = func.__qualname__
         decorated_func_file = str(Path(func.__code__.co_filename).resolve())
@@ -431,6 +434,21 @@ class UnitTestGeneratorDecorator:
             print(f"{Fore.YELLOW}No function executions found across all traces.{Style.RESET_ALL}")
             return
 
+        # --- Multi-threading Check ---
+        all_thread_ids = {
+            record["thread_id"]
+            for funcs in all_discovered_calls.values()
+            for records in funcs.values()
+            for record in records
+            if "thread_id" in record
+        }
+        if len(all_thread_ids) > 1:
+            print(
+                f"{Fore.YELLOW}Warning: Traces from multiple threads {sorted(list(all_thread_ids))} were detected. "
+                f"The generator will attempt to create tests based on all traced executions.{Style.RESET_ALL}"
+            )
+        # ---
+
         # 3. Determine final targets
         targets_by_file, final_target_funcs = cls._determine_targets(
             all_discovered_calls, base_config, all_presets, is_any_preset_defined
@@ -443,26 +461,27 @@ class UnitTestGeneratorDecorator:
                 f"{Fore.MAGENTA}(This shows the final, processed trace data used for test generation){Style.RESET_ALL}"
             )
 
-            processed_funcs = set()
             target_funcs_to_print = final_target_funcs or [func for funcs in targets_by_file.values() for func in funcs]
+            if not target_funcs_to_print:
+                print(f"{Fore.YELLOW}No target functions were selected for verification.{Style.RESET_ALL}")
+            else:
+                # Optimized lookup for function's file
+                func_to_file_map = {
+                    func: filename for filename, funcs in all_discovered_calls.items() for func in funcs
+                }
 
-            for func_to_print in sorted(target_funcs_to_print):
-                if func_to_print in processed_funcs:
-                    continue
-                found = False
-                for filename, funcs in all_discovered_calls.items():
-                    if func_to_print in funcs:
-                        records = funcs[func_to_print]
+                for func_to_print in sorted(target_funcs_to_print):
+                    filename = func_to_file_map.get(func_to_print)
+                    if filename and func_to_print in all_discovered_calls.get(filename, {}):
+                        records = all_discovered_calls[filename][func_to_print]
                         print(f"\n{Fore.YELLOW}Trace for: {filename}::{func_to_print}{Style.RESET_ALL}")
                         for i, record in enumerate(records):
                             print(f"{Fore.CYAN}--- Execution Record {i + 1}/{len(records)} ---{Style.RESET_ALL}")
                             # Use CallAnalyzer's pretty_print for a structured, recursive view
                             analyzer_for_printing = CallAnalyzer()
                             print(analyzer_for_printing.pretty_print_call(record))
-                        found = True
-                        break
-                if found:
-                    processed_funcs.add(func_to_print)
+                    else:
+                        print(f"{Fore.YELLOW}Warning: Could not find trace for '{func_to_print}'.{Style.RESET_ALL}")
 
             print(f"\n{Fore.MAGENTA}{Style.BRIGHT}--- Trace Verification Finished ---{Style.RESET_ALL}")
         except Exception as e:
@@ -474,7 +493,17 @@ class UnitTestGeneratorDecorator:
             print(f"{Fore.BLUE}No functions selected or test generation cancelled.{Style.RESET_ALL}")
             return
 
-        # 4. Initialize the generator
+        # 4. Save the unified import map before generation
+        import_map_path = base_config.get("import_map_file")
+        if import_map_path:
+            try:
+                print(f"{Fore.CYAN}Saving unified import map to {import_map_path}...{Style.RESET_ALL}")
+                AnalyzableTraceLogic.save_import_map(import_map_path)
+            except Exception as e:
+                print(f"{Fore.RED}Failed to save import map: {e}{Style.RESET_ALL}")
+                # We can continue without it, but tests may have missing imports.
+
+        # 5. Initialize the generator
         try:
             generator = UnitTestGenerator(
                 report_path=report_path,
@@ -483,7 +512,7 @@ class UnitTestGeneratorDecorator:
                 trace_llm=base_config["trace_llm"],
                 llm_trace_dir=base_config["llm_trace_dir"],
                 project_root=cls.default_source_base_dir,
-                import_map_path=base_config.get("import_map_file"),
+                import_map_path=import_map_path,  # Pass the path here
             )
             if not generator.load_and_parse_report():
                 return
@@ -492,7 +521,7 @@ class UnitTestGeneratorDecorator:
             traceback.print_exc()
             return
 
-        # 5. Execute generation tasks
+        # 6. Execute generation tasks
         if targets_by_file:  # Interactive or auto-confirm modes
             print(f"\n{Fore.GREEN}Processing targets for {len(targets_by_file)} file(s).{Style.RESET_ALL}")
             for filename, funcs in targets_by_file.items():

@@ -1547,7 +1547,7 @@ class TraceLogic:
             self._frame_data._frame_locals_map[frame_id] = frame.f_locals
             self._add_to_buffer(
                 {
-                    "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}]",
+                    "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}][thread:{thread_id}]",
                     "data": {
                         "indent": _INDENT * self.stack_depth,
                         "prefix": log_prefix,
@@ -1559,6 +1559,7 @@ class TraceLogic:
                         "frame_id": frame_id,
                         "parent_frame_id": parent_frame_id,
                         "caller_lineno": parent_lineno,
+                        "thread_id": threading.get_native_id(),
                     },
                 },
                 TraceTypes.COLOR_CALL,
@@ -1594,6 +1595,7 @@ class TraceLogic:
                     "frame_id": frame_id,
                     "func": frame.f_code.co_name,
                     "original_filename": frame.f_code.co_filename,
+                    "thread_id": threading.get_native_id(),
                 },
             },
             TraceTypes.COLOR_RETURN,
@@ -1724,6 +1726,7 @@ class TraceLogic:
                 "frame_id": frame_id,
                 "original_filename": filename,
                 "tracked_vars": changed_vars,
+                "thread_id": threading.get_native_id(),
             },
         }
 
@@ -1816,6 +1819,7 @@ class TraceLogic:
                     "frame_id": frame_id,
                     "func": frame.f_code.co_name,
                     "original_filename": frame.f_code.co_filename,
+                    "thread_id": threading.get_native_id(),
                 },
             },
             TraceTypes.COLOR_EXCEPTION,

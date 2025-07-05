@@ -26,7 +26,14 @@ class AnalyzableTraceLogic(TraceLogic):
     一个增强的TraceLogic，它将事件转发给CallAnalyzer，并为单元测试生成目的解析模块导入。
     此版本通过重写 _add_to_buffer 方法，将所有最终的日志事件分发给分析器，
     确保分析器与日志系统看到完全一致的事件流。
+    此版本使用类变量来聚合所有跟踪会话的导入信息。
     """
+
+    # --- 类级别的共享状态，用于聚合所有跟踪实例的导入信息 ---
+    _resolved_imports: Dict[str, Any] = {}
+    _resolved_files: set = set()
+    _imports_lock: threading.Lock = threading.Lock()
+    # ---
 
     def __init__(
         self,
@@ -45,9 +52,6 @@ class AnalyzableTraceLogic(TraceLogic):
         super().__init__(config)
         self.analyzer = analyzer
         self._thread_local = threading.local()
-        self._lock = threading.Lock()
-        self.resolved_files = set()
-        self.resolved_imports = {}
 
         # 路径应由调用者（装饰器）传入，确保单一来源。
         if isinstance(import_map_file, str):
@@ -69,21 +73,21 @@ class AnalyzableTraceLogic(TraceLogic):
         filename = frame.f_code.co_filename
         # 只有当文件名是真实文件路径（非<...>包围）时才解析
         if not (filename.startswith("<") and filename.endswith(">")):
-            with self._lock:
-                is_resolved = filename in self.resolved_files
+            with AnalyzableTraceLogic._imports_lock:
+                is_resolved = filename in AnalyzableTraceLogic._resolved_files
 
             if not is_resolved:
                 setattr(self._thread_local, "is_resolving", True)
                 try:
                     imports = resolve_imports(frame)
-                    with self._lock:
+                    with AnalyzableTraceLogic._imports_lock:
                         if imports:
-                            self.resolved_imports[filename] = imports
-                        self.resolved_files.add(filename)
+                            AnalyzableTraceLogic._resolved_imports[filename] = imports
+                        AnalyzableTraceLogic._resolved_files.add(filename)
                 except Exception as e:
                     logging.error(f"Failed to resolve imports for {filename}: {e}\n{traceback.format_exc()}")
-                    with self._lock:
-                        self.resolved_files.add(filename)  # 即使失败也标记，避免重试
+                    with AnalyzableTraceLogic._imports_lock:
+                        AnalyzableTraceLogic._resolved_files.add(filename)  # 即使失败也标记，避免重试
                 finally:
                     setattr(self._thread_local, "is_resolving", False)
 
@@ -105,6 +109,7 @@ class AnalyzableTraceLogic(TraceLogic):
                 TraceTypes.COLOR_ERROR: "error",
             }
             event_type = event_map.get(color_type, color_type)
+            # CallAnalyzer.process_event 将自行从 log_data 中提取 thread_id
             self.analyzer.process_event(log_data, event_type)
         except Exception as e:
             # 确保分析器的任何错误都不会中断正常的日志记录
@@ -120,19 +125,28 @@ class AnalyzableTraceLogic(TraceLogic):
 
     def stop(self):
         """
-        停止跟踪时，确保分析器完成处理，并保存已解析的导入依赖映射。
+        停止跟踪时，确保分析器完成处理。
+        导入依赖映射的保存已移至类方法，由atexit处理程序调用。
         """
         self.analyzer.finalize()
-
-        if self.resolved_imports:
-            try:
-                self.import_map_file.parent.mkdir(parents=True, exist_ok=True)
-                with self.import_map_file.open("w", encoding="utf-8") as f:
-                    json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
-            except Exception as e:
-                logging.error(f"Failed to save import map: {e}")
-
         super().stop()
+
+    @classmethod
+    def save_import_map(cls, import_map_file: Union[str, Path]):
+        """
+        将所有已解析的导入依赖映射保存到文件。
+        此方法应在程序退出前、所有跟踪结束后调用。
+        """
+        path = Path(import_map_file)
+        with cls._imports_lock:
+            if cls._resolved_imports:
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with path.open("w", encoding="utf-8") as f:
+                        json.dump(cls._resolved_imports, f, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    logging.error(f"Failed to save import map to {path}: {e}")
+                    print(f"{color_wrap(f'❌ Error saving import map: {e}', TraceTypes.COLOR_ERROR)}")
 
 
 def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: TraceConfig = None, **kwargs):
