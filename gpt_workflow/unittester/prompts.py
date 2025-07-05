@@ -3,6 +3,7 @@ from textwrap import dedent
 from typing import Any, Dict, List, Optional, Tuple
 
 from .file_utils import generate_relative_sys_path_snippet
+from .format_call_record import format_call_record_as_text
 
 
 def build_suggestion_prompt(file_path: str, target_funcs: List[str], file_content: Optional[str] = None) -> str:
@@ -230,6 +231,21 @@ def build_prompt_for_generation(
     raise ValueError("Either symbol_context or file_content must be provided to build a prompt.")
 
 
+def _get_intent_driven_testing_guidance() -> str:
+    """[NEW] Generates the prompt section explaining how to write intent-driven tests."""
+    return dedent("""
+        **A. CORE MISSION: FROM TRACE TO INTENT-DRIVEN TEST**
+        The provided execution trace is your starting point, not your final goal. Your mission is to write a test that validates the *intended behavior* of the function, even if it means exposing a bug in the current code.
+
+        **Your Critical Thought Process:**
+        1.  **Infer Intent:** From the source code (name, docstring, logic), determine what the function is *supposed* to do. (e.g., a function `add_positive_numbers` should reject negative inputs).
+        2.  **Critique the Trace:** Compare this intent with the execution trace. Does the trace show the function behaving as intended?
+            - **If the trace reveals a bug** (e.g., `add_positive_numbers(5, -2)` returned `3` instead of raising an error), your test MUST assert the **correct, intended behavior**. This test is designed to **fail** when run against the buggy code, thus highlighting the flaw. This is a high-value test.
+            - **If the trace reflects correct behavior**, your test should confirm that outcome.
+        3.  **Action:** Do not write tests that simply replicate a buggy execution. Write tests that enforce the code's logical contract.
+    """).strip()
+
+
 def _build_file_based_prompt(
     file_path: str,
     file_content: str,
@@ -244,18 +260,21 @@ def _build_file_based_prompt(
 ) -> str:
     """
     [REFACTORED] Constructs the detailed prompt for the LLM using full file content.
-    Now uses the centralized `build_generation_guidance` function.
+    Now uses the centralized `build_generation_guidance` and includes intent-driven testing.
     """
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
     call_record_text = format_call_record_as_text(call_record)
     action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
-
     generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code, import_context)
+    intent_guidance = _get_intent_driven_testing_guidance()
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
+        {intent_guidance}
+
         Your task is to {action_description} for the function `{target_func}`.
-        **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+
+        **B. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
         You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
         - **Project Root Directory:** `{project_root_path}`
         - **Module to Test:** `{module_to_test}`
@@ -264,7 +283,7 @@ def _build_file_based_prompt(
           ```python
           {sys_path_setup_snippet}
           ```
-        **2. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
+        **C. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
         [File Path]: {file_path}
         [File Content]:
         [start]
@@ -273,14 +292,14 @@ def _build_file_based_prompt(
     """).strip()
 
     prompt_part2 = dedent(f"""
-        **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+        **D. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
         This is a compact text trace of the function's execution. It is the **blueprint** for the test case you must generate.
         [Runtime Execution Trace]
         [start]
         {call_record_text}
         [end]
 
-        **4. TEST GENERATION REQUIREMENTS**
+        **E. TEST GENERATION REQUIREMENTS**
         {generation_guidance}
         {existing_code_section}
 
@@ -305,7 +324,7 @@ def _build_symbol_based_prompt(
 ) -> str:
     """
     [REFACTORED] Constructs the detailed prompt for the LLM using precise symbol context.
-    Now uses the centralized `build_generation_guidance` function.
+    Now uses the centralized `build_generation_guidance` and includes intent-driven testing.
     """
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
     call_record_text = format_call_record_as_text(call_record)
@@ -314,20 +333,23 @@ def _build_symbol_based_prompt(
         context_code_str += f"# Symbol: {name}\n# File: {data.get('file_path', '?')}:{data.get('start_line', '?')}\n{data.get('code', '# Code not found')}\n\n"
 
     action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
-
     generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code, import_context)
+    intent_guidance = _get_intent_driven_testing_guidance()
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
+        {intent_guidance}
+
         Your task is to {action_description} for the function `{target_func}`.
-        **1. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+        
+        **B. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
         - **Project Root Directory:** `{project_root_path}`
         - **Module to Test:** `{module_to_test}`
         - **`sys.path` Setup:** You MUST include this exact code snippet at the top of the test file.
           ```python
           {sys_path_setup_snippet}
           ```
-        **2. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
+        **C. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
         [Relevant Code Snippets]
         [start]
         {context_code_str.strip()}
@@ -335,14 +357,14 @@ def _build_symbol_based_prompt(
     """).strip()
 
     prompt_part2 = dedent(f"""
-        **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+        **D. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
         This is a compact text trace of the function's execution. It is the **blueprint** for the test case.
         [Runtime Execution Trace]
         [start]
         {call_record_text}
         [end]
 
-        **4. TEST GENERATION REQUIREMENTS**
+        **E. TEST GENERATION REQUIREMENTS**
         {generation_guidance}
         {existing_code_section}
 
@@ -364,8 +386,9 @@ def _build_incremental_generation_prompt(
     file_content: Optional[str] = None,
     import_context: Optional[Dict[str, Dict]] = None,
 ) -> str:
-    """[NEW] Builds a prompt to generate only a single new test method."""
+    """[NEW & REFACTORED] Builds a prompt to generate only a single new test method, with intent-driven logic."""
     call_record_text = format_call_record_as_text(call_record)
+    intent_guidance = _get_intent_driven_testing_guidance()
 
     # Context can come from symbols (preferred) or the full file
     if symbol_context:
@@ -373,7 +396,7 @@ def _build_incremental_generation_prompt(
         for name, data in symbol_context.items():
             context_code_str += f"# Symbol: {name}\n# File: {data.get('file_path', '?')}:{data.get('start_line', '?')}\n{data.get('code', '# Code not found')}\n\n"
         context_section = f"""
-        **2. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
+        **C. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
         [Relevant Code Snippets]
         [start]
         {context_code_str.strip()}
@@ -381,7 +404,7 @@ def _build_incremental_generation_prompt(
         """
     elif file_content and file_path:
         context_section = f"""
-        **2. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
+        **C. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
         [File Path]: {file_path}
         [File Content]:
         [start]
@@ -389,24 +412,26 @@ def _build_incremental_generation_prompt(
         [end]
         """
     else:
-        context_section = "**2. CONTEXT: SOURCE CODE**\nNo source code provided."
+        context_section = "**C. CONTEXT: SOURCE CODE**\nNo source code provided."
 
     import_context_guidance = _format_import_context(import_context)
     import_context_section = (
-        f"**4. IMPORT CONTEXT AND MOCK TARGETS**\n{import_context_guidance}" if import_context_guidance else ""
+        f"**E. IMPORT CONTEXT AND MOCK TARGETS**\n{import_context_guidance}" if import_context_guidance else ""
     )
 
     return dedent(f"""
         You are an expert Python developer writing a new test case for an existing test suite.
-        Your task is to generate a SINGLE new test method for the function `{target_func}`.
+        {intent_guidance}
 
-        **1. CONTEXT: HOW THE FUNCTION IS IMPORTED**
+        Your task is to generate a SINGLE new test method for the function `{target_func}` based on your analysis.
+
+        **B. CONTEXT: HOW THE FUNCTION IS IMPORTED**
         - The function `{target_func}` is imported from the module `{module_to_test}`.
         - You will need `unittest.mock.patch` to mock dependencies.
 
         {context_section}
 
-        **3. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
+        **D. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
         This trace is the **blueprint** for the new test case.
         [Runtime Execution Trace]
         [start]
@@ -414,17 +439,17 @@ def _build_incremental_generation_prompt(
         [end]
         {import_context_section}
 
-        **5. INTELLIGENT MOCKING STRATEGY**
+        **F. INTELLIGENT MOCKING STRATEGY**
         {_get_mocking_guidance(module_to_test)}
 
-        **6. YOUR TASK: GENERATE *ONLY* THE NEW TEST METHOD**
+        **G. YOUR TASK: GENERATE *ONLY* THE NEW TEST METHOD**
         - The test file and class (`{test_class_name}`) already exist.
         - You must **ONLY** generate the Python code for the new test method.
         - **DO NOT** generate the class definition (`class ...:`).
         - **DO NOT** generate imports or `sys.path` setup.
         - **DO NOT** generate `if __name__ == '__main__':`.
         - Your output must be a single, complete `def test_...` method, correctly indented to be placed inside a class.
-        - The method MUST have a clear docstring explaining the test case.
+        - The method MUST have a clear docstring explaining the test case, especially if it's designed to expose a bug.
         - **MOCKING MUST BE SCOPED:** Use `with` blocks for mocks to ensure they are cleaned up after use.
 
         **Example of correct output:**
@@ -498,9 +523,9 @@ def _get_common_prompt_sections(test_class_name: str, existing_code: Optional[st
     code_structure_guidance = dedent(f"""
         - **Framework:** Use Python's built-in `unittest` module.
         - **Test Method:** Create a new, descriptively named test method (e.g., `test_..._case_N`).
-        - **Docstring:** CRITICAL - Each test method MUST have a clear and concise docstring that explains the specific scenario being tested.
+        - **Docstring:** CRITICAL - Each test method MUST have a clear and concise docstring that explains the specific scenario being tested, especially if it's designed to expose a bug.
         - **Mocking:** Based on the **INTELLIGENT MOCKING STRATEGY**, mock only necessary dependencies (`[SUB-CALL]`).
-        - **Assertions:** Use `self.assertEqual()` for return values and `self.assertRaises()` for exceptions, based on the runtime trace.
+        - **Assertions:** Use `self.assertEqual()` for return values and `self.assertRaises()` for exceptions, based on your analysis of the code's intent vs. the runtime trace.
         - **Code Structure and Style:**
           - Generate a complete, runnable Python script.
           - **Imports:** Place all imports (`unittest`, `unittest.mock`, the `sys.path` snippet, the function to test) at the top of the file. Group them logically (standard library, third-party, local) and combine imports from the same module (e.g., `from unittest.mock import patch, MagicMock`).
@@ -567,64 +592,3 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     #   self.global_mock = patch('module.dependency').start()
     [end]
     """).strip()
-
-
-def format_call_record_as_text(call_record: Dict[str, Any]) -> str:
-    """
-    Formats a single call record into a human-readable text trace for the LLM.
-    This version correctly represents the nested structure and final outcomes.
-    """
-    trace_lines = []
-
-    def _format_recursive(record: Dict, indent_str: str):
-        # 1. Print the entry point of this specific record
-        func_name = record.get("func_name", "N/A")
-        args = record.get("args", {})
-        caller_lineno = record.get("caller_lineno")
-        prefix = f"L{caller_lineno:<4} " if caller_lineno else ""
-
-        args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items()) if args else ""
-        call_header = f"[SUB-CALL] {func_name}({args_str})" if indent_str else f"[CALL] {func_name}({args_str})"
-        trace_lines.append(f"{indent_str}{prefix}{call_header}")
-
-        # 2. Iterate through the internal events of this record
-        for event in record.get("events", []):
-            event_type = event.get("type")
-            data = event.get("data", {})
-
-            if event_type == "line":
-                line_no, content = data.get("line_no"), data.get("content", "").rstrip()
-                trace_lines.append(f"{indent_str}  L{line_no:<4} {content}")
-            elif event_type == "call":
-                # If a sub-call event is found, recurse
-                _format_recursive(data, indent_str + "  ")
-
-        # 3. Print the final outcome of this specific record
-        exception = record.get("exception")
-        if exception:
-            exc_type = exception.get("type", "UnknownException")
-            exc_value = exception.get("value", "N/A")
-            outcome = (
-                f"-> SUB-CALL RAISED: {exc_type}: {exc_value}"
-                if indent_str
-                else f"[FINAL] RAISES: {exc_type}: {exc_value}"
-            )
-            trace_lines.append(f"{indent_str}  {outcome}")
-        else:
-            return_value = record.get("return_value")
-            outcome = (
-                f"-> SUB-CALL RETURNED: {repr(return_value)}"
-                if indent_str
-                else f"[FINAL] RETURNS: {repr(return_value)}"
-            )
-            trace_lines.append(f"{indent_str}  {outcome}")
-
-    # Start the formatting from the top-level record
-    func_name = call_record.get("func_name", "N/A")
-    original_filename = call_record.get("original_filename", "N/A")
-    trace_lines.append(f"Execution trace for `{func_name}` from `{original_filename}`:")
-    _format_recursive(call_record, "")
-
-    # Clean up the output slightly for better prompt injection
-    # Remove final line breaks and adjust spacing
-    return "\n".join(line.rstrip() for line in trace_lines).replace("\n  \n", "\n")

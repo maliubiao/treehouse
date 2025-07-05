@@ -3,7 +3,6 @@ import errno
 import hashlib
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -202,7 +201,7 @@ class UnitTestGeneratorDecorator:
                 dir_hash = hashlib.md5(report_dir_abs.encode("utf-8")).hexdigest()[:8]
                 lock_file_name = f"tllm_unittest_gen_{dir_hash}.lock"
                 UnitTestGeneratorDecorator._lock = _ProcessLock(lock_file_name)
-            except Exception as e:
+            except OSError as e:
                 print(
                     f"{Fore.YELLOW}Warning: Could not create unique lock file name, "
                     f"using default. Error: {e}{Style.RESET_ALL}"
@@ -259,19 +258,8 @@ class UnitTestGeneratorDecorator:
         return traced_func
 
     @classmethod
-    def _interactive_target_selection(
-        cls, all_discovered_calls: Dict[str, Dict[str, Any]]
-    ) -> Optional[Dict[str, List[str]]]:
-        # pylint: disable=too-many-locals
-        # This function acts as a CLI, so many local variables are needed for clarity.
-        """
-        Provides an interactive UI for function selection.
-        Returns a dictionary mapping filenames to a list of selected function names.
-        """
-        if not all_discovered_calls:
-            print(Fore.YELLOW + "No executed functions found in the trace report.")
-            return {}
-
+    def _display_interactive_menu(cls, all_discovered_calls: Dict[str, Dict[str, Any]]) -> Tuple[Dict, Dict]:
+        """Prints the interactive menu for function selection and returns mapping dicts."""
         print(f"\n{Style.BRIGHT}Discovered functions with execution traces:{Style.RESET_ALL}")
         print("Please select which functions you want to generate unit tests for.")
 
@@ -291,22 +279,13 @@ class UnitTestGeneratorDecorator:
                 print(f"  [{func_key: >3}] {func_name}")
                 func_counter += 1
             file_counter += 1
+        return file_map, func_map
 
-        prompt = (
-            f"\n{Style.BRIGHT}Enter your choice:{Style.RESET_ALL}\n"
-            f"  - Press {Style.BRIGHT}Enter{Style.RESET_ALL} or type {Style.BRIGHT}'A'{Style.RESET_ALL} "
-            "for All discovered functions.\n"
-            f"  - Type {Style.BRIGHT}'Q'{Style.RESET_ALL} to Quit without generating tests.\n"
-            f"  - Enter numbers or file keys, separated by commas (e.g., {Style.BRIGHT}F1, 3, 5{Style.RESET_ALL}).\n"
-            "> "
-        )
-
-        try:
-            user_input = input(prompt).strip().upper()
-        except EOFError:
-            print(Fore.YELLOW + "\nNo input received, quitting test generation.")
-            user_input = "Q"
-
+    @classmethod
+    def _parse_interactive_selection(
+        cls, user_input: str, file_map: Dict, func_map: Dict, all_discovered_calls: Dict
+    ) -> Optional[Dict[str, List[str]]]:
+        """Parses user input from the interactive menu and returns selected targets."""
         if user_input == "Q":
             return None
 
@@ -332,6 +311,37 @@ class UnitTestGeneratorDecorator:
         return dict(selected_targets_by_file)
 
     @classmethod
+    def _interactive_target_selection(
+        cls, all_discovered_calls: Dict[str, Dict[str, Any]]
+    ) -> Optional[Dict[str, List[str]]]:
+        """
+        Provides an interactive UI for function selection.
+        Returns a dictionary mapping filenames to a list of selected function names.
+        """
+        if not all_discovered_calls:
+            print(Fore.YELLOW + "No executed functions found in the trace report.")
+            return {}
+
+        file_map, func_map = cls._display_interactive_menu(all_discovered_calls)
+
+        prompt = (
+            f"\n{Style.BRIGHT}Enter your choice:{Style.RESET_ALL}\n"
+            f"  - Press {Style.BRIGHT}Enter{Style.RESET_ALL} or type {Style.BRIGHT}'A'{Style.RESET_ALL} "
+            "for All discovered functions.\n"
+            f"  - Type {Style.BRIGHT}'Q'{Style.RESET_ALL} to Quit without generating tests.\n"
+            f"  - Enter numbers or file keys, separated by commas (e.g., {Style.BRIGHT}F1, 3, 5{Style.RESET_ALL}).\n"
+            "> "
+        )
+
+        try:
+            user_input = input(prompt).strip().upper()
+        except EOFError:
+            print(Fore.YELLOW + "\nNo input received, quitting test generation.")
+            user_input = "Q"
+
+        return cls._parse_interactive_selection(user_input, file_map, func_map, all_discovered_calls)
+
+    @classmethod
     def _generate_all_tests_on_exit(cls):
         """
         At program exit, acquires a lock, starts the test generation workflow,
@@ -341,32 +351,33 @@ class UnitTestGeneratorDecorator:
             return
 
         try:
-            if cls._lock:
-                try:
-                    with cls._lock:
-                        print(f"{Fore.CYAN}Acquired process lock. Starting test generation...{Style.RESET_ALL}")
-                        cls._do_generation()
-                except _LockAcquisitionError as e:
-                    print(
-                        f"{Fore.YELLOW}Could not acquire lock: {e}. "
-                        f"Another process is likely handling test generation.{Style.RESET_ALL}"
-                    )
-                except Exception:  # pylint: disable=broad-except
-                    print(
-                        f"{Fore.RED}An unexpected error occurred during the locked generation process:{Style.RESET_ALL}"
-                    )
-                    traceback.print_exc()
-            else:
+            # The lock is initialized in __init__, so it might not exist if no
+            # decorator was ever instantiated.
+            if not cls._lock:
                 print(
                     f"{Fore.YELLOW}Warning: Lock not initialized. "
                     f"Proceeding without single-instance guarantee.{Style.RESET_ALL}"
                 )
                 cls._do_generation()
+                return
+
+            # If lock exists, use it.
+            try:
+                with cls._lock:
+                    print(f"{Fore.CYAN}Acquired process lock. Starting test generation...{Style.RESET_ALL}")
+                    cls._do_generation()
+            except _LockAcquisitionError as e:
+                print(
+                    f"{Fore.YELLOW}Could not acquire lock: {e}. "
+                    f"Another process is likely handling test generation.{Style.RESET_ALL}"
+                )
+            except Exception:
+                # This top-level catch is a safety net for the entire generation
+                # workflow, which can have many failure points.
+                print(f"{Fore.RED}An unexpected error occurred during the locked generation process:{Style.RESET_ALL}")
+                traceback.print_exc()
         finally:
             # Ensure tracer resources like the raw event log file are closed.
-            # Lazy import to prevent circular dependencies at module load time.
-            from debugger.analyzable_tracer import AnalyzableTraceLogic
-
             AnalyzableTraceLogic.close_event_log()
 
     @classmethod
@@ -417,35 +428,51 @@ class UnitTestGeneratorDecorator:
         return targets_by_file, final_target_funcs
 
     @classmethod
-    def _do_generation(cls):
-        """Executes the unified test generation workflow, called by the lock-holding process."""
-        # pylint: disable=import-outside-toplevel
-        from gpt_workflow.unittester import UnitTestGenerator
+    def _discover_all_calls_from_tree(cls, call_tree: Dict) -> Dict[str, Dict[str, List[Dict]]]:
+        """
+        [NEW] Traverses a nested call tree and creates a flat dictionary of all function
+        executions, grouped by their file and function name. This ensures all executed
+        functions are discovered, not just the top-level ones.
+        """
+        discovered = defaultdict(lambda: defaultdict(list))
 
-        print(f"\n{Fore.CYAN}{Style.BRIGHT}=== Starting Unified Unit Test Generation Workflow ==={Style.RESET_ALL}")
+        def _visitor(record: Dict):
+            # Use original_filename for accuracy as it points to the source file.
+            filename = record.get("original_filename")
+            func_name = record.get("func_name")
 
-        # 1. Merge all trace data
-        merged = cls._merge_traces_and_configs()
-        if not merged:
-            return
-        master_call_tree, base_config, all_presets, is_any_preset_defined = merged
+            if filename and func_name:
+                discovered[filename][func_name].append(record)
 
-        # 2. Generate and load a unified report
-        # We don't need a new analyzer; the master_call_tree is already the final data.
-        report_path = str(Path(base_config["report_dir"]) / "unified_trace_report.json")
+            # Recurse into sub-calls.
+            for event in record.get("events", []):
+                if event.get("type") == "call" and isinstance(event.get("data"), dict):
+                    _visitor(event["data"])
+
+        # Iterate over each top-level entry point in the original tree.
+        for funcs_in_file in call_tree.values():
+            for records in funcs_in_file.values():
+                for top_level_record in records:
+                    _visitor(top_level_record)
+
+        # Convert defaultdicts to regular dicts for a cleaner structure.
+        return {fname: dict(funcs) for fname, funcs in discovered.items()}
+
+    @classmethod
+    def _save_unified_report(cls, master_call_tree: Dict, config: Dict) -> Optional[str]:
+        """Saves the unified trace report and returns the path."""
+        report_path = str(Path(config["report_dir"]) / "unified_trace_report.json")
         try:
             with open(report_path, "w", encoding="utf-8") as f:
                 json.dump(master_call_tree, f, indent=2, ensure_ascii=False, default=str)
+            return report_path
         except (IOError, TypeError) as e:
             print(f"{Fore.RED}Error writing unified report: {e}{Style.RESET_ALL}")
-            return
+            return None
 
-        all_discovered_calls = cls._load_calls_from_report(report_path)
-        if not all_discovered_calls:
-            print(f"{Fore.YELLOW}No function executions found across all traces.{Style.RESET_ALL}")
-            return
-
-        # --- Multi-threading Check ---
+    @classmethod
+    def _check_for_multithreading(cls, all_discovered_calls: Dict):
+        """Checks for and warns about traces from multiple threads."""
         all_thread_ids = {
             record["thread_id"]
             for funcs in all_discovered_calls.values()
@@ -458,81 +485,83 @@ class UnitTestGeneratorDecorator:
                 f"{Fore.YELLOW}Warning: Traces from multiple threads {sorted(list(all_thread_ids))} were detected. "
                 f"The generator will attempt to create tests based on all traced executions.{Style.RESET_ALL}"
             )
-        # ---
 
-        # 3. Determine final targets
-        targets_by_file, final_target_funcs = cls._determine_targets(
-            all_discovered_calls, base_config, all_presets, is_any_preset_defined
-        )
-
-        # === TRACE VERIFICATION BLOCK (for debugging and user feedback) ===
+    @classmethod
+    def _verify_and_print_traces(cls, all_discovered_calls: Dict, targets_by_file: Dict, final_target_funcs: List[str]):
+        """Prints the final, processed trace data for user verification."""
         try:
             print(f"\n{Fore.MAGENTA}{Style.BRIGHT}--- Verifying Captured Traces ---{Style.RESET_ALL}")
             print(
                 f"{Fore.MAGENTA}(This shows the final, processed trace data used for test generation){Style.RESET_ALL}"
             )
 
-            target_funcs_to_print = final_target_funcs or [func for funcs in targets_by_file.values() for func in funcs]
-            if not target_funcs_to_print:
+            target_funcs = final_target_funcs or [func for funcs in targets_by_file.values() for func in funcs]
+            if not target_funcs:
                 print(f"{Fore.YELLOW}No target functions were selected for verification.{Style.RESET_ALL}")
-            else:
-                # Optimized lookup for function's file
-                func_to_file_map = {
-                    func: filename for filename, funcs in all_discovered_calls.items() for func in funcs
-                }
+                return
 
-                for func_to_print in sorted(target_funcs_to_print):
-                    filename = func_to_file_map.get(func_to_print)
-                    if filename and func_to_print in all_discovered_calls.get(filename, {}):
-                        records = all_discovered_calls[filename][func_to_print]
-                        print(f"\n{Fore.YELLOW}Trace for: {filename}::{func_to_print}{Style.RESET_ALL}")
-                        for i, record in enumerate(records):
-                            print(f"{Fore.CYAN}--- Execution Record {i + 1}/{len(records)} ---{Style.RESET_ALL}")
-                            # Use CallAnalyzer's pretty_print for a structured, recursive view
-                            analyzer_for_printing = CallAnalyzer()
-                            print(analyzer_for_printing.pretty_print_call(record))
-                    else:
-                        print(f"{Fore.YELLOW}Warning: Could not find trace for '{func_to_print}'.{Style.RESET_ALL}")
+            func_to_file_map = {func: filename for filename, funcs in all_discovered_calls.items() for func in funcs}
 
-            print(f"\n{Fore.MAGENTA}{Style.BRIGHT}--- Trace Verification Finished ---{Style.RESET_ALL}")
+            for func_to_print in sorted(target_funcs):
+                filename = func_to_file_map.get(func_to_print)
+                if filename and func_to_print in all_discovered_calls.get(filename, {}):
+                    records = all_discovered_calls[filename][func_to_print]
+                    print(f"\n{Fore.YELLOW}Trace for: {filename}::{func_to_print}{Style.RESET_ALL}")
+                    for i, record in enumerate(records):
+                        print(f"{Fore.CYAN}--- Execution Record {i + 1}/{len(records)} ---{Style.RESET_ALL}")
+                        analyzer_for_printing = CallAnalyzer()
+                        print(analyzer_for_printing.pretty_print_call(record))
+                else:
+                    print(f"{Fore.YELLOW}Warning: Could not find trace for '{func_to_print}'.{Style.RESET_ALL}")
+
         except Exception as e:
+            # This is a non-critical debug block; prevent it from crashing the generator.
             print(f"{Fore.RED}An error occurred during trace verification: {e}{Style.RESET_ALL}")
             traceback.print_exc()
-        # === END: TRACE VERIFICATION BLOCK ===
+        finally:
+            print(f"\n{Fore.MAGENTA}{Style.BRIGHT}--- Trace Verification Finished ---{Style.RESET_ALL}")
 
-        if not targets_by_file and not final_target_funcs:
-            print(f"{Fore.BLUE}No functions selected or test generation cancelled.{Style.RESET_ALL}")
+    @classmethod
+    def _save_unified_import_map(cls, config: Dict):
+        """Saves the unified import map before generation."""
+        import_map_path = config.get("import_map_file")
+        if not import_map_path:
             return
 
-        # 4. Save the unified import map before generation
-        import_map_path = base_config.get("import_map_file")
-        if import_map_path:
-            try:
-                print(f"{Fore.CYAN}Saving unified import map to {import_map_path}...{Style.RESET_ALL}")
-                AnalyzableTraceLogic.save_import_map(import_map_path)
-            except Exception as e:
-                print(f"{Fore.RED}Failed to save import map: {e}{Style.RESET_ALL}")
-                # We can continue without it, but tests may have missing imports.
+        try:
+            print(f"{Fore.CYAN}Saving unified import map to {import_map_path}...{Style.RESET_ALL}")
+            AnalyzableTraceLogic.save_import_map(import_map_path)
+        except IOError as e:
+            print(f"{Fore.RED}Failed to save import map: {e}{Style.RESET_ALL}")
+            # We can continue without it, but tests may have missing imports.
 
-        # 5. Initialize the generator
+    @classmethod
+    def _initialize_generator(cls, config: Dict, report_path: str):
+        """Initializes and returns the UnitTestGenerator instance."""
+        # pylint: disable=import-outside-toplevel
+        from gpt_workflow.unittester import UnitTestGenerator
+
         try:
             generator = UnitTestGenerator(
                 report_path=report_path,
-                model_name=base_config["model_name"],
-                checker_model_name=base_config["checker_model_name"],
-                trace_llm=base_config["trace_llm"],
-                llm_trace_dir=base_config["llm_trace_dir"],
+                model_name=config["model_name"],
+                checker_model_name=config["checker_model_name"],
+                trace_llm=config["trace_llm"],
+                llm_trace_dir=config["llm_trace_dir"],
                 project_root=cls.default_source_base_dir,
-                import_map_path=import_map_path,  # Pass the path here
+                import_map_path=config.get("import_map_file"),
             )
             if not generator.load_and_parse_report():
-                return
-        except Exception:  # pylint: disable=broad-except
-            print(f"{Fore.RED}Failed to initialize UnitTestGenerator:{Style.RESET_ALL}")
+                return None
+            return generator
+        except (ImportError, FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"{Fore.RED}Failed to initialize UnitTestGenerator: {e}{Style.RESET_ALL}")
             traceback.print_exc()
-            return
+            return None
 
-        # 6. Execute generation tasks
+    @classmethod
+    def _run_generation_tasks(cls, generator, config: Dict, targets_by_file: Dict, final_target_funcs: List[str]):
+        """Executes the generation tasks for the selected targets."""
         if targets_by_file:  # Interactive or auto-confirm modes
             print(f"\n{Fore.GREEN}Processing targets for {len(targets_by_file)} file(s).{Style.RESET_ALL}")
             for filename, funcs in targets_by_file.items():
@@ -540,10 +569,10 @@ class UnitTestGeneratorDecorator:
                 print(f"    Functions: {Style.BRIGHT}{', '.join(sorted(funcs))}{Style.RESET_ALL}")
                 generator.generate(
                     target_funcs=funcs,
-                    output_dir=base_config["output_dir"],
-                    auto_confirm=base_config["auto_confirm"],
-                    use_symbol_service=base_config["use_symbol_service"],
-                    num_workers=base_config["num_workers"],
+                    output_dir=config["output_dir"],
+                    auto_confirm=config["auto_confirm"],
+                    use_symbol_service=config["use_symbol_service"],
+                    num_workers=config["num_workers"],
                     target_file=str(Path(filename).relative_to(cls.default_source_base_dir)),
                 )
         elif final_target_funcs:  # Preset mode
@@ -553,12 +582,50 @@ class UnitTestGeneratorDecorator:
             )
             generator.generate(
                 target_funcs=final_target_funcs,
-                output_dir=base_config["output_dir"],
-                auto_confirm=base_config["auto_confirm"],
-                use_symbol_service=base_config["use_symbol_service"],
-                num_workers=base_config["num_workers"],
+                output_dir=config["output_dir"],
+                auto_confirm=config["auto_confirm"],
+                use_symbol_service=config["use_symbol_service"],
+                num_workers=config["num_workers"],
                 target_file=None,  # No specific file context for global presets
             )
+
+    @classmethod
+    def _do_generation(cls):
+        """Executes the unified test generation workflow, called by the lock-holding process."""
+        print(f"\n{Fore.CYAN}{Style.BRIGHT}=== Starting Unified Unit Test Generation Workflow ==={Style.RESET_ALL}")
+
+        merged_data = cls._merge_traces_and_configs()
+        if not merged_data:
+            return
+        master_call_tree, config, all_presets, is_preset_defined = merged_data
+
+        report_path = cls._save_unified_report(master_call_tree, config)
+        if not report_path:
+            return
+
+        all_discovered_calls = cls._discover_all_calls_from_tree(master_call_tree)
+        if not all_discovered_calls:
+            print(f"{Fore.YELLOW}No function executions found across all traces.{Style.RESET_ALL}")
+            return
+        cls._check_for_multithreading(all_discovered_calls)
+
+        targets_by_file, final_target_funcs = cls._determine_targets(
+            all_discovered_calls, config, all_presets, is_preset_defined
+        )
+
+        cls._verify_and_print_traces(all_discovered_calls, targets_by_file, final_target_funcs)
+
+        if not targets_by_file and not final_target_funcs:
+            print(f"{Fore.BLUE}No functions selected or test generation cancelled.{Style.RESET_ALL}")
+            return
+
+        cls._save_unified_import_map(config)
+
+        generator = cls._initialize_generator(config, report_path)
+        if not generator:
+            return
+
+        cls._run_generation_tasks(generator, config, targets_by_file, final_target_funcs)
 
         print(f"\n{Fore.GREEN}{Style.BRIGHT}=== Unit Test Generation Workflow Finished ==={Style.RESET_ALL}")
 
