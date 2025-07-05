@@ -515,7 +515,7 @@ class TraceDispatcher:
         if event == TraceTypes.CALL:
             return self._handle_call_event(frame)
         if event == TraceTypes.RETURN:
-            self._logic.flush_exception()
+            # self._logic.flush_exception()
             return self._handle_return_event(frame, arg)
         if event == TraceTypes.LINE:
             return self._handle_line_event(frame)
@@ -747,7 +747,7 @@ class SysMonitoringTraceDispatcher:
         """Handle PY_RETURN event (function return)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
-            self._logic.flush_exception()
+            # self._logic.flush_exception()
             self._logic.handle_return(frame, retval)
             self.active_frames.discard(frame)
 
@@ -789,6 +789,7 @@ class SysMonitoringTraceDispatcher:
         if frame in self.active_frames:
             for exception in self._logic.exception_chain:
                 self._logic._add_to_buffer(exception[0], exception[1])
+            self._logic.exception_chain = []
             self.active_frames.discard(frame)
 
     def _handle_reraise(self, _code, _offset, exc):
@@ -1786,11 +1787,11 @@ class TraceLogic:
                 TraceTypes.COLOR_VAR,
             )
 
-    def flush_exception(self):
-        """将暂存的异常链刷入日志队列"""
-        for item in self.exception_chain:
-            self._log_queue.put(item)
-        self.exception_chain = []
+    # def flush_exception(self):
+    #     """将暂存的异常链刷入日志队列"""
+    #     for item in self.exception_chain:
+    #         self._log_queue.put(item)
+    #     self.exception_chain = []
 
     def handle_exception(self, exc_type, exc_value, frame):
         """
@@ -1892,7 +1893,7 @@ class TraceLogic:
         if self._timer_thread:
             self._timer_thread.join(timeout=1)
 
-        self.flush_exception()  # 确保任何剩余的异常都被记录
+        # self.flush_exception()  # 确保任何剩余的异常都被记录
 
         self._flush_buffer()
         while not self._log_queue.empty():
