@@ -578,7 +578,9 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_
     """
 
     GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size)
+    p = PatchPromptBuilder(
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
+    )
     p.process_search_results(symbol_result)
     prompt = p.build(user_requirement=prompt_content)
     print(Fore.YELLOW + "正在生成修复方案...")
@@ -649,7 +651,7 @@ def _perform_two_step_fix(
 [trace log end]
 """
     p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size
+        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
     )
     p_explain.process_search_results(symbol_result)
     prompt_explain = p_explain.build(user_requirement=analyze_prompt_content)
@@ -681,7 +683,7 @@ def _perform_two_step_fix(
     """
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p_fix = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
     )
     p_fix.process_search_results(symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
@@ -714,7 +716,7 @@ def _perform_automated_fix_and_report(
 [trace log end]
 """
     p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size
+        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
     )
     p_explain.process_search_results(symbol_result)
     prompt_explain = p_explain.build(user_requirement=explain_prompt_content)
@@ -739,7 +741,7 @@ def _perform_automated_fix_and_report(
     """
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p_fix = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
     )
     p_fix.process_search_results(symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
@@ -916,7 +918,7 @@ def analyze_error_task(
 [trace log end]
 """
     p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size
+        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
     )
     p_explain.process_search_results(symbol_result)
     prompt_explain = p_explain.build(user_requirement=analyze_prompt_content)
@@ -987,7 +989,7 @@ def _generate_and_apply_patch_from_analysis(
     """
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p_fix = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
     )
     p_fix.process_search_results(analyzed_error.symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)

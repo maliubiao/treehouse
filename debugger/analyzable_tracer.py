@@ -26,7 +26,7 @@ class AnalyzableTraceLogic(TraceLogic):
     一个增强的TraceLogic，它将事件转发给CallAnalyzer，并为单元测试生成目的解析模块导入。
     """
 
-    def __init__(self, config: TraceConfig, analyzer: CallAnalyzer, import_map_file: str | None):
+    def __init__(self, config: TraceConfig, analyzer: CallAnalyzer, import_map_file: str | Path | None):
         """
         初始化时，除了常规配置外，还需要一个 CallAnalyzer 实例。
 
@@ -40,8 +40,12 @@ class AnalyzableTraceLogic(TraceLogic):
         self._lock = threading.Lock()
         self.resolved_files = set()
         self.resolved_imports = {}
+
+        # 确保import_map_file是Path对象
         if import_map_file is None:
             self.import_map_file = Path(_LOG_DIR) / "import_map.json"
+        elif isinstance(import_map_file, str):
+            self.import_map_file = Path(import_map_file)
         else:
             self.import_map_file = import_map_file
 
@@ -54,7 +58,12 @@ class AnalyzableTraceLogic(TraceLogic):
             return
 
         filename = frame.f_code.co_filename
-        if not (filename.startswith("<") and filename.endswith(">")):
+        funcname = frame.f_code.co_name  # 获取函数名
+
+        # 关键修改：只有当文件名不是动态生成（非<>包围）且函数名不是模块初始化状态（非<>包围）时才解析
+        if not (filename.startswith("<") and filename.endswith(">")) and not (
+            funcname.startswith("<") and funcname.endswith(">")
+        ):
             with self._lock:
                 is_resolved = filename in self.resolved_files
 
@@ -79,7 +88,7 @@ class AnalyzableTraceLogic(TraceLogic):
 
     def _add_to_buffer(self, log_data: Any, color_type: str):
         """
-        重写此方法以实现“挂载”分析器。
+        重写此方法以实现"挂载"分析器。
 
         在将日志数据添加到原始的输出缓冲区之前，先将其传递给 CallAnalyzer 进行处理。
         """
@@ -109,10 +118,14 @@ class AnalyzableTraceLogic(TraceLogic):
         """
         # 保存导入依赖映射
         if self.resolved_imports:
-            self.import_map_file.parent.mkdir(parents=True, exist_ok=True)
-            with self.import_map_file.open("w", encoding="utf-8") as f:
-                json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
-            print(color_wrap(f"Import map saved to: {self.import_map_file}", TraceTypes.COLOR_RETURN))
+            try:
+                # 安全创建目录
+                self.import_map_file.parent.mkdir(parents=True, exist_ok=True)
+                with self.import_map_file.open("w", encoding="utf-8") as f:
+                    json.dump(self.resolved_imports, f, indent=2, ensure_ascii=False)
+                print(color_wrap(f"Import map saved to: {self.import_map_file}", TraceTypes.COLOR_RETURN))
+            except Exception as e:
+                logging.error(f"Failed to save import map: {e}")
 
         # 调用父类的stop方法来完成剩余的清理工作（如保存HTML报告）
         super().stop()
@@ -151,6 +164,7 @@ def start_analyzable_trace(analyzer: CallAnalyzer, module_path=None, config: Tra
         tracer = TraceDispatcher(str(module_path), config)
         tracer._logic = logic_instance
 
+    # 关键修复：使用 f_back 获取调用者帧
     caller_frame = sys._getframe().f_back
     tracer.add_target_frame(caller_frame)
     try:
@@ -183,7 +197,7 @@ def analyzable_trace(
     source_base_dir: Optional[Path] = None,
     disable_html: bool = False,
     include_stdlibs: Optional[List[str]] = None,
-    import_map_file: str | None = None,
+    import_map_file: str | Path | None = None,
 ):
     """
     一个功能强大的函数跟踪装饰器，集成了调用分析和依赖解析功能。

@@ -134,12 +134,30 @@ class TestGPTContextProcessor(unittest.TestCase):
 
     def test_max_length_truncation(self):
         """测试最大长度截断"""
-        max_len = 128 * 1024
-        long_text = "a" * (max_len + 100)
-        # 显式传递 tokens_left，使测试意图更清晰
-        result = self.processor.process_text(long_text, tokens_left=max_len)
-        self.assertTrue(len(result) <= max_len)
+        # 定义一个期望的字符长度上限，用于测试截断逻辑
+        expected_char_length_limit = 128 * 1024
+        # 根据llm_query.py中process_text内部 tokens_left *= 3 的逻辑，
+        # 反推出需要传入的tokens_left值，以确保最终字符限制接近期望值
+        tokens_left_for_process_text = expected_char_length_limit // 3
+
+        long_text = "a" * (expected_char_length_limit + 100)  # 确保文本长度超过期望的字符限制
+
+        # 调用process_text，传入计算后的tokens_left
+        result = self.processor.process_text(long_text, tokens_left=tokens_left_for_process_text)
+
+        # 验证结果的长度不超过期望的字符长度上限
+        self.assertTrue(len(result) <= expected_char_length_limit)
+
+        # 验证截断标志是否存在
         self.assertIn("输入太长内容已自动截断", result)
+
+        # 验证截断后的实际长度是否是根据内部计算的字符限制（tokens_left * 3）
+        # _finalize_output 会在 len(text) > max_tokens 时将文本截断到 max_tokens 长度
+        # 这里的 max_tokens 实际就是 tokens_left_for_process_text * 3
+        # long_text (131172) 肯定大于 (expected_char_length_limit // 3 * 3 = 131070),
+        # 所以会触发截断，最终长度为 131070
+        actual_truncated_length = tokens_left_for_process_text * 3
+        self.assertEqual(len(result), actual_truncated_length)
 
     def test_multiple_symbol_args(self):
         """测试多个符号参数合并"""
@@ -189,7 +207,8 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_process.return_value = "符号处理结果"
             # 文本部分是'..test_symbol..'移除'..'后的内容
             processed_text_content = "test_symbol"
-            expected_tokens_left = self.default_tokens_left - len(processed_text_content)
+            # 修正：考虑到process_text内部tokens_left会乘以3
+            expected_tokens_left = (self.default_tokens_left * 3) - len(processed_text_content)
 
             result = self.processor.process_text(text, tokens_left=self.default_tokens_left)
 
@@ -203,7 +222,8 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_process.return_value = "多符号处理结果"
             # 文本部分是'..symbol1.. ..symbol2..'移除'..'后的内容
             processed_text_content = "symbol1 symbol2"
-            expected_tokens_left = self.default_tokens_left - len(processed_text_content)
+            # 修正：考虑到process_text内部tokens_left会乘以3
+            expected_tokens_left = (self.default_tokens_left * 3) - len(processed_text_content)
 
             result = self.processor.process_text(text, tokens_left=self.default_tokens_left)
 
@@ -222,7 +242,8 @@ class TestGPTContextProcessor(unittest.TestCase):
             mock_symbol.return_value = "符号处理结果"
             # 模拟命令和符号标记被移除和替换后的文本
             text_after_processing = "前置内容symbol1中间剪贴板内容 symbol2结尾"
-            expected_tokens_left = self.default_tokens_left - len(text_after_processing)
+            # 修正：考虑到process_text内部tokens_left会乘以3
+            expected_tokens_left = (self.default_tokens_left * 3) - len(text_after_processing)
 
             result = self.processor.process_text(text, tokens_left=self.default_tokens_left)
 

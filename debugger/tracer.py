@@ -1674,6 +1674,8 @@ class TraceLogic:
         statement_info = get_statement_info(filename, lineno)
         if statement_info:
             full_statement, start_line, end_line = statement_info
+            if end_line - start_line > 10:
+                full_statement = "\n".join(full_statement.split("\n")[:10])
         else:
             full_statement = linecache.getline(filename, lineno).strip("\n")
             if not full_statement:

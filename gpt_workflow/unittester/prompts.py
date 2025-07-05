@@ -116,8 +116,10 @@ def build_merge_prompt(
           - **Do Not Remove Existing Tests:** Ensure all original test logic is preserved, even if it's moved to a different class.
           - **Completeness:** The final output must be a single, complete, and runnable Python file, including the `if __name__ == '__main__':` block.
 
-        **IMPORTANT**: Your entire response MUST be only the merged and refactored Python code, enclosed within a single
-        `[start]` and `[end]` block. Do not add any explanations or text outside the code block. Do not use markdown ``` syntax to wrap the merged Python code.
+        **IMPORTANT**: 
+        1. Your entire response MUST be only the merged and refactored Python code
+        2. Enclose the code within a single `[start]` and `[end]` block
+        3. **DO NOT** use markdown ``` syntax to wrap the code
     """).strip()
 
 
@@ -136,7 +138,7 @@ def _format_import_context(import_context: Optional[Dict[str, Dict]]) -> str:
     ]
     for symbol, info in sorted(import_context.items()):
         lines.append(
-            f"- The name `{symbol}` is available in the file and comes from module `{info.get('module', 'N/A')}`."
+            f"- The name `{symbol}` comes from module `{info.get('module', 'N/A')}`, the module path is `{info['path']}`."
         )
 
     return "\n".join(lines)
@@ -283,7 +285,10 @@ def _build_file_based_prompt(
         {generation_guidance}
         {existing_code_section}
 
-        **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single `[start]` and `[end]` block.
+        **IMPORTANT**: 
+        1. Your entire response must be only the Python code
+        2. Enclose the code within a single `[start]` and `[end]` block
+        3. **DO NOT** use markdown ``` syntax to wrap the code
     """).strip()
     return f"{prompt_part1}\n\n{prompt_part2}"
 
@@ -342,7 +347,10 @@ def _build_symbol_based_prompt(
         {generation_guidance}
         {existing_code_section}
 
-        **IMPORTANT**: Your entire response must be only the Python code, enclosed within a single `[start]` and `[end]` block.
+        **IMPORTANT**: 
+        1. Your entire response must be only the Python code
+        2. Enclose the code within a single `[start]` and `[end]` block
+        3. **DO NOT** use markdown ``` syntax to wrap the code
     """).strip()
     return f"{prompt_part1}\n\n{prompt_part2}"
 
@@ -430,7 +438,10 @@ def _build_incremental_generation_prompt(
             self.assertEqual(result, 16)
         [end]
 
-        **IMPORTANT**: Your entire response must be only the Python method, enclosed within a `[start]` and `[end]` block.
+        **IMPORTANT**: 
+        1. Your entire response must be only the Python method
+        2. Enclose the method within a `[start]` and `[end]` block
+        3. **DO NOT** use markdown code syntax (triple backticks) to wrap the method
     """).strip()
 
 
@@ -494,6 +505,9 @@ def _get_common_prompt_sections(test_class_name: str, existing_code: Optional[st
         - **Code Structure and Style:**
           - Generate a complete, runnable Python script.
           - **Imports:** Place all imports (`unittest`, `unittest.mock`, the `sys.path` snippet, the function to test) at the top of the file. Group them logically (standard library, third-party, local) and combine imports from the same module (e.g., `from unittest.mock import patch, MagicMock`).
+          - **Output Format:** 
+            * Enclose the entire output within `[start]` and `[end]` tags
+            * **DO NOT** use markdown code blocks (triple backticks)
           - {action_verb}
     """).strip()
     return action_description, existing_code_section, code_structure_guidance
@@ -529,7 +543,7 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     2.  **DO NOT MOCK NON-EXISTENT OBJECTS.** Only mock objects that are explicitly mentioned in the source code context or the `[SUB-CALL]` trace. Inventing a dependency to mock (e.g., `patch('some.module.that_does_not_exist')`) will cause the test to fail with an `AttributeError` or `ModuleNotFoundError`. This is an unacceptable error.
 
     **Example of Correct Mocking:**
-    ```python
+    [start]
     # Good: Using a context manager within a test
     def test_my_function(self):
         with patch('mymodule.other_function', return_value=42):
@@ -541,7 +555,10 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     def test_my_function(self, mock_other):
         result = my_function()
         self.assertEqual(result, 42)
+    [end]
 
+    **Example of Forbidden Mocking:**
+    [start]
     # BAD: Global mock that affects other tests (STRICTLY FORBIDDEN)
     # At the top of the test file:
     #   import sys
@@ -549,7 +566,7 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     #
     # Or in setUp method without cleanup:
     #   self.global_mock = patch('module.dependency').start()
-    ```
+    [end]
     """).strip()
 
 

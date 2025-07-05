@@ -2843,7 +2843,8 @@ class GPTContextProcessor:
             if not GLOBAL_MODEL_CONFIG:
                 raise ValueError("模型配置未初始化")
             tokens_left = GLOBAL_MODEL_CONFIG.max_context_size
-
+        # 近似的估计tokens消耗为长度1/3倍，实际大约为1/4
+        tokens_left *= 3
         nodes = self.parse_text_into_nodes(text.strip())
         self.processed_nodes = nodes.copy()
 
