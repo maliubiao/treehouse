@@ -168,6 +168,7 @@ class UnitTestGeneratorDecorator:
             auto_confirm: 是否自动确认所有LLM建议和文件覆盖提示。
             enable_var_trace: 是否启用变量跟踪。
             verbose_trace: 是否在运行时实时打印详细的、带缩进的函数调用/返回日志。
+                           启用此项还会创建一个包含所有原始事件的 `raw_trace_events.log` 文件用于调试。
             model_name: 用于生成测试的核心语言模型名称。
             checker_model_name: 用于辅助任务（如命名、合并）的模型名称。
             use_symbol_service: 是否使用符号服务获取更精确的代码上下文。
@@ -332,31 +333,41 @@ class UnitTestGeneratorDecorator:
 
     @classmethod
     def _generate_all_tests_on_exit(cls):
-        """At program exit, acquires a lock and starts the test generation workflow."""
+        """
+        At program exit, acquires a lock, starts the test generation workflow,
+        and cleans up resources.
+        """
         if not cls._registry:
             return
 
-        if cls._lock:
-            try:
-                with cls._lock:
-                    print(f"{Fore.CYAN}Acquired process lock. Starting test generation...{Style.RESET_ALL}")
-                    cls._do_generation()
-            except _LockAcquisitionError as e:
+        try:
+            if cls._lock:
+                try:
+                    with cls._lock:
+                        print(f"{Fore.CYAN}Acquired process lock. Starting test generation...{Style.RESET_ALL}")
+                        cls._do_generation()
+                except _LockAcquisitionError as e:
+                    print(
+                        f"{Fore.YELLOW}Could not acquire lock: {e}. "
+                        f"Another process is likely handling test generation.{Style.RESET_ALL}"
+                    )
+                except Exception:  # pylint: disable=broad-except
+                    print(
+                        f"{Fore.RED}An unexpected error occurred during the locked generation process:{Style.RESET_ALL}"
+                    )
+                    traceback.print_exc()
+            else:
                 print(
-                    f"{Fore.YELLOW}Could not acquire lock: {e}. "
-                    f"Another process is likely handling test generation.{Style.RESET_ALL}"
+                    f"{Fore.YELLOW}Warning: Lock not initialized. "
+                    f"Proceeding without single-instance guarantee.{Style.RESET_ALL}"
                 )
-            except Exception:  # pylint: disable=broad-except
-                # For an atexit handler, it's crucial to catch any unexpected error
-                # to avoid a noisy crash on program exit. We log it thoroughly.
-                print(f"{Fore.RED}An unexpected error occurred during the locked generation process:{Style.RESET_ALL}")
-                traceback.print_exc()
-        else:
-            print(
-                f"{Fore.YELLOW}Warning: Lock not initialized. "
-                f"Proceeding without single-instance guarantee.{Style.RESET_ALL}"
-            )
-            cls._do_generation()
+                cls._do_generation()
+        finally:
+            # Ensure tracer resources like the raw event log file are closed.
+            # Lazy import to prevent circular dependencies at module load time.
+            from debugger.analyzable_tracer import AnalyzableTraceLogic
+
+            AnalyzableTraceLogic.close_event_log()
 
     @classmethod
     def _merge_traces_and_configs(cls) -> Optional[Tuple[Dict, Dict, List[str], bool]]:

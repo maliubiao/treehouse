@@ -18,6 +18,7 @@ import threading
 import time
 import traceback
 import types
+import weakref
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
@@ -712,7 +713,6 @@ class SysMonitoringTraceDispatcher:
     def handle_py_start(self, _code, _offset):
         """Handle PY_START event (function entry)"""
         frame = sys._getframe(1)  # Get the frame of the function being called
-
         if not self.is_target_frame(frame):
             return self.monitoring_module.DISABLE
 
@@ -790,6 +790,14 @@ class SysMonitoringTraceDispatcher:
             for exception in self._logic.exception_chain:
                 self._logic._add_to_buffer(exception[0], exception[1])
             self._logic.exception_chain = []
+
+            # BUG FIX: Add resource cleanup for frames exiting via exception
+            frame_id = self._logic._get_frame_id(frame)
+            if frame_id in self._logic._frame_data._frame_locals_map:
+                del self._logic._frame_data._frame_locals_map[frame_id]
+            if frame_id in self._logic._last_vars_by_frame:
+                del self._logic._last_vars_by_frame[frame_id]
+
             self.active_frames.discard(frame)
 
     def _handle_reraise(self, _code, _offset, exc):
@@ -1300,6 +1308,18 @@ class TraceLogExtractor:
 
 
 class TraceLogic:
+    class _UniqueIDGenerator:
+        """线程安全的唯一ID生成器"""
+
+        def __init__(self):
+            self._counter = 0
+            self._lock = threading.Lock()
+
+        def get_id(self):
+            with self._lock:
+                self._counter += 1
+                return self._counter
+
     class _FileCache:
         def __init__(self):
             self._file_name_cache = {}
@@ -1309,10 +1329,10 @@ class TraceLogic:
 
     class _FrameData:
         def __init__(self):
-            self._frame_id_map = {}
             self._frame_locals_map = {}
-            self._current_frame_id = 0
             self._code_var_ops = {}
+            self._frame_id_map = {}
+            self._current_frame_id = 0
 
     class _OutputHandlers:
         def __init__(self, parent: "TraceLogic"):
@@ -1340,6 +1360,7 @@ class TraceLogic:
         # 分组属性
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
+        self._frame_id_generator = self._UniqueIDGenerator()
         self._output = self._OutputHandlers(self)
         self.last_statement_vars = None
         self._last_vars_by_frame = {}  # Cache for tracking variable changes
@@ -1349,7 +1370,7 @@ class TraceLogic:
             self.disable_output("html")
 
     def _get_frame_id(self, frame):
-        """获取当前帧ID"""
+        """获取或为帧分配一个唯一的、持久的ID。"""
         frame_key = id(frame)
         if frame_key not in self._frame_data._frame_id_map:
             self._frame_data._current_frame_id += 1
@@ -1522,9 +1543,6 @@ class TraceLogic:
 
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
-        if self.stack_depth >= _MAX_CALL_DEPTH:
-            logging.warning("超过最大调用深度已达到，无法记录更多调用 %s", str(frame))
-            return
         try:
             args_info = []
             if frame.f_code.co_name == "<module>":
@@ -1805,6 +1823,13 @@ class TraceLogic:
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self._get_frame_id(frame)
+
+        # BUG FIX: Add resource cleanup for frames exiting via exception
+        if frame_id in self._frame_data._frame_locals_map:
+            del self._frame_data._frame_locals_map[frame_id]
+        if frame_id in self._last_vars_by_frame:
+            del self._last_vars_by_frame[frame_id]
+
         msg = (
             {
                 "template": (
@@ -1982,17 +2007,6 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
             )
         )
         raise
-
-
-class Counter:
-    counter = 0
-    lock = threading.Lock()
-
-    @classmethod
-    def increase(self):
-        with Counter.lock:
-            Counter.counter += 1
-            return Counter.counter
 
 
 def trace(

@@ -145,8 +145,8 @@ def run_multithreading_demo():
     target_functions=[
         "comprehensive_demo_entrypoint",
         "run_async_demos",
-        "run_multithreading_demo",  # <--- 新增
-        "threaded_worker_function",  # <--- 新增
+        "run_multithreading_demo",
+        "threaded_worker_function",
         "innermost_raiser",
         "middle_handler_and_reraiser",
         "deep1",
@@ -159,7 +159,7 @@ def run_multithreading_demo():
     report_dir="call_reports/comprehensive_demo",
     auto_confirm=True,
     trace_llm=True,
-    verbose_trace=True,  # <--- [新功能] 开启实时详细跟踪日志
+    verbose_trace=True,  # <--- [新功能] 开启实时详细跟踪日志 (同时会生成 logs/raw_trace_events.log)
     num_workers=0,  # 使用单线程以便于观察和调试日志
     model_name="deepseek-v3",
     checker_model_name="deepseek-v3",

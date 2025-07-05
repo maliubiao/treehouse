@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import threading
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, TypedDict, Union
@@ -21,7 +22,7 @@ class CallRecord(TypedDict):
 
     # 身份信息
     frame_id: int
-    thread_id: int  # <--- 新增
+    thread_id: int
     func_name: str
     filename: str
     original_filename: str
@@ -56,60 +57,78 @@ class CallAnalyzer:
         初始化分析器。
 
         Args:
-            verbose: 如果为 True，将在标准输出中实时打印详细的、带缩进的跟踪日志。
+            verbose: 如果为 True, 将在标准输出中实时打印详细的、带缩进的跟踪日志。
         """
         self.call_trees: Dict[str, Dict[str, List[CallRecord]]] = defaultdict(lambda: defaultdict(list))
         # 为每个线程维护一个独立的调用栈
         self.call_stacks: Dict[int, List[CallRecord]] = defaultdict(list)
         self.records_by_frame_id: Dict[int, CallRecord] = {}
         self.verbose = verbose
-        self.colors = {"call": Fore.BLUE, "return": Fore.GREEN, "exception": Fore.RED}
+        self.colors = {"call": Fore.BLUE, "return": Fore.GREEN, "exception": Fore.RED, "info": Fore.YELLOW}
         # 锁，用于保护 verbose 模式下的 print 输出，防止多线程输出混乱
         self.verbose_lock = threading.Lock()
 
     def _handle_exit_event(self, frame_id: int, is_clean_exit: bool, event_data: Dict, thread_id: int):
         """
-        终结位于指定线程调用栈顶的帧。
-
-        此方法精确处理Python的 `return` 或 `exception` 事件。它假定Python的追踪器
-        会为每个被异常回溯的帧都触发一个相应的事件。因此，我们只处理与栈顶匹配的帧。
-
-        Args:
-            frame_id: 目标帧的ID，即触发`return`或`exception`事件的帧。
-            is_clean_exit: 如果为 True，表示是`return`事件；否则是`exception`事件。
-            event_data: 与事件相关的原始数据 (包含返回值或异常详情)。
-            thread_id: 当前事件所属的线程ID。
+        增强的退出事件处理：支持在栈中任意位置匹配帧ID
         """
         stack = self.call_stacks[thread_id]
         if not stack:
             return
 
-        # 目标帧必须在栈顶。如果不是，说明我们的调用栈跟踪逻辑出现了偏差，
-        # 或者是事件流本身有问题。在单线程同步执行中，这不应该发生。
-        record = stack[-1]
-        if record["frame_id"] != frame_id:
+        # 首先检查栈顶是否匹配
+        top_record = stack[-1]
+        if top_record["frame_id"] == frame_id:
+            # 正常情况：栈顶匹配
+            self._process_matched_exit(top_record, is_clean_exit, event_data, stack)
             return
 
+        # 栈顶不匹配时，搜索整个调用栈
+        matched_index = -1
+        for i in range(len(stack) - 1, -1, -1):
+            if stack[i]["frame_id"] == frame_id:
+                matched_index = i
+                break
+
+        if matched_index == -1:
+            # 没有找到匹配的帧
+            if self.verbose:
+                with self.verbose_lock:
+                    stack_ids = [str(r["frame_id"]) for r in stack]
+                    print(
+                        f"{self.colors['info']}⚠️ UNMATCHED EXIT: Frame {frame_id} not found in stack: {', '.join(stack_ids)} [EID:{event_data.get('event_id')}]{Style.RESET_ALL}"
+                    )
+            return
+
+        # 处理找到的匹配帧
+        self._process_deep_exit(stack, matched_index, is_clean_exit, event_data)
+
+    def _process_matched_exit(self, record: CallRecord, is_clean_exit: bool, event_data: Dict, stack: List[CallRecord]):
+        """处理栈顶匹配的正常退出"""
         if self.verbose:
             with self.verbose_lock:
                 indent = "  " * (len(stack) - 1)
                 func_name = record["func_name"]
+                event_id = event_data.get("event_id", -1)
                 if is_clean_exit:
                     return_value = event_data.get("return_value")
                     return_repr = repr(return_value)
                     if len(return_repr) > 120:
                         return_repr = return_repr[:120] + "..."
-                    print(f"{self.colors['return']}{indent}✔️ RETURN from {func_name} -> {return_repr}{Style.RESET_ALL}")
+                    print(
+                        f"{self.colors['return']}{indent}✔️ RETURN from {func_name} (FrameID:{record['frame_id']}) -> {return_repr} "
+                        f"[EID:{event_id}]{Style.RESET_ALL}"
+                    )
                 else:
                     exc_type = event_data.get("exc_type")
                     exc_value = str(event_data.get("exc_value"))
                     print(
-                        f"{self.colors['exception']}{indent}💥 EXCEPTION in {func_name}: "
-                        f"{exc_type}: {exc_value}{Style.RESET_ALL}"
+                        f"{self.colors['exception']}{indent}💥 EXCEPTION in {func_name} (FrameID:{record['frame_id']}): "
+                        f"{exc_type}: {exc_value} [EID:{event_id}]{Style.RESET_ALL}"
                     )
 
         # 弹出正确的帧进行终结。
-        record = stack.pop()
+        stack.pop()
         if not record.get("end_time"):
             record["end_time"] = datetime.datetime.now().timestamp()
 
@@ -125,6 +144,68 @@ class CallAnalyzer:
             record["return_value"] = None
 
         # 只有当这个调用是顶级调用时（即，没有父级），才将其添加到最终的树中。
+        if not stack:
+            self._add_to_final_tree(record)
+
+    def _process_deep_exit(self, stack: List[CallRecord], index: int, is_clean_exit: bool, event_data: Dict):
+        """处理在栈深处找到的匹配帧的退出"""
+        record = stack[index]
+        if self.verbose:
+            with self.verbose_lock:
+                indent = "  " * index
+                func_name = record["func_name"]
+                event_id = event_data.get("event_id", -1)
+                depth = len(stack) - index
+                if is_clean_exit:
+                    return_value = event_data.get("return_value")
+                    return_repr = (
+                        repr(return_value)[:120] + "..." if len(repr(return_value)) > 120 else repr(return_value)
+                    )
+                    print(
+                        f"{self.colors['return']}{indent}⚠️ DEEP RETURN from {func_name} (FrameID:{record['frame_id']}, depth={depth}) -> {return_repr} "
+                        f"[EID:{event_id}]{Style.RESET_ALL}"
+                    )
+                else:
+                    exc_type = event_data.get("exc_type")
+                    exc_value = str(event_data.get("exc_value"))
+                    print(
+                        f"{self.colors['exception']}{indent}⚠️ DEEP EXCEPTION in {func_name} (FrameID:{record['frame_id']}, depth={depth}): "
+                        f"{exc_type}: {exc_value} [EID:{event_id}]{Style.RESET_ALL}"
+                    )
+
+        # 标记结束时间
+        if not record.get("end_time"):
+            record["end_time"] = datetime.datetime.now().timestamp()
+
+        # 设置返回或异常信息
+        if is_clean_exit:
+            record["return_value"] = event_data.get("return_value")
+            record["exception"] = None
+        else:
+            record["exception"] = {
+                "type": event_data.get("exc_type"),
+                "value": str(event_data.get("exc_value")),
+                "lineno": event_data.get("lineno"),
+            }
+            record["return_value"] = None
+
+        # 从栈中移除该帧及其上方的所有帧
+        removed_frames = stack[index:]
+        del stack[index:]
+
+        # 处理被移除的未完成帧
+        for frame in removed_frames:
+            if frame is not record:  # 跳过当前记录（已处理）
+                if not frame.get("end_time"):
+                    frame["end_time"] = datetime.datetime.now().timestamp()
+                if not frame.get("exception"):
+                    frame["exception"] = {
+                        "type": "ForcedUnwind",
+                        "value": "Function terminated early due to deep stack unwind",
+                        "lineno": None,
+                    }
+
+        # 如果移除后栈为空，添加到最终树
         if not stack:
             self._add_to_final_tree(record)
 
@@ -174,7 +255,7 @@ class CallAnalyzer:
 
         record: CallRecord = {
             "frame_id": frame_id,
-            "thread_id": thread_id,  # <--- 填充线程ID
+            "thread_id": thread_id,
             "func_name": data["func"],
             "filename": data["filename"],
             "original_filename": data["original_filename"],
@@ -196,8 +277,10 @@ class CallAnalyzer:
                 args_str = ", ".join(f"{k}={v}" for k, v in record["args"].items())
                 func_name = record["func_name"]
                 location = f"{record['filename']}:{record['original_lineno']}"
+                event_id = data.get("event_id", -1)
                 print(
-                    f"{self.colors['call']}{indent}📞 CALL: {func_name}({args_str}) at {location} [TID:{thread_id}]{Style.RESET_ALL}"
+                    f"{self.colors['call']}{indent}📞 CALL: {func_name}({args_str}) at {location} "
+                    f"[FrameID:{frame_id}] [TID:{thread_id}] [EID:{event_id}]{Style.RESET_ALL}"
                 )
 
         # 如果调用栈不为空，将此调用作为子事件添加到父记录中。
@@ -264,7 +347,7 @@ class CallAnalyzer:
         duration = (record["end_time"] - record["start_time"]) * 1000 if record["end_time"] > 0 else 0
         args_str = ", ".join(f"{k}={v}" for k, v in record["args"].items())
         output = [
-            f"{prefix}📞 Call: {record['func_name']}({args_str}) -> File: {record['filename']}:{record['original_lineno']}"
+            f"{prefix}📞 Call: {record['func_name']}({args_str}) -> File: {record['filename']}:{record['original_lineno']} [FrameID:{record['frame_id']}]"
         ]
 
         for event in record.get("events", []):

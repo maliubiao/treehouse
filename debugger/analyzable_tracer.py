@@ -27,12 +27,19 @@ class AnalyzableTraceLogic(TraceLogic):
     此版本通过重写 _add_to_buffer 方法，将所有最终的日志事件分发给分析器，
     确保分析器与日志系统看到完全一致的事件流。
     此版本使用类变量来聚合所有跟踪会话的导入信息。
+    新增功能：为每个事件分配唯一ID，并在 verbose 模式下将原始事件记录到文件。
     """
 
-    # --- 类级别的共享状态，用于聚合所有跟踪实例的导入信息 ---
+    # --- 类级别的共享状态 ---
     _resolved_imports: Dict[str, Any] = {}
     _resolved_files: set = set()
     _imports_lock: threading.Lock = threading.Lock()
+
+    # 用于事件溯源和调试的类级别状态
+    _event_counter: int = 0
+    _event_log_file = None
+    _event_log_path = Path(_LOG_DIR) / "raw_trace_events.log"
+    _event_lock: threading.Lock = threading.Lock()
     # ---
 
     def __init__(
@@ -53,25 +60,27 @@ class AnalyzableTraceLogic(TraceLogic):
         self.analyzer = analyzer
         self._thread_local = threading.local()
 
-        # 路径应由调用者（装饰器）传入，确保单一来源。
         if isinstance(import_map_file, str):
             self.import_map_file = Path(import_map_file)
         elif isinstance(import_map_file, Path):
             self.import_map_file = import_map_file
         else:
-            # 提供一个合理的默认值，以防直接使用此模块。
             self.import_map_file = Path(_LOG_DIR) / "import_map.json"
+
+        # 根据分析器的 verbose 设置，决定是否启用原始事件日志记录
+        self.log_raw_events = self.analyzer.verbose
+        if self.log_raw_events:
+            self._ensure_event_log_open()
 
     def handle_call(self, frame):
         """
         在处理函数调用前，先解析该文件中的导入依赖。
         """
-        # 递归调用保护，防止在解析导入时触发新的跟踪事件
         if getattr(self._thread_local, "is_resolving", False):
             return
 
         filename = frame.f_code.co_filename
-        # 只有当文件名是真实文件路径（非<...>包围）时才解析
+
         if not (filename.startswith("<") and filename.endswith(">")):
             with AnalyzableTraceLogic._imports_lock:
                 is_resolved = filename in AnalyzableTraceLogic._resolved_files
@@ -87,7 +96,7 @@ class AnalyzableTraceLogic(TraceLogic):
                 except Exception as e:
                     logging.error(f"Failed to resolve imports for {filename}: {e}\n{traceback.format_exc()}")
                     with AnalyzableTraceLogic._imports_lock:
-                        AnalyzableTraceLogic._resolved_files.add(filename)  # 即使失败也标记，避免重试
+                        AnalyzableTraceLogic._resolved_files.add(filename)
                 finally:
                     setattr(self._thread_local, "is_resolving", False)
 
@@ -95,11 +104,33 @@ class AnalyzableTraceLogic(TraceLogic):
 
     def _add_to_buffer(self, log_data: Any, color_type: str):
         """
-        重写此方法以实现对分析器的事件分发。
+        重写此方法以实现对分析器的事件分发和事件溯源。
 
-        在将日志数据添加到原始的输出缓冲区之前，先将其传递给 CallAnalyzer 进行处理。
-        这是连接跟踪器和分析器的核心枢纽。
+        在将日志数据添加到原始的输出缓冲区之前，它会：
+        1. 为事件分配一个全局唯一的、原子递增的ID。
+        2. 将此ID注入到事件数据中，以便下游消费者（如CallAnalyzer）使用。
+        3. 如果启用了原始事件日志，将带ID的事件写入 `raw_trace_events.log` 文件。
+        4. 将事件传递给 CallAnalyzer 进行处理。
         """
+        with AnalyzableTraceLogic._event_lock:
+            AnalyzableTraceLogic._event_counter += 1
+            new_id = AnalyzableTraceLogic._event_counter
+
+            # 始终注入事件ID，以确保分析器可以访问它
+            if isinstance(log_data, dict) and isinstance(log_data.get("data"), dict):
+                log_data["data"]["event_id"] = new_id
+
+            # 如果启用了详细模式，则将原始事件写入日志文件
+            if self.log_raw_events and AnalyzableTraceLogic._event_log_file:
+                try:
+                    log_line = json.dumps(log_data, default=lambda o: f"<unserializable: {type(o).__name__}>")
+                    AnalyzableTraceLogic._event_log_file.write(f"[EID: {new_id}] {log_line}\n")
+                    # 立即刷新以确保在崩溃时也能看到日志
+                    AnalyzableTraceLogic._event_log_file.flush()
+                except Exception as e:
+                    # 确保日志记录失败不会中断跟踪
+                    AnalyzableTraceLogic._event_log_file.write(f"[EID: {new_id}] LOGGING_ERROR: {e}\n")
+
         try:
             event_map = {
                 TraceTypes.COLOR_CALL: "call",
@@ -109,27 +140,46 @@ class AnalyzableTraceLogic(TraceLogic):
                 TraceTypes.COLOR_ERROR: "error",
             }
             event_type = event_map.get(color_type, color_type)
-            # CallAnalyzer.process_event 将自行从 log_data 中提取 thread_id
             self.analyzer.process_event(log_data, event_type)
         except Exception as e:
-            # 确保分析器的任何错误都不会中断正常的日志记录
             error_msg = f"CallAnalyzer process_event failed: {e}\n{traceback.format_exc()}"
             logging.error(error_msg)
-            # 将分析器的错误也记录下来
             super()._add_to_buffer(
                 {"template": "⚠ ANALYZER ERROR: {error}", "data": {"error": error_msg}}, TraceTypes.ERROR
             )
 
-        # 调用父类方法，保持原有的日志输出功能（如HTML报告）
         super()._add_to_buffer(log_data, color_type)
 
     def stop(self):
         """
         停止跟踪时，确保分析器完成处理。
-        导入依赖映射的保存已移至类方法，由atexit处理程序调用。
+        导入映射和原始事件日志的保存/关闭由atexit处理程序调用。
         """
         self.analyzer.finalize()
         super().stop()
+
+    @classmethod
+    def _ensure_event_log_open(cls):
+        """确保原始事件日志文件只被打开一次。"""
+        with cls._event_lock:
+            if cls._event_log_file is None:
+                try:
+                    cls._event_log_path.parent.mkdir(parents=True, exist_ok=True)
+                    # 以写模式打开，清空上次运行的日志
+                    cls._event_log_file = open(cls._event_log_path, "w", encoding="utf-8")
+                    print(
+                        f"{color_wrap(f'📝 Raw event logging enabled. View details at: {cls._event_log_path}', TraceTypes.COLOR_TRACE)}"
+                    )
+                except IOError as e:
+                    print(f"{color_wrap(f'❌ Could not open raw event log file: {e}', TraceTypes.COLOR_ERROR)}")
+
+    @classmethod
+    def close_event_log(cls):
+        """在程序退出时关闭原始事件日志文件。"""
+        with cls._event_lock:
+            if cls._event_log_file:
+                cls._event_log_file.close()
+                cls._event_log_file = None
 
     @classmethod
     def save_import_map(cls, import_map_file: Union[str, Path]):
