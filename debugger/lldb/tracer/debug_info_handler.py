@@ -79,32 +79,33 @@ class DebugInfoHandler:
                     # Try to display in different formats based on available methods
                     if reg_val.GetData().GetFloat:
                         return [f"${normalized_reg}={reg_val.GetData().GetFloat():.6g}"]
-                    # Fallback to hex representation
-                    return [f"${normalized_reg}={reg_val.value}"]
+                    # Fallback to general value string (e.g., hex representation for vectors)
+                    return [f"${normalized_reg}={reg_val.GetValue()}"]
                 except Exception:
-                    return [f"${normalized_reg}={reg_val.value}"]
+                    return [f"${normalized_reg}={reg_val.GetValue()}"]
             # For double precision floating point
             elif normalized_reg.startswith("d"):
                 try:
                     as_float = float(reg_val.GetValue())
                     return [f"${normalized_reg}={as_float:.6g}"]
                 except (ValueError, TypeError):
-                    return [f"${normalized_reg}={reg_val.value}"]
+                    return [f"${normalized_reg}={reg_val.GetValue()}"]
             # For single precision floating point
             elif normalized_reg.startswith("s"):
                 try:
                     as_float = float(reg_val.GetValue())
                     return [f"${normalized_reg}={as_float:.6g}"]
                 except (ValueError, TypeError):
-                    return [f"${normalized_reg}={reg_val.value}"]
+                    return [f"${normalized_reg}={reg_val.GetValue()}"]
             else:
-                return [f"${normalized_reg}={reg_val.value}"]
+                return [f"${normalized_reg}={reg_val.GetValue()}"]
         else:
             # For integer registers
             try:
-                return [f"${normalized_reg}={hex(int(reg_val.value, 16))}"]
+                # Attempt to convert to int and then hex, falling back to GetValue()
+                return [f"${normalized_reg}={hex(int(reg_val.GetValue(), 16))}"]
             except (ValueError, TypeError):
-                return [f"${normalized_reg}={reg_val.value}"]
+                return [f"${normalized_reg}={reg_val.GetValue()}"]
 
     def _normalize_register_name(self, reg_name: str) -> str:
         """Normalize register names for consistency"""

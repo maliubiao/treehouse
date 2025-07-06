@@ -323,7 +323,7 @@ class UnitTestGenerator:
             import_context,
         ) = setup_data
 
-        tasks = self._prepare_generation_tasks(
+        tasks = self._prepare_function_generation_tasks(
             calls_for_file,
             target_file_path,
             file_content,
@@ -557,31 +557,21 @@ class UnitTestGenerator:
             return symbol_results
         return None
 
-    def _prepare_generation_tasks(
+    def _prepare_function_generation_tasks(
         self,
-        all_calls_by_func,
-        target_file_path,
-        file_content,
-        symbol_context,
-        test_class_name,
-        module_to_test,
-        output_path,
-        existing_code,
-        import_context,
+        all_calls_by_func: Dict[str, List[Dict]],
+        target_file_path: Path,
+        file_content: Optional[str],
+        symbol_context: Optional[Dict[str, Dict]],
+        test_class_name: str,
+        module_to_test: str,
+        output_path: Path,
+        existing_code: Optional[str],
+        import_context: Optional[Dict[str, Dict]],
     ) -> List[Dict]:
+        """[NEW] Prepares one generation task per function, bundling all its call records."""
         tasks = []
         is_incremental = existing_code is not None
-        flat_call_list = []
-        for target_func, call_records in all_calls_by_func.items():
-            for i, call_record in enumerate(call_records):
-                flat_call_list.append(
-                    {
-                        "target_func": target_func,
-                        "call_record": call_record,
-                        "call_index": i + 1,
-                        "total_calls_for_func": len(call_records),
-                    }
-                )
 
         # Get max context sizes once to pass to workers
         try:
@@ -596,14 +586,19 @@ class UnitTestGenerator:
         except Exception:
             checker_max_context = None
 
-        for i, call_info in enumerate(flat_call_list):
+        func_items = list(all_calls_by_func.items())
+        total_tasks = len(func_items)
+
+        for i, (target_func, call_records) in enumerate(func_items):
+            if not call_records:
+                continue
+
             tasks.append(
                 {
-                    "case_number": i + 1,
-                    "target_func": call_info["target_func"],
-                    "call_record": call_info["call_record"],
-                    "total_calls": len(flat_call_list),
-                    "call_index": i + 1,
+                    "task_number": i + 1,
+                    "total_tasks": total_tasks,
+                    "target_func": target_func,
+                    "call_records": call_records,
                     "file_path": str(target_file_path),
                     "file_content": file_content,
                     "symbol_context": symbol_context,
@@ -633,7 +628,7 @@ class UnitTestGenerator:
 
         use_parallel = effective_workers > 1
         executor = f"parallel ({effective_workers} workers)" if use_parallel else "serial"
-        print(Fore.MAGENTA + f"\nStarting {executor} test case generation for {len(tasks)} tasks...")
+        print(Fore.MAGENTA + f"\nStarting {executor} test generation for {len(tasks)} function(s)...")
         if use_parallel:
             with multiprocessing.Pool(processes=effective_workers) as pool:
                 results = pool.map(generation_worker, tasks)

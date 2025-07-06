@@ -183,7 +183,7 @@ def build_generation_guidance(
 
 def build_prompt_for_generation(
     target_func: str,
-    call_record: Dict,
+    call_records: List[Dict],
     test_class_name: str,
     module_to_test: str,
     project_root_path: Path,
@@ -196,11 +196,11 @@ def build_prompt_for_generation(
     import_context: Optional[Dict[str, Dict]] = None,
     max_trace_chars: Optional[int] = None,
 ) -> str:
-    """Dispatcher for building the generation prompt based on context and mode (full/incremental)."""
+    """[REFACTORED] Dispatcher for building the generation prompt. Now handles a list of call records."""
     if is_incremental:
         return _build_incremental_generation_prompt(
             target_func=target_func,
-            call_record=call_record,
+            call_records=call_records,
             test_class_name=test_class_name,
             module_to_test=module_to_test,
             symbol_context=symbol_context,
@@ -213,7 +213,7 @@ def build_prompt_for_generation(
         return _build_symbol_based_prompt(
             symbol_context=symbol_context,
             target_func=target_func,
-            call_record=call_record,
+            call_records=call_records,
             test_class_name=test_class_name,
             module_to_test=module_to_test,
             project_root_path=project_root_path,
@@ -227,7 +227,7 @@ def build_prompt_for_generation(
             file_path=file_path,
             file_content=file_content,
             target_func=target_func,
-            call_record=call_record,
+            call_records=call_records,
             test_class_name=test_class_name,
             module_to_test=module_to_test,
             project_root_path=project_root_path,
@@ -239,27 +239,129 @@ def build_prompt_for_generation(
     raise ValueError("Either symbol_context or file_content must be provided to build a prompt.")
 
 
-def _get_intent_driven_testing_guidance() -> str:
-    """[NEW] Generates the prompt section explaining how to write intent-driven tests."""
+def _get_test_writing_philosophy_guidance() -> str:
+    """[NEW] Generates the prompt section explaining how to write focused, high-value tests."""
     return dedent("""
-        **A. CORE MISSION: FROM TRACE TO INTENT-DRIVEN TEST**
+        **CORE MISSION: WRITE FOCUSED, INTENT-DRIVEN, HIGH-VALUE TESTS**
+
+        Your goal is to be a discerning software engineer, not a mindless test generator. The quality of your tests is more important than the quantity.
+
+        ***
+
+        **1. FROM TRACE TO INTENT (The "Why")**
         The provided execution trace is your starting point, not your final goal. Your mission is to write a test that validates the *intended behavior* of the function, even if it means exposing a bug in the current code.
 
-        **Your Critical Thought Process:**
-        1.  **Infer Intent:** From the source code (name, docstring, logic), determine what the function is *supposed* to do. (e.g., a function `add_positive_numbers` should reject negative inputs).
-        2.  **Critique the Trace:** Compare this intent with the execution trace. Does the trace show the function behaving as intended?
+        - **Infer Intent:** From the source code (name, docstring, logic), determine what the function is *supposed* to do. (e.g., a function `add_positive_numbers` should reject negative inputs).
+        - **Critique the Trace:** Compare this intent with the execution trace. Does the trace show the function behaving as intended?
             - **If the trace reveals a bug** (e.g., `add_positive_numbers(5, -2)` returned `3` instead of raising an error), your test MUST assert the **correct, intended behavior**. This test is designed to **fail** when run against the buggy code, thus highlighting the flaw. This is a high-value test.
             - **If the trace reflects correct behavior**, your test should confirm that outcome.
-        3.  **Special Case - `KeyboardInterrupt`**: If the trace ends with a `KeyboardInterrupt` exception, **DO NOT** write a test that asserts this exception. This is a user-initiated interruption (e.g., Ctrl+C), not a programmatic error or an intended outcome. Analyze the trace *before* the interruption and write a test that validates the logical behavior of the function.
-        4.  **Action:** Do not write tests that simply replicate a buggy execution. Write tests that enforce the code's logical contract.
+        - **Special Case - `KeyboardInterrupt`**: If the trace ends with a `KeyboardInterrupt`, DO NOT test for it. This is a user interruption, not a programmatic error. Analyze the trace *before* the interruption and test the function's logical behavior.
+
+        ***
+
+        **2. FOCUSED, NOT FRAGMENTED, TESTING (The "What")**
+        A single, well-written test is better than many trivial ones. Focus on the core logic and avoid "over-testing".
+
+        - **WHAT TO TEST:**
+          - **Primary Logic ("Happy Path"):** Does the function work correctly with typical inputs?
+          - **Key Edge Cases:** Test for conditions directly relevant to the function's logic (e.g., `None` inputs, empty lists, zero values, state transitions).
+          - **Expected Error Conditions:** If the function is supposed to raise specific errors, test for them using `assertRaises`.
+
+        - **WHAT TO AVOID TESTING IN A *UNIT* TEST:**
+          - **Over-splitting Logic:** Do not create separate tests for every minor variation or `if` branch if they can be tested more cohesively. A single test can and should follow a logical path through the code.
+          - **System State:** Avoid testing for conditions that are the responsibility of the larger application, not the unit. For example, "what if the database connection object is `None`?" is often an integration concern, not a unit test concern, unless the function's explicit purpose is to handle that state. Assume the function's pre-conditions are met.
+          - **Library Behavior:** Do not test that a third-party library works. Mock it, and test that your code *uses* it correctly.
+
+        ***
+
+        **3. EXAMPLE: FOCUSED VS. FRAGMENTED TESTING**
+
+        Consider this simple function:
+        ```python
+        # In tracer.core
+        def continue_to_main(self) -> None:
+            # Wait for the main entry point breakpoint to be hit
+            while not self.entry_point_breakpoint_event.is_set():
+                if self.process:
+                    self.process.Continue()
+                time.sleep(0.1)
+        ```
+
+        **BAD - FRAGMENTED AND LOW-VALUE:**
+        This approach creates too many tests for one simple loop, and tests an irrelevant edge case (`process is None`).
+
+        ```python
+        # BAD EXAMPLE - DO NOT DO THIS
+        def test_continue_to_main_event_already_set(self):
+            # Trivial: tests the loop is never entered.
+            tracer.entry_point_breakpoint_event.is_set.return_value = True
+            tracer.continue_to_main()
+            tracer.process.Continue.assert_not_called()
+
+        def test_continue_to_main_wait_and_continue(self):
+            # Tests the loop runs.
+            tracer.entry_point_breakpoint_event.is_set.side_effect = [False, True]
+            tracer.continue_to_main()
+            tracer.process.Continue.assert_called_once()
+
+        def test_continue_to_main_no_process(self):
+            # Low-value: This state (no process) should likely be handled
+            # at a higher level and is not the core focus of this function.
+            tracer.process = None
+            tracer.entry_point_breakpoint_event.is_set.side_effect = [False, True]
+            tracer.continue_to_main()
+            # ... asserts sleep was called ...
+        ```
+
+        **GOOD - FOCUSED AND HIGH-VALUE:**
+        This single test verifies the core responsibility of the function: it waits for an event, continues the process during the wait, and then exits.
+
+        ```python
+        # GOOD EXAMPLE - AIM FOR THIS
+        def test_continue_to_main_waits_for_event_and_continues_process(self):
+            \"\"\"
+            Verify continue_to_main continues the process until the event is set.
+            \"\"\"
+            tracer = Tracer.__new__(Tracer)
+            tracer.process = MagicMock()
+            tracer.entry_point_breakpoint_event = MagicMock()
+            # Simulate the event being unset for 2 checks, then set on the 3rd.
+            tracer.entry_point_breakpoint_event.is_set.side_effect = [False, False, True]
+
+            with patch('tracer.core.time.sleep') as mock_sleep:
+                tracer.continue_to_main()
+
+            # Verify the core logic: the process was continued twice before the loop exited.
+            self.assertEqual(tracer.process.Continue.call_count, 2)
+            # Verify that it doesn't wait unnecessarily after the event is set.
+            self.assertEqual(mock_sleep.call_count, 2)
+        ```
     """).strip()
+
+
+def _format_multiple_traces(call_records: List[Dict], max_total_chars: Optional[int]) -> str:
+    """Formats a list of call records into a single string, respecting a total character budget."""
+    num_records = len(call_records)
+    if num_records == 0:
+        return "No traces provided."
+
+    # Distribute character budget, giving a bit more to earlier traces if budget is tight
+    per_trace_budget = int(max_total_chars / num_records) if max_total_chars else None
+
+    trace_texts = []
+    for i, record in enumerate(call_records):
+        trace_header = f"--- TRACE {i + 1} of {num_records} ---"
+        formatted_trace = format_call_record_as_text(record, max_chars=per_trace_budget)
+        trace_texts.append(f"{trace_header}\n{formatted_trace}")
+
+    return "\n\n".join(trace_texts)
 
 
 def _build_file_based_prompt(
     file_path: str,
     file_content: str,
     target_func: str,
-    call_record: Dict,
+    call_records: List[Dict],
     test_class_name: str,
     module_to_test: str,
     project_root_path: Path,
@@ -268,23 +370,31 @@ def _build_file_based_prompt(
     import_context: Optional[Dict[str, Dict]] = None,
     max_trace_chars: Optional[int] = None,
 ) -> str:
-    """
-    [REFACTORED] Constructs the detailed prompt for the LLM using full file content.
-    Now uses the centralized `build_generation_guidance` and includes intent-driven testing.
-    """
+    """[REFACTORED] Constructs prompt for a new file, using multiple traces to generate multiple tests."""
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
-    call_record_text = format_call_record_as_text(call_record, max_chars=max_trace_chars)
+    call_records_text = _format_multiple_traces(call_records, max_trace_chars)  # FIXED: removed keyword arg
     action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
     generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code, import_context)
-    intent_guidance = _get_intent_driven_testing_guidance()
+    philosophy_guidance = _get_test_writing_philosophy_guidance()
+
+    # Create a new, more specific task description for multiple traces
+    num_traces = len(call_records)
+    multi_trace_task = dedent(f"""
+        Your task is to create a new `unittest.TestCase` class named `{test_class_name}` for the function `{target_func}`.
+        You have been provided with {num_traces} unique execution traces. You MUST generate one distinct `def test_...` method for EACH trace.
+        Each test method must have a descriptive name reflecting the scenario in its corresponding trace.
+    """).strip()
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
-        {intent_guidance}
+        
+        **A. TEST GENERATION PHILOSOPHY**
+        {philosophy_guidance}
 
-        Your task is to {action_description} for the function `{target_func}`.
+        **B. YOUR TASK**
+        {multi_trace_task}
 
-        **B. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+        **C. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
         You MUST NOT copy the source code of the function into the test file. Instead, you MUST import it.
         - **Project Root Directory:** `{project_root_path}`
         - **Module to Test:** `{module_to_test}`
@@ -293,7 +403,7 @@ def _build_file_based_prompt(
           ```python
           {sys_path_setup_snippet}
           ```
-        **C. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
+        **D. CONTEXT: SOURCE CODE (FOR REFERENCE ONLY)**
         [File Path]: {file_path}
         [File Content]:
         [start]
@@ -302,14 +412,14 @@ def _build_file_based_prompt(
     """).strip()
 
     prompt_part2 = dedent(f"""
-        **D. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
-        This is a compact text trace of the function's execution. It is the **blueprint** for the test case you must generate.
-        [Runtime Execution Trace]
+        **E. CONTEXT: MULTIPLE RUNTIME EXECUTION TRACES for `{target_func}`**
+        These are {num_traces} distinct blueprints for the test cases you must generate.
+        [Runtime Execution Traces]
         [start]
-        {call_record_text}
+        {call_records_text}
         [end]
 
-        **E. TEST GENERATION REQUIREMENTS**
+        **F. TEST GENERATION REQUIREMENTS**
         {generation_guidance}
         {existing_code_section}
 
@@ -324,7 +434,7 @@ def _build_file_based_prompt(
 def _build_symbol_based_prompt(
     symbol_context: Dict[str, Dict],
     target_func: str,
-    call_record: Dict,
+    call_records: List[Dict],
     test_class_name: str,
     module_to_test: str,
     project_root_path: Path,
@@ -333,34 +443,42 @@ def _build_symbol_based_prompt(
     import_context: Optional[Dict[str, Dict]] = None,
     max_trace_chars: Optional[int] = None,
 ) -> str:
-    """
-    [REFACTORED] Constructs the detailed prompt for the LLM using precise symbol context.
-    Now uses the centralized `build_generation_guidance` and includes intent-driven testing.
-    """
+    """[REFACTORED] Constructs prompt with symbol context, using multiple traces to generate multiple tests."""
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
-    call_record_text = format_call_record_as_text(call_record, max_chars=max_trace_chars)
+    call_records_text = _format_multiple_traces(call_records, max_trace_chars)  # FIXED: removed keyword arg
     context_code_str = ""
     for name, data in symbol_context.items():
         context_code_str += f"# Symbol: {name}\n# File: {data.get('file_path', '?')}:{data.get('start_line', '?')}\n{data.get('code', '# Code not found')}\n\n"
 
-    action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
+    _, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
     generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code, import_context)
-    intent_guidance = _get_intent_driven_testing_guidance()
+    philosophy_guidance = _get_test_writing_philosophy_guidance()
+
+    # Create a new, more specific task description for multiple traces
+    num_traces = len(call_records)
+    multi_trace_task = dedent(f"""
+        Your task is to create a new `unittest.TestCase` class named `{test_class_name}` for the function `{target_func}`.
+        You have been provided with {num_traces} unique execution traces. You MUST generate one distinct `def test_...` method for EACH trace.
+        Each test method must have a descriptive name reflecting the scenario in its corresponding trace.
+    """).strip()
 
     prompt_part1 = dedent(f"""
         You are an expert Python developer specializing in writing clean, modular, and robust unit tests.
-        {intent_guidance}
 
-        Your task is to {action_description} for the function `{target_func}`.
+        **A. TEST GENERATION PHILOSOPHY**
+        {philosophy_guidance}
+
+        **B. YOUR TASK**
+        {multi_trace_task}
         
-        **B. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
+        **C. CRITICAL INSTRUCTION: HOW TO IMPORT THE CODE TO TEST**
         - **Project Root Directory:** `{project_root_path}`
         - **Module to Test:** `{module_to_test}`
         - **`sys.path` Setup:** You MUST include this exact code snippet at the top of the test file.
           ```python
           {sys_path_setup_snippet}
           ```
-        **C. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
+        **D. CONTEXT: RELEVANT SOURCE CODE (PRECISION MODE)**
         [Relevant Code Snippets]
         [start]
         {context_code_str.strip()}
@@ -368,14 +486,14 @@ def _build_symbol_based_prompt(
     """).strip()
 
     prompt_part2 = dedent(f"""
-        **D. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
-        This is a compact text trace of the function's execution. It is the **blueprint** for the test case.
-        [Runtime Execution Trace]
+        **E. CONTEXT: MULTIPLE RUNTIME EXECUTION TRACES for `{target_func}`**
+        These are {num_traces} distinct blueprints for the test cases you must generate.
+        [Runtime Execution Traces]
         [start]
-        {call_record_text}
+        {call_records_text}
         [end]
 
-        **E. TEST GENERATION REQUIREMENTS**
+        **F. TEST GENERATION REQUIREMENTS**
         {generation_guidance}
         {existing_code_section}
 
@@ -389,7 +507,7 @@ def _build_symbol_based_prompt(
 
 def _build_incremental_generation_prompt(
     target_func: str,
-    call_record: Dict,
+    call_records: List[Dict],
     test_class_name: str,
     module_to_test: str,
     symbol_context: Optional[Dict[str, Dict]] = None,
@@ -398,9 +516,10 @@ def _build_incremental_generation_prompt(
     import_context: Optional[Dict[str, Dict]] = None,
     max_trace_chars: Optional[int] = None,
 ) -> str:
-    """[NEW & REFACTORED] Builds a prompt to generate only a single new test method, with intent-driven logic."""
-    call_record_text = format_call_record_as_text(call_record, max_chars=max_trace_chars)
-    intent_guidance = _get_intent_driven_testing_guidance()
+    """[REFACTORED] Builds a prompt to generate multiple new test methods for an existing test suite."""
+    call_records_text = _format_multiple_traces(call_records, max_trace_chars)  # FIXED: removed keyword arg
+    philosophy_guidance = _get_test_writing_philosophy_guidance()
+    num_traces = len(call_records)
 
     # Context can come from symbols (preferred) or the full file
     if symbol_context:
@@ -432,52 +551,57 @@ def _build_incremental_generation_prompt(
     )
 
     return dedent(f"""
-        You are an expert Python developer writing a new test case for an existing test suite.
-        {intent_guidance}
+        You are an expert Python developer writing new test cases for an existing test suite.
+        
+        **A. TEST GENERATION PHILOSOPHY**
+        {philosophy_guidance}
 
-        Your task is to generate a SINGLE new test method for the function `{target_func}` based on your analysis.
+        **B. YOUR TASK: GENERATE NEW TEST METHODS**
+        - You have been provided with {num_traces} unique execution traces for the function `{target_func}`.
+        - You must generate one new, distinct `def test_...` method for EACH trace.
+        - The test file and class (`{test_class_name}`) already exist.
+        - You must **ONLY** generate the Python code for the new test method(s).
+        - **DO NOT** generate the class definition (`class ...:`), imports, `sys.path` setup, or `if __name__ == '__main__':`.
+        - Each method MUST be correctly indented to be placed inside a class.
+        - Each method MUST have a clear docstring explaining the test case.
+        - **MOCKING MUST BE SCOPED:** Use `with` blocks for mocks to ensure they are cleaned up after use.
 
-        **B. CONTEXT: HOW THE FUNCTION IS IMPORTED**
+        **C. CONTEXT: HOW THE FUNCTION IS IMPORTED**
         - The function `{target_func}` is imported from the module `{module_to_test}`.
         - You will need `unittest.mock.patch` to mock dependencies.
 
         {context_section}
 
-        **D. CONTEXT: RUNTIME EXECUTION TRACE for `{target_func}`**
-        This trace is the **blueprint** for the new test case.
-        [Runtime Execution Trace]
+        **D. CONTEXT: MULTIPLE RUNTIME EXECUTION TRACES for `{target_func}`**
+        These {num_traces} traces are the blueprints for the new test cases.
+        [Runtime Execution Traces]
         [start]
-        {call_record_text}
+        {call_records_text}
         [end]
         {import_context_section}
 
         **F. INTELLIGENT MOCKING STRATEGY**
         {_get_mocking_guidance(module_to_test)}
-
-        **G. YOUR TASK: GENERATE *ONLY* THE NEW TEST METHOD**
-        - The test file and class (`{test_class_name}`) already exist.
-        - You must **ONLY** generate the Python code for the new test method.
-        - **DO NOT** generate the class definition (`class ...:`).
-        - **DO NOT** generate imports or `sys.path` setup.
-        - **DO NOT** generate `if __name__ == '__main__':`.
-        - Your output must be a single, complete `def test_...` method, correctly indented to be placed inside a class.
-        - The method MUST have a clear docstring explaining the test case, especially if it's designed to expose a bug.
-        - **MOCKING MUST BE SCOPED:** Use `with` blocks for mocks to ensure they are cleaned up after use.
-
-        **Example of correct output:**
+        
+        **Example of correct output for multiple traces:**
         [start]
-    def test_func_to_test_with_specific_input(self):
-        \"\"\"Test func_to_test with a=5 and b=3, expecting return value 16.\"\"\"
-        with patch('module.dependency') as mock_dep:
-            mock_dep.return_value = 10
-            result = func_to_test(5, 3)
-            self.assertEqual(result, 16)
+        def test_func_with_specific_input(self):
+            \"\"\"Test func_to_test with a=5 and b=3, expecting return value 16.\"\"\"
+            with patch('module.dependency') as mock_dep:
+                mock_dep.return_value = 10
+                result = func_to_test(5, 3)
+                self.assertEqual(result, 16)
+
+        def test_func_handles_error_case(self):
+            \"\"\"Verify that the function raises ValueError with negative input.\"\"\"
+            with self.assertRaises(ValueError):
+                func_to_test(-1, 3)
         [end]
 
         **IMPORTANT**: 
-        1. Your entire response must be only the Python method
-        2. Enclose the method within a `[start]` and `[end]` block
-        3. **DO NOT** use markdown code syntax (triple backticks) to wrap the method
+        1. Your entire response must be only the Python methods.
+        2. Enclose the methods within a single `[start]` and `[end]` block.
+        3. **DO NOT** use markdown code syntax (triple backticks) to wrap the code.
     """).strip()
 
 

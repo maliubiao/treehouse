@@ -1446,11 +1446,12 @@ class TraceLogic:
         """文件输出处理"""
         if self._output._log_file:
             msg = self._format_log_message(log_data)
-            position = self._output._log_file.tell()
             if log_type == TraceTypes.CALL:
+                position = self._output._log_file.tell()
                 self.write_log_index(log_type, log_data, position)
             self._output._log_file.write(msg + "\n")
             if log_type in (TraceTypes.RETURN, TraceTypes.EXCEPTION):
+                position = self._output._log_file.tell()
                 self.write_log_index(log_type, log_data, position)
 
     def _html_output(self, log_data, color_type):

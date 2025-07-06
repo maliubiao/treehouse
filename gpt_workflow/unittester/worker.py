@@ -7,7 +7,7 @@ from typing import Dict, Optional
 
 from colorama import Fore, Style
 
-from .prompts import build_duplicate_check_prompt, build_prompt_for_generation
+from .prompts import build_prompt_for_generation
 
 
 def _check_and_log_oversized_prompt(
@@ -60,16 +60,15 @@ def _check_and_log_oversized_prompt(
 
 def generation_worker(task: Dict) -> Optional[str]:
     """
-    Static worker for parallel test generation. It's self-contained and handles
-    the logic for full vs. incremental generation.
+    [REFACTORED] Static worker for parallel test generation. It's self-contained
+    and handles the logic for generating a batch of tests for a single function
+    based on multiple call records.
     """
     # Unpack task dictionary
     target_func = task["target_func"]
-    call_record = task["call_record"]
-    case_num = task["case_number"]
-    call_idx = task["call_index"]
-    total_calls = task["total_calls"]
-    existing_code = task.get("existing_code")
+    call_records = task["call_records"]  # This is now a list
+    task_num = task["task_number"]
+    total_tasks = task["total_tasks"]
     is_incremental = task.get("is_incremental", False)
     from .generator import UnitTestGenerator
 
@@ -84,51 +83,26 @@ def generation_worker(task: Dict) -> Optional[str]:
     )
 
     log_prefix = f"[Worker-{os.getpid()}]"
-    log_msg = f"{log_prefix} Processing Test Case {case_num}/{total_calls} for '{target_func}'"
+    log_msg = (
+        f"{log_prefix} Processing Task {task_num}/{total_tasks}: {len(call_records)} test cases for '{target_func}'"
+    )
     trace_dir_base = str(task["trace_dir"]) if task["trace_dir"] else "llm_traces"
 
     if is_incremental:
         print(Fore.MAGENTA + f"{log_msg} [INCREMENTAL MODE]" + Style.RESET_ALL)
-
-        # 1. Check for duplicates before generating
-        # Calculate budget for trace in duplicate check prompt
-        max_chars_for_dup_check = None
-        checker_max_context = task.get("checker_max_context_size")
-        if checker_max_context and existing_code:
-            # Prompt template is small, ~500 chars. Existing code is the main variable.
-            # Use a conservative 2.5 chars/token ratio and a safety buffer.
-            max_chars_for_dup_check = int((checker_max_context * 2.5) - len(existing_code) - 1000)
-
-        duplicate_prompt = build_duplicate_check_prompt(
-            existing_code, call_record, max_trace_chars=max_chars_for_dup_check
-        )
-
-        # Check prompt size before sending to LLM
-        _check_and_log_oversized_prompt(
-            prompt=duplicate_prompt,
-            max_context_size=task.get("checker_max_context_size"),
-            model_name=task["checker_model_name"],
-            target_func_for_log=f"{target_func}-duplicate_check",
-            trace_dir_base=trace_dir_base,
-            log_prefix=log_prefix,
-        )
-
-        print(Fore.CYAN + f"{log_prefix} Checking for duplicate test case...")
-        response = worker_generator.model_switch.query(task["checker_model_name"], duplicate_prompt)
-
-        # Normalize response to be safe
-        if "YES" in response.upper():
-            print(Fore.YELLOW + f"{log_prefix} Skipping duplicate test case for '{target_func}'.")
-            return None
-        print(Fore.GREEN + f"{log_prefix} No duplicate found. Proceeding with generation.")
-
     else:
         print(Fore.CYAN + log_msg + Style.RESET_ALL)
 
-    # 2. Build the appropriate prompt (full or incremental)
+    # NOTE: Per-trace duplicate checking logic has been removed.
+    # The new approach generates all unique test paths for a function at once,
+    # and the prompt instructs the LLM to create distinct tests for each path.
+    # The initial `_filter_duplicate_code_paths` in the main generator
+    # is now the primary de-duplication mechanism.
+
+    # 1. Build the appropriate prompt (for a batch of tests)
     prompt_args = {
         "target_func": target_func,
-        "call_record": call_record,
+        "call_records": call_records,  # Pass the list of records
         "is_incremental": is_incremental,
     }
     # Add all relevant context from the task dictionary
@@ -146,7 +120,7 @@ def generation_worker(task: Dict) -> Optional[str]:
         if key in task:
             prompt_args[key] = task[key]
 
-    # Calculate budget for trace in generation prompt
+    # 2. Calculate budget for traces in generation prompt
     max_chars_for_gen_trace = None
     generator_max_context = task.get("generator_max_context_size")
     if generator_max_context:
@@ -164,7 +138,7 @@ def generation_worker(task: Dict) -> Optional[str]:
 
     prompt = build_prompt_for_generation(**prompt_args)
 
-    # Check prompt size before sending to LLM
+    # 3. Check prompt size before sending to LLM
     _check_and_log_oversized_prompt(
         prompt=prompt,
         max_context_size=task.get("generator_max_context_size"),
@@ -174,7 +148,7 @@ def generation_worker(task: Dict) -> Optional[str]:
         log_prefix=log_prefix,
     )
 
-    # 3. Query the LLM and extract code
+    # 4. Query the LLM and extract code
     response_text = worker_generator.model_switch.query(task["generator_model_name"], prompt, stream=False)
     extracted_code = _extract_code_from_response(response_text)
 
