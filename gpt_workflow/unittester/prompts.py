@@ -110,6 +110,10 @@ def build_merge_prompt(
         - **Step 4: Apply and Validate Standards:**
           - Ensure every test method (new and old) has a clear docstring.
           - Re-validate all mocking against the "Generation Standards". All mocks MUST be correctly scoped using `with` blocks or decorators. Remove any invalid or global mocks.
+          - **Validate Test Method Signatures:** This is a critical quality check. A standard `unittest` test method has the signature `def test_my_behavior(self):`. It should only accept extra arguments if it is decorated (e.g., with `@patch`).
+            - **Verify all method signatures:** For every `test_...` method, you MUST ensure that the number of arguments in its signature matches the mock objects passed by its decorators.
+            - **Correct mismatches:** If a method incorrectly accepts an argument (e.g., `mock_db`) without a corresponding `@patch` decorator, you MUST fix the signature by removing the unused argument. A test method without decorators must only have `self` as its parameter.
+            - **Example:** `def test_logic(self, mock_db):` is **INVALID** unless a decorator like `@patch('module.db')` is present. You must fix this.
           - **Adhere to the "STRICT PROHIBITIONS" in the standards.** Do not mock mocks or non-existent objects.
 
         - **Step 5: Preserve and Finalize:**
@@ -564,6 +568,35 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     - **How to Patch:**
       - Patch dependencies where they are *used*, not where they are defined. For a function in `{module_to_test}`, you will likely be patching targets like `patch('{module_to_test}.dependency_name', ...)`.
       - **Avoid excessive `assert_called_with`**. Only verify calls if the *interaction itself* is a critical part of the function's contract. A test that only checks mocks is often a poor test.
+
+    **Special Handling for `logging.Logger`**
+    - A common error is mocking a component that provides a logger, but failing to configure the mock logger object. Code often accesses `logger.name`, which causes `AttributeError: Mock object has no attribute 'name'` if the mock is not prepared.
+    - **Solution:** When you mock a component that provides a logger (e.g., a `LogManager`), you must ensure the mock logger it returns has the necessary attributes.
+      *Example:* If the class under test does `self.logger = self.log_manager.logger`, you must mock `LogManager` to provide a pre-configured logger.
+      ```python
+      # In your test setup, you MUST ensure the mock logger has a .name attribute.
+      import logging
+      from unittest.mock import MagicMock, patch
+
+      # Correct way to set up the mock:
+      # 1. Create a mock for the logger itself and set critical attributes.
+      mock_logger = MagicMock(spec=logging.Logger)
+      mock_logger.name = 'test_logger'
+
+      # 2. Create a mock for the manager that provides the logger.
+      mock_log_manager = MagicMock()
+      mock_log_manager.logger = mock_logger
+
+      # 3. Patch the manager class to return your pre-configured mock instance.
+      with patch('path.to.your_app.LogManager', return_value=mock_log_manager):
+          # Now, when your code under test does this:
+          #   self.log_manager = LogManager()
+          #   self.logger = self.log_manager.logger
+          #   some_library_call(self.logger.name)
+          # The call will succeed because self.logger.name is 'test_logger'.
+          instance = ClassUnderTest()
+          # ... rest of your test
+      ```
 
     **Handling Loops and Long-Running Functions**
     - Functions with `while` or `for` loops can run infinitely during tests if the termination condition isn't correctly mocked. You must prevent this.

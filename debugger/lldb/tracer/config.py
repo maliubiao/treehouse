@@ -113,9 +113,11 @@ class ConfigManager:
         return valid_patterns
 
     def _validate_source_base_dir(self, path: str) -> str:
-        """Ensures the source_base_dir is an absolute path."""
+        """Ensures the source_base_dir is an absolute path, relative to the config file if originally relative."""
         if path and not os.path.isabs(path):
-            abs_path = os.path.abspath(path)
+            # Resolve relative path relative to the config file's directory
+            config_dir = os.path.dirname(self.config_file) if self.config_file else os.getcwd()
+            abs_path = os.path.abspath(os.path.join(config_dir, path))
             self.logger.info("Converted relative source_base_dir '%s' to absolute path '%s'.", path, abs_path)
             return abs_path
         return path
@@ -145,9 +147,10 @@ class ConfigManager:
             # Create a copy to avoid modifying the original config dict in place
             hook = item.copy()
 
-            # Normalize path to be absolute
+            # Normalize path to be absolute relative to config file's directory
             if not os.path.isabs(hook["path"]):
-                abs_path = os.path.abspath(hook["path"])
+                config_dir = os.path.dirname(self.config_file) if self.config_file else os.getcwd()
+                abs_path = os.path.abspath(os.path.join(config_dir, hook["path"]))
                 self.logger.debug("Converted relative hook path '%s' to absolute path '%s'.", hook["path"], abs_path)
                 hook["path"] = abs_path
 

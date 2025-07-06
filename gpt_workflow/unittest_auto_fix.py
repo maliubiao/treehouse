@@ -7,7 +7,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
-from unittest.mock import ANY, _Call  # 添加了 ANY
+from unittest.mock import ANY
 
 from colorama import Fore, Style
 from fixer_prompt import FixerPromptGenerator
@@ -28,8 +28,6 @@ from llm_query import (
     process_patch_response,
     query_symbol_service,
 )
-
-_Call.__repr__ = lambda self: f"<Call id={id(self)}>"  # type: ignore
 
 
 def extract_frame_id_from_log(log_file_path: str, test_id: str) -> Optional[int]:

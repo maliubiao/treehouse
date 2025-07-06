@@ -1,7 +1,9 @@
 from typing import Any, Dict, List, Optional
 
 
-def format_call_record_as_text(call_record: Dict[str, Any], max_chars: Optional[int] = None, max_depth: int = 4) -> str:
+def format_call_record_as_text(
+    call_record: Dict[str, Any], max_chars: Optional[int] = None, max_depth: int = 10
+) -> str:
     """
     Formats a single call record into a human-readable text trace for the LLM.
     This version intelligently compresses repetitive sequences of events (like in loops)

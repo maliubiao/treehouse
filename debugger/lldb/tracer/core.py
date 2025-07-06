@@ -38,15 +38,15 @@ class Tracer:
         self.program_path: Optional[str] = kwargs.get("program_path")
         self.program_args: List[str] = kwargs.get("program_args", [])
         self.attach_pid: Optional[int] = kwargs.get("attach_pid")
-        logfile: Optional[str] = kwargs.get("logfile")
-        config_file: Optional[str] = kwargs.get("config_file")
+        self.logfile: Optional[str] = kwargs.get("logfile")
+        self.config_file: Optional[str] = kwargs.get("config_file")
         self.stdin_forwarding_thread = None
         self.stdin_forwarding_stop = threading.Event()
-        self.log_manager: LogManager = LogManager(None, logfile)
+        self.log_manager: LogManager = LogManager(None, self.logfile)
         self.logger: logging.Logger = self.log_manager.logger
 
         # 此处赋值会调用 setter，自动处理 log_manager.config 的关联
-        self.config_manager: ConfigManager = ConfigManager(config_file, self.logger)
+        self.config_manager: ConfigManager = ConfigManager(self.config_file, self.logger)
 
         self.breakpoint_table = {}
         self.breakpoint_seen = set()
