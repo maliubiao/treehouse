@@ -61,7 +61,7 @@ from debugger.presets import generate_for_project
     checker_model_name="gemini-2.5-flash",
     num_workers=10,
     trace_llm=True,
-    verbose_trace=True,
+    verbose_trace=False,
 )
 def main():
     args = parse_args()

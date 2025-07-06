@@ -226,6 +226,14 @@ class JSONTestResult(unittest.TextTestResult):
             error_type_name = err_type.__name__ if hasattr(err_type, "__name__") else "UnknownError"
             error_message = str(err_value)
 
+            # --- Collect full stack trace and prepare for location finding ---
+            frame_ref_lines = []
+            tb_frames = None
+            if err_tb:
+                tb_frames = traceback.extract_tb(err_tb)
+                if tb_frames:
+                    frame_ref_lines = [(frame.filename, frame.lineno) for frame in tb_frames]
+
             # --- Robust location finding logic ---
             file_path, line, func_name = "Unknown", 0, test_id
 
@@ -239,27 +247,25 @@ class JSONTestResult(unittest.TextTestResult):
             # 2. Fallback: If not cached, walk the traceback to find the test function.
             #    This is more reliable than using the innermost frame, which could be
             #    a library or helper function deep in the call stack.
-            elif err_tb:
-                tb_frames = traceback.extract_tb(err_tb)
+            elif tb_frames:
                 found_test_frame = False
-                if tb_frames:
-                    # Iterate from the site of the error backwards up the call stack.
-                    for frame in reversed(tb_frames):
-                        # Use a heuristic: unittest methods are typically named 'test*'.
-                        # This helps pinpoint the test function itself.
-                        if frame.name.startswith("test"):
-                            file_path = frame.filename
-                            line = frame.lineno
-                            func_name = frame.name
-                            found_test_frame = True
-                            break  # Found the most likely frame, stop searching.
+                # Iterate from the site of the error backwards up the call stack.
+                for frame in reversed(tb_frames):
+                    # Use a heuristic: unittest methods are typically named 'test*'.
+                    # This helps pinpoint the test function itself.
+                    if frame.name.startswith("test"):
+                        file_path = frame.filename
+                        line = frame.lineno
+                        func_name = frame.name
+                        found_test_frame = True
+                        break  # Found the most likely frame, stop searching.
 
-                    # If the heuristic fails, fall back to the innermost frame as a last resort.
-                    if not found_test_frame:
-                        frame_to_report = tb_frames[-1]
-                        file_path = frame_to_report.filename
-                        line = frame_to_report.lineno
-                        func_name = frame_to_report.name
+                # If the heuristic fails, fall back to the innermost frame as a last resort.
+                if not found_test_frame:
+                    frame_to_report = tb_frames[-1]
+                    file_path = frame_to_report.filename
+                    line = frame_to_report.lineno
+                    func_name = frame_to_report.name
 
             # 3. Ensure file path is absolute for consistency.
             if file_path and file_path != "Unknown" and not os.path.isabs(file_path):
@@ -274,6 +280,7 @@ class JSONTestResult(unittest.TextTestResult):
                 "file_path": file_path,
                 "line": line,
                 "function": func_name,
+                "frame_ref_lines": frame_ref_lines,
             }
             self.results[category].append(error_entry)
             self.all_issues.append({"type": category.rstrip("s"), "test": str(test), "details": tb_string})
@@ -318,6 +325,7 @@ class JSONTestResult(unittest.TextTestResult):
                         "function": error["function"],
                         "error_type": error["error_type"],
                         "error_message": error["error_message"],
+                        "frame_ref_lines": error.get("frame_ref_lines", []),
                     }
                 )
         return error_details

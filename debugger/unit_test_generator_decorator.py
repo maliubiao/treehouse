@@ -459,12 +459,12 @@ class UnitTestGeneratorDecorator:
         return {fname: dict(funcs) for fname, funcs in discovered.items()}
 
     @classmethod
-    def _save_unified_report(cls, master_call_tree: Dict, config: Dict) -> Optional[str]:
-        """Saves the unified trace report and returns the path."""
+    def _save_unified_report(cls, data_to_save: Dict, config: Dict) -> Optional[str]:
+        """Saves the unified trace data to a report file and returns the path."""
         report_path = str(Path(config["report_dir"]) / "unified_trace_report.json")
         try:
             with open(report_path, "w", encoding="utf-8") as f:
-                json.dump(master_call_tree, f, indent=2, ensure_ascii=False, default=str)
+                json.dump(data_to_save, f, indent=2, ensure_ascii=False, default=str)
             return report_path
         except (IOError, TypeError) as e:
             print(f"{Fore.RED}Error writing unified report: {e}{Style.RESET_ALL}")
@@ -551,8 +551,7 @@ class UnitTestGeneratorDecorator:
                 project_root=cls.default_source_base_dir,
                 import_map_path=config.get("import_map_file"),
             )
-            if not generator.load_and_parse_report():
-                return None
+            # No need to call load_and_parse_report here, it will be called by generator.generate()
             return generator
         except (ImportError, FileNotFoundError, json.JSONDecodeError) as e:
             print(f"{Fore.RED}Failed to initialize UnitTestGenerator: {e}{Style.RESET_ALL}")
@@ -573,7 +572,7 @@ class UnitTestGeneratorDecorator:
                     auto_confirm=config["auto_confirm"],
                     use_symbol_service=config["use_symbol_service"],
                     num_workers=config["num_workers"],
-                    target_file=str(Path(filename).relative_to(cls.default_source_base_dir)),
+                    target_file=filename,
                 )
         elif final_target_funcs:  # Preset mode
             print(
@@ -599,11 +598,26 @@ class UnitTestGeneratorDecorator:
             return
         master_call_tree, config, all_presets, is_preset_defined = merged_data
 
-        report_path = cls._save_unified_report(master_call_tree, config)
+        # [MODIFIED] First, discover all calls and flatten the tree.
+        all_discovered_calls = cls._discover_all_calls_from_tree(master_call_tree)
+
+        # Filter out special function names (e.g., <module>) which are not valid test targets.
+        all_discovered_calls = {
+            filename: {
+                func_name: records
+                for func_name, records in funcs.items()
+                if not (func_name.startswith("<") and func_name.endswith(">"))
+            }
+            for filename, funcs in all_discovered_calls.items()
+        }
+        # Subsequently, filter out any files that have no functions left after filtering.
+        all_discovered_calls = {filename: funcs for filename, funcs in all_discovered_calls.items() if funcs}
+
+        # [MODIFIED] Save the FLATTENED, processed data to the report. This is the key change.
+        report_path = cls._save_unified_report(all_discovered_calls, config)
         if not report_path:
             return
 
-        all_discovered_calls = cls._discover_all_calls_from_tree(master_call_tree)
         if not all_discovered_calls:
             print(f"{Fore.YELLOW}No function executions found across all traces.{Style.RESET_ALL}")
             return

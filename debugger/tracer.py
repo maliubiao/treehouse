@@ -492,11 +492,17 @@ class TraceDispatcher:
 
     def is_target_frame(self, frame):
         """精确匹配目标模块路径"""
+        if not frame or not frame.f_code:
+            if frame:
+                frame.f_trace_lines = False
+            return False
+
         if frame.f_code.co_name.startswith("<genexpr>"):
             # one line code, ignore
             return False
         try:
-            if not frame or not frame.f_code or not frame.f_code.co_filename:
+            # 此时 frame 和 frame.f_code 保证不为 None
+            if not frame.f_code.co_filename:
                 frame.f_trace_lines = False
                 return False
             filename = frame.f_code.co_filename

@@ -1,14 +1,16 @@
 import argparse
 import concurrent.futures
 import os
+import re
 import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 from unittest.mock import _Call
 
 from colorama import Fore, Style
+from fixer_prompt import FixerPromptGenerator
 from report_generator import ReportGenerator
 from tqdm import tqdm
 
@@ -30,15 +32,72 @@ from llm_query import (
 _Call.__repr__ = lambda self: f"<Call id={id(self)}>"  # type: ignore
 
 
-def _restart_with_original_args():
+def extract_frame_id_from_log(log_file_path: str, test_id: str) -> Optional[int]:
+    """
+    从日志文件中提取指定 test_id 对应的 CALL 语句的 frame_id。
+
+    Args:
+        log_file_path (str): 日志文件的路径。
+        test_id (str): 要查找的 testMethod 名称 (例如: "test_on_step_hit_with_invalid_line_entry_and_instruction_mode")。
+
+    Returns:
+        Optional[int]: 如果找到对应的 frame_id，则返回其整数值；否则返回 None。
+    """
+    # 定义正则表达式来捕获 frame_id
+    # r"\[frame:(\d+)\]" 解释:
+    #   \[    : 匹配字面量 '['
+    #   frame:: 匹配字面量 'frame:'
+    #   (\d+) : 捕获一个或多个数字 (这是我们想要的 frame_id)
+    #   \]    : 匹配字面量 ']'
+    frame_id_pattern = re.compile(r"\[frame:(\d+)\]")
+
+    # 构建要查找的 testMethod 字符串，提高匹配效率
+    target_test_method_str = f"testMethod={test_id}"
+
+    try:
+        with open(log_file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                # 1. 快速字符串查找过滤：
+                # 检查行中是否包含 "↘ CALL" 和 目标 testMethod 字符串。
+                # 这是一个高效的初步过滤，避免对不相关的行进行正则匹配。
+                if "↘ CALL" in line and target_test_method_str in line:
+                    # 2. 进一步检查是否包含 "[frame:"，如果包含，才尝试正则匹配
+                    # 再次避免不必要的正则操作，因为有些行可能匹配前两个条件但没有 frame id
+                    if "[frame:" in line:
+                        # 3. 使用正则表达式提取 frame_id
+                        match = frame_id_pattern.search(line)
+                        if match:
+                            # 提取捕获组1 (即括号内的数字)
+                            frame_id_str = match.group(1)
+                            # 转换为整数并返回，同时及时中止循环
+                            return int(frame_id_str)
+
+        # 如果循环结束仍未找到，则返回 None
+        return None
+
+    except FileNotFoundError:
+        print(f"错误: 文件 '{log_file_path}' 未找到。")
+        return None
+    except Exception as e:
+        print(f"读取文件时发生错误: {e}")
+        return None
+
+
+def _restart_with_original_args(auto_accept: bool = False):
     """
     Restarts the script with its original command-line arguments.
     This replaces the current process with a new one, ensuring a clean state.
+    Optionally adds '--auto-accept-analysis' flag to persist choice across restarts.
     """
     print(Fore.MAGENTA + "\n" + "=" * 20 + " RESTARTING WORKFLOW " + "=" * 20)
     print(Fore.CYAN + "Restarting process to ensure a clean environment for the next cycle...")
+
+    new_argv = sys.argv[:]
+    if auto_accept and "--auto-accept-analysis" not in new_argv:
+        new_argv.append("--auto-accept-analysis")
+
     try:
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        os.execv(sys.executable, [sys.executable] + new_argv)
     except OSError as e:
         print(Fore.RED + f"Fatal: Failed to restart process: {e}")
         sys.exit(1)
@@ -209,13 +268,26 @@ class TestAutoFix:
                 print(Fore.YELLOW + "-" * 30)
 
         if selected_error.get("file_path") and selected_error.get("line"):
-            self._display_tracer_logs(selected_error["file_path"], selected_error["line"], silent=silent)
+            self._display_tracer_logs(
+                selected_error["file_path"],
+                selected_error["line"],
+                silent=silent,
+                test_id=selected_error["test_id"],
+                frame_ref_lines=selected_error["frame_ref_lines"],
+            )
 
     def lookup_reference(self, file_path: str, lineno: int) -> None:
         """Display reference information for a specific file and line."""
         self._display_tracer_logs(file_path, lineno)
 
-    def _display_tracer_logs(self, file_path: str, line: int, silent: bool = False) -> None:
+    def _display_tracer_logs(
+        self,
+        file_path: str,
+        line: int,
+        silent: bool = False,
+        test_id: str = "",
+        frame_ref_lines: List[Tuple[str, int]] = None,
+    ) -> None:
         """
         Display relevant tracer logs for the error location and identify the exception source.
         """
@@ -230,8 +302,15 @@ class TestAutoFix:
             show_full_trace=True,
         )
         # log_extractor = tracer.TraceLogExtractor(fn)
+        logs, references_group = log_extractor.lookup(file_path, line, sibling_config=config)
+        if not logs and test_id:
+            frame_id = extract_frame_id_from_log(str(fn), test_id=test_id.split(".")[-1])
+            logs, references_group = log_extractor.lookup(frame_id=frame_id, next_siblings=2)
+        if frame_ref_lines:
+            for item in frame_ref_lines:
+                self.uniq_references.add(item)
+        self.uniq_references.add((file_path, line))
         try:
-            logs, references_group = log_extractor.lookup(file_path, line, sibling_config=config)
             if logs:
                 self.trace_log = logs[0]
                 if not silent:
@@ -538,6 +617,9 @@ def parse_args():
         default=str(default_report_dir),
         help=f"Directory to save analysis reports. Defaults to: {default_report_dir}",
     )
+    parser.add_argument(
+        "--auto-accept-analysis", action="store_true", help=argparse.SUPPRESS
+    )  # Hidden arg for session state
     return parser.parse_args()
 
 
@@ -559,16 +641,7 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_
     """Performs a direct, one-step fix by analyzing the tracer log and generating a patch."""
     print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
 
-    if not user_req:
-        user_req = "分析并解决用户遇到的问题，修复test_*符号中的错误"
-
-    prompt_content = f"""
-请根据以下tracer的报告, 分析问题原因并直接修复testcase相关问题。请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据。
-用户的要求: {user_req}
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-    """
+    prompt_content = FixerPromptGenerator.create_direct_fix_prompt(trace_log=auto_fix.trace_log, user_req=user_req)
 
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p = PatchPromptBuilder(
@@ -581,68 +654,75 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
 
 
-def _get_user_feedback_on_analysis(analysis_text: str) -> str:
+def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
     """
     Presents the AI's analysis to the user and asks for feedback on how to proceed with the fix.
 
     Returns:
-        A string containing the user's directive for the fix, or an empty string to abort.
+        A tuple containing:
+        - A string with the user's directive for the fix (or empty to abort).
+        - A boolean indicating if the choice should be remembered for the session.
     """
     print(Fore.YELLOW + "\n" + "=" * 15 + " User Review and Direction " + "=" * 15)
     print(Fore.CYAN + "The AI has analyzed the issue. Please review its findings and provide direction for the fix.")
     print(Fore.YELLOW + "=" * 54)
 
     print(Fore.GREEN + "Please choose a course of action:")
-    print(Fore.CYAN + "  1. Accept the analysis and proceed with the recommended fix.")
-    print(Fore.CYAN + "  2. The analysis is correct, but I want to provide a specific instruction.")
-    print(Fore.CYAN + "  3. The analysis seems wrong. I will provide a new direction.")
+    print(Fore.CYAN + "  1. Accept analysis and proceed with recommended fix.")
+    print(Fore.CYAN + "  2. Analysis is correct, but provide specific instruction.")
+    print(Fore.CYAN + "  3. Analysis seems wrong, provide new direction.")
+    print(Fore.YELLOW + "  4. Accept & auto-accept for this session.")
     print(Fore.CYAN + "  q. Quit the fix process.")
 
     while True:
-        choice = input(Fore.GREEN + "Your choice (1/2/3/q): ").strip().lower()
+        choice = input(Fore.GREEN + "Your choice (1/2/3/4/q): ").strip().lower()
+
+        default_directive = "按照上述技术专家的分析，解决用户遇到的问题，修复单元测试中的错误，使其能够成功通过。"
 
         if choice == "1":
-            return "按照上述技术专家的分析，解决用户遇到的问题，修复单元测试中的错误，使其能够成功通过。"
+            return default_directive, False
         elif choice == "2":
             user_instruction = input(Fore.GREEN + "Please provide your specific instruction: ").strip()
             if user_instruction:
-                return user_instruction
+                return user_instruction, False
             else:
                 print(Fore.RED + "Instruction cannot be empty. Please try again.")
         elif choice == "3":
             user_instruction = input(Fore.GREEN + "Please describe the correct analysis and how to fix it: ").strip()
             if user_instruction:
-                return user_instruction
+                return user_instruction, False
             else:
                 print(Fore.RED + "Direction cannot be empty. Please try again.")
+        elif choice == "4":
+            print(Fore.YELLOW + "Will auto-accept analysis for the rest of this session.")
+            return default_directive, True
         elif choice == "q":
-            return ""  # Empty string signals to abort
+            return "", False  # Empty string signals to abort
         else:
-            print(Fore.RED + "Invalid choice. Please enter 1, 2, 3, or q.")
+            print(Fore.RED + "Invalid choice. Please enter 1, 2, 3, 4, or q.")
 
 
 def _perform_two_step_fix(
-    auto_fix: TestAutoFix, symbol_result: dict, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch
-):
+    auto_fix: TestAutoFix,
+    symbol_result: dict,
+    analyzer_model_switch: ModelSwitch,
+    fixer_model_switch: ModelSwitch,
+    auto_accept: bool = False,
+) -> bool:
     """
-    Performs an interactive, two-step fix:
+    Performs an interactive, two-step fix and returns whether the choice should be remembered.
     1. Analyzes the failure and presents the analysis.
-    2. Gets user feedback and direction.
+    2. Gets user feedback and direction (or skips if auto_accept is True).
     3. Generates a patch based on the analysis and user's final command.
+
+    Returns:
+        A boolean indicating if the "auto-accept" choice should be persisted for the next run.
     """
     print(Fore.YELLOW + "\nStep 1: Generating failure analysis...")
     print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
-    # Load the specialized analysis prompt
-    analyze_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
-        encoding="utf-8"
-    )
-    analyze_prompt_content = f"""
-{analyze_prompt_template}
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-"""
+    # Step 1: Generate analysis prompt and query the model
+    analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
     p_explain = PatchPromptBuilder(
         use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
     )
@@ -652,28 +732,26 @@ def _perform_two_step_fix(
     analysis_text = _consume_stream_and_get_text(stream)
 
     # Step 2: Get user feedback on the analysis
-    user_directive = _get_user_feedback_on_analysis(analysis_text)
+    remember_choice = auto_accept
+    if auto_accept:
+        print(Fore.GREEN + "\nAuto-accepting analysis based on previous choice.")
+        user_directive = "按照上述技术专家的分析，解决用户遇到的问题，修复单元测试中的错误，使其能够成功通过。"
+    else:
+        user_directive, remember_choice = _get_user_feedback_on_analysis(analysis_text)
+
     if not user_directive:
         print(Fore.RED + "User aborted the fix process.")
-        return
+        return False  # Don't remember the choice if user aborts
 
     # Step 3: Generate the fix based on analysis and user directive
     print(Fore.YELLOW + "\nStep 2: Generating fix based on analysis and user directive...")
     print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
-    fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
-        encoding="utf-8"
+    fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
+        trace_log=auto_fix.trace_log,
+        analysis_text=analysis_text,
+        user_directive=user_directive,
     )
-    fix_prompt_content = f"""
-{fix_prompt_template}
 
-[技术专家的分析报告]
-{analysis_text}
-[用户最终指令]
-{user_directive}
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-    """
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p_fix = PatchPromptBuilder(
         use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
@@ -683,6 +761,7 @@ def _perform_two_step_fix(
 
     text = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
     process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+    return remember_choice
 
 
 def _perform_automated_fix_and_report(
@@ -698,16 +777,8 @@ def _perform_automated_fix_and_report(
     print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
     # Step 1: Get Explanation for the report
-    explain_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
-        encoding="utf-8"
-    )
-    explain_prompt_content = f"""
-{explain_prompt_template}
-请根据以下tracer的报告, 按照分析要求，解释问题的原因, 请以中文回复
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-"""
+    explain_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
+
     p_explain = PatchPromptBuilder(
         use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
     )
@@ -718,20 +789,11 @@ def _perform_automated_fix_and_report(
 
     # Step 2: Prepare the fix prompt (which will also be in the report)
     user_req_for_fix = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
-    fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
-        encoding="utf-8"
+    fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
+        trace_log=auto_fix.trace_log,
+        analysis_text=analysis_text,
+        user_directive=user_req_for_fix,
     )
-    fix_prompt_content = f"""
-{fix_prompt_template}
-
-[技术专家的分析报告]
-{analysis_text}
-[用户最终指令]
-{user_req_for_fix}
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-    """
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p_fix = PatchPromptBuilder(
         use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
@@ -753,8 +815,11 @@ def _perform_automated_fix_and_report(
 def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch):
     """Main loop for interactive test fixing. Runs one cycle and then restarts."""
     fix_mode = None
+    remember_choice = False
 
-    if not args.direct_fix:
+    if args.auto_accept_analysis:
+        fix_mode = "two_step"
+    elif not args.direct_fix:
         print(Fore.YELLOW + "\n请选择修复模式：")
         print(Fore.CYAN + "1. 解释并修复 (两步, 包含用户反馈)")
         print(Fore.CYAN + "2. 直接修复 (一步)")
@@ -804,11 +869,13 @@ def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, f
     if fix_mode == "direct":
         _perform_direct_fix(auto_fix, symbol_result, fixer_model_switch, args.user_requirement)
     elif fix_mode == "two_step":
-        _perform_two_step_fix(auto_fix, symbol_result, analyzer_model_switch, fixer_model_switch)
+        remember_choice = _perform_two_step_fix(
+            auto_fix, symbol_result, analyzer_model_switch, fixer_model_switch, auto_accept=args.auto_accept_analysis
+        )
 
     continue_choice = input(Fore.GREEN + "\n补丁已应用。是否继续修复下一个问题？ (y/n): ").strip().lower()
     if continue_choice == "y":
-        _restart_with_original_args()
+        _restart_with_original_args(auto_accept=remember_choice)
     else:
         print(Fore.RED + "用户选择退出修复流程。")
 
@@ -904,15 +971,7 @@ def analyze_error_task(
         return AnalyzedError(error_detail, "Failed to build symbol context.", auto_fix.trace_log, {}, False)
 
     # Perform the analysis query (without printing stream)
-    analyze_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_analyze_failure.py.prompt").read_text(
-        encoding="utf-8"
-    )
-    analyze_prompt_content = f"""
-{analyze_prompt_template}
-[trace log start]
-{auto_fix.trace_log}
-[trace log end]
-"""
+    analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
     p_explain = PatchPromptBuilder(
         use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
     )
@@ -969,20 +1028,13 @@ def _generate_and_apply_patch_from_analysis(
     """Generates and applies a patch based on a pre-computed analysis and a directive."""
     print(Fore.YELLOW + "\nGenerating fix based on analysis and user directive...")
     print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
-    fix_prompt_template = (Path(__file__).parent.parent / "prompts/unittest_generate_fix.py.prompt").read_text(
-        encoding="utf-8"
-    )
-    fix_prompt_content = f"""
-{fix_prompt_template}
 
-[技术专家的分析报告]
-{analyzed_error.analysis_text}
-[用户最终指令]
-{user_directive}
-[trace log start]
-{analyzed_error.trace_log}
-[trace log end]
-    """
+    fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
+        trace_log=analyzed_error.trace_log,
+        analysis_text=analyzed_error.analysis_text,
+        user_directive=user_directive,
+    )
+
     GPT_FLAGS[GPT_FLAG_PATCH] = True
     p_fix = PatchPromptBuilder(
         use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
@@ -1001,7 +1053,7 @@ def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_
     print(analyzed_error.analysis_text)
     print(Fore.BLUE + "-------------------" + Style.RESET_ALL)
 
-    user_directive = _get_user_feedback_on_analysis(analyzed_error.analysis_text)
+    user_directive, _ = _get_user_feedback_on_analysis(analyzed_error.analysis_text)
     if not user_directive:
         print(Fore.RED + "User aborted the fix process.")
         return

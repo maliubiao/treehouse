@@ -355,81 +355,59 @@ class UnitTestGenerator:
         self, target_funcs: List[str], target_file: Optional[str] = None
     ) -> Dict[str, List[Dict]]:
         """
-        [REVISED] Finds all call records for the target functions. If a target_file is provided,
-        the search is constrained to that file to resolve ambiguities with common function names.
+        [REVISED] Finds call records for target functions from a pre-flattened report.
+        If `target_file` is provided, the search is constrained to that file to resolve
+        ambiguities. This function performs a direct lookup, not a recursive search.
         """
         target_set = set(target_funcs)
         calls_by_func = defaultdict(list)
-        frame_id_seen = set()
         COMMON_METHODS_REQUIRING_CONTEXT = {"__init__", "__new__", "__call__", "__str__", "__repr__"}
 
-        def _recursive_search(record: Dict):
-            nonlocal frame_id_seen
-            if not isinstance(record, dict):
-                return
-
-            func_name = record.get("func_name")
-            frame_id = record.get("frame_id")
-
-            if func_name and frame_id and frame_id not in frame_id_seen:
-                is_match = False
-                # Rule 1: Direct match of the full qualified name is always accepted.
-                if func_name in target_set:
-                    is_match = True
-                else:
-                    name_parts = func_name.split(".")
-                    intersection = set(name_parts).intersection(target_set)
-
-                    if intersection:
-                        # Rule 2: A match is valid if it includes any non-ambiguous name part.
-                        if intersection - COMMON_METHODS_REQUIRING_CONTEXT:
-                            is_match = True
-                        # Rule 3: If only ambiguous names match, require explicit context (parent class must be a target).
-                        else:
-                            for i, part in enumerate(name_parts):
-                                if part in intersection and i > 0:
-                                    parent_class_or_module = name_parts[i - 1]
-                                    if parent_class_or_module in target_set:
-                                        is_match = True
-                                        break
-                if is_match:
-                    frame_id_seen.add(frame_id)
-                    calls_by_func[func_name].append(record)
-
-            # Continue search in sub-calls
-            for event in record.get("events", []):
-                if event.get("type") == "call" and isinstance(event.get("data"), dict):
-                    _recursive_search(event.get("data"))
-
-        # Determine the search scope based on the provided target_file to avoid ambiguity.
+        # Determine the search scope. If a target_file is given, constrain to it.
         search_scope = {}
         if target_file:
-            target_path = Path(target_file)
-            if target_path.is_absolute():
-                target_path = Path(target_file).relative_to(self.project_root)
-            target_file_str = str(target_path)
-            if target_file_str in self.analysis_data:
-                search_scope = {target_file_str: self.analysis_data[target_file_str]}
-                print(Fore.GREEN + f"Search for call records constrained to file: {target_file_str}")
+            # The `target_file` is expected to be a path string that is a key in `analysis_data`.
+            # The old logic incorrectly converted this path, causing lookup failures.
+            # We now perform a direct lookup.
+            if target_file in self.analysis_data:
+                search_scope = {target_file: self.analysis_data[target_file]}
+                print(Fore.GREEN + f"Search for call records constrained to file: {target_file}")
             else:
                 print(
-                    Fore.YELLOW
-                    + f"Warning: Target file '{target_file_str}' not found in report keys. Searching all files."
+                    Fore.YELLOW + f"Warning: Target file '{target_file}' not found in report keys. Searching all files."
                 )
                 search_scope = self.analysis_data
         else:
             search_scope = self.analysis_data
 
-        # Iterate over the determined (and possibly constrained) scope.
-        # The analysis data structure is {file_path: {entry_func_name: [call_records]}}
-        for file_path, file_data in search_scope.items():
-            if isinstance(file_data, dict):
-                for func_records in file_data.values():
-                    if isinstance(func_records, list):
-                        for record in func_records:
-                            _recursive_search(record)
+        # Iterate over the determined scope and directly match functions.
+        for filename, funcs_in_file in search_scope.items():
+            for fq_name, records in funcs_in_file.items():
+                if not records:
+                    continue
 
-        if target_file and not calls_by_func:
+                # This matching logic correctly handles simple names, FQNs, and ambiguous
+                # names like `__init__` by requiring additional context from the target list.
+                is_match = False
+                if fq_name in target_set:
+                    is_match = True
+                else:
+                    name_parts = fq_name.split(".")
+                    intersection = set(name_parts).intersection(target_set)
+                    if intersection:
+                        if intersection - COMMON_METHODS_REQUIRING_CONTEXT:
+                            is_match = True
+                        else:  # Only ambiguous names matched, requires parent context
+                            for i, part in enumerate(name_parts):
+                                if part in intersection and i > 0:
+                                    parent_context = name_parts[i - 1]
+                                    if parent_context in target_set:
+                                        is_match = True
+                                        break
+                if is_match:
+                    calls_by_func[fq_name].extend(records)
+
+        if not calls_by_func and target_file:
             print(
                 Fore.YELLOW + f"Warning: No call records were found for any target functions in file '{target_file}'. "
                 "The functions may not have been executed during tracing or the names are incorrect."

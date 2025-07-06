@@ -135,10 +135,9 @@ class TestTruncateReprValue(unittest.TestCase):
     def test_truncate_long_string(self):
         long_str = "a" * (_MAX_VALUE_LENGTH + 100)
         result = truncate_repr_value(long_str)
-        # 修正断言：计算实际后缀长度
         suffix = f"... (total length: {len(long_str)})"
+        self.assertTrue(result.endswith(suffix))
         self.assertTrue(len(result) <= _MAX_VALUE_LENGTH + len(suffix))
-        self.assertTrue(result.endswith(suffix))  # 同步修正结尾检查
 
     def test_truncate_list(self):
         long_list = list(range(100))
@@ -294,11 +293,12 @@ class TestTraceLogic(BaseTracerTest):
         formatted_message = log_data["template"].format(**log_data["data"])
         self.assertIn("↘ CALL", formatted_message)
         self.assertIn("sample_function(x=5, y=3)", formatted_message)
-        self.assertEqual(self.logic.stack_depth, 1)
+        self.assertEqual(self.logic._local.stack_depth, 1)
 
     def test_handle_return(self):
         frame = self._get_frame_at(sample_function, 5, 3, event_type="return")
-        self.logic.stack_depth = 1  # Simulate being inside a call
+        # Simulate being inside a call
+        self.logic._local.stack_depth = 1
         self.logic.handle_return(frame, (16, "large"))
 
         self.logic._add_to_buffer.assert_called_once()
@@ -307,7 +307,7 @@ class TestTraceLogic(BaseTracerTest):
 
         self.assertIn("↗ RETURN", log_data["template"])
         self.assertIn("→ (16, 'large')", log_data["template"].format(**log_data["data"]))
-        self.assertEqual(self.logic.stack_depth, 0)
+        self.assertEqual(self.logic._local.stack_depth, 0)
 
     def test_handle_line_with_trace_comment(self):
         lines, start_line = inspect.getsourcelines(sample_function)
@@ -348,15 +348,23 @@ class TestTraceLogic(BaseTracerTest):
             _, exc_value, tb = sys.exc_info()
             frame = tb.tb_frame
 
-        self.logic.stack_depth = 1
+        # Manually set stack depth to simulate being inside a call
+        self.logic._local.stack_depth = 1
         self.logic.handle_exception(ValueError, exc_value, frame)
 
-        self.assertEqual(len(self.logic.exception_chain), 1)
-        log_data, _ = self.logic.exception_chain[0]
+        if sys.version_info >= (3, 12):
+            self.assertEqual(len(self.logic.exception_chain), 1)
+            self.logic._add_to_buffer.assert_not_called()
+            log_data, _ = self.logic.exception_chain[0]
+        else:
+            self.logic._add_to_buffer.assert_called_once()
+            self.assertEqual(len(self.logic.exception_chain), 0)
+            log_data, _ = self.logic._add_to_buffer.call_args[0]
 
         self.assertIn("⚠ EXCEPTION", log_data["template"])
         self.assertIn("ValueError: x cannot be zero", log_data["template"].format(**log_data["data"]))
-        self.assertEqual(self.logic.stack_depth, 0)
+        # Assert that stack depth is NOT decremented by handle_exception
+        self.assertEqual(self.logic._local.stack_depth, 1)
 
     def test_capture_variables(self):
         self.config.capture_vars = ["a", "b > 10"]
@@ -424,6 +432,13 @@ class TestTraceDispatcher(BaseTracerTest):
         self.dispatcher.trace_dispatch(frame, "return", "some_value")
         self.assertFalse(frame in self.dispatcher.active_frames)
         self.mock_logic.handle_return.assert_called_once()
+
+    def test_dispatch_ignores_genexpr(self):
+        mock_frame = MagicMock()
+        mock_frame.f_code.co_name = "<genexpr>"
+        mock_frame.f_code.co_filename = "some_file.py"
+        self.dispatcher.trace_dispatch(mock_frame, "call", None)
+        self.mock_logic.handle_call.assert_not_called()
 
     def test_none_frame(self):
         self.assertFalse(self.dispatcher.is_target_frame(None))
@@ -531,7 +546,6 @@ class TestSysMonitoringDispatcher(BaseTracerTest):
         )
         self.mock_monitoring_module.set_events.assert_called_with(0, expected_events)
 
-        # 修正断言：实际注册了10个回调，而不是11个
         self.assertEqual(self.mock_monitoring_module.register_callback.call_count, 10)
         self.assertTrue(self.dispatcher._registered)
 
@@ -568,8 +582,7 @@ class TestCallTreeHtmlRender(BaseTracerTest):
     def test_add_stack_variable(self):
         self.renderer.add_stack_variable_create(1, dis.opmap["LOAD_NAME"], "x", 42)
         self.assertIn(1, self.renderer._stack_variables)
-        # 修复: 使用元组索引[1]访问var_name
-        self.assertEqual(self.renderer._stack_variables[1][0][1], "x")
+        self.assertEqual(self.renderer._stack_variables[1][0], (dis.opmap["LOAD_NAME"], "x", 42))
 
     def test_save_to_file(self):
         report_path = self.test_dir / "render_test.html"
