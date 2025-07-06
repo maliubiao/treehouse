@@ -190,6 +190,7 @@ def build_prompt_for_generation(
     symbol_context: Optional[Dict[str, Dict]] = None,
     existing_code: Optional[str] = None,
     import_context: Optional[Dict[str, Dict]] = None,
+    max_trace_chars: Optional[int] = None,
 ) -> str:
     """Dispatcher for building the generation prompt based on context and mode (full/incremental)."""
     if is_incremental:
@@ -202,6 +203,7 @@ def build_prompt_for_generation(
             file_path=file_path,
             file_content=file_content,
             import_context=import_context,
+            max_trace_chars=max_trace_chars,
         )
     if symbol_context:
         return _build_symbol_based_prompt(
@@ -214,6 +216,7 @@ def build_prompt_for_generation(
             output_file_abs_path=output_file_abs_path,
             existing_code=existing_code,
             import_context=import_context,
+            max_trace_chars=max_trace_chars,
         )
     if file_content and file_path:
         return _build_file_based_prompt(
@@ -227,6 +230,7 @@ def build_prompt_for_generation(
             output_file_abs_path=output_file_abs_path,
             existing_code=existing_code,
             import_context=import_context,
+            max_trace_chars=max_trace_chars,
         )
     raise ValueError("Either symbol_context or file_content must be provided to build a prompt.")
 
@@ -242,7 +246,8 @@ def _get_intent_driven_testing_guidance() -> str:
         2.  **Critique the Trace:** Compare this intent with the execution trace. Does the trace show the function behaving as intended?
             - **If the trace reveals a bug** (e.g., `add_positive_numbers(5, -2)` returned `3` instead of raising an error), your test MUST assert the **correct, intended behavior**. This test is designed to **fail** when run against the buggy code, thus highlighting the flaw. This is a high-value test.
             - **If the trace reflects correct behavior**, your test should confirm that outcome.
-        3.  **Action:** Do not write tests that simply replicate a buggy execution. Write tests that enforce the code's logical contract.
+        3.  **Special Case - `KeyboardInterrupt`**: If the trace ends with a `KeyboardInterrupt` exception, **DO NOT** write a test that asserts this exception. This is a user-initiated interruption (e.g., Ctrl+C), not a programmatic error or an intended outcome. Analyze the trace *before* the interruption and write a test that validates the logical behavior of the function.
+        4.  **Action:** Do not write tests that simply replicate a buggy execution. Write tests that enforce the code's logical contract.
     """).strip()
 
 
@@ -257,13 +262,14 @@ def _build_file_based_prompt(
     output_file_abs_path: Path,
     existing_code: Optional[str] = None,
     import_context: Optional[Dict[str, Dict]] = None,
+    max_trace_chars: Optional[int] = None,
 ) -> str:
     """
     [REFACTORED] Constructs the detailed prompt for the LLM using full file content.
     Now uses the centralized `build_generation_guidance` and includes intent-driven testing.
     """
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
-    call_record_text = format_call_record_as_text(call_record)
+    call_record_text = format_call_record_as_text(call_record, max_chars=max_trace_chars)
     action_description, existing_code_section, _ = _get_common_prompt_sections(test_class_name, existing_code)
     generation_guidance = build_generation_guidance(module_to_test, test_class_name, existing_code, import_context)
     intent_guidance = _get_intent_driven_testing_guidance()
@@ -321,13 +327,14 @@ def _build_symbol_based_prompt(
     output_file_abs_path: Path,
     existing_code: Optional[str] = None,
     import_context: Optional[Dict[str, Dict]] = None,
+    max_trace_chars: Optional[int] = None,
 ) -> str:
     """
     [REFACTORED] Constructs the detailed prompt for the LLM using precise symbol context.
     Now uses the centralized `build_generation_guidance` and includes intent-driven testing.
     """
     sys_path_setup_snippet = generate_relative_sys_path_snippet(output_file_abs_path, project_root_path)
-    call_record_text = format_call_record_as_text(call_record)
+    call_record_text = format_call_record_as_text(call_record, max_chars=max_trace_chars)
     context_code_str = ""
     for name, data in symbol_context.items():
         context_code_str += f"# Symbol: {name}\n# File: {data.get('file_path', '?')}:{data.get('start_line', '?')}\n{data.get('code', '# Code not found')}\n\n"
@@ -385,9 +392,10 @@ def _build_incremental_generation_prompt(
     file_path: Optional[str] = None,
     file_content: Optional[str] = None,
     import_context: Optional[Dict[str, Dict]] = None,
+    max_trace_chars: Optional[int] = None,
 ) -> str:
     """[NEW & REFACTORED] Builds a prompt to generate only a single new test method, with intent-driven logic."""
-    call_record_text = format_call_record_as_text(call_record)
+    call_record_text = format_call_record_as_text(call_record, max_chars=max_trace_chars)
     intent_guidance = _get_intent_driven_testing_guidance()
 
     # Context can come from symbols (preferred) or the full file
@@ -469,9 +477,9 @@ def _build_incremental_generation_prompt(
     """).strip()
 
 
-def build_duplicate_check_prompt(existing_code: str, call_record: Dict) -> str:
+def build_duplicate_check_prompt(existing_code: str, call_record: Dict, max_trace_chars: Optional[int] = None) -> str:
     """[NEW] Builds a prompt to ask the LLM if a test case already exists."""
-    call_record_text = format_call_record_as_text(call_record)
+    call_record_text = format_call_record_as_text(call_record, max_chars=max_trace_chars)
     func_name = call_record.get("func_name", "N/A")
     args = call_record.get("args", {})
     args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
@@ -541,7 +549,7 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     """
     [REFACTORED] Generates enhanced mocking guidance. The unnecessary `target_func`
     parameter has been removed to make this function more generic. It now includes
-    strict prohibitions against invalid mocking patterns.
+    strict prohibitions against invalid mocking patterns and guidance for handling loops.
     """
     return dedent(f"""
     Your goal is to create a valuable and robust test, not a brittle one that just checks implementation details.
@@ -556,6 +564,22 @@ def _get_mocking_guidance(module_to_test: str) -> str:
     - **How to Patch:**
       - Patch dependencies where they are *used*, not where they are defined. For a function in `{module_to_test}`, you will likely be patching targets like `patch('{module_to_test}.dependency_name', ...)`.
       - **Avoid excessive `assert_called_with`**. Only verify calls if the *interaction itself* is a critical part of the function's contract. A test that only checks mocks is often a poor test.
+
+    **Handling Loops and Long-Running Functions**
+    - Functions with `while` or `for` loops can run infinitely during tests if the termination condition isn't correctly mocked. You must prevent this.
+    - **Primary Goal:** Your main mock should control the loop's execution (e.g., by mocking a network call that would eventually terminate the loop).
+    - **Safety-Net Mock (Circuit Breaker):** To guarantee termination, you can add a "circuit-breaker" mock. Patch a function *inside* the loop. Use the `side_effect` attribute of a `MagicMock` to make it raise a specific exception after a certain number of calls. Your test should then expect and catch this specific exception as a sign of successful, controlled termination.
+      *Example:* For a function `function_with_endless_loop()` that repeatedly calls `do_work()`:
+      ```python
+      # In a test for a function like: while True: do_work()
+      mock_do_work = MagicMock(side_effect=[1, 2, ValueError("Safety Break")])
+      with patch('module.do_work', new=mock_do_work):
+          with self.assertRaisesRegex(ValueError, "Safety Break"):
+              function_with_endless_loop()
+          # Assert that the function was called as many times as you expected before breaking.
+          self.assertEqual(mock_do_work.call_count, 3)
+      ```
+    - This ensures the test terminates reliably, even if your primary mock on the loop condition fails.
 
     **CRITICAL MOCKING RULES**
     - **SCOPED MOCKS ONLY:** All mocks MUST be contained within the smallest possible scope. Use `with unittest.mock.patch(...):` blocks or the `@patch` decorator on individual test methods.

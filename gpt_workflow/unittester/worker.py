@@ -91,7 +91,17 @@ def generation_worker(task: Dict) -> Optional[str]:
         print(Fore.MAGENTA + f"{log_msg} [INCREMENTAL MODE]" + Style.RESET_ALL)
 
         # 1. Check for duplicates before generating
-        duplicate_prompt = build_duplicate_check_prompt(existing_code, call_record)
+        # Calculate budget for trace in duplicate check prompt
+        max_chars_for_dup_check = None
+        checker_max_context = task.get("checker_max_context_size")
+        if checker_max_context and existing_code:
+            # Prompt template is small, ~500 chars. Existing code is the main variable.
+            # Use a conservative 2.5 chars/token ratio and a safety buffer.
+            max_chars_for_dup_check = int((checker_max_context * 2.5) - len(existing_code) - 1000)
+
+        duplicate_prompt = build_duplicate_check_prompt(
+            existing_code, call_record, max_trace_chars=max_chars_for_dup_check
+        )
 
         # Check prompt size before sending to LLM
         _check_and_log_oversized_prompt(
@@ -135,6 +145,22 @@ def generation_worker(task: Dict) -> Optional[str]:
     ]:
         if key in task:
             prompt_args[key] = task[key]
+
+    # Calculate budget for trace in generation prompt
+    max_chars_for_gen_trace = None
+    generator_max_context = task.get("generator_max_context_size")
+    if generator_max_context:
+        # Estimate size of code context (symbol or full file)
+        code_context_size = 0
+        if task.get("symbol_context"):
+            code_context_size = len(str(task["symbol_context"]))
+        elif task.get("file_content"):
+            code_context_size = len(task["file_content"])
+
+        # Prompt templates are large, estimate ~4000 chars for safety.
+        # Use a conservative 2.5 chars/token ratio and a safety buffer.
+        max_chars_for_gen_trace = int((generator_max_context * 2.5) - code_context_size - 4000)
+    prompt_args["max_trace_chars"] = max_chars_for_gen_trace
 
     prompt = build_prompt_for_generation(**prompt_args)
 

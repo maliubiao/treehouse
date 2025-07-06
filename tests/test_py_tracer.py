@@ -169,11 +169,59 @@ class TestTruncateReprValue(unittest.TestCase):
 class TestTraceConfig(BaseTracerTest):
     """Tests for the TraceConfig class."""
 
-    def test_initialization_defaults(self):
-        config = TraceConfig()
-        self.assertEqual(config.target_files, [])
-        self.assertTrue(config.ignore_system_paths)
-        self.assertFalse(config.enable_var_trace)
+
+import os
+import site
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+
+def test_initialization_defaults(self):
+    config = TraceConfig()
+
+    self.assertTrue(config.ignore_self)
+    self.assertTrue(config.ignore_system_paths)
+    self.assertFalse(config.enable_var_trace)
+    self.assertEqual(config.report_name, "trace_report.html")
+    self.assertEqual(config.target_files, [])
+    self.assertEqual(config.line_ranges, defaultdict(set))
+    self.assertEqual(config.capture_vars, [])
+    self.assertEqual(config.exclude_functions, [])
+    self.assertIsNone(config.callback)
+    self.assertIsNone(config.start_function)
+    self.assertIsNone(config.source_base_dir)
+    self.assertFalse(config.disable_html)
+    self.assertEqual(config.include_stdlibs, [])
+
+    test_site_packages_file = None
+    try:
+        site_packages_dirs = site.getsitepackages()
+        for sp_dir in site_packages_dirs:
+            current_path = Path(sp_dir)
+            if current_path.is_dir() and (
+                any(f.suffix == ".pth" for f in current_path.iterdir())
+                or any(f.suffix == ".egg-info" for f in current_path.iterdir())
+                or any(f.is_dir() and "dist-info" in f.name for f in current_path.iterdir())
+            ):
+                test_site_packages_file = current_path / "some_test_lib.py"
+                break
+    except Exception:
+        pass
+
+    if not test_site_packages_file:
+        for p in sys.path:
+            resolved_p = Path(p).resolve()
+            if any(part in ("site-packages", "dist-packages") for part in resolved_p.parts) or (
+                "lib" in resolved_p.parts and any("python" in part.lower() for part in resolved_p.parts)
+            ):
+                test_site_packages_file = resolved_p / "some_test_lib.py"
+                break
+
+    if not test_site_packages_file:
+        test_site_packages_file = Path("/my_virtual_env/lib/python3.9/site-packages/test_module.py")
+
+    self.assertFalse(config.match_filename(str(test_site_packages_file)))
 
     def test_initialization_with_params(self):
         config = TraceConfig(target_files=["*.py"], enable_var_trace=True, ignore_system_paths=False)

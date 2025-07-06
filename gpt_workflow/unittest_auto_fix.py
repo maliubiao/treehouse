@@ -7,7 +7,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
-from unittest.mock import _Call
+from unittest.mock import ANY, _Call  # 添加了 ANY
 
 from colorama import Fore, Style
 from fixer_prompt import FixerPromptGenerator
@@ -169,6 +169,7 @@ class TestAutoFix:
                                 "error_message": error.get("error_message", "Unknown error"),
                                 "traceback": error.get("traceback", ""),
                                 "issue_type": category[:-1],  # removes 's' from 'errors'/'failures'
+                                "frame_ref_lines": error.get("frame_ref_lines", []),
                             }
                         )
 
@@ -203,7 +204,6 @@ class TestAutoFix:
 
         if not self.error_details:
             return None
-
         print(Fore.YELLOW + "\nPlease select an issue to fix:")
         print(Fore.YELLOW + "=" * 50)
         for i, error in enumerate(self.error_details):
@@ -273,7 +273,7 @@ class TestAutoFix:
                 selected_error["line"],
                 silent=silent,
                 test_id=selected_error["test_id"],
-                frame_ref_lines=selected_error["frame_ref_lines"],
+                frame_ref_lines=selected_error.get("frame_ref_lines", []),
             )
 
     def lookup_reference(self, file_path: str, lineno: int) -> None:
@@ -637,6 +637,31 @@ def _consume_stream_and_get_text(stream_generator, print_stream: bool = True) ->
     return "".join(text_chunks)
 
 
+def _interactive_patch_and_retry(fixer_model_switch: ModelSwitch, prompt: str, symbol_storage: list) -> bool:
+    """
+    Interactively generates and applies a patch, allowing the user to retry on failure.
+    Returns True on success, False on failure or user cancellation.
+    """
+    while True:
+        try:
+            print(Fore.YELLOW + "正在生成修复方案...")
+            text_stream = fixer_model_switch.query(fixer_model_switch.model_name, prompt, stream=True)
+            process_patch_response(text_stream, symbol_storage)
+            return True  # Success
+        except (ValueError, IndexError) as e:
+            print(Fore.RED + f"\nError processing AI response to generate patch: {e}")
+            print(
+                Fore.YELLOW
+                + "This can happen if the AI's response is malformed or doesn't follow the patch format correctly."
+            )
+            retry_choice = (
+                input(Fore.YELLOW + "Would you like to try generating the fix again? (y/n): ").strip().lower()
+            )
+            if retry_choice != "y":
+                print(Fore.RED + "User aborted the fix for this issue.")
+                return False
+
+
 def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_switch: ModelSwitch, user_req: str):
     """Performs a direct, one-step fix by analyzing the tracer log and generating a patch."""
     print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
@@ -649,9 +674,10 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_
     )
     p.process_search_results(symbol_result)
     prompt = p.build(user_requirement=prompt_content)
-    print(Fore.YELLOW + "正在生成修复方案...")
-    text = fixer_model_switch.query(fixer_model_switch.model_name, prompt, stream=True)
-    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+
+    _interactive_patch_and_retry(
+        fixer_model_switch=fixer_model_switch, prompt=prompt, symbol_storage=GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH]
+    )
 
 
 def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
@@ -759,8 +785,11 @@ def _perform_two_step_fix(
     p_fix.process_search_results(symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
 
-    text = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
-    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+    _interactive_patch_and_retry(
+        fixer_model_switch=fixer_model_switch,
+        prompt=prompt_fix,
+        symbol_storage=GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH],
+    )
     return remember_choice
 
 
@@ -808,8 +837,12 @@ def _perform_automated_fix_and_report(
     # Step 4: Generate and apply the fix
     print(Fore.YELLOW + "Generating and applying fix...")
     print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
-    text_fix = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
-    process_patch_response(text_fix, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+    try:
+        text_fix = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
+        process_patch_response(text_fix, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+    except (ValueError, IndexError) as e:
+        print(Fore.RED + f"\nError processing AI response to generate patch: {e}")
+        print(Fore.YELLOW + "Automated fix failed. This can happen if the AI's response is malformed. Skipping.")
 
 
 def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch):
@@ -1042,8 +1075,11 @@ def _generate_and_apply_patch_from_analysis(
     p_fix.process_search_results(analyzed_error.symbol_result)
     prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
 
-    text = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
-    process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+    _interactive_patch_and_retry(
+        fixer_model_switch=fixer_model_switch,
+        prompt=prompt_fix,
+        symbol_storage=GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH],
+    )
 
 
 def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_model_switch: ModelSwitch):
@@ -1327,7 +1363,25 @@ def run_single_test_fix_loop(args: argparse.Namespace, test_id: str):
         print(Fore.RED + "Could not build context. Cannot fix automatically.")
         sys.exit(1)
 
-    _perform_direct_fix(auto_fix, symbol_result, fixer_model_switch, args.user_requirement)
+    # Inlined logic from _perform_direct_fix for non-interactive use
+    prompt_content = FixerPromptGenerator.create_direct_fix_prompt(
+        trace_log=auto_fix.trace_log, user_req=args.user_requirement
+    )
+
+    GPT_FLAGS[GPT_FLAG_PATCH] = True
+    p = PatchPromptBuilder(
+        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
+    )
+    p.process_search_results(symbol_result)
+    prompt = p.build(user_requirement=prompt_content)
+
+    try:
+        print(Fore.YELLOW + "正在生成修复方案...")
+        text = fixer_model_switch.query(fixer_model_switch.model_name, prompt, stream=True)
+        process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
+    except (ValueError, IndexError) as e:
+        print(Fore.RED + f"\nError applying patch: {e}. Automated fix failed in isolated mode.")
+        sys.exit(1)
 
     print(Fore.GREEN + "\nPatch applied. Restarting process to verify...")
     _restart_with_original_args()

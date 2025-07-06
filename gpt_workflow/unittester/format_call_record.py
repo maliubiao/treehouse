@@ -1,52 +1,104 @@
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 
-def format_call_record_as_text(call_record: Dict[str, Any], max_depth: int = 2) -> str:
+def format_call_record_as_text(call_record: Dict[str, Any], max_chars: Optional[int] = None, max_depth: int = 4) -> str:
     """
     Formats a single call record into a human-readable text trace for the LLM.
-    This version correctly represents the nested structure and final outcomes,
-    with an added `max_depth` parameter to control recursion depth.
+    This version intelligently compresses repetitive sequences of events (like in loops)
+    and respects a maximum character limit to avoid oversized prompts.
 
     Args:
         call_record: The dictionary representing the call record.
+        max_chars: The maximum number of characters for the formatted trace.
+                   If the output exceeds this, it will be truncated.
         max_depth: The maximum depth to recurse into sub-calls.
-                   A depth of 0 means only the top-level call header and final outcome
-                   will be shown. A depth of 1 means direct sub-calls will be expanded,
-                   but their internal details (lines, further sub-sub-calls) will be truncated.
 
     Returns:
-        A string representing the formatted call trace.
+        A string representing the formatted and potentially compressed/truncated call trace.
     """
-    trace_lines = []
+    formatter = _CallRecordFormatter(max_chars=max_chars, max_depth=max_depth)
+    return formatter.format(call_record)
 
-    def _format_recursive(record: Dict, indent_str: str, current_depth: int, max_depth: int):
-        # 1. Print the entry point of this specific record
+
+def _get_event_signature(event: Dict) -> str:
+    """Creates a unique signature for an event to detect repetitions."""
+    event_type = event.get("type")
+    data = event.get("data", {})
+    if event_type == "line":
+        return f"line:{data.get('line_no')}"
+    if event_type == "call":
+        return f"call:{data.get('func_name')}@{data.get('caller_lineno')}"
+    return "other"
+
+
+class _CallRecordFormatter:
+    def __init__(self, max_chars: Optional[int], max_depth: int):
+        self.max_chars = max_chars
+        self.max_depth = max_depth
+        self.lines: List[str] = []
+        self.current_length = 0
+        self.truncated = False
+
+    def _add(self, text: str):
+        if self.truncated:
+            return
+
+        if self.max_chars is not None and self.current_length + len(text) + 1 > self.max_chars:
+            self.lines.append("  (...)")
+            self.lines.append("[Trace truncated due to size limit]")
+            self.truncated = True
+            return
+
+        self.lines.append(text)
+        self.current_length += len(text) + 1
+
+    def format(self, call_record: Dict) -> str:
+        func_name = call_record.get("func_name", "N/A")
+        filename = call_record.get("original_filename", "N/A")
+        self._add(f"Execution trace for `{func_name}` from `{filename}`:")
+        self._format_recursive(call_record, "", 0)
+        return "\n".join(self.lines)
+
+    def _format_recursive(self, record: Dict, indent_str: str, depth: int):
+        if self.truncated:
+            return
+
         func_name = record.get("func_name", "N/A")
         args = record.get("args", {})
         caller_lineno = record.get("caller_lineno")
         prefix = f"L{caller_lineno:<4} " if caller_lineno else ""
-
         args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items()) if args else ""
         call_header = f"[SUB-CALL] {func_name}({args_str})" if indent_str else f"[CALL] {func_name}({args_str})"
-        trace_lines.append(f"{indent_str}{prefix}{call_header}")
+        self._add(f"{indent_str}{prefix}{call_header}")
 
-        # 2. Iterate through the internal events of this record, if within max_depth
-        if current_depth < max_depth:
+        if depth < self.max_depth:
+            last_sig: Optional[str] = None
+            repeat_count = 0
             for event in record.get("events", []):
+                if self.truncated:
+                    break
+                current_sig = _get_event_signature(event)
+                if current_sig is not None and current_sig == last_sig:
+                    repeat_count += 1
+                else:
+                    if repeat_count > 1:
+                        self._add(f"{indent_str}  (Repeated {repeat_count} times)")
+                    repeat_count = 1
+                    last_sig = current_sig
+
                 event_type = event.get("type")
                 data = event.get("data", {})
-
                 if event_type == "line":
-                    line_no, content = data.get("line_no"), data.get("content", "").rstrip()
-                    trace_lines.append(f"{indent_str}  L{line_no:<4} {content}")
+                    self._add(f"{indent_str}  L{data.get('line_no'):<4} {data.get('content', '').rstrip()}")
                 elif event_type == "call":
-                    # If a sub-call event is found, recurse with incremented depth
-                    _format_recursive(data, indent_str + "  ", current_depth + 1, max_depth)
-        else:
-            # If max_depth is reached or exceeded, indicate truncation (optional, but good for clarity)
-            trace_lines.append(f"{indent_str}  (Trace truncated at depth {current_depth}/{max_depth})")
+                    self._format_recursive(data, indent_str + "  ", depth + 1)
+            if repeat_count > 1:
+                self._add(f"{indent_str}  (Repeated {repeat_count} times)")
+        elif depth == self.max_depth:
+            # When the current depth reaches max_depth, events are truncated.
+            # Add the truncation message as per test expectation.
+            self._add(f"{indent_str}  (Trace truncated at depth {self.max_depth}/{self.max_depth})")
 
-        # 3. Print the final outcome of this specific record
         exception = record.get("exception")
         if exception:
             exc_type = exception.get("type", "UnknownException")
@@ -56,7 +108,6 @@ def format_call_record_as_text(call_record: Dict[str, Any], max_depth: int = 2) 
                 if indent_str
                 else f"[FINAL] RAISES: {exc_type}: {exc_value}"
             )
-            trace_lines.append(f"{indent_str}  {outcome}")
         else:
             return_value = record.get("return_value")
             outcome = (
@@ -64,13 +115,4 @@ def format_call_record_as_text(call_record: Dict[str, Any], max_depth: int = 2) 
                 if indent_str
                 else f"[FINAL] RETURNS: {repr(return_value)}"
             )
-            trace_lines.append(f"{indent_str}  {outcome}")
-
-    # Start the formatting from the top-level record with initial depth 0
-    func_name = call_record.get("func_name", "N/A")
-    original_filename = call_record.get("original_filename", "N/A")
-    trace_lines.append(f"Execution trace for `{func_name}` from `{original_filename}`:")
-    _format_recursive(call_record, "", 0, max_depth)
-
-    # Clean up the output slightly for better prompt injection
-    return "\n".join(line.rstrip() for line in trace_lines).replace("\n  \n", "\n")
+        self._add(f"{indent_str}  {outcome}")
