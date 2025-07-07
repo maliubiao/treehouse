@@ -1157,8 +1157,11 @@ class TestModelSwitch(unittest.TestCase):
             key="original_key",
             base_url="http://original",
             model_name="original_model",
+            tokenizer_name="original_model",
             max_context_size=4096,
             temperature=0.7,
+            http_proxy=None,
+            https_proxy=None,
         )
 
         # 创建临时目录用于隔离测试文件
@@ -1174,19 +1177,25 @@ class TestModelSwitch(unittest.TestCase):
                 key="key1",
                 base_url="http://api1",
                 model_name="model1",
+                tokenizer_name="model1",
                 max_context_size=4096,
                 temperature=0.7,
                 price_1m_input=1.0,
                 price_1m_output=2.0,
+                http_proxy=None,
+                https_proxy=None,
             ),
             "model2": ModelConfig(
                 key="key2",
                 base_url="http://api2",
                 model_name="model2",
+                tokenizer_name="model2",
                 max_context_size=4096,
                 temperature=0.7,
                 price_1m_input=1.0,
                 price_1m_output=2.0,
+                http_proxy=None,
+                https_proxy=None,
             ),
         }
 
@@ -1252,14 +1261,20 @@ class TestModelSwitch(unittest.TestCase):
             key="test_key",
             base_url="http://test-api/v1",
             model_name="test-model",
+            tokenizer_name="test-model",
             max_context_size=512,
             temperature=0.3,
+            http_proxy=None,
+            https_proxy=None,
         )
 
         self.assertEqual(test_config.model_name, "test-model")
         self.assertEqual(test_config.base_url, "http://test-api/v1")
+        self.assertEqual(test_config.tokenizer_name, "test-model")
         self.assertEqual(test_config.max_context_size, 512)
         self.assertAlmostEqual(test_config.temperature, 0.3)
+        self.assertIsNone(test_config.http_proxy)
+        self.assertIsNone(test_config.https_proxy)
 
     def test_config_revert_after_switch(self) -> None:
         """测试配置切换后的回滚机制"""
@@ -1270,10 +1285,16 @@ class TestModelSwitch(unittest.TestCase):
             key="temp_key",
             base_url="http://temp-api/v2",
             model_name="temp-model",
+            tokenizer_name="temp-model",
             temperature=1.0,
+            http_proxy=None,
+            https_proxy=None,
         )
 
         self.assertEqual(temp_config.model_name, "temp-model")
+        self.assertEqual(temp_config.tokenizer_name, "temp-model")
+        self.assertIsNone(temp_config.http_proxy)
+        self.assertIsNone(temp_config.https_proxy)
 
     def test_load_valid_config(self) -> None:
         """测试正常加载配置文件"""
@@ -1287,14 +1308,16 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(config["model1"].key, "key1")
         self.assertEqual(config["model1"].base_url, "http://api1")
         self.assertEqual(config["model1"].model_name, "model1")
+        self.assertEqual(config["model1"].tokenizer_name, "model1")
         self.assertEqual(config["model1"].max_context_size, 4096)
         self.assertAlmostEqual(config["model1"].temperature, 0.7)
+        self.assertIsNone(config["model1"].http_proxy)
+        self.assertIsNone(config["model1"].https_proxy)
 
     def test_load_missing_config_file(self) -> None:
         """测试配置文件不存在异常"""
         switch = ModelSwitch()
 
-        # 修改mock行为使其在特定路径下抛出异常
         def mock_load_config(path):
             if path == "nonexistent.json":
                 raise FileNotFoundError(f"模型配置文件未找到: {path}")
@@ -1314,14 +1337,12 @@ class TestModelSwitch(unittest.TestCase):
 
         switch = ModelSwitch()
 
-        # 临时停止mock以测试实际文件加载逻辑
         self.model_switch_patcher.stop()
         try:
             with self.assertRaises(ValueError) as context:
                 switch._load_config(invalid_file.name)
             self.assertIn("配置文件格式错误", str(context.exception))
         finally:
-            # 恢复mock
             self.model_switch_patcher.start()
 
         os.unlink(invalid_file.name)
@@ -1329,8 +1350,6 @@ class TestModelSwitch(unittest.TestCase):
     def test_get_valid_model_config(self) -> None:
         """测试获取存在的模型配置"""
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
-
         config = switch._get_model_config("model1")
         self.assertEqual(config.key, "key1")
         self.assertEqual(config.base_url, "http://api1")
@@ -1338,46 +1357,33 @@ class TestModelSwitch(unittest.TestCase):
     def test_get_nonexistent_model(self) -> None:
         """测试获取不存在的模型配置"""
         switch = ModelSwitch()
-        switch.config = {name: ModelConfig(**config.__dict__) for name, config in self.valid_config.items()}
-
         with self.assertRaises(ValueError) as context:
             switch._get_model_config("nonexistent")
         self.assertIn("未找到模型配置", str(context.exception))
 
     def test_validate_required_fields(self) -> None:
         """测试配置字段验证"""
-        # 写入缺少base_url的配置
-        invalid_config = {"invalid_model": {"model_name": "invalid_model", "temperature": 0.5}}
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf8") as invalid_file:
-            invalid_file.write(json.dumps(invalid_config))
-            invalid_file.flush()
+        invalid_raw_config = {"invalid_model": {"base_url": "http://invalid", "model_name": "invalid_model"}}
 
-            # 临时停止mock以测试实际验证逻辑
-            self.model_switch_patcher.stop()
-            try:
-                with self.assertRaises(ValueError) as context:
-                    switch = ModelSwitch(config_path=invalid_file.name)
-                    switch._load_config()
-                self.assertIn("模型配置缺少必要字段", str(context.exception))
-            finally:
-                # 恢复mock
-                self.model_switch_patcher.start()
-
-            os.unlink(invalid_file.name)
+        switch = ModelSwitch()
+        with patch.object(
+            switch, "_load_and_validate_config", side_effect=switch._load_and_validate_config
+        ) as mock_validate:
+            with self.assertRaises(ValueError) as cm:
+                mock_validate(invalid_raw_config["invalid_model"])
+            self.assertIn("模型配置缺少必要字段", str(cm.exception))
 
     @patch("llm_query.query_gpt_api")
     def test_api_query_with_retry(self, mock_query):
         """测试API调用重试机制"""
         time.sleep = lambda x: 0  # Mock sleep function
-        # 设置模拟API返回值包含完整结构
         mock_query.side_effect = [
             Exception("First fail"),
             Exception("Second fail"),
-            {"choices": [{"message": {"content": "success"}}]},
+            {"choices": [{"message": {"content": "success"}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
         ]
 
         switch = ModelSwitch()
-        # 删除无效的switch.config赋值
 
         result = switch.query("model1", "test prompt")
         self.assertEqual(result, "success")
@@ -1386,19 +1392,20 @@ class TestModelSwitch(unittest.TestCase):
     @patch("llm_query.query_gpt_api")
     def test_api_config_propagation(self, mock_query):
         """测试配置参数是否正确传播到API调用"""
-        # 设置模拟API返回值为完整结构
-        mock_query.return_value = {"choices": [{"message": {"content": "test response"}}]}
+        mock_query.return_value = {
+            "choices": [{"message": {"content": "test response"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
 
         switch = ModelSwitch()
-        # 删除无效的switch.config赋值
 
-        # 执行查询并验证配置传播
         switch.query("model1", "test prompt")
         mock_query.assert_called_once_with(
             base_url="http://api1",
             api_key="key1",
             prompt="test prompt",
             model="model1",
+            model_config=switch.current_config,
             disable_conversation_history=True,
             max_context_size=4096,
             temperature=0.7,
@@ -1416,7 +1423,6 @@ class TestModelSwitch(unittest.TestCase):
         """测试端到端工作流程"""
         from unittest.mock import ANY
 
-        # 1. 设置模拟数据 (query方法现在返回字符串)
         architect_content = json.dumps(
             {
                 "task": "test task",
@@ -1429,7 +1435,6 @@ class TestModelSwitch(unittest.TestCase):
         coder_content_1 = "patch1"
         coder_content_2 = "patch2"
 
-        # 2. 配置mock行为
         mock_query.side_effect = [architect_content, coder_content_1, coder_content_2]
         mock_parse.return_value = {
             "task": "parsed task",
@@ -1439,26 +1444,22 @@ class TestModelSwitch(unittest.TestCase):
             ],
         }
 
-        # 3. 执行测试
         switch = ModelSwitch()
         switch._config_cache = {
-            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch"),
-            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder"),
+            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch", tokenizer_name="arch"),
+            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder", tokenizer_name="coder"),
         }
         results = switch.execute_workflow(architect_model="architect", coder_model="coder", prompt="test prompt")
 
-        # 4. 验证结果
         self.assertEqual(len(results), 2)
         self.assertEqual(results, [coder_content_1, coder_content_2])
 
-        # 验证parse_response调用 (应该被调用一次，参数是architect的响应字符串)
         mock_parse.assert_called_once_with(architect_content)
 
-        # 验证process_patch_response调用次数 (每个coder job调用一次)
         self.assertEqual(mock_process.call_count, 2)
         mock_process.assert_any_call(
             coder_content_1,
-            ANY,  # 忽略对GPT_VALUE_STORAGE的精确检查
+            ANY,
             auto_commit=False,
             auto_lint=False,
         )
@@ -1469,14 +1470,12 @@ class TestModelSwitch(unittest.TestCase):
             auto_lint=False,
         )
 
-        # 验证query调用次数 (1次架构师 + 2次编码)
         self.assertEqual(mock_query.call_count, 3)
 
     @patch("llm_query.query_gpt_api")
     @patch("builtins.input")
     def test_execute_workflow_retry_mechanism(self, mock_input, mock_query):
         """测试工作流重试机制"""
-        # 模拟3次失败后成功
         time.sleep = lambda x: 0  # Mock sleep function
         mock_query.side_effect = [
             Exception("First fail"),
@@ -1497,17 +1496,17 @@ class TestModelSwitch(unittest.TestCase):
 """
                         }
                     }
-                ]
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
             },
         ]
 
         switch = ModelSwitch()
         switch._config_cache = {
-            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch"),
-            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder"),
+            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch", tokenizer_name="arch"),
+            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder", tokenizer_name="coder"),
         }
 
-        # 模拟用户输入y重试
         mock_input.side_effect = ["y", "y", "n"]
         results = switch.execute_workflow(
             architect_model="architect",
@@ -1523,16 +1522,13 @@ class TestModelSwitch(unittest.TestCase):
     @patch("gpt_workflow.ArchitectMode.parse_response")
     def test_execute_workflow_invalid_json(self, mock_parse, mock_query):
         """测试非标准JSON输入的容错处理"""
-        # 模拟非标准JSON响应
-        mock_query.return_value = {"choices": [{"message": {"content": "invalid{json"}}]}
-
-        # parse_response应该能处理这种异常
+        mock_query.return_value = "invalid{json"
         mock_parse.side_effect = json.JSONDecodeError("Expecting value", doc="invalid{json", pos=0)
 
         switch = ModelSwitch()
         switch._config_cache = {
-            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch"),
-            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder"),
+            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch", tokenizer_name="arch"),
+            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder", tokenizer_name="coder"),
         }
 
         with self.assertRaises(json.JSONDecodeError):
@@ -1545,15 +1541,18 @@ class TestModelSwitch(unittest.TestCase):
                 key="test_key",
                 base_url="http://test",
                 model_name="test",
+                tokenizer_name="test_tokenizer",
                 max_context_size=8192,
                 temperature=0.6,
                 is_thinking=True,
                 max_tokens=1000,
-                thinking_budget=65536,  # 测试thinking_budget
-                top_k=30,  # 测试top_k
-                top_p=0.8,  # 测试top_p
+                thinking_budget=65536,
+                top_k=30,
+                top_p=0.8,
                 price_1m_input=1.0,
                 price_1m_output=2.0,
+                http_proxy="http_proxy_test",
+                https_proxy="https_proxy_test",
             )
         }
         switch = ModelSwitch()
@@ -1563,46 +1562,46 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_config.key, "test_key")
         self.assertEqual(model_config.base_url, "http://test")
         self.assertEqual(model_config.model_name, "test")
+        self.assertEqual(model_config.tokenizer_name, "test_tokenizer")
         self.assertEqual(model_config.max_context_size, 8192)
         self.assertEqual(model_config.temperature, 0.6)
         self.assertTrue(model_config.is_thinking)
         self.assertEqual(model_config.max_tokens, 1000)
-        self.assertEqual(model_config.thinking_budget, 65536)  # 验证thinking_budget
-        self.assertEqual(model_config.top_k, 30)  # 验证top_k
-        self.assertAlmostEqual(model_config.top_p, 0.8)  # 验证top_p
+        self.assertEqual(model_config.thinking_budget, 65536)
+        self.assertEqual(model_config.top_k, 30)
+        self.assertAlmostEqual(model_config.top_p, 0.8)
         self.assertEqual(model_config.price_1m_input, 1.0)
         self.assertEqual(model_config.price_1m_output, 2.0)
+        self.assertEqual(model_config.http_proxy, "http_proxy_test")
+        self.assertEqual(model_config.https_proxy, "https_proxy_test")
 
     def test_calculate_cost(self):
         """测试费用计算逻辑"""
-        # 创建带价格的配置
         config = ModelConfig(
             key="test_key",
             base_url="http://test",
             model_name="test",
-            price_1m_input=10.0,  # 每百万输入token $10
-            price_1m_output=20.0,  # 每百万输出token $20
+            tokenizer_name="test",
+            price_1m_input=10.0,
+            price_1m_output=20.0,
+            http_proxy=None,
+            https_proxy=None,
         )
 
         switch = ModelSwitch()
 
-        # 测试输入输出费用计算
         cost = switch._calculate_cost(500_000, 250_000, config)
-        self.assertAlmostEqual(cost, (0.5 * 10) + (0.25 * 20))  # $5 + $5 = $10
+        self.assertAlmostEqual(cost, (0.5 * 10) + (0.25 * 20))
 
-        # 修正：使用低于阈值的token数量
-        cost = switch._calculate_cost(50_000, 5_000, config)  # $0.5 + $0.1 = $0.6
+        cost = switch._calculate_cost(50_000, 5_000, config)
         self.assertAlmostEqual(cost, 0.6)
 
-        # 边界值测试(0.69999美元)
-        cost = switch._calculate_cost(69_999, 0, config)  # $0.69999
+        cost = switch._calculate_cost(69_999, 0, config)
         self.assertAlmostEqual(cost, 0.69999)
 
-        # 边界值测试(0.70001美元)
-        cost = switch._calculate_cost(70_001, 0, config)  # $0.70001
+        cost = switch._calculate_cost(70_001, 0, config)
         self.assertAlmostEqual(cost, 0.70001)
 
-        # 测试无价格配置
         config.price_1m_input = None
         config.price_1m_output = None
         cost = switch._calculate_cost(1_000_000, 500_000, config)
@@ -1612,7 +1611,6 @@ class TestModelSwitch(unittest.TestCase):
     def test_record_usage(self, mock_save):
         """测试使用记录功能"""
         switch = ModelSwitch()
-        # 确保mock应用到实例
         switch._save_usage_to_file = mock_save
 
         switch._config_cache = {
@@ -1620,23 +1618,23 @@ class TestModelSwitch(unittest.TestCase):
                 key="key1",
                 base_url="url1",
                 model_name="model1",
+                tokenizer_name="model1",
                 price_1m_input=5.0,
                 price_1m_output=15.0,
+                http_proxy=None,
+                https_proxy=None,
             )
         }
 
-        # 清空使用记录，确保测试环境干净
         switch._usage_records = {}
 
-        # 第一次调用
         switch._record_usage("model1", 200_000, 100_000)
         today = datetime.date.today().isoformat()
 
-        # 验证记录内容
         daily = switch._usage_records[today]
         self.assertEqual(daily["total_input_tokens"], 200_000)
         self.assertEqual(daily["total_output_tokens"], 100_000)
-        self.assertAlmostEqual(daily["total_cost"], (0.2 * 5) + (0.1 * 15))  # $1 + $1.5 = $2.5
+        self.assertAlmostEqual(daily["total_cost"], (0.2 * 5) + (0.1 * 15))
 
         model_record = daily["models"]["model1"]
         self.assertEqual(model_record["input_tokens"], 200_000)
@@ -1644,13 +1642,11 @@ class TestModelSwitch(unittest.TestCase):
         self.assertAlmostEqual(model_record["cost"], 2.5)
         self.assertEqual(model_record["count"], 1)
 
-        # 第二次调用
         switch._record_usage("model1", 300_000, 150_000)
 
-        # 验证累加
         self.assertEqual(daily["total_input_tokens"], 500_000)
         self.assertEqual(daily["total_output_tokens"], 250_000)
-        self.assertAlmostEqual(daily["total_cost"], 2.5 + (0.3 * 5) + (0.15 * 15))  # $2.5 + $1.5 + $2.25 = $6.25
+        self.assertAlmostEqual(daily["total_cost"], 2.5 + (0.3 * 5) + (0.15 * 15))
 
         model_record = daily["models"]["model1"]
         self.assertEqual(model_record["count"], 2)
@@ -1658,13 +1654,11 @@ class TestModelSwitch(unittest.TestCase):
         self.assertEqual(model_record["output_tokens"], 250_000)
         self.assertAlmostEqual(model_record["cost"], 6.25)
 
-        # 验证保存调用
         self.assertEqual(mock_save.call_count, 2)
 
     def test_record_usage_multiple_models(self):
         """测试多模型使用记录"""
         switch = ModelSwitch()
-        # 清空使用记录，避免历史数据影响
         switch._usage_records = {}
 
         switch._config_cache = {
@@ -1672,19 +1666,24 @@ class TestModelSwitch(unittest.TestCase):
                 key="keyA",
                 base_url="urlA",
                 model_name="modelA",
+                tokenizer_name="modelA",
                 price_1m_input=10.0,
                 price_1m_output=20.0,
+                http_proxy=None,
+                https_proxy=None,
             ),
             "modelB": ModelConfig(
                 key="keyB",
                 base_url="urlB",
                 model_name="modelB",
+                tokenizer_name="modelB",
                 price_1m_input=5.0,
                 price_1m_output=10.0,
+                http_proxy=None,
+                https_proxy=None,
             ),
         }
 
-        # 记录不同模型的使用
         switch._record_usage("modelA", 100_000, 50_000)
         switch._record_usage("modelB", 200_000, 100_000)
         switch._record_usage("modelA", 50_000, 25_000)
@@ -1692,24 +1691,20 @@ class TestModelSwitch(unittest.TestCase):
         today = datetime.date.today().isoformat()
         daily = switch._usage_records[today]
 
-        # 验证总使用量
         self.assertEqual(daily["total_input_tokens"], 350_000)
         self.assertEqual(daily["total_output_tokens"], 175_000)
         self.assertAlmostEqual(
             daily["total_cost"],
-            (0.15 * 10 + 0.075 * 20)  # modelA: $1.5 + $1.5 = $3
-            + (0.2 * 5 + 0.1 * 10),  # modelB: $1 + $1 = $2
+            (0.15 * 10 + 0.075 * 20) + (0.2 * 5 + 0.1 * 10),
             places=2,
         )
 
-        # 验证模型A记录
         modelA = daily["models"]["modelA"]
         self.assertEqual(modelA["count"], 2)
         self.assertEqual(modelA["input_tokens"], 150_000)
         self.assertEqual(modelA["output_tokens"], 75_000)
         self.assertAlmostEqual(modelA["cost"], 3.0)
 
-        # 验证模型B记录
         modelB = daily["models"]["modelB"]
         self.assertEqual(modelB["count"], 1)
         self.assertEqual(modelB["input_tokens"], 200_000)

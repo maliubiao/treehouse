@@ -196,7 +196,6 @@ class SymbolService:
         return api_url
 
 
-@trace(target_files=["*.py"])
 def start_symbol_service(force=False):
     """
     use config in global object

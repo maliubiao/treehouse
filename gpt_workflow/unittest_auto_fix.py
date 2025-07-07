@@ -431,12 +431,28 @@ class TestAutoFix:
                 print("symbol service returns symbol: %s" % sym)
         # 3. Create a lookup map for symbols with their approximate token counts
         location_to_symbol_map = {}
+        total_tokens = 0  # Track total tokens of all symbols
         for name, symbol_data in all_symbols.items():
             content = symbol_data.get("code", "")
             tokens = len(content) // 3
+            total_tokens += tokens
             location_to_symbol_map[name] = {"name": name, "tokens": tokens, "data": symbol_data}
 
-        # 4. Reconstruct the call stack at the point of exception
+        # 4. Check if all symbols fit within token budget
+        if total_tokens <= MAX_SYMBOLS_TOKENS:
+            if not silent:
+                print(Fore.CYAN + "\nAll symbols fit within token budget. Adding all without prioritization:")
+            final_symbols = {name: data["data"] for name, data in location_to_symbol_map.items()}
+            if not silent:
+                print(Fore.GREEN + f"  ✓ Added all {len(final_symbols)} symbols ({total_tokens} tokens)")
+                print(
+                    Fore.CYAN
+                    + f"\nSelected {len(final_symbols)} symbols with a total of ~{total_tokens} tokens for context."
+                )
+                print(Fore.CYAN + "=" * 54)
+            return final_symbols
+
+        # 5. Reconstruct the call stack at the point of exception
         call_stack_at_exception = []
         if self.main_call_chain:
             temp_stack = []
@@ -454,12 +470,12 @@ class TestAutoFix:
         if not call_stack_at_exception and self.exception_location:
             call_stack_at_exception.append(self.exception_location)
 
-        # 5. Prioritize and build the final list of symbols
+        # 6. Prioritize and build the final list of symbols
         final_symbols = {}
         added_symbol_names = set()
         current_tokens = 0
 
-        # 5a. Add symbols from the call stack, deepest first
+        # 6a. Add symbols from the call stack, deepest first
         if call_stack_at_exception:
             if not silent:
                 print(Fore.CYAN + "\nAdding symbols from exception call stack (deepest first):")
@@ -495,7 +511,7 @@ class TestAutoFix:
                             print(Fore.YELLOW + f"  - Skipping {name} ({tokens} tokens) to fit context. Budget full.")
                         break
 
-        # 5b. Fill remaining budget with other referenced symbols, smallest first
+        # 6b. Fill remaining budget with other referenced symbols, smallest first
         if current_tokens < MAX_SYMBOLS_TOKENS:
             if not silent:
                 print(Fore.CYAN + "\nFilling remaining context with other referenced symbols (smallest first):")

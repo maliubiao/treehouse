@@ -238,6 +238,32 @@ class GraphTraceLogExtractor:
             "type": event_type,
         }
 
+    def _get_descendant_events(self, frame_id: int) -> List[ReferenceInfo]:
+        """
+        递归收集指定帧及其所有后代帧的事件（按调用时间顺序）
+
+        返回格式: [CALL事件, ...子事件..., RETURN/EXCEPTION/PARTIAL事件]
+        """
+        events = []
+
+        # 添加当前帧的CALL事件
+        events.append(self._create_reference_event(frame_id, TraceTypes.CALL.value))
+
+        # 递归处理所有子帧（按时间顺序）
+        children = sorted(
+            list(self._graph.successors(frame_id)), key=lambda cid: self._graph.nodes[cid].get("start_pos", 0)
+        )
+        for child_id in children:
+            events.extend(self._get_descendant_events(child_id))
+
+        # 添加当前帧的结束事件
+        status = self._graph.nodes[frame_id].get("status")
+        if not status:  # 处理未关闭帧
+            status = TraceTypes.PARTIAL.value
+        events.append(self._create_reference_event(frame_id, status))
+
+        return events
+
     def _lookup_by_frame_id(
         self, frame_id: int, next_siblings: Optional[int] = None
     ) -> Tuple[List[str], List[List[ReferenceInfo]]]:
@@ -286,19 +312,9 @@ class GraphTraceLogExtractor:
         # 4. 按时间顺序构建引用链
         references: List[ReferenceInfo] = []
         for fid in sorted_relevant_frames:
-            # 对于目标帧，包含其完整的子调用链
+            # 对于目标帧，包含其完整的子调用树
             if fid == frame_id:
-                references.append(self._create_reference_event(fid, TraceTypes.CALL.value))
-                children_ids = sorted(
-                    list(self._graph.successors(fid)),
-                    key=lambda cid: self._graph.nodes[cid].get("start_pos", 0),
-                )
-                for child_id in children_ids:
-                    references.append(self._create_reference_event(child_id, TraceTypes.CALL.value))
-                    if status := self._graph.nodes[child_id].get("status"):
-                        references.append(self._create_reference_event(child_id, status))
-                if status := self._graph.nodes[fid].get("status"):
-                    references.append(self._create_reference_event(fid, status))
+                references.extend(self._get_descendant_events(fid))
             # 对于兄弟帧，只包含其自身的调用和返回事件
             else:
                 references.append(self._create_reference_event(fid, TraceTypes.CALL.value))
@@ -382,18 +398,10 @@ class GraphTraceLogExtractor:
             # 4. 按时间顺序构建引用链
             references: List[ReferenceInfo] = []
             for fid in sorted_by_start:
+                # 对于目标帧，包含完整的子树事件
                 if fid == frame_id:
-                    references.append(self._create_reference_event(fid, TraceTypes.CALL.value))
-                    children_ids = sorted(
-                        list(self._graph.successors(fid)),
-                        key=lambda cid: self._graph.nodes[cid].get("start_pos", 0),
-                    )
-                    for child_id in children_ids:
-                        references.append(self._create_reference_event(child_id, TraceTypes.CALL.value))
-                        if status := self._graph.nodes[child_id].get("status"):
-                            references.append(self._create_reference_event(child_id, status))
-                    if status := self._graph.nodes[fid].get("status"):
-                        references.append(self._create_reference_event(fid, status))
+                    references.extend(self._get_descendant_events(fid))
+                # 对于兄弟帧，只包含自身事件
                 else:
                     references.append(self._create_reference_event(fid, TraceTypes.CALL.value))
                     if status := self._graph.nodes[fid].get("status"):

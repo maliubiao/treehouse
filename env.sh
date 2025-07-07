@@ -420,11 +420,11 @@ function trace() {
 }
 
 function symbolgpt() {
-  $GPT_PYTHON_BIN -c "import gpt_lib; gpt_lib.start_symbol_service(False)"
+  $GPT_PYTHON_BIN -c "from gpt_lib import service; service.start_symbol_service(False)"
 }
 
 function symbolgptrestart() {
-  $GPT_PYTHON_BIN -c "import gpt_lib; gpt_lib.start_symbol_service(True)"
+  $GPT_PYTHON_BIN -c "from gpt_lib import service; service.start_symbol_service(True)"
 }
 
 function patchgpttrace() {

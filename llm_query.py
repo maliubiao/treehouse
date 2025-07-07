@@ -542,7 +542,11 @@ def query_gpt_api(
         return _process_and_save_response(model, response, history, kwargs)
 
     except requests.exceptions.HTTPError as he:
-        debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
+        if not GLOBAL_MODEL_CONFIG:
+            model_config = kwargs.get("model_config")
+        else:
+            model_config = GLOBAL_MODEL_CONFIG
+        debug_info = model_config.get_debug_info()
         error_msg = f"API请求失败 HTTP {he.response.status_code}\n"
         error_msg += f"请求配置: {debug_info}\n"
 
@@ -553,7 +557,11 @@ def query_gpt_api(
         raise RuntimeError(error_msg) from he
 
     except requests.exceptions.RequestException as req_exc:
-        debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
+        if not GLOBAL_MODEL_CONFIG:
+            model_config: ModelConfig = kwargs.get("model_config")
+        else:
+            model_config = GLOBAL_MODEL_CONFIG
+        debug_info = model_config.get_debug_info()
         error_msg = f"网络请求异常: {str(req_exc)}\n"
         error_msg += f"当前配置: {debug_info}"
         raise RuntimeError(error_msg) from req_exc
@@ -562,7 +570,11 @@ def query_gpt_api(
         print(f"详细错误信息: {str(runtime_exc)}")
         raise runtime_exc
     except (ValueError, TypeError, KeyError) as specific_exc:
-        debug_info = GLOBAL_MODEL_CONFIG.get_debug_info()
+        if not GLOBAL_MODEL_CONFIG:
+            model_config = kwargs.get("model_config")
+        else:
+            model_config = GLOBAL_MODEL_CONFIG
+        debug_info = model_config.get_debug_info()
         error_msg = f"特定类型错误: {str(specific_exc)}\n"
         error_msg += f"配置状态: {debug_info}"
         print(error_msg)
@@ -3958,10 +3970,13 @@ class ModelSwitch:
                 key="test_key",
                 base_url="http://test",
                 model_name="test",
+                tokenizer_name="test",
                 max_context_size=8192,
                 temperature=0.0,
                 price_1m_input=0.5,
                 price_1m_output=1.5,
+                http_proxy=None,
+                https_proxy=None,
             )
         }
 
@@ -4222,7 +4237,12 @@ class ModelSwitch:
         """执行单次API查询"""
         with self._temp_env_vars(config):
             response = query_gpt_api(
-                base_url=config.base_url, api_key=config.key, prompt=prompt, model=config.model_name, **kwargs
+                base_url=config.base_url,
+                api_key=config.key,
+                prompt=prompt,
+                model=config.model_name,
+                model_config=config,
+                **kwargs,
             )
         return response
 
