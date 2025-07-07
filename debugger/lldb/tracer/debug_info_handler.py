@@ -197,7 +197,10 @@ class DebugInfoHandler:
         """Build expression string for memory reference"""
         expr_str = f"[{base_reg}"
         if offset_value != 0:
-            expr_str += f" + {offset_value:#x}"
+            if offset_value < 0:
+                expr_str += f" - {abs(offset_value):#x}"  # 将负值转换为减法表达式
+            else:
+                expr_str += f" + {offset_value:#x}"
         if index_reg:
             expr_str += f" + {index_reg}"
             if "shift_op" in memref:

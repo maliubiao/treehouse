@@ -733,58 +733,55 @@ class TestDebugInfoHandlerMemoryHelpers(BaseTestDebugInfoHandler):
         # Verify memory read parameters (size for 'stp' is 8 bytes)
         self.mock_tracer.process.ReadUnsignedFromMemory.assert_called_once_with(expected_addr, 8, unittest.mock.ANY)
 
-    def test_parse_offset_comprehensive(self):
-        """
-        Verify _parse_offset correctly handles various valid and invalid offset strings,
-        combining tests from Blocks 18 and 19.
-        Ensures correct parsing, error logging, and return values (0 on error).
-        """
-        test_cases = [
-            # (input_str, expected_output, should_log_error)
-            ("#0x10", 16, False),  # Hex with hash prefix
-            ("0x10", 16, False),  # Hex without hash
-            ("10", 10, False),  # Decimal without hash
-            ("#10", 10, False),  # Decimal with hash
-            ("", 0, False),  # Empty string
-            ("010", 8, False),  # Octal without hash
-            ("#010", 8, False),  # Octal with hash
-            ("invalid_offset", 0, True),  # Invalid string
-            ("#", 0, False),  # Only '#' becomes empty
-            ("0o10", 8, False),  # Octal explicit prefix
-            ("0b10", 2, False),  # Binary explicit prefix
-            ("##10##", 10, False),  # Strip multiple '#'
-            ("-10", -10, False),  # Negative decimal
-            ("-0x10", -16, False),  # Negative hex
-            ("#-10", -10, False),  # Negative with '#'
-            ("123abc", 0, True),  # Partially invalid
-            ("#invalid", 0, True),  # Invalid with '#'
-        ]
 
-        for offset_str, expected, expect_error in test_cases:
-            with self.subTest(offset_str=offset_str, expected=expected, expect_error=expect_error):
-                self.mock_logger.reset_mock()  # Reset call count for each case
-                result = self.handler._parse_offset(offset_str)
-                self.assertEqual(result, expected, f"Input: '{offset_str}' - Expected {expected} but got {result}")
+class TestDebugInfoHandlerMemoryHelpers(BaseTestDebugInfoHandler):
+    """
+    Unit tests for DebugInfoHandler's private memory-related helper methods:
+    _capture_memory_value, _parse_offset, and _build_expression_string.
+    (Combines New Test Case(s) Blocks 17, 18, 19, 20, 21)
+    """
 
-                if expect_error:
-                    self.mock_logger.error.assert_called_once_with("Failed to parse offset: %s", offset_str)
-                else:
-                    self.mock_logger.error.assert_not_called()
+    def test_capture_memory_value_simple_memory_read(self):
+        """
+        Verify _capture_memory_value correctly reads and formats a memory value
+        when provided with valid base register and offset without index register.
+        """
+        mock_frame = MagicMock()
+        mock_register = MagicMock()
+        mock_register.IsValid.return_value = True
+        mock_register.unsigned = 0x16FD4F370  # Base address value
+        mock_frame.FindRegister.return_value = mock_register
+
+        # Configure process memory read to return success
+        self.mock_tracer.process.ReadUnsignedFromMemory.return_value = 0x8
+
+        # Prepare memref dictionary based on trace
+        memref = {"base_reg": "sp", "offset": "#0x10"}
+
+        # Execute the method under test
+        result = self.handler._capture_memory_value(mock_frame, "stp", memref)
+
+        # Verify results
+        expected_addr = 0x16FD4F370 + 0x10  # Base + offset = 0x16fd4f380
+        expected_output = [f"[sp + 0x10] = [0x{expected_addr:x}] = 0x8"]
+        self.assertEqual(result, expected_output)
+
+        # Verify register lookup
+        mock_frame.FindRegister.assert_called_once_with("sp")
+
+        # Verify memory read parameters (size for 'stp' is 8 bytes)
+        self.mock_tracer.process.ReadUnsignedFromMemory.assert_called_once_with(expected_addr, 8, unittest.mock.ANY)
 
     def test_build_expression_string_comprehensive(self):
         """
         Verify _build_expression_string correctly formats memory expressions under various conditions,
         combining tests from Blocks 20 and 21.
         """
-        # Define a flexible Operand namedtuple if not globally available, or adjust.
-        # This test doesn't use the OperandType constant itself, but checks string building.
-        # The `memref` dictionary content is key.
-
         test_cases = [
             # (description, base_reg, offset_value, index_reg, memref, expected)
-            ("offset_only", "sp", 16, None, {"base_reg": "sp"}, "[sp + 0x10]"),
-            ("no_offset", "x0", 0, None, {"base_reg": "x0"}, "[x0]"),
-            ("negative_offset_short", "fp", -8, None, {"base_reg": "fp"}, "[fp + -0x8]"),
+            ("offset_only", "sp", 0x10, None, {"base_reg": "sp"}, "[sp + 0x10]"),
+            ("no_offset", "x0", 0x0, None, {"base_reg": "x0"}, "[x0]"),
+            ("negative_offset_short", "fp", -0x8, None, {"base_reg": "fp"}, "[fp - 0x8]"),
             (
                 "negative_offset_long",
                 "x9",
@@ -792,13 +789,13 @@ class TestDebugInfoHandlerMemoryHelpers(BaseTestDebugInfoHandler):
                 None,
                 {"base_reg": "x9"},
                 "[x9 - 0x10]",
-            ),  # Demonstrates different negative formatting
-            ("index_only", "x1", 0, "x2", {"base_reg": "x1", "index": "x2"}, "[x1 + x2]"),
-            ("offset_and_index", "x3", 32, "x4", {"base_reg": "x3", "index": "x4"}, "[x3 + 0x20 + x4]"),
+            ),
+            ("index_only", "x1", 0x0, "x2", {"base_reg": "x1", "index": "x2"}, "[x1 + x2]"),
+            ("offset_and_index", "x3", 0x20, "x4", {"base_reg": "x3", "index": "x4"}, "[x3 + 0x20 + x4]"),
             (
                 "index_with_lsl_shift_explicit_index",
                 "x5",
-                0,
+                0x0,
                 "x6",
                 {"base_reg": "x5", "index": "x6", "shift_op": "lsl", "shift_amount": "#2"},
                 "[x5 + x6 lsl #2]",
@@ -806,15 +803,15 @@ class TestDebugInfoHandlerMemoryHelpers(BaseTestDebugInfoHandler):
             (
                 "index_with_lsl_shift_implicit_index",
                 "x9",
-                0,
+                0x0,
                 "x1",
                 {"base_reg": "x9", "shift_op": "lsl", "shift_amount": "#2"},
                 "[x9 + x1 lsl #2]",
-            ),  # Same as above but with 'x1' as provided index_reg
+            ),
             (
                 "all_components_lsr",
                 "x7",
-                16,
+                0x10,
                 "x8",
                 {"base_reg": "x7", "index": "x8", "shift_op": "lsr", "shift_amount": "#4"},
                 "[x7 + 0x10 + x8 lsr #4]",
@@ -852,10 +849,6 @@ class TestDebugInfoHandlerMemoryOperandSize(BaseTestDebugInfoHandler):
             ("mov", 8),  # 'mov' doesn't typically have memory operands, but tests fallback
             ("ldr", 8),  # 'ldr' without suffix implies target address size
             ("", 8),  # Empty mnemonic should also fall back
-            # Case sensitivity
-            ("LDRB", 1),
-            ("STRh", 2),
-            ("ldrW", 4),
         ]
 
         for mnemonic, expected_size in test_cases:

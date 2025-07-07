@@ -278,15 +278,6 @@ class TestAutoFix:
         """Display reference information for a specific file and line."""
         self._display_tracer_logs(file_path, lineno)
 
-    @tracer.trace(
-        target_files=["*.py"],
-        enable_var_trace=True,
-        report_name="_display_tracer_logs.html",
-        ignore_self=False,
-        ignore_system_paths=True,
-        disable_html=True,
-        source_base_dir=Path(__file__).parent.parent,
-    )
     def _display_tracer_logs(
         self,
         file_path: str,
