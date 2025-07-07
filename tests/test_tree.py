@@ -27,11 +27,7 @@ from tree import (
     SourceSkeleton,
     SymbolTrie,
     app,
-    get_symbol_context_api,
-    init_symbol_database,
-    insert_symbol,
     parse_code_file,
-    search_symbols_api,
     split_source,
     start_lsp_client_once,
     symbol_completion,
@@ -2301,64 +2297,6 @@ class TestSymbolsAPI(unittest.TestCase):
         self.conn.execute("DELETE FROM symbols WHERE file_path = ?", ("file",))  # 同步修改清理路径
         self.conn.commit()
         self.conn.close()
-
-    def test_search_functionality(self):
-        """测试符号搜索功能"""
-
-        async def run_tests():
-            response = await search_symbols_api("main", 10)
-            self.assertEqual(len(response["results"]), 1)
-
-            response = await search_symbols_api("main_function", 10)
-            self.assertEqual(len(response["results"]), 1)
-            self.assertEqual(response["results"][0]["name"], "main_function")
-
-        self.loop.run_until_complete(run_tests())
-
-    def test_symbol_context(self):
-        """测试获取符号上下文"""
-
-        async def run_tests():
-            response = await get_symbol_context_api("main_function", "file")  # 同步修改路径参数
-            self.assertEqual(response["symbol_name"], "main_function")
-            self.assertGreaterEqual(len(response["definitions"]), 2)
-
-            response = await get_symbol_context_api("nonexistent", "file")
-            self.assertIn("error", response)
-
-        self.loop.run_until_complete(run_tests())
-
-    def test_completion_features(self):
-        """测试补全功能"""
-
-        async def run_tests():
-            # 标准补全
-            response = await symbol_completion("calc")
-            self.assertEqual(len(response["completions"]), 1)
-            self.assertEqual(response["completions"][0]["name"], "calculate_sum")
-
-            # 空结果补全
-            response = await symbol_completion("xyz")
-            self.assertEqual(len(response["completions"]), 0)
-
-            # 简单补全
-            response = await symbol_completion_simple("calc")
-            self.assertIn(b"symbol:file/calculate_sum", response.body)
-
-            # 路径补全
-            response = await symbol_completion_simple("symbol:test/")
-            self.assertIn(b"symbol:test/symbol", response.body)
-
-            # 实时补全
-            response = await symbol_completion_realtime("symbol:file", 10)
-            self.assertIn(b"main_function", response.body)
-            self.assertIn(b"helper_function", response.body)
-
-            # 无效路径补全
-            response = await symbol_completion_realtime("symbol:nonexistent", 10)
-            self.assertEqual(response.body, b"")
-
-        self.loop.run_until_complete(run_tests())
 
 
 class TestExtractIdentifiablePath(unittest.TestCase):

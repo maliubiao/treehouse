@@ -1,4 +1,5 @@
 import logging
+import sys
 import threading
 from typing import TYPE_CHECKING, Optional
 
@@ -166,6 +167,16 @@ class EventLoop:
             self.tracer.main_thread_id = thread.GetThreadID()
             self.tracer.entry_point_breakpoint_event.set()
             self.tracer.step_handler.base_frame_count = frame.thread.GetNumFrames()
+
+            # 从breakpoint_handler迁移的核心功能
+            self.tracer.modules._build_skip_modules_ranges()
+            if self.tracer.config_manager.config.get("dump_modules_for_skip"):
+                self.tracer.modules.dump_modules_for_skip()
+                sys.exit(0)
+            if self.tracer.config_manager.config.get("dump_source_files_for_skip"):
+                self.tracer.source_ranges.dump_source_files_for_skip()
+                sys.exit(0)
+
             self.debugger_api.step_instruction(thread, False)
             self.logger.info("Entry point breakpoint hit: thread %s", thread.GetThreadID())
             return

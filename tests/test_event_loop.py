@@ -841,6 +841,8 @@ class TestEventLoopHandleBreakpointStop(TestEventLoopBase):
         self.mock_tracer.entry_point_breakpoint_event = threading.Event()
         self.mock_tracer.step_handler = MagicMock()
         self.mock_tracer.breakpoint_handler = MagicMock(spec=BreakpointHandler)  # Mock the handler itself for isolation
+        self.mock_tracer.config_manager = MagicMock()
+        self.mock_tracer.config_manager.config.get.return_value = False
 
     @patch("time.sleep")
     def test_entry_point_breakpoint_handling(self, mock_sleep):
@@ -858,6 +860,7 @@ class TestEventLoopHandleBreakpointStop(TestEventLoopBase):
 
         # Set tracer's entry point breakpoint ID to match the simulated stop reason data
         type(self.mock_tracer).breakpoint = PropertyMock(return_value=MagicMock(GetID=MagicMock(return_value=1)))
+        self.mock_tracer.modules = MagicMock()
 
         # Execute the breakpoint handler method
         self.event_loop._handle_breakpoint_stop(self.mock_process, self.mock_thread)

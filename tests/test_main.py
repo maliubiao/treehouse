@@ -209,6 +209,25 @@ class JSONTestResult(unittest.TextTestResult):
         super().addUnexpectedSuccess(test)
         self.all_issues.append({"type": "unexpected_success", "test": str(test), "details": None})
 
+    def addSubTest(self, test, sub_test, err):
+        """
+        Called when a subtest finishes. This is a custom implementation
+        to ensure subtest failures are routed through our detailed JSON
+        reporting logic.
+        """
+        if err is not None:
+            # The base TestResult.addSubTest appends to self.failures/errors
+            # but does not call the addFailure/addError hooks. We want to
+            # call those hooks to trigger our JSON reporting logic.
+            if issubclass(err[0], test.failureException):
+                self.addFailure(sub_test, err)
+            else:
+                self.addError(sub_test, err)
+        else:
+            # For successful subtests, the default behavior (from TextTestResult)
+            # which handles verbose printing is sufficient.
+            super().addSubTest(test, sub_test, err)
+
     def _collect_error_details(self, test, err, category):
         """
         Robustly collects details about an error or failure.
@@ -237,9 +256,14 @@ class JSONTestResult(unittest.TextTestResult):
             # --- Robust location finding logic ---
             file_path, line, func_name = "Unknown", 0, test_id
 
+            # For subtests, the test object is a `_SubTest` wrapper which has a
+            # `test_case` attribute pointing to the parent TestCase. We must use the
+            # parent's ID to look up the pre-cached source information.
+            base_test_id = getattr(test, "test_case", test).id()
+
             # 1. Use the cached test definition location as the primary source of truth.
-            if test_id in TEST_SOURCE_INFO_CACHE:
-                cached_info = TEST_SOURCE_INFO_CACHE[test_id]
+            if base_test_id in TEST_SOURCE_INFO_CACHE:
+                cached_info = TEST_SOURCE_INFO_CACHE[base_test_id]
                 file_path = cached_info["file_path"]
                 line = cached_info["line"]
                 func_name = cached_info["function"]
