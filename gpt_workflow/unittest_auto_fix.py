@@ -300,11 +300,11 @@ class TestAutoFix:
             show_full_trace=True,
         )
 
-        # log_extractor = tracer.TraceLogExtractor(fn)
-        logs, references_group = log_extractor.lookup(file_path, line, sibling_config=config)
-        if not logs and test_id:
-            frame_id = extract_frame_id_from_log(str(fn), test_id=test_id.split(".")[-1])
-            logs, references_group = log_extractor.lookup(frame_id=frame_id, next_siblings=2)
+        # # log_extractor = tracer.TraceLogExtractor(fn)
+        # logs, references_group = log_extractor.lookup(file_path, line, sibling_config=config)
+        # if not logs and test_id:
+        frame_id = extract_frame_id_from_log(str(fn), test_id=test_id.split(".")[-1])
+        logs, references_group = log_extractor.lookup(frame_id=frame_id, next_siblings=2)
         if frame_ref_lines:
             for item in frame_ref_lines:
                 self.uniq_references.add(item)
