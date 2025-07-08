@@ -1252,10 +1252,10 @@ class CodeMapBuilder:
                 current_node, current_symbols, current_nodes, code_map, source_bytes, results
             )
 
-            if processed_node:
-                self._extract_function_calls(processed_node, current_symbols, code_map)
+            # if processed_node:
+            #     self._extract_function_calls(processed_node, current_symbols, code_map)
 
-            self._extract_parameter_type_calls(current_node, current_symbols, code_map)
+            # self._extract_parameter_type_calls(current_node, current_symbols, code_map)
 
             # Add children to the stack for future processing
             # The new depth is the current length of the symbol path
