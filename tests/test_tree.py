@@ -14,13 +14,7 @@ from fastapi.testclient import TestClient
 import tree
 from lsp import GenericLSPClient
 from tree import (
-    LANGUAGE_QUERIES,
     BlockPatch,
-    CodeMapBuilder,
-    NodeProcessor,
-    NodeTypes,
-    ParserLoader,
-    ParserUtil,
     ProjectConfig,
     RipgrepSearcher,
     SearchConfig,
@@ -33,6 +27,14 @@ from tree import (
     symbol_completion,
     symbol_completion_realtime,
     symbol_completion_simple,
+)
+from tree_libs.ast import (
+    LANGUAGE_QUERIES,
+    CodeMapBuilder,
+    NodeProcessor,
+    NodeTypes,
+    ParserLoader,
+    ParserUtil,
 )
 
 
