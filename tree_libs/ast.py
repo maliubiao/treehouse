@@ -1,4 +1,5 @@
 import importlib
+import logging
 from abc import ABC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
@@ -144,7 +145,7 @@ class NodeTypes:
     TS_EXPORT_STATEMENT = "export_statement"
 
     @staticmethod
-    def is_module(node_type):
+    def is_module(node_type: str) -> bool:
         return node_type in (
             NodeTypes.MODULE,
             NodeTypes.TRANSLATION_UNIT,
@@ -154,7 +155,7 @@ class NodeTypes:
         )
 
     @staticmethod
-    def is_import(node_type):
+    def is_import(node_type: str) -> bool:
         return node_type in (
             NodeTypes.IMPORT_STATEMENT,
             NodeTypes.IMPORT_FROM_STATEMENT,
@@ -162,7 +163,7 @@ class NodeTypes:
         )
 
     @staticmethod
-    def is_structure_tree_node(node_type):
+    def is_structure_tree_node(node_type: str) -> bool:
         return node_type in (
             NodeTypes.C_STRUCT_SPECFIER,
             NodeTypes.CPP_CLASS_SPECIFIER,
@@ -181,7 +182,7 @@ class NodeTypes:
         )
 
     @staticmethod
-    def is_statement(node_type):
+    def is_statement(node_type: str) -> bool:
         return node_type in (
             NodeTypes.EXPRESSION_STATEMENT,
             NodeTypes.IF_STATEMENT,
@@ -192,7 +193,7 @@ class NodeTypes:
         )
 
     @staticmethod
-    def is_identifier(node_type):
+    def is_identifier(node_type: str) -> bool:
         return node_type in (
             NodeTypes.IDENTIFIER,
             NodeTypes.NAME,
@@ -204,7 +205,7 @@ class NodeTypes:
         )
 
     @staticmethod
-    def is_type(node_type):
+    def is_type(node_type: str) -> bool:
         return node_type in (
             NodeTypes.TYPED_PARAMETER,
             NodeTypes.TYPED_DEFAULT_PARAMETER,
@@ -217,13 +218,13 @@ class NodeTypes:
 
 
 class ParserLoader:
-    def __init__(self):
-        self._parsers = {}
-        self._languages = {}
-        self._queries = {}
-        self.lang = None
+    def __init__(self) -> None:
+        self._parsers: Dict[str, Parser] = {}
+        self._languages: Dict[str, Any] = {}
+        self._queries: Dict[str, Query] = {}
+        self.lang: Optional[str] = None
 
-    def _get_language(self, lang_name: str):
+    def _get_language(self, lang_name: str) -> Any:
         """动态加载对应语言的 Tree-sitter 模块"""
         if lang_name in self._languages:
             return self._languages[lang_name]
@@ -244,7 +245,7 @@ class ParserLoader:
                 ) from exc
             return lang_module.language
 
-    def get_parser(self, file_path: str) -> tuple[Parser, Query, str]:
+    def get_parser(self, file_path: str) -> tuple[Parser, Optional[Query], str]:
         """根据文件路径获取对应的解析器和查询对象"""
         suffix = Path(file_path).suffix.lower()
         lang_name = SUPPORTED_LANGUAGES.get(suffix)
@@ -252,7 +253,7 @@ class ParserLoader:
             raise ValueError(f"不支持的文件类型: {suffix}")
 
         if lang_name in self._parsers:
-            return self._parsers[lang_name], None, lang_name
+            return self._parsers[lang_name], self._queries.get(lang_name), lang_name
         self.lang = lang_name
 
         language = self._get_language(lang_name)
@@ -261,6 +262,7 @@ class ParserLoader:
 
         # 根据语言类型获取对应的查询语句
         query_source = LANGUAGE_QUERIES.get(lang_name)
+        query: Optional[Query] = None
         if query_source:
             query = Query(lang, query_source)
             self._queries[lang_name] = query
@@ -276,14 +278,14 @@ def calculate_crc32_hash(text: str) -> int:
 
 
 class ParserUtil:
-    def __init__(self, parser_loader: ParserLoader):
+    def __init__(self, parser_loader: ParserLoader) -> None:
         """初始化解析器工具类"""
         self.parser_loader = parser_loader
         self.node_processor = NodeProcessor()
         self.code_map_builder = CodeMapBuilder(None, self.node_processor, lang=parser_loader.lang)
-        self._source_code = None
+        self._source_code: Optional[bytes] = None
 
-    def prepare_root_node(self, file_path: str):
+    def prepare_root_node(self, file_path: str) -> Node:
         """获取文件的根节点"""
         parser, _, lang_name = self.parser_loader.get_parser(file_path)
         self.node_processor.lang_spec = find_spec_for_lang(lang_name)
@@ -296,17 +298,18 @@ class ParserUtil:
         self.code_map_builder.root_node = root_node
         return root_node
 
-    def get_symbol_paths(self, file_path: str, debug: bool = False):
+    def get_symbol_paths(self, file_path: str, debug: bool = False) -> Tuple[List[str], Dict[str, Any]]:
         """解析代码文件并返回所有符号路径及对应代码和位置信息"""
         root_node = self.prepare_root_node(file_path)
-        results = []
-        code_map = {}
+        results: List[str] = []
+        code_map: Dict[str, Any] = {}
+        assert self._source_code is not None
         if is_node_module(root_node.type) and len(root_node.children) != 0:
             self.code_map_builder.process_import_block(root_node, code_map, self._source_code, results)
         self.code_map_builder.traverse(root_node, [], [], code_map, self._source_code, results)
         return results, code_map
 
-    def update_symbol_trie(self, file_path: str, symbol_trie: "SymbolTrie"):
+    def update_symbol_trie(self, file_path: str, symbol_trie: "SymbolTrie") -> None:
         """更新符号前缀树，将文件中的所有符号插入到前缀树中"""
         paths, code_map = self.get_symbol_paths(file_path)
         for path in paths:
@@ -333,17 +336,17 @@ class ParserUtil:
             include_class_context=include_class_context,
         )
 
-    def symbol_at_line(self, line: int) -> dict:
+    def symbol_at_line(self, line: int) -> Optional[dict]:
         return self.code_map_builder.build_symbol_info_at_line(line)
 
-    def near_symbol_at_line(self, line: int) -> dict:
+    def near_symbol_at_line(self, line: int) -> Optional[dict]:
         return self.code_map_builder.build_near_symbol_info_at_line(line)
 
-    def lookup_symbols(self, file_path: str, symbols: list[str]):
+    def lookup_symbols(self, file_path: str, symbols: list[str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """根据文件路径列表查找符号"""
         _, code_map = self.get_symbol_paths(file_path)
-        m = {}
-        n = {}
+        m: Dict[str, Any] = {}
+        n: Dict[str, Any] = {}
         for path in symbols:
             path_backup = path
             symbol_info = code_map.get(path, None)
@@ -354,8 +357,8 @@ class ParserUtil:
             for _ in range(path.count(".")):
                 path = path[: path.rfind(".")]
                 symbol_info = code_map.get(path, None)
-                symbol_info["block_content"] = symbol_info["code"].encode("utf-8")
                 if symbol_info:
+                    symbol_info["block_content"] = symbol_info["code"].encode("utf-8")
                     n[path_backup] = (path, symbol_info)
                     break
             if not symbol_info:
@@ -372,7 +375,7 @@ class ParserUtil:
                 n[path_backup] = ("module", symbol_info)
         return m, n
 
-    def print_symbol_paths(self, file_path: str):
+    def print_symbol_paths(self, file_path: str) -> None:
         """打印文件中的所有符号路径及对应代码和位置信息"""
         paths, code_map = self.get_symbol_paths(file_path)
         for path in paths:
@@ -390,7 +393,7 @@ class BaseNodeProcessor(ABC):
     """抽象基类，包含通用节点处理方法"""
 
     @staticmethod
-    def find_child_by_type(node, target_type):
+    def find_child_by_type(node: Node, target_type: str) -> Optional[Node]:
         """在节点子节点中查找指定类型的节点"""
         for child in node.children:
             if child.type == target_type:
@@ -398,7 +401,7 @@ class BaseNodeProcessor(ABC):
         return None
 
     @staticmethod
-    def find_child_by_field(node, field_name):
+    def find_child_by_field(node: Node, field_name: str) -> Optional[Node]:
         """根据字段名查找子节点"""
         for child in node.children:
             if child.type == field_name:
@@ -406,7 +409,7 @@ class BaseNodeProcessor(ABC):
         return None
 
     @staticmethod
-    def find_identifier_in_node(node):
+    def find_identifier_in_node(node: Node) -> Optional[str]:
         """在节点中查找identifier节点"""
         for child in node.children:
             if child.type == NodeTypes.IDENTIFIER:
@@ -414,18 +417,21 @@ class BaseNodeProcessor(ABC):
         return None
 
     @staticmethod
-    def get_full_attribute_name(node):
+    def get_full_attribute_name(node: Node) -> str:
         """递归获取属性调用的完整名称"""
         if node.type == NodeTypes.IDENTIFIER:
             return node.text.decode("utf8")
         if node.type == NodeTypes.ATTRIBUTE:
-            obj_part = BaseNodeProcessor.get_full_attribute_name(node.child_by_field_name("object"))
-            attr_part = node.child_by_field_name("attribute").text.decode("utf8")
-            return f"{obj_part}.{attr_part}"
+            obj_node = node.child_by_field_name("object")
+            attr_node = node.child_by_field_name("attribute")
+            if obj_node and attr_node:
+                obj_part = BaseNodeProcessor.get_full_attribute_name(obj_node)
+                attr_part = attr_node.text.decode("utf8")
+                return f"{obj_part}.{attr_part}"
         return ""
 
     @staticmethod
-    def get_function_name_from_call(function_node):
+    def get_function_name_from_call(function_node: Node) -> Optional[str]:
         """从函数调用节点中提取函数名"""
         if function_node.type == NodeTypes.IDENTIFIER:
             return function_node.text.decode("utf8")
@@ -467,10 +473,10 @@ class BaseNodeProcessor(ABC):
 
         if "." in type_name:
             module_part, *rest = type_name.split(".", 1)
-            if module_part == "typing":
+            if module_part == "typing" and rest:
                 try:
-                    return getattr(typing, rest[0].split(".", 1)[0]) is not None
-                except AttributeError:
+                    return getattr(importlib.import_module(module_part), rest[0].split(".", 1)[0]) is not None
+                except (AttributeError, ImportError):
                     return False
             return module_part in {"typing", "collections", "abc"}
         return type_name in basic_types
@@ -494,7 +500,7 @@ def line_number_from_unnamed_symbol(symbol: str) -> int:
     return -1
 
 
-def find_spec_for_lang(lang: str) -> "LangSpec":
+def find_spec_for_lang(lang: str) -> Optional["LangSpec"]:
     """根据语言名称查找对应的语言特定处理策略"""
     if lang == PYTHON_LANG:
         return PythonSpec()
@@ -502,10 +508,6 @@ def find_spec_for_lang(lang: str) -> "LangSpec":
         return JavascriptSpec()
     elif lang == TYPESCRIPT_LANG or lang == TYPESCRIPT_TSX_LANG:
         return TypeScriptSpec()
-    # elif lang == JAVASCRIPT_LANG:
-    #     return JavaScriptSpec()
-    # elif lang == JAVA_LANG:
-    #     return JavaSpec()
     if lang == GO_LANG:
         return GoLangSpec()
     if lang in (CPP_LANG, C_LANG):
@@ -517,19 +519,19 @@ class LangSpec(ABC):
     """语言特定处理策略接口"""
 
     @abstractmethod
-    def get_symbol_name(self, node: Node) -> str:
+    def get_symbol_name(self, node: Node) -> Optional[Union[str, Tuple[str, str]]]:
         """提取节点的符号名称"""
         raise NotImplementedError("Subclasses must implement get_symbol_name")
 
     @abstractmethod
-    def get_function_name(self, node: Node) -> str:
+    def get_function_name(self, node: Node) -> Optional[str]:
         raise NotImplementedError("Subclasses must implement get_function_name")
 
 
 class JavascriptSpec(LangSpec):
     """JavaScript语言特定处理策略"""
 
-    def get_symbol_name(self, node: Node) -> str:
+    def get_symbol_name(self, node: Node) -> Optional[str]:
         if node.type == NodeTypes.JS_CLASS_DECLARATION:
             class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
             if not class_name:
@@ -584,14 +586,14 @@ class JavascriptSpec(LangSpec):
 
         return None
 
-    def get_function_name(self, node: Node) -> str:
+    def get_function_name(self, node: Node) -> Optional[str]:
         return self.get_symbol_name(node)
 
 
 class TypeScriptSpec(JavascriptSpec):
     """TypeScript语言特定处理策略"""
 
-    def get_symbol_name(self, node: Node) -> str:
+    def get_symbol_name(self, node: Node) -> Optional[str]:
         if node.type == NodeTypes.TS_NAMESPACE:
             namespace_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
             return namespace_name.text.decode("utf8") if namespace_name else None
@@ -634,21 +636,21 @@ class TypeScriptSpec(JavascriptSpec):
 
         return super().get_symbol_name(node)
 
-    def get_function_name(self, node: Node) -> str:
+    def get_function_name(self, node: Node) -> Optional[str]:
         return self.get_symbol_name(node)
 
 
 class PythonSpec(LangSpec):
-    def get_symbol_name(self, node):
+    def get_symbol_name(self, node: Node) -> Optional[str]:
         if node.type == NodeTypes.IF_STATEMENT and self.is_main_block(node):
             return "__main__"
         return None
 
-    def get_function_name(self, node):
+    def get_function_name(self, node: Node) -> Optional[str]:
         return None
 
     @staticmethod
-    def is_main_block(node):
+    def is_main_block(node: Node) -> bool:
         """判断是否是__main__块"""
         condition = BaseNodeProcessor.find_child_by_type(node, NodeTypes.COMPARISON_OPERATOR)
         if condition:
@@ -662,7 +664,7 @@ class PythonSpec(LangSpec):
 class CPPSpec(LangSpec):
     """C++语言特定处理策略"""
 
-    def get_symbol_name(self, node: Node) -> Union[str, Tuple[str, str]]:
+    def get_symbol_name(self, node: Node) -> Optional[Union[str, Tuple[str, str]]]:
         if node.type in (NodeTypes.CPP_CLASS_SPECIFIER, NodeTypes.C_STRUCT_SPECFIER):
             return "class", self.get_cpp_class_name(node)
         if node.type == NodeTypes.CPP_NAMESPACE_DEFINITION:
@@ -676,21 +678,21 @@ class CPPSpec(LangSpec):
             return self.get_friend_function_name(node)
         return None
 
-    def get_cpp_class_name(self, node: Node):
+    def get_cpp_class_name(self, node: Node) -> Optional[str]:
         """从C++类定义节点中提取类名"""
         class_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_TYPE_IDENTIFIER)
         if class_name:
             return class_name.text.decode("utf8")
         return None
 
-    def get_cpp_namespace_name(self, node: Node):
+    def get_cpp_namespace_name(self, node: Node) -> Optional[str]:
         """从命名空间定义节点中提取命名空间名称"""
         namespace_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_NAMESPACE_IDENTIFIER)
         if namespace_name:
             return namespace_name.text.decode("utf8")
         return None
 
-    def get_cpp_declaration_name(self, node: Node):
+    def get_cpp_declaration_name(self, node: Node) -> Optional[str]:
         """从声明节点中提取限定名称"""
         init_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.CPP_INIT_DECLARATOR)
         if not init_declarator:
@@ -711,11 +713,11 @@ class CPPSpec(LangSpec):
 
         return BaseNodeProcessor.find_identifier_in_node(declarator)
 
-    def get_friend_function_name(self, node: Node):
+    def get_friend_function_name(self, node: Node) -> Optional[Union[str, Tuple[str, str]]]:
         decl = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_DECLARATION)
         return self.get_function_name(decl) if decl else None
 
-    def node_is_function(self, node: Node):
+    def node_is_function(self, node: Node) -> bool:
         pointer_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_POINTER_DECLARATOR)
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
@@ -729,9 +731,10 @@ class CPPSpec(LangSpec):
         func_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.FUNCTION_DECLARATOR)
         if func_declarator:
             return True
+        return False
 
-    def get_function_name(self, node: Node):
-        result = None
+    def get_function_name(self, node: Node) -> Optional[str]:
+        result: Optional[str] = None
         pointer_declarator = BaseNodeProcessor.find_child_by_type(node, NodeTypes.C_POINTER_DECLARATOR)
         if pointer_declarator:
             func_declarator = pointer_declarator.child_by_field_name("declarator")
@@ -779,23 +782,31 @@ class CPPSpec(LangSpec):
 class GoLangSpec(LangSpec):
     """Go语言特定处理策略"""
 
-    def get_symbol_name(self, node) -> str:
+    def get_symbol_name(self, node: Node) -> Optional[str]:
+        if node.type == NodeTypes.GO_SOURCE_FILE:
+            return self._get_package_name_from_source_file(node)
         if node.type == NodeTypes.GO_TYPE_DECLARATION:
             return self.get_go_type_name(node)
         if node.type == NodeTypes.GO_METHOD_DECLARATION:
             return self.get_go_method_name(node)
         if node.type == NodeTypes.GO_FUNC_DECLARATION:
             return self.get_go_function_name(node)
-        if node.type == NodeTypes.GO_PACKAGE_CLAUSE:
-            return self.get_go_package_name(node)
         return None
 
-    def get_function_name(self, node):
-        pass
+    def get_function_name(self, node: Node) -> Optional[str]:
+        return self.get_symbol_name(node)
 
     @staticmethod
-    def get_go_method_name(node):
-        """从Go方法声明节点中提取方法名，格式为(ReceiverType).MethodName"""
+    def _get_package_name_from_source_file(source_file_node: Node) -> Optional[str]:
+        """从 source_file 节点中查找包名。"""
+        package_clause = BaseNodeProcessor.find_child_by_type(source_file_node, NodeTypes.GO_PACKAGE_CLAUSE)
+        if not package_clause:
+            return None
+        return GoLangSpec.get_go_package_name(package_clause)
+
+    @staticmethod
+    def get_go_method_name(node: Node) -> Optional[str]:
+        """从Go方法声明节点中提取方法名，格式为 ReceiverType.MethodName"""
         find_child = BaseNodeProcessor.find_child_by_type
         parameter_list = find_child(node, NodeTypes.GO_PARAMETER_LIST)
         if not parameter_list:
@@ -804,16 +815,15 @@ class GoLangSpec(LangSpec):
         if not parameter_declaration:
             return None
 
-        type_node = find_child(parameter_declaration, NodeTypes.GO_TYPE_IDENTIFIER)
+        type_node: Optional[Node] = find_child(parameter_declaration, NodeTypes.GO_TYPE_IDENTIFIER)
         if not type_node:
             pointer_type = find_child(parameter_declaration, NodeTypes.GO_POINTER_TYPE)
             if pointer_type:
                 type_node = find_child(pointer_type, NodeTypes.GO_TYPE_IDENTIFIER)
                 if not type_node:
                     type_node = find_child(pointer_type, NodeTypes.GO_QUALIFIED_TYPE)
-        method_name = None
 
-        # 查找方法名
+        method_name: Optional[str] = None
         func_identifier = find_child(node, NodeTypes.GO_FIELD_IDENTIFIER)
         if func_identifier:
             method_name = func_identifier.text.decode("utf8")
@@ -824,7 +834,7 @@ class GoLangSpec(LangSpec):
         return f"{type_node.text.decode('utf8')}.{method_name}"
 
     @staticmethod
-    def get_go_function_name(node):
+    def get_go_function_name(node: Node) -> Optional[str]:
         """从Go函数声明节点中提取函数名"""
         func_identifier = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
         if func_identifier:
@@ -832,31 +842,31 @@ class GoLangSpec(LangSpec):
         return None
 
     @staticmethod
-    def get_go_package_name(node):
+    def get_go_package_name(node: Node) -> Optional[str]:
         """从Go包声明节点中提取包名"""
-        package_name = BaseNodeProcessor.find_child_by_type(node, NodeTypes.GO_PACKAGE_IDENTIFIER)
-        if package_name:
-            return package_name.text.decode("utf8")
+        package_name_node = BaseNodeProcessor.find_child_by_type(node, NodeTypes.GO_PACKAGE_IDENTIFIER)
+        if package_name_node:
+            return package_name_node.text.decode("utf8")
         return None
 
     @staticmethod
-    def get_go_type_name(node):
+    def get_go_type_name(node: Node) -> Optional[str]:
         """从Go类型声明节点中提取类型名"""
-        for child in node.children:
-            if child.type == NodeTypes.GO_TYPE_SPEC:
-                for sub_child in child.children:
-                    if sub_child.type == NodeTypes.GO_TYPE_IDENTIFIER:
-                        return sub_child.text.decode("utf8")
+        type_spec_node = BaseNodeProcessor.find_child_by_type(node, NodeTypes.GO_TYPE_SPEC)
+        if type_spec_node:
+            type_identifier = BaseNodeProcessor.find_child_by_type(type_spec_node, NodeTypes.GO_TYPE_IDENTIFIER)
+            if type_identifier:
+                return type_identifier.text.decode("utf8")
         return None
 
 
 class NodeProcessor(BaseNodeProcessor):
     """节点处理器，使用语言特定策略处理节点"""
 
-    def __init__(self, lang_spec: LangSpec = None):
+    def __init__(self, lang_spec: Optional[LangSpec] = None):
         self.lang_spec = lang_spec
 
-    def get_symbol_name(self, node) -> Union[str, Tuple[str, str]]:
+    def get_symbol_name(self, node: Node) -> Optional[Union[str, Tuple[str, str]]]:
         """提取节点的符号名称"""
         if not hasattr(node, "type"):
             return None
@@ -871,14 +881,14 @@ class NodeProcessor(BaseNodeProcessor):
             return self.lang_spec.get_symbol_name(node)
         return None
 
-    def get_class_name(self, node):
+    def get_class_name(self, node: Node) -> Optional[str]:
         """从类定义节点中提取类名"""
         for child in node.children:
             if child.type == NodeTypes.IDENTIFIER:
                 return child.text.decode("utf8")
         return None
 
-    def get_function_name(self, node):
+    def get_function_name(self, node: Node) -> Optional[str]:
         """从函数定义节点中提取函数名"""
         if node.type == NodeTypes.FUNCTION_DEFINITION:
             name_node = BaseNodeProcessor.find_child_by_field(node, NodeTypes.NAME)
@@ -895,7 +905,7 @@ class NodeProcessor(BaseNodeProcessor):
         return BaseNodeProcessor.find_identifier_in_node(node)
 
     @staticmethod
-    def get_assignment_name(node):
+    def get_assignment_name(node: Node) -> Optional[str]:
         """从赋值节点中提取变量名"""
         identifier = BaseNodeProcessor.find_child_by_type(node, NodeTypes.IDENTIFIER)
         if identifier:
@@ -910,19 +920,19 @@ class NodeProcessor(BaseNodeProcessor):
 class CodeMapBuilder:
     def __init__(
         self,
-        root_node: Node | None,
+        root_node: Optional[Node],
         node_processor: NodeProcessor,
-        lang: str = PYTHON_LANG,
+        lang: Optional[str] = PYTHON_LANG,
     ):
         self.node_processor = node_processor
         self.lang = lang
         self.root_node = root_node
 
-    def symbol_at_line(self, line: int) -> Node | None:
+    def symbol_at_line(self, line: int) -> Optional[Node]:
         """查找指定行开始的第一个语法树节点，使用层级遍历"""
         if not self.root_node:
             return None
-        queue = [self.root_node]
+        queue: List[Node] = [self.root_node]
         while queue:
             current_node = queue.pop(0)
             start_row, _ = current_node.start_point
@@ -931,14 +941,14 @@ class CodeMapBuilder:
             queue.extend(current_node.children)
         return None
 
-    def build_symbol_info_at_line(self, line: int) -> dict | None:
+    def build_symbol_info_at_line(self, line: int) -> Optional[dict]:
         """构建指定行符号的完整信息"""
         node = self.symbol_at_line(line)
         if not node:
             return None
         return self.symbol_info_from_node(node)
 
-    def build_near_symbol_info_at_line(self, line: int) -> dict | None:
+    def build_near_symbol_info_at_line(self, line: int) -> Optional[dict]:
         """构建指定行附近符号的完整信息"""
         node = self.symbol_at_line(line)
         if not node:
@@ -946,6 +956,7 @@ class CodeMapBuilder:
         while (
             node
             and node.parent
+            and self.root_node
             and node.parent.type != self.root_node.type
             and not NodeTypes.is_structure_tree_node(node.type)
         ):
@@ -974,10 +985,10 @@ class CodeMapBuilder:
         }
         return symbol_info
 
-    def _extract_import_block(self, node: Node):
+    def _extract_import_block(self, node: Node) -> List[Node]:
         """提取文件开头的import块，包含注释、字符串字面量和导入语句"""
-        import_block = []
-        current_node = node
+        import_block: List[Node] = []
+        current_node: Optional[Node] = node
         while current_node and current_node.type in (
             NodeTypes.COMMENT,
             NodeTypes.IMPORT_STATEMENT,
@@ -987,14 +998,14 @@ class CodeMapBuilder:
             NodeTypes.GO_PACKAGE_CLAUSE,
         ):
             if current_node.type == NodeTypes.EXPRESSION_STATEMENT:
-                if current_node.children[0].type == NodeTypes.STRING:
+                if current_node.children and current_node.children[0].type == NodeTypes.STRING:
                     import_block.append(current_node)
             else:
                 import_block.append(current_node)
             current_node = current_node.next_sibling
         return import_block
 
-    def _get_effective_node(self, node: Node):
+    def _get_effective_node(self, node: Node) -> Node:
         """获取有效的语法树节点（处理装饰器情况）"""
         if (
             node.type
@@ -1015,15 +1026,17 @@ class CodeMapBuilder:
             return node.parent
         return node
 
-    def get_symbol_range_info(self, source_bytes: bytes, node: Node):
+    def get_symbol_range_info(self, source_bytes: Optional[bytes], node: Node) -> Dict[str, Any]:
         """获取节点的代码和位置信息"""
         effective_node = self._get_effective_node(node)
-        start_byte = effective_node.start_byte
-        start_point = effective_node.start_point
-        while node.prev_sibling and node.prev_sibling.type == NodeTypes.COMMENT:
-            node = node.prev_sibling
-            start_byte = node.start_byte
-            start_point = node.start_point
+        start_byte: int = effective_node.start_byte
+        start_point: Tuple[int, int] = effective_node.start_point
+        current_node: Optional[Node] = node
+        while current_node and current_node.prev_sibling and current_node.prev_sibling.type == NodeTypes.COMMENT:
+            current_node = current_node.prev_sibling
+            if current_node:
+                start_byte = current_node.start_byte
+                start_point = current_node.start_point
         if source_bytes:
             # 找到行的起始位置
             line_start_byte = source_bytes.rfind(b"\n", 0, start_byte) + 1
@@ -1032,7 +1045,7 @@ class CodeMapBuilder:
             # 验证从行开始到当前位置都是空白字符
             if line_start_byte < start_byte:
                 whitespace = source_bytes[line_start_byte:start_byte]
-                if not all([c in (space_, tab_) for c in whitespace]):
+                if not all(c in (space_, tab_) for c in whitespace):
                     line_start_byte = start_byte  # 如果不是纯空白，保持原位置
                 else:
                     start_byte = line_start_byte
@@ -1044,12 +1057,11 @@ class CodeMapBuilder:
             "end_point": effective_node.end_point,
         }
 
-    def _extract_code(self, source_bytes, start_byte, end_byte):
+    def _extract_code(self, source_bytes: bytes, start_byte: int, end_byte: int) -> str:
         """从源字节中提取代码"""
-        # 找到行起始位置
         return source_bytes[start_byte:end_byte].decode("utf8")
 
-    def _build_code_map_entry(self, path_key, code, node_info):
+    def _build_code_map_entry(self, path_key: str, code: str, node_info: Dict[str, Any]) -> Dict[str, Any]:
         """构建代码映射条目"""
         return {
             "code": code,
@@ -1062,13 +1074,17 @@ class CodeMapBuilder:
             "type": "unknown",
         }
 
-    def process_import_block(self, node, code_map, source_bytes, results):
+    def process_import_block(
+        self, node: Node, code_map: Dict[str, Any], source_bytes: bytes, results: List[str]
+    ) -> None:
         """处理import块"""
+        if not node.children:
+            return
         import_block = self._extract_import_block(node.children[0])
         if import_block:
             first_node = import_block[0]
             last_node = import_block[-1]
-            node_info = {
+            node_info: Dict[str, Any] = {
                 "start_byte": first_node.start_byte,
                 "end_byte": last_node.end_byte,
                 "start_point": first_node.start_point,
@@ -1079,12 +1095,24 @@ class CodeMapBuilder:
             code_map["__import__"]["type"] = "import_block"
             results.append("__import__")
 
-    def _process_symbol_node(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
+    def _process_symbol_node(
+        self,
+        node: Node,
+        current_symbols: List[str],
+        current_nodes: List[Node],
+        code_map: Dict[str, Any],
+        source_bytes: bytes,
+        results: List[str],
+    ) -> Optional[Node]:
         """处理符号节点，返回处理后的有效节点或None"""
-        symbol_name: Union[str, Tuple[str, str]] = self.node_processor.get_symbol_name(node)
-        symbol_type = ""
-        if isinstance(symbol_name, tuple):
-            symbol_type, symbol_name = symbol_name
+        symbol_name_or_tuple = self.node_processor.get_symbol_name(node)
+        symbol_name: Optional[str] = None
+        symbol_type: str = ""
+        if isinstance(symbol_name_or_tuple, tuple):
+            symbol_type, symbol_name = symbol_name_or_tuple
+        else:
+            symbol_name = symbol_name_or_tuple
+
         if symbol_name is None:
             return None
         if not symbol_type:
@@ -1099,12 +1127,15 @@ class CodeMapBuilder:
                 NodeTypes.ASSIGNMENT: "module_variable" if not current_symbols else "variable",
                 NodeTypes.GO_PACKAGE_CLAUSE: "package",
                 NodeTypes.C_DECLARATION: "declaration",
+                NodeTypes.GO_SOURCE_FILE: "package",
             }
-            symbol_type = type_mapping.get(node.type)
-            if symbol_type is None and NodeTypes.is_structure_tree_node(node.type):
+            node_symbol_type = type_mapping.get(node.type)
+            if node_symbol_type is None and NodeTypes.is_structure_tree_node(node.type):
                 symbol_type = "function"
+            elif node_symbol_type:
+                symbol_type = node_symbol_type
 
-            if symbol_type is None:
+            if not symbol_type:
                 symbol_type = node.type
 
         effective_node = self._get_effective_node(node)
@@ -1112,9 +1143,9 @@ class CodeMapBuilder:
         current_nodes.append(effective_node)
 
         path_key = ".".join(current_symbols)
-        current_node = current_nodes[-1]
+        current_node_for_info = current_nodes[-1]
 
-        node_info = self.get_symbol_range_info(source_bytes, current_node)
+        node_info = self.get_symbol_range_info(source_bytes, current_node_for_info)
         code = self._extract_code(source_bytes, node_info["start_byte"], node_info["end_byte"])
         code_entry = self._build_code_map_entry(path_key, code, node_info)
         code_entry["type"] = symbol_type
@@ -1127,7 +1158,9 @@ class CodeMapBuilder:
             return None
         return effective_node
 
-    def _add_call_info(self, func_name, current_symbols, code_map, node):
+    def _add_call_info(
+        self, func_name: Optional[str], current_symbols: List[str], code_map: Dict[str, Any], node: Node
+    ) -> None:
         """通用方法：添加调用信息到code_map"""
         if func_name and current_symbols:
             current_path = ".".join(current_symbols)
@@ -1141,7 +1174,7 @@ class CodeMapBuilder:
                 }
                 code_map[current_path]["calls"].append(call_info)
 
-    def _extract_function_calls(self, node: Node, current_symbols, code_map):
+    def _extract_function_calls(self, node: Node, current_symbols: List[str], code_map: Dict[str, Any]) -> None:
         """提取函数调用信息并添加到当前符号的calls集合"""
         if node.type == NodeTypes.CALL:
             function_node = node.child_by_field_name("function")
@@ -1158,7 +1191,7 @@ class CodeMapBuilder:
         for child in node.children:
             self._extract_function_calls(child, current_symbols, code_map)
 
-    def _extract_parameter_type_calls(self, node, current_symbols, code_map):
+    def _extract_parameter_type_calls(self, node: Node, current_symbols: List[str], code_map: Dict[str, Any]) -> None:
         """提取参数的类型注释中的调用信息"""
         if NodeTypes.is_type(node.type):
             type_node = node.child_by_field_name("type")
@@ -1167,32 +1200,71 @@ class CodeMapBuilder:
             identifiers = self._collect_type_identifiers(type_node)
             for identifier in identifiers:
                 type_name = identifier.text.decode("utf8")
-                if not self.node_processor.is_standard_type(type_name):
+                if not BaseNodeProcessor.is_standard_type(type_name):
                     self._add_call_info(type_name, current_symbols, code_map, identifier)
 
-    def _collect_type_identifiers(self, node):
+    def _collect_type_identifiers(self, node: Node) -> List[Node]:
         """递归收集类型节点中的所有标识符"""
-        identifiers = []
+        identifiers: List[Node] = []
         if NodeTypes.is_identifier(node.type):
             identifiers.append(node)
         for child in node.children:
             identifiers.extend(self._collect_type_identifiers(child))
         return identifiers
 
-    def traverse(self, node, current_symbols, current_nodes, code_map, source_bytes, results):
-        processed_node = self._process_symbol_node(
-            node, current_symbols, current_nodes, code_map, source_bytes, results
-        )
-        if processed_node:
-            self._extract_function_calls(processed_node, current_symbols, code_map)
-        self._extract_parameter_type_calls(node, current_symbols, code_map)
-        for child in node.children:
-            self.traverse(child, current_symbols, current_nodes, code_map, source_bytes, results)
-        if processed_node:
-            current_symbols.pop()
-            current_nodes.pop()
+    def traverse(
+        self,
+        node: Node,
+        current_symbols: List[str],
+        current_nodes: List[Node],
+        code_map: Dict[str, Any],
+        source_bytes: bytes,
+        results: List[str],
+    ) -> None:
+        """
+        Iteratively traverses the AST to build a map of symbols and their information.
 
-    def build_symbol_info(self, info, file_path):
+        This method uses a stack-based, non-recursive approach to perform a pre-order
+        traversal of the tree, avoiding Python's recursion depth limit.
+
+        Args:
+            node: The starting node for traversal.
+            current_symbols: A list to track the current symbol path (mutated in place).
+            current_nodes: A list to track the nodes corresponding to the symbol path (mutated in place).
+            code_map: The dictionary to populate with symbol information.
+            source_bytes: The source code of the file as bytes.
+            results: A list to store the ordered symbol paths found.
+        """
+        # Stack for iterative traversal, storing (node, depth in symbol hierarchy)
+        stack: List[Tuple[Node, int]] = [(node, 0)]
+
+        while stack:
+            current_node, depth = stack.pop()
+
+            # Prune the symbol/node paths to the correct depth for the current node
+            while len(current_symbols) > depth:
+                current_symbols.pop()
+            while len(current_nodes) > depth:
+                current_nodes.pop()
+
+            # Process the current node (pre-order visit)
+            processed_node = self._process_symbol_node(
+                current_node, current_symbols, current_nodes, code_map, source_bytes, results
+            )
+
+            if processed_node:
+                self._extract_function_calls(processed_node, current_symbols, code_map)
+
+            self._extract_parameter_type_calls(current_node, current_symbols, code_map)
+
+            # Add children to the stack for future processing
+            # The new depth is the current length of the symbol path
+            new_depth: int = len(current_symbols)
+            # Push children in reverse order to process them in the correct (forward) order
+            for child in reversed(current_node.children):
+                stack.append((child, new_depth))
+
+    def build_symbol_info(self, info: Dict[str, Any], file_path: str) -> Dict[str, Any]:
         """构建符号信息字典"""
         full_definition_hash = calculate_crc32_hash(info["code"])
         location = (
@@ -1255,15 +1327,15 @@ class CodeMapBuilder:
         )
         sorted_locations = sorted(locations, key=lambda loc: (loc[0], loc[1]))
 
-        processed_symbols = {}
-        symbol_locations = {}
+        processed_symbols: Dict[str, Any] = {}
+        symbol_locations: Dict[str, List[Tuple[int, int]]] = {}
         total_code_size = 0
 
         # 存储处理后的位置信息 (line, col, symbol_path)
-        processed_locations_with_symbols = []
+        processed_locations_with_symbols: List[Tuple[int, int, str]] = []
 
         for line, col in sorted_locations:
-            current_symbol = None
+            current_symbol: Optional[str] = None
             for symbol_path, symbol_info in sorted_symbols:
                 if symbol_info["type"] == "variable":
                     continue
@@ -1287,7 +1359,7 @@ class CodeMapBuilder:
                 if include_class_context:
                     symbol_info = code_map[current_symbol]
                     # 仅处理函数类型且包含命名空间的符号 (e.g., "MyClass.my_method")
-                    if symbol_info.get("type") == "function" and "." in current_symbol:
+                    if symbol_info.get("type") in ("function", "method") and "." in current_symbol:
                         parts = current_symbol.split(".")
                         if len(parts) > 1:
                             class_path = ".".join(parts[:-1])
@@ -1344,11 +1416,11 @@ class CodeMapBuilder:
         return processed_symbols
 
 
-def is_node_module(node_type):
+def is_node_module(node_type: str) -> bool:
     return NodeTypes.is_module(node_type)
 
 
-def dump_tree(node, indent=0):
+def dump_tree(node: Node, indent: int = 0) -> None:
     prefix = "  " * indent
     node_text = node.text.decode("utf8") if node.text else ""
     # 或者根据 source_bytes 截取：node_text = source_bytes[node.start_byte:node.end_byte].decode('utf8')
@@ -1364,7 +1436,7 @@ class SourceSkeleton:
     def __init__(self, parser_loader: ParserLoader):
         self.parser_loader = parser_loader
 
-    def _get_docstring(self, node, parent_type: str):
+    def _get_docstring(self, node: Node, parent_type: str) -> Optional[str]:
         """根据Tree-sitter节点类型提取文档字符串"""
         if parent_type == NodeTypes.DECORATED_DEFINITION:
             for child in node.children:
@@ -1379,27 +1451,28 @@ class SourceSkeleton:
 
         # 类/函数文档字符串：body中的第一个字符串表达式
         if parent_type in (NodeTypes.CLASS_DEFINITION, NodeTypes.FUNCTION_DEFINITION):
-            node = node.child_by_field_name(NodeTypes.BODY)
-            if node:
+            body_node = node.child_by_field_name(NodeTypes.BODY)
+            if body_node:
                 if (
-                    len(node.children) > 1
-                    and node.children[0].type == NodeTypes.EXPRESSION_STATEMENT
-                    and node.children[0].children[0].type == NodeTypes.STRING
+                    len(body_node.children) > 1
+                    and body_node.children[0].type == NodeTypes.EXPRESSION_STATEMENT
+                    and body_node.children[0].children
+                    and body_node.children[0].children[0].type == NodeTypes.STRING
                 ):
-                    return node.children[0].text.decode("utf8")
+                    return body_node.children[0].text.decode("utf8")
         if parent_type in (
             NodeTypes.GO_FUNC_DECLARATION,
             NodeTypes.GO_METHOD_DECLARATION,
         ):
-            prev = node.prev_sibling
-            comment_all = []
+            prev: Optional[Node] = node.prev_sibling
+            comment_all: List[str] = []
             while prev and prev.type == NodeTypes.COMMENT:
                 comment_all.append(prev.text.decode("utf8"))
                 prev = prev.prev_sibling
             return "\n".join(reversed(comment_all))
         return None
 
-    def _capture_signature(self, node, source_bytes: bytes) -> str:
+    def _capture_signature(self, node: Node, source_bytes: bytes) -> str:
         """精确捕获定义签名（基于Tree-sitter解析结构）"""
         start = node.start_byte
         end = 0
@@ -1415,7 +1488,7 @@ class SourceSkeleton:
                             end = v.children[j - 1].end_byte
                             break
             if end == 0:
-                dump_tree(node, source_bytes)
+                dump_tree(node)
                 raise ValueError("unknown ast")
             return source_bytes[start:end].decode("utf8")
 
@@ -1430,19 +1503,19 @@ class SourceSkeleton:
                     end = node.children[j - 1].end_byte
                     break
             if end == 0:
-                dump_tree(node, source_bytes)
+                dump_tree(node)
                 raise ValueError("unknown ast")
             return source_bytes[start:end].decode("utf8")
 
-        dump_tree(node, source_bytes)
+        dump_tree(node)
         raise ValueError("unknown ast")
 
-    def _process_node(self, node, source_bytes: bytes, indent=0, lang_name="") -> List[str]:
+    def _process_node(self, node: Node, source_bytes: bytes, indent: int = 0, lang_name: str = "") -> List[str]:
         """基于Tree-sitter节点类型的处理逻辑"""
-        output = []
+        output: List[str] = []
         indent_str = INDENT_UNIT * indent
 
-        def process_module_node():
+        def process_module_node() -> None:
             for child in node.children:
                 if child.type in [
                     NodeTypes.CLASS_DEFINITION,
@@ -1463,7 +1536,7 @@ class SourceSkeleton:
                 ]:
                     output.extend(self._process_node(child, source_bytes, lang_name=lang_name))
 
-        def process_class_node():
+        def process_class_node() -> None:
             class_sig = self._capture_signature(node, source_bytes)
             output.append(f"\n{class_sig}")
 
@@ -1485,7 +1558,7 @@ class SourceSkeleton:
                         code = source_bytes[member.start_byte : member.end_byte].decode("utf8")
                         output.append(f"{indent_str}{INDENT_UNIT}{code}")
 
-        def process_function_node():
+        def process_function_node() -> None:
             if self.is_lang_cstyle(lang_name):
                 docstring = self._get_docstring(node, node.type)
                 if docstring:
@@ -1504,8 +1577,8 @@ class SourceSkeleton:
             else:
                 output.append(f"{indent_str}{INDENT_UNIT}pass  # Placeholder")
 
-        def process_other_node():
-            if is_node_module(node.parent.type):
+        def process_other_node() -> None:
+            if node.parent and is_node_module(node.parent.type):
                 code = source_bytes[node.start_byte : node.end_byte].decode("utf8")
                 output.append(f"{code}")
 
@@ -1539,7 +1612,7 @@ class SourceSkeleton:
 
         return output
 
-    def is_lang_cstyle(self, lang_name):
+    def is_lang_cstyle(self, lang_name: str) -> bool:
         return lang_name in ("c", "cpp", "go", "java")
 
     def generate_framework(self, file_path: str) -> str:
