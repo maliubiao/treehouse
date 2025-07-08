@@ -1546,123 +1546,123 @@ class TestCallAnalysis(TestParserUtil):
 
         return (start_line, start_col, end_line, end_col)
 
-    # def test_function_call_extraction(self):
-    #     code = dedent(
-    #         """
-    #         def some_function():
-    #             pass
+    def test_function_call_extraction(self):
+        code = dedent(
+            """
+            def some_function():
+                pass
 
-    #         class A:
-    #             class B:
-    #                 @staticmethod
-    #                 def f():
-    #                     pass
+            class A:
+                class B:
+                    @staticmethod
+                    def f():
+                        pass
 
-    #         class MyClass:
-    #             def other_method(self):
-    #                 pass
+            class MyClass:
+                def other_method(self):
+                    pass
 
-    #             @A.B.f()
-    #             def my_method(self):
-    #                 A.B.f()
-    #                 self.other_method()
-    #                 some_function()
-    #                 self.attr
-    #                 A.B.f
-    #         """
-    #     )
-    #     path = self.create_temp_file(code, suffix=".py")
-    #     paths, code_map = self.parser_util.get_symbol_paths(path)
-    #     os.unlink(path)
+                @A.B.f()
+                def my_method(self):
+                    A.B.f()
+                    self.other_method()
+                    some_function()
+                    self.attr
+                    A.B.f
+            """
+        )
+        path = self.create_temp_file(code, suffix=".py")
+        paths, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
 
-    # expected_paths = [
-    #     "A",
-    #     "A.B",
-    #     "A.B.f",
-    #     "MyClass",
-    #     "MyClass.other_method",
-    #     "MyClass.my_method",
-    #     "some_function",
-    # ]
-    # method_entry = code_map["MyClass.my_method"]
+        expected_paths = [
+            "A",
+            "A.B",
+            "A.B.f",
+            "MyClass",
+            "MyClass.other_method",
+            "MyClass.my_method",
+            "some_function",
+        ]
+        method_entry = code_map["MyClass.my_method"]
 
-    # self.assertEqual(sorted(paths), sorted(expected_paths))
+        self.assertEqual(sorted(paths), sorted(expected_paths))
 
-    # actual_calls = method_entry["calls"]
-    # expected_call_names = {
-    #     "A.B",
-    #     "A.B.f",
-    #     "self.other_method",
-    #     "some_function",
-    #     "self.attr",
-    # }
-    # actual_call_names = {call["name"] for call in actual_calls}
-    # self.assertEqual(actual_call_names, expected_call_names)
+        actual_calls = method_entry["calls"]
+        expected_call_names = {
+            "A.B",
+            "A.B.f",
+            "self.other_method",
+            "some_function",
+            "self.attr",
+        }
+        actual_call_names = {call["name"] for call in actual_calls}
+        self.assertEqual(actual_call_names, expected_call_names)
 
-    # with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-    #     f.write(code)
-    #     temp_path = f.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            temp_path = f.name
 
-    # try:
-    #     self.lsp_client.send_notification(
-    #         "textDocument/didOpen",
-    #         {
-    #             "textDocument": {
-    #                 "uri": f"file://{temp_path}",
-    #                 "languageId": "python",
-    #                 "version": 1,
-    #                 "text": code,
-    #             }
-    #         },
-    #     )
+        try:
+            self.lsp_client.send_notification(
+                "textDocument/didOpen",
+                {
+                    "textDocument": {
+                        "uri": f"file://{temp_path}",
+                        "languageId": "python",
+                        "version": 1,
+                        "text": code,
+                    }
+                },
+            )
 
-    #     for call in actual_calls:
-    #         line = call["start_point"][0] + 1
-    #         char = call["start_point"][1] + 1
+            for call in actual_calls:
+                line = call["start_point"][0] + 1
+                char = call["start_point"][1] + 1
 
-    #         definition = asyncio.run(self.lsp_client.get_definition(temp_path, line, char))
-    #         self.assertTrue(definition is not None, f"未找到 {call['name']} 的定义")
+                definition = asyncio.run(self.lsp_client.get_definition(temp_path, line, char))
+                self.assertTrue(definition is not None, f"未找到 {call['name']} 的定义")
 
-    #         definitions = definition if isinstance(definition, list) else [definition]
-    #         found_valid = any(
-    #             d.get("uri", "").startswith("file://") and os.path.exists(unquote(urlparse(d.get("uri", "")).path))
-    #             for d in definitions
-    #         )
-    #         self.assertTrue(found_valid, f"未找到有效的文件路径定义: {call['name']}")
-    # finally:
-    #     os.unlink(temp_path)
-    #     if self.lsp_client.running:
-    #         asyncio.run(self.lsp_client.shutdown())
+                definitions = definition if isinstance(definition, list) else [definition]
+                found_valid = any(
+                    d.get("uri", "").startswith("file://") and os.path.exists(unquote(urlparse(d.get("uri", "")).path))
+                    for d in definitions
+                )
+                self.assertTrue(found_valid, f"未找到有效的文件路径定义: {call['name']}")
+        finally:
+            os.unlink(temp_path)
+            if self.lsp_client.running:
+                asyncio.run(self.lsp_client.shutdown())
 
-    # def test_parameter_type_calls(self):
-    #     code = dedent(
-    #         """
-    #         from typing import List, Optional
+    def test_parameter_type_calls(self):
+        code = dedent(
+            """
+            from typing import List, Optional
 
-    #         class MyType:
-    #             pass
+            class MyType:
+                pass
 
-    #         def example(
-    #             a: int,
-    #             b: MyType,
-    #             c: List[MyType],
-    #             d: Optional[List[int]],
-    #             e: "Optional[MyType]",
-    #             f: dict[str, MyType],
-    #             g: tuple[MyType, int],
-    #             h: Sequence[MyType]
-    #         ):
-    #             pass
-    #     """
-    #     )
-    #     path = self.create_temp_file(code)
-    #     _, code_map = self.parser_util.get_symbol_paths(path)
-    #     os.unlink(path)
+            def example(
+                a: int,
+                b: MyType,
+                c: List[MyType],
+                d: Optional[List[int]],
+                e: "Optional[MyType]",
+                f: dict[str, MyType],
+                g: tuple[MyType, int],
+                h: Sequence[MyType]
+            ):
+                pass
+        """
+        )
+        path = self.create_temp_file(code)
+        _, code_map = self.parser_util.get_symbol_paths(path)
+        os.unlink(path)
 
-    #     entry = code_map["example"]
-    #     call_names = {call["name"] for call in entry["calls"]}
-    #     expected_calls = {"MyType"}
-    #     self.assertEqual(call_names, expected_calls)
+        entry = code_map["example"]
+        call_names = {call["name"] for call in entry["calls"]}
+        expected_calls = {"MyType"}
+        self.assertEqual(call_names, expected_calls)
 
     def test_find_symbol_by_location(self):
         code = dedent(

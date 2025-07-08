@@ -1174,43 +1174,83 @@ class CodeMapBuilder:
                 }
                 code_map[current_path]["calls"].append(call_info)
 
-    def _extract_function_calls(self, node: Node, current_symbols: List[str], code_map: Dict[str, Any]) -> None:
-        """提取函数调用信息并添加到当前符号的calls集合"""
-        if node.type == NodeTypes.CALL:
-            function_node = node.child_by_field_name("function")
-            if function_node:
-                func_name = self.node_processor.get_function_name_from_call(function_node)
-                self._add_call_info(func_name, current_symbols, code_map, function_node)
-        elif node.type == NodeTypes.ATTRIBUTE:
-            func_name = self.node_processor.get_full_attribute_name(node)
-            self._add_call_info(func_name, current_symbols, code_map, node)
-        elif node.type == NodeTypes.C_ATTRIBUTE_DECLARATION:
+    def _extract_function_calls(self, root_node: Node, current_symbols: List[str], code_map: Dict[str, Any]) -> None:
+        """
+        Iteratively extracts function call information from the subtree rooted at root_node.
+        This method replaces the recursive version.
+        """
+        if not current_symbols:
             return
-        elif self.lang in (C_LANG, CPP_LANG) and node.type == NodeTypes.IDENTIFIER:
-            self._add_call_info(node.text.decode("utf8"), current_symbols, code_map, node)
-        for child in node.children:
-            self._extract_function_calls(child, current_symbols, code_map)
 
-    def _extract_parameter_type_calls(self, node: Node, current_symbols: List[str], code_map: Dict[str, Any]) -> None:
-        """提取参数的类型注释中的调用信息"""
-        if NodeTypes.is_type(node.type):
-            type_node = node.child_by_field_name("type")
-            if not type_node:
-                return
-            identifiers = self._collect_type_identifiers(type_node)
-            for identifier in identifiers:
-                type_name = identifier.text.decode("utf8")
-                if not BaseNodeProcessor.is_standard_type(type_name):
-                    self._add_call_info(type_name, current_symbols, code_map, identifier)
+        stack: List[Node] = [root_node]
+        while stack:
+            node = stack.pop()
 
-    def _collect_type_identifiers(self, node: Node) -> List[Node]:
-        """递归收集类型节点中的所有标识符"""
+            if node.type == NodeTypes.CALL:
+                function_node = node.child_by_field_name("function")
+                if function_node:
+                    func_name = BaseNodeProcessor.get_function_name_from_call(function_node)
+                    self._add_call_info(func_name, current_symbols, code_map, function_node)
+            elif node.type == NodeTypes.ATTRIBUTE:
+                func_name = BaseNodeProcessor.get_full_attribute_name(node)
+                self._add_call_info(func_name, current_symbols, code_map, node)
+            elif self.lang in (C_LANG, CPP_LANG) and node.type == NodeTypes.IDENTIFIER:
+                # Refinement for C/CPP identifiers: only consider if it's the function name in a call_expression
+                parent = node.parent
+                if parent and parent.type == "call_expression":
+                    function_child = parent.child_by_field_name("function")
+                    if function_child == node:  # Check if this identifier is indeed the function being called
+                        self._add_call_info(node.text.decode("utf8"), current_symbols, code_map, node)
+            elif node.type == NodeTypes.C_ATTRIBUTE_DECLARATION:
+                # In iterative traversal, 'continue' here means don't add children of this node to stack.
+                continue
+
+            # Add children to stack in reverse order for pre-order traversal
+            for child in reversed(node.children):
+                stack.append(child)
+
+    def _collect_type_identifiers_iterative(self, node: Node) -> List[Node]:
+        """
+        Iteratively collects all identifier nodes within a type annotation subtree.
+        This replaces the recursive version of _collect_type_identifiers.
+        """
         identifiers: List[Node] = []
-        if NodeTypes.is_identifier(node.type):
-            identifiers.append(node)
-        for child in node.children:
-            identifiers.extend(self._collect_type_identifiers(child))
+        stack: List[Node] = [node]
+        while stack:
+            current = stack.pop()
+            if NodeTypes.is_identifier(current.type):
+                identifiers.append(current)
+            # Add children to stack in reverse order to maintain original order in results
+            for child in reversed(current.children):
+                stack.append(child)
         return identifiers
+
+    def _extract_parameter_type_calls(
+        self, root_node: Node, current_symbols: List[str], code_map: Dict[str, Any]
+    ) -> None:
+        """
+        Iteratively extracts type annotations from the subtree rooted at root_node.
+        This method replaces the recursive version.
+        """
+        if not current_symbols:
+            return
+
+        stack: List[Node] = [root_node]
+        while stack:
+            node = stack.pop()
+
+            if NodeTypes.is_type(node.type):
+                type_node = node.child_by_field_name("type")
+                if type_node:
+                    # Use the iterative _collect_type_identifiers
+                    identifiers = self._collect_type_identifiers_iterative(type_node)
+                    for identifier in identifiers:
+                        type_name = identifier.text.decode("utf8")
+                        if not BaseNodeProcessor.is_standard_type(type_name):
+                            self._add_call_info(type_name, current_symbols, code_map, identifier)
+            # Add children to stack in reverse order
+            for child in reversed(node.children):
+                stack.append(child)
 
     def traverse(
         self,
@@ -1247,15 +1287,15 @@ class CodeMapBuilder:
             while len(current_nodes) > depth:
                 current_nodes.pop()
 
-            # Process the current node (pre-order visit)
+            # Process the current node (pre-order visit) as a potential symbol definition
             processed_node = self._process_symbol_node(
                 current_node, current_symbols, current_nodes, code_map, source_bytes, results
             )
 
-            # if processed_node:
-            #     self._extract_function_calls(processed_node, current_symbols, code_map)
-
-            # self._extract_parameter_type_calls(current_node, current_symbols, code_map)
+            # If a symbol definition was processed, extract calls and parameter types from its subtree
+            if processed_node:
+                self._extract_function_calls(processed_node, current_symbols, code_map)
+                self._extract_parameter_type_calls(processed_node, current_symbols, code_map)
 
             # Add children to the stack for future processing
             # The new depth is the current length of the symbol path
