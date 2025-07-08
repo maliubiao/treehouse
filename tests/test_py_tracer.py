@@ -2,9 +2,12 @@ import dis
 import importlib.util
 import inspect
 import json
+import os
 import shutil
+import site
 import sys
 import unittest
+from collections import defaultdict
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -169,115 +172,107 @@ class TestTruncateReprValue(unittest.TestCase):
 class TestTraceConfig(BaseTracerTest):
     """Tests for the TraceConfig class."""
 
+    def test_initialization_defaults(self):
+        config = TraceConfig()
 
-import os
-import site
-import sys
-from collections import defaultdict
-from pathlib import Path
+        self.assertTrue(config.ignore_self)
+        self.assertTrue(config.ignore_system_paths)
+        self.assertFalse(config.enable_var_trace)
+        self.assertEqual(config.report_name, "trace_report.html")
+        self.assertEqual(config.target_files, [])
+        self.assertEqual(config.line_ranges, defaultdict(set))
+        self.assertEqual(config.capture_vars, [])
+        self.assertEqual(config.exclude_functions, [])
+        self.assertIsNone(config.callback)
+        self.assertIsNone(config.start_function)
+        self.assertIsNone(config.source_base_dir)
+        self.assertFalse(config.disable_html)
+        self.assertEqual(config.include_stdlibs, [])
 
+        test_site_packages_file = None
+        try:
+            site_packages_dirs = site.getsitepackages()
+            for sp_dir in site_packages_dirs:
+                current_path = Path(sp_dir)
+                if current_path.is_dir() and (
+                    any(f.suffix == ".pth" for f in current_path.iterdir())
+                    or any(f.suffix == ".egg-info" for f in current_path.iterdir())
+                    or any(f.is_dir() and "dist-info" in f.name for f in current_path.iterdir())
+                ):
+                    test_site_packages_file = current_path / "some_test_lib.py"
+                    break
+        except Exception:
+            pass
 
-def test_initialization_defaults(self):
-    config = TraceConfig()
+        if not test_site_packages_file:
+            for p in sys.path:
+                resolved_p = Path(p).resolve()
+                if any(part in ("site-packages", "dist-packages") for part in resolved_p.parts) or (
+                    "lib" in resolved_p.parts and any("python" in part.lower() for part in resolved_p.parts)
+                ):
+                    test_site_packages_file = resolved_p / "some_test_lib.py"
+                    break
 
-    self.assertTrue(config.ignore_self)
-    self.assertTrue(config.ignore_system_paths)
-    self.assertFalse(config.enable_var_trace)
-    self.assertEqual(config.report_name, "trace_report.html")
-    self.assertEqual(config.target_files, [])
-    self.assertEqual(config.line_ranges, defaultdict(set))
-    self.assertEqual(config.capture_vars, [])
-    self.assertEqual(config.exclude_functions, [])
-    self.assertIsNone(config.callback)
-    self.assertIsNone(config.start_function)
-    self.assertIsNone(config.source_base_dir)
-    self.assertFalse(config.disable_html)
-    self.assertEqual(config.include_stdlibs, [])
+        if not test_site_packages_file:
+            test_site_packages_file = Path("/my_virtual_env/lib/python3.9/site-packages/test_module.py")
 
-    test_site_packages_file = None
-    try:
-        site_packages_dirs = site.getsitepackages()
-        for sp_dir in site_packages_dirs:
-            current_path = Path(sp_dir)
-            if current_path.is_dir() and (
-                any(f.suffix == ".pth" for f in current_path.iterdir())
-                or any(f.suffix == ".egg-info" for f in current_path.iterdir())
-                or any(f.is_dir() and "dist-info" in f.name for f in current_path.iterdir())
-            ):
-                test_site_packages_file = current_path / "some_test_lib.py"
-                break
-    except Exception:
-        pass
+        self.assertFalse(config.match_filename(str(test_site_packages_file)))
 
-    if not test_site_packages_file:
-        for p in sys.path:
-            resolved_p = Path(p).resolve()
-            if any(part in ("site-packages", "dist-packages") for part in resolved_p.parts) or (
-                "lib" in resolved_p.parts and any("python" in part.lower() for part in resolved_p.parts)
-            ):
-                test_site_packages_file = resolved_p / "some_test_lib.py"
-                break
+        def test_initialization_with_params(self):
+            config = TraceConfig(target_files=["*.py"], enable_var_trace=True, ignore_system_paths=False)
+            self.assertEqual(config.target_files, ["*.py"])
+            self.assertFalse(config.ignore_system_paths)
+            self.assertTrue(config.enable_var_trace)
 
-    if not test_site_packages_file:
-        test_site_packages_file = Path("/my_virtual_env/lib/python3.9/site-packages/test_module.py")
+        def test_from_yaml(self):
+            config_file = self.test_dir / "test_config.yml"
+            sample_config = {
+                "target_files": ["*.py", "test_*.py"],
+                "line_ranges": {"test.py": [(1, 10), (20, 30)]},
+                "capture_vars": ["x", "y.z"],
+            }
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump(sample_config, f)
 
-    self.assertFalse(config.match_filename(str(test_site_packages_file)))
+            config = TraceConfig.from_yaml(config_file)
+            self.assertEqual(config.target_files, sample_config["target_files"])
+            self.assertEqual(len(config.line_ranges), 1)
+            self.assertEqual(config.capture_vars, sample_config["capture_vars"])
 
-    def test_initialization_with_params(self):
-        config = TraceConfig(target_files=["*.py"], enable_var_trace=True, ignore_system_paths=False)
-        self.assertEqual(config.target_files, ["*.py"])
-        self.assertFalse(config.ignore_system_paths)
-        self.assertTrue(config.enable_var_trace)
+        def test_match_filename(self):
+            config = TraceConfig(target_files=["*/test_*.py", "*/debugger/*"])
+            current_file = Path(__file__).resolve().as_posix()
+            self.assertTrue(config.match_filename(current_file))
+            self.assertTrue(config.match_filename("/fake/path/to/debugger/tracer.py"))
+            self.assertFalse(config.match_filename("/app/main.py"))
 
-    def test_from_yaml(self):
-        config_file = self.test_dir / "test_config.yml"
-        sample_config = {
-            "target_files": ["*.py", "test_*.py"],
-            "line_ranges": {"test.py": [(1, 10), (20, 30)]},
-            "capture_vars": ["x", "y.z"],
-        }
-        with open(config_file, "w", encoding="utf-8") as f:
-            json.dump(sample_config, f)
+        def test_ignore_system_paths(self):
+            config = TraceConfig(ignore_system_paths=True)
+            site_packages_file = "/usr/lib/python3.9/site-packages/some_lib.py"
+            self.assertFalse(config.match_filename(site_packages_file))
 
-        config = TraceConfig.from_yaml(config_file)
-        self.assertEqual(config.target_files, sample_config["target_files"])
-        self.assertEqual(len(config.line_ranges), 1)
-        self.assertEqual(config.capture_vars, sample_config["capture_vars"])
+        def test_is_excluded_function(self):
+            config = TraceConfig(exclude_functions=["secret_function", "internal_helper"])
+            self.assertTrue(config.is_excluded_function("secret_function"))
+            self.assertFalse(config.is_excluded_function("public_api"))
 
-    def test_match_filename(self):
-        config = TraceConfig(target_files=["*/test_*.py", "*/debugger/*"])
-        current_file = Path(__file__).resolve().as_posix()
-        self.assertTrue(config.match_filename(current_file))
-        self.assertTrue(config.match_filename("/fake/path/to/debugger/tracer.py"))
-        self.assertFalse(config.match_filename("/app/main.py"))
+        def test_parse_line_ranges(self):
+            line_ranges = {"test.py": [(1, 3), (5, 7)]}
+            config = TraceConfig(line_ranges=line_ranges)
+            parsed = config.line_ranges
+            self.assertEqual(len(parsed), 1)
+            self.assertIn(str(Path("test.py").resolve()), parsed)
+            self.assertEqual(parsed[str(Path("test.py").resolve())], {1, 2, 3, 5, 6, 7})
 
-    def test_ignore_system_paths(self):
-        config = TraceConfig(ignore_system_paths=True)
-        site_packages_file = "/usr/lib/python3.9/site-packages/some_lib.py"
-        self.assertFalse(config.match_filename(site_packages_file))
+        def test_validate_expressions(self):
+            valid_exprs = ["x", "x.y", "x[0]"]
+            invalid_exprs = ["x.", "1 + ", "x = y"]
 
-    def test_is_excluded_function(self):
-        config = TraceConfig(exclude_functions=["secret_function", "internal_helper"])
-        self.assertTrue(config.is_excluded_function("secret_function"))
-        self.assertFalse(config.is_excluded_function("public_api"))
+            config = TraceConfig(capture_vars=valid_exprs)
+            self.assertTrue(config.validate())
 
-    def test_parse_line_ranges(self):
-        line_ranges = {"test.py": [(1, 3), (5, 7)]}
-        config = TraceConfig(line_ranges=line_ranges)
-        parsed = config.line_ranges
-        self.assertEqual(len(parsed), 1)
-        self.assertIn(str(Path("test.py").resolve()), parsed)
-        self.assertEqual(parsed[str(Path("test.py").resolve())], {1, 2, 3, 5, 6, 7})
-
-    def test_validate_expressions(self):
-        valid_exprs = ["x", "x.y", "x[0]"]
-        invalid_exprs = ["x.", "1 + ", "x = y"]
-
-        config = TraceConfig(capture_vars=valid_exprs)
-        self.assertTrue(config.validate())
-
-        t = TraceConfig(capture_vars=invalid_exprs)
-        self.assertFalse(t.validate())
+            t = TraceConfig(capture_vars=invalid_exprs)
+            self.assertFalse(t.validate())
 
 
 class TestTraceLogic(BaseTracerTest):
