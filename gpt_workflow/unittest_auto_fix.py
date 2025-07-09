@@ -546,7 +546,7 @@ class TestAutoFix:
         ignore_system_paths=True,
         disable_html=True,
         source_base_dir=Path(__file__).parent.parent,
-        exclude_functions=["get_symbol_paths", "traverse", "search_exact", "__init__", "insert"],
+        exclude_functions=["symbol_at_line", "get_symbol_paths", "traverse", "search_exact", "__init__", "insert"],
     )
     def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
         """

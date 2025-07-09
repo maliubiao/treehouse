@@ -3,18 +3,16 @@ import logging
 import os
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import unquote, urlparse
 
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
 
 from lsp.client import GenericLSPClient, LSPFeatureError
 from lsp.language_id import LanguageId
 from tree import (
     ParserLoader,
     ParserUtil,
-    SymbolTrie,
     perform_trie_search,
     update_trie_if_needed,
 )
@@ -22,14 +20,76 @@ from tree_libs.ast import line_number_from_unnamed_symbol
 
 from .app import FileSearchResults, WebServiceState
 
-# from .app import FileSearchResults, WebServiceState
-
 logger = logging.getLogger(__name__)
 
 
 def clamp(value: int, min_val: int, max_val: int) -> int:
     """限制数值范围"""
     return max(min_val, min(max_val, value))
+
+
+# --- Centralized Caching and Parsing Logic ---
+
+
+def _update_trie_from_code_map(file_path: str, code_map: Dict[str, Any], state: WebServiceState, parser: ParserUtil):
+    """Helper to update the file_symbol_trie with symbols from a given code_map."""
+    rel_path = state.config.relative_path(file_path)
+    for path, info in code_map.items():
+        # The key in the trie should be fully qualified for global uniqueness.
+        full_path = f"symbol:{rel_path}/{path}"
+        # The symbol_info object itself should contain the relative path.
+        symbol_info = parser.code_map_builder.build_symbol_info(info, rel_path)
+        state.file_symbol_trie.insert(full_path, symbol_info)
+
+
+async def _get_cached_file_data(
+    file_path: str, state: WebServiceState
+) -> Tuple[Optional[ParserUtil], Optional[Dict[str, Any]]]:
+    """
+    Retrieves parsed file data (ParserUtil instance and code_map) from cache,
+    updating the cache if the file is new or has been modified.
+    This is the single source of truth for file parsing.
+    Returns (ParserUtil, code_map) or (None, None) if parsing fails.
+    """
+    clean_file_path = file_path.removeprefix("symbol:")
+    try:
+        current_mtime = os.path.getmtime(clean_file_path)
+    except (FileNotFoundError, OSError):
+        return None, None
+
+    # First, check cache with the lock
+    async with state.lock:
+        if clean_file_path in state.file_parser_info_cache:
+            cached_mtime, parser, code_map = state.file_parser_info_cache[clean_file_path]
+            if cached_mtime == current_mtime:
+                return parser, code_map
+
+    # If not in cache or modified, parse the file (outside the lock to avoid blocking)
+    # The ParserLoader might be better if shared, but for now let's keep it simple.
+    parser_loader = ParserLoader()
+    parser = ParserUtil(parser_loader)
+    try:
+        paths, code_map = parser.get_symbol_paths(clean_file_path)
+    except (ValueError, FileNotFoundError) as e:
+        logger.warning(f"Error parsing {clean_file_path}: {e}")
+        # Cache failure to avoid re-parsing a broken file repeatedly
+        async with state.lock:
+            state.file_parser_info_cache[clean_file_path] = (current_mtime, None, None)
+        return None, None
+
+    # After parsing, acquire lock to update cache and trie
+    async with state.lock:
+        # Re-check in case another thread parsed and cached it while we were parsing
+        if clean_file_path in state.file_parser_info_cache:
+            cached_mtime, cached_parser, cached_code_map = state.file_parser_info_cache[clean_file_path]
+            if cached_mtime >= current_mtime:
+                return cached_parser, cached_code_map
+
+        # Update cache and trie
+        state.file_parser_info_cache[clean_file_path] = (current_mtime, parser, code_map)
+        _update_trie_from_code_map(clean_file_path, code_map, state, parser)
+
+        return parser, code_map
 
 
 # --- Handler for /complete ---
@@ -41,302 +101,427 @@ async def handle_symbol_completion(prefix: str, max_results: int, state: WebServ
     max_results = clamp(int(max_results), 1, 50)
 
     results = trie.search_prefix(prefix, max_results=max_results, use_bfs=True)
-    # Note: Database fallback logic is removed as the DB logic is not present in the provided tree.py
-    # If db integration is needed, it should be added here.
-
     return {"completions": results}
 
 
-# --- Handler for /symbol_content ---
+# --- LSP-based Call Resolution ---
+class LSPCallResolver:
+    """Encapsulates the logic for resolving symbol calls using an LSP client."""
+
+    def __init__(self, state: WebServiceState):
+        self.state: WebServiceState = state
+        self.lookup_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self.file_content_cache: Dict[str, bytes] = {}
+        self.file_lines_cache: Dict[str, List[str]] = {}
+
+    async def resolve_calls_for_symbols(self, symbols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        For a given list of symbols, resolves their internal calls to other symbols.
+        """
+        resolved_symbols: List[Dict[str, Any]] = []
+        for symbol in symbols:
+            try:
+                lsp_client = self.state.get_lsp_client(symbol["file_path"])
+                if lsp_client:
+                    resolved_symbols.extend(await self._location_to_symbol(symbol, lsp_client))
+            except (ConnectionError, TimeoutError, RuntimeError) as e:
+                logger.error("LSP enhancement failed for symbol %s: %s", symbol.get("name"), e)
+
+        return resolved_symbols
+
+    async def _location_to_symbol(self, symbol: Dict[str, Any], lsp_client: GenericLSPClient) -> List[Dict[str, Any]]:
+        """Converts call locations within a symbol to full symbol definitions."""
+        await self._initialize_lsp_server(symbol, lsp_client)
+
+        collected_symbols: List[Dict[str, Any]] = []
+        # Use a queue for breadth-first traversal of calls
+        call_queue: List[Tuple[int, Dict[str, Any]]] = [(1, call) for call in symbol.get("calls", [])]
+        processed_symbols: Set[str] = set()
+
+        while call_queue:
+            level, call = call_queue.pop(0)
+            if level > 3:  # Limit recursion depth
+                continue
+
+            try:
+                symbols_from_call = await self._process_call(call, symbol["file_path"], lsp_client)
+                for sym in symbols_from_call:
+                    unique_symbol_id = f"{sym.get('file_path', '')}:{sym.get('name', '')}"
+                    if unique_symbol_id in processed_symbols:
+                        continue
+                    processed_symbols.add(unique_symbol_id)
+
+                    collected_symbols.append(sym)
+                    # If the new symbol is in the same file, explore its calls as well
+                    if sym.get("file_path") == symbol["file_path"]:
+                        call_queue.extend([(level + 1, c) for c in sym.get("calls", [])])
+
+            except (ConnectionError, TimeoutError, RuntimeError) as e:
+                logger.error("Error processing call %s: %s", call.get("name"), e)
+
+        return collected_symbols
+
+    async def _initialize_lsp_server(self, symbol: Dict[str, Any], lsp_client: GenericLSPClient) -> None:
+        """Sends a textDocument/didOpen notification to the LSP server."""
+        file_path = symbol["file_path"]
+        abs_file_path = os.path.abspath(file_path)
+        uri = f"file://{abs_file_path}"
+
+        # Avoid re-opening the same file
+        if uri in lsp_client.open_documents:
+            return
+
+        content_bytes = self._read_source_code_bytes(file_path)
+        if content_bytes is None:
+            return
+
+        lsp_client.send_notification(
+            "textDocument/didOpen",
+            {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": LanguageId.get_language_id(file_path),
+                    "version": 1,
+                    "text": content_bytes.decode("utf-8", errors="ignore"),
+                }
+            },
+        )
+
+    async def _process_call(
+        self, call: Dict[str, Any], file_path: str, lsp_client: GenericLSPClient
+    ) -> List[Dict[str, Any]]:
+        """Processes a single call location to find its definition."""
+        line, char = call["start_point"][0] + 1, call["start_point"][1] + 1
+        definitions = await lsp_client.get_definition(os.path.abspath(file_path), line, char)
+        if not definitions:
+            return []
+
+        definitions = definitions if isinstance(definitions, list) else [definitions]
+        collected_symbols: List[Dict[str, Any]] = []
+        for def_item in definitions:
+            uri = def_item.get("uri", "")
+            def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
+            if not def_path:
+                continue
+
+            cache_key = f"{def_path}:{def_item.get('range', {}).get('start', {}).get('line', 0)}"
+            if cache_key in self.lookup_cache:
+                collected_symbols.extend(self.lookup_cache[cache_key])
+                continue
+
+            symbols = await self._process_definition(def_item, call["name"])
+            self.lookup_cache[cache_key] = symbols
+            collected_symbols.extend(symbols)
+        return collected_symbols
+
+    async def _process_definition(self, def_item: Dict[str, Any], call_name: str) -> List[Dict[str, Any]]:
+        """Processes a definition item returned by the LSP server."""
+        uri = def_item.get("uri", "")
+        def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
+        if not def_path or not os.path.exists(def_path):
+            return []
+
+        rel_def_path = self.state.config.relative_path(def_path)
+        # Ensure file is parsed and in cache
+        await _get_cached_file_data(rel_def_path, self.state)
+
+        lines = self._get_file_lines(def_path)
+        if not lines:
+            return []
+
+        symbol_name = self._extract_symbol_name_from_definition(def_item, lines)
+        if not symbol_name:
+            return []
+
+        return self._collect_symbols_from_trie(rel_def_path, symbol_name, call_name)
+
+    def _get_file_lines(self, file_path: str) -> List[str]:
+        """Gets file content as lines, using a cache."""
+        if file_path not in self.file_lines_cache:
+            content_bytes = self._read_source_code_bytes(file_path)
+            if content_bytes is None:
+                self.file_lines_cache[file_path] = []
+                return []
+            self.file_lines_cache[file_path] = content_bytes.decode("utf8", errors="ignore").splitlines()
+        return self.file_lines_cache[file_path]
+
+    def _read_source_code_bytes(self, file_path: str) -> Optional[bytes]:
+        """Reads file content as bytes, using a cache."""
+        if file_path not in self.file_content_cache:
+            try:
+                with open(file_path, "rb") as f:
+                    self.file_content_cache[file_path] = f.read()
+            except (FileNotFoundError, PermissionError, IsADirectoryError):
+                self.file_content_cache[file_path] = b""
+                return None
+        return self.file_content_cache[file_path]
+
+    @staticmethod
+    def _expand_symbol_from_line(line: str, start: int, end: int) -> str:
+        """Expands a slice to cover the whole identifier at that position."""
+        while start > 0 and (line[start - 1].isidentifier() or line[start - 1] == "_"):
+            start -= 1
+        while end < len(line) and (line[end].isidentifier() or line[end] == "_"):
+            end += 1
+        return line[start:end].strip() or "<unnamed>"
+
+    def _extract_symbol_name_from_definition(self, def_item: Dict[str, Any], lines: List[str]) -> str:
+        """Extracts a symbol name from an LSP definition item."""
+        start = def_item.get("range", {}).get("start", {})
+        end = def_item.get("range", {}).get("end", {})
+        start_line, start_char = start.get("line", 0), start.get("character", 0)
+        end_char = end.get("character", start_char + 1)
+
+        if start_line >= len(lines):
+            return ""
+
+        target_line = lines[start_line]
+        symbol_name = target_line[start_char:end_char].strip()
+        # If the range is a single point, expand it to the full identifier.
+        if not symbol_name:
+            return self._expand_symbol_from_line(target_line, start_char, end_char)
+        return symbol_name
+
+    def _collect_symbols_from_trie(self, rel_def_path: str, symbol_name: str, call_name: str) -> List[Dict[str, Any]]:
+        """Searches the trie for a symbol and formats it for the response."""
+        full_prefix = f"symbol:{rel_def_path}/{symbol_name}"
+        symbols = perform_trie_search(
+            trie=self.state.file_symbol_trie,
+            prefix=full_prefix,
+            max_results=5,
+            file_path=rel_def_path,
+            file_parser_info_cache=self.state.file_parser_info_cache,
+            search_exact=True,
+        )
+
+        collected = []
+        for s in symbols:
+            if not s:
+                continue
+            start_point, end_point, block_range = s["location"]
+            collected.append(
+                {
+                    "name": symbol_name,
+                    "file_path": rel_def_path,
+                    "location": {
+                        "start_line": start_point[0],
+                        "start_col": start_point[1],
+                        "end_line": end_point[0],
+                        "end_col": end_point[1],
+                        "block_range": block_range,
+                    },
+                    "jump_from": call_name,
+                    "calls": s.get("calls", []),
+                }
+            )
+        return collected
+
+
+# --- Main Handler for /symbol_content ---
 async def handle_get_symbol_content(
     symbol_path: str, json_format: bool, lsp_enabled: bool, state: WebServiceState
 ) -> PlainTextResponse | JSONResponse:
-    # 1. Parse Path
-    parse_result = _parse_symbol_path(symbol_path)
+    # Stage 1: Parse and Validate Request
+    parse_result = _parse_symbol_request(symbol_path)
     if isinstance(parse_result, PlainTextResponse):
         return parse_result
-    file_path_part, symbols = parse_result
+    file_path_part, symbol_names = parse_result
 
-    # 2. Validate and Lookup Symbols
-    lookup_result = _validate_and_lookup_symbols(file_path_part, symbols, state)
-    if isinstance(lookup_result, PlainTextResponse):
-        return lookup_result
-    symbol_results = lookup_result
-
-    if not symbol_results:
+    # Stage 2: Retrieve Core Symbols from Trie
+    core_symbols = await _retrieve_core_symbols(file_path_part, symbol_names, state)
+    if isinstance(core_symbols, PlainTextResponse):
+        return core_symbols
+    if not core_symbols:
         return PlainTextResponse(f"No symbols found for path: {symbol_path}", status_code=404)
 
-    # 3. Read Source Code
-    source_code_result = _read_source_code(symbol_results[0]["file_path"])
-    if isinstance(source_code_result, PlainTextResponse):
-        return source_code_result
-    source_code = source_code_result
-
-    # 4. Extract Contents
-    contents = _extract_contents(source_code, symbol_results)
-
-    # 5. LSP Enhancement (if enabled)
-    collected_symbols = []
+    # Stage 3: LSP-based Enhancement
+    lsp_symbols = []
     if lsp_enabled:
-        lookup_cache: Dict[str, Any] = {}
-        for symbol in symbol_results:
-            try:
-                lsp_client = state.get_lsp_client(symbol["file_path"])
-                collected_symbols.extend(await _location_to_symbol(symbol, lsp_client, state, lookup_cache))
-            except Exception as e:
-                logger.error(f"LSP enhancement failed for symbol {symbol.get('name')}: {e}")
+        resolver = LSPCallResolver(state)
+        lsp_symbols = await resolver.resolve_calls_for_symbols(core_symbols)
 
-    # 6. Build Response
-    response_data = collected_symbols + _build_json_response(symbol_results, contents)
+    # Stage 4: Combine, Enrich, and Format Response
+    all_symbols = _deduplicate_symbols(core_symbols + lsp_symbols)
+    enriched_symbols = _enrich_symbols_with_content(all_symbols)
+
     if json_format:
-        return JSONResponse(content=response_data)
-    else:
-        return PlainTextResponse("\n\n".join(item["content"] for item in response_data))
+        return JSONResponse(content=enriched_symbols)
+
+    text_content = "\n\n".join(item.get("content", "") for item in enriched_symbols)
+    return PlainTextResponse(text_content)
 
 
-# --- Helpers for /symbol_content ---
-def _parse_symbol_path(symbol_path: str) -> tuple[str, list[str]] | PlainTextResponse:
+# --- Helpers for /symbol_content Pipeline ---
+
+
+def _parse_symbol_request(symbol_path: str) -> Tuple[str, List[str]] | PlainTextResponse:
+    """Parses the 'file/path/symbol1,symbol2' string."""
     if "/" not in symbol_path:
         return PlainTextResponse(
             "Symbol path format is incorrect. Should be file_path/symbol1,symbol2,...", status_code=400
         )
-    last_slash_index = symbol_path.rfind("/", 1)
+    last_slash_index = symbol_path.rfind("/")
     file_path_part = symbol_path[:last_slash_index]
     symbols_part = symbol_path[last_slash_index + 1 :]
     symbols = [s.strip() for s in symbols_part.split(",") if s.strip()]
     if not symbols:
-        return PlainTextResponse("At least one symbol is required.", status_code=400)
+        return PlainTextResponse("At least one symbol is required in the path.", status_code=400)
     return (file_path_part, symbols)
 
 
-def _validate_and_lookup_symbols(
-    file_path_part: str, symbols: list[str], state: WebServiceState
-) -> list[Dict[str, Any]] | PlainTextResponse:
-    update_trie_if_needed(file_path_part, state.file_symbol_trie, state.file_parser_info_cache, just_path=True)
-    symbol_results = []
-    for symbol in symbols:
-        full_symbol_path = f"{file_path_part}/{symbol}"
-        line_number = line_number_from_unnamed_symbol(symbol)
-        if line_number != -1:
-            file_path_part = file_path_part.removeprefix("symbol:")
-            if file_path_part not in state.file_parser_info_cache:
-                return PlainTextResponse(f"Parser info not cached for file: {file_path_part}", status_code=404)
-            parser_instance: ParserUtil = state.file_parser_info_cache[file_path_part][0]
-            formatted_path = state.file_parser_info_cache[file_path_part][2]
-            result = (
-                parser_instance.near_symbol_at_line(line_number - 1)
-                if symbol.startswith("near_")
-                else parser_instance.symbol_at_line(line_number - 1)
-            )
-            if not result:
-                return PlainTextResponse(f"Symbol not found: {symbol}", status_code=404)
-            result["file_path"] = formatted_path
-        else:
-            result = state.file_symbol_trie.search_exact(full_symbol_path)
-            if not result:
-                return PlainTextResponse(f"Symbol not found: {symbol}", status_code=404)
+def _normalize_symbol_location_in_place(symbol: Dict[str, Any]) -> None:
+    """
+    Normalizes the 'location' field of a symbol to be a dictionary, modifying the symbol in place.
+    Converts from tuple format `((start_line, start_col), (end_line, end_col), block_range)`
+    to dict format `{'start_line': ..., 'end_line': ..., 'block_range': ...}`.
+    """
+    location = symbol.get("location")
+    if isinstance(location, (list, tuple)) and len(location) == 3:
+        start_point, end_point, block_range = location
+        # Additional checks for robustness
+        if (
+            isinstance(start_point, (list, tuple))
+            and len(start_point) == 2
+            and isinstance(end_point, (list, tuple))
+            and len(end_point) == 2
+        ):
+            symbol["location"] = {
+                "start_line": start_point[0],
+                "start_col": start_point[1],
+                "end_line": end_point[0],
+                "end_col": end_point[1],
+                "block_range": block_range,
+            }
 
-        result["name"] = full_symbol_path.removeprefix("symbol:")
-        symbol_results.append(result)
+
+async def _retrieve_core_symbols(
+    file_path_part: str, symbols: List[str], state: WebServiceState
+) -> List[Dict[str, Any]] | PlainTextResponse:
+    """Retrieves the initial set of symbols from the trie based on the request."""
+    # Ensure the file is parsed and its data is cached.
+    parser_util, _ = await _get_cached_file_data(file_path_part, state)
+    if not parser_util:
+        return PlainTextResponse(f"Could not parse file: {file_path_part}", status_code=500)
+
+    symbol_results: List[Dict[str, Any]] = []
+    for symbol_name in symbols:
+        line_number = line_number_from_unnamed_symbol(symbol_name)
+        if line_number != -1:
+            result = _lookup_symbol_by_line(file_path_part, symbol_name, line_number, state, parser_util)
+        else:
+            result = _lookup_symbol_by_name(file_path_part, symbol_name, state)
+
+        if isinstance(result, PlainTextResponse):
+            # Log or handle specific symbol lookup errors if needed, for now just continue
+            logger.warning(f"Could not find symbol '{symbol_name}' in '{file_path_part}': {result.body.decode()}")
+            continue
+        if result:
+            symbol_results.append(result)
+
     return symbol_results
 
 
-def _read_source_code(file_path: str) -> bytes | PlainTextResponse:
-    try:
-        with open(file_path, "rb") as f:
-            return f.read()
-    except (FileNotFoundError, PermissionError, IsADirectoryError) as e:
-        return PlainTextResponse(f"Could not read file: {str(e)}", status_code=500)
-
-
-def _extract_contents(source_code: bytes, symbol_results: list) -> list[str]:
-    return [source_code[res["location"][2][0] : res["location"][2][1]].decode("utf8") for res in symbol_results]
-
-
-def _build_json_response(symbol_results: list, contents: list) -> list:
-    return [
-        {
-            "name": res["name"],
-            "file_path": res["file_path"],
-            "content": content,
-            "location": {
-                "start_line": res["location"][0][0],
-                "start_col": res["location"][0][1],
-                "end_line": res["location"][1][0],
-                "end_col": res["location"][1][1],
-                "block_range": res["location"][2],
-            },
-            "calls": res.get("calls", []),
-        }
-        for res, content in zip(symbol_results, contents)
-    ]
-
-
-# --- LSP-based symbol location logic (used by /symbol_content) ---
-async def _location_to_symbol(
-    symbol: Dict[str, Any], lsp_client: GenericLSPClient, state: WebServiceState, lookup_cache: Dict[str, Any]
-) -> List[Dict[str, Any]]:
-    collected_symbols: List[Dict] = []
-    file_content_cache: Dict[str, bytes] = {}
-    file_lines_cache: Dict[str, List[str]] = {}
-
-    await _initialize_lsp_server(symbol, lsp_client)
-    symbol_file_path = symbol["file_path"]
-    calls = [(1, call) for call in symbol.get("calls", [])]
-    symbols_filter: set[str] = set()
-    for level, call in calls:
-        if level > 3:
-            break
-        try:
-            symbols = await _process_call(
-                call, symbol_file_path, lsp_client, file_content_cache, file_lines_cache, state, lookup_cache
-            )
-            for sym in symbols:
-                if sym["file_path"] == symbol_file_path:
-                    if sym["name"] in symbols_filter:
-                        continue
-                    symbols_filter.add(sym["name"])
-                    logger.info("Checking calls for same-file symbol %s.%s", sym["file_path"], sym["name"])
-                    calls.extend([(level + 1, c) for c in sym.get("calls", [])])
-            collected_symbols.extend(symbols)
-        except (ConnectionError, TimeoutError, RuntimeError) as e:
-            logger.error(f"Error processing call {call.get('name')}: {e}")
-
-    return collected_symbols
-
-
-async def _initialize_lsp_server(symbol: Dict[str, Any], lsp_client: GenericLSPClient) -> None:
-    file_path = symbol["file_path"]
-    with open(file_path, "r", encoding="utf-8") as f:
-        file_content = f.read()
-    abs_file_path = os.path.abspath(file_path)
-    lsp_client.send_notification(
-        "textDocument/didOpen",
-        {
-            "textDocument": {
-                "uri": f"file://{abs_file_path}",
-                "languageId": LanguageId.get_language_id(file_path),
-                "version": 1,
-                "text": file_content,
-            }
-        },
-    )
-
-
-async def _process_call(
-    call: Dict,
-    file_path: str,
-    lsp_client: GenericLSPClient,
-    file_content_cache: Dict,
-    file_lines_cache: Dict,
+def _lookup_symbol_by_line(
+    file_path_part: str,
+    symbol_name: str,
+    line_number: int,
     state: WebServiceState,
-    lookup_cache: Dict,
-) -> List[Dict]:
-    call_name = call["name"]
-    line, char = call["start_point"][0] + 1, call["start_point"][1] + 1
-    definition = await lsp_client.get_definition(os.path.abspath(file_path), line, char)
-    if not definition:
-        return []
+    parser_instance: ParserUtil,
+) -> Optional[Dict[str, Any]] | PlainTextResponse:
+    """Finds a symbol based on a line number (e.g., 'at_123' or 'near_123')."""
+    clean_file_path = file_path_part.removeprefix("symbol:")
+    formatted_path = state.config.relative_path(clean_file_path)
 
-    definitions = definition if isinstance(definition, list) else [definition]
-    collected_symbols: List[Dict] = []
-    for def_item in definitions:
-        uri = def_item.get("uri", "")
-        def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
-        if not def_path:
+    if symbol_name.startswith("near_"):
+        result = parser_instance.near_symbol_at_line(line_number - 1)
+    else:
+        result = parser_instance.symbol_at_line(line_number - 1)
+
+    if not result:
+        return PlainTextResponse(f"Symbol not found at line {line_number} in {clean_file_path}", status_code=404)
+
+    _normalize_symbol_location_in_place(result)
+
+    result["file_path"] = formatted_path
+    result["name"] = f"{formatted_path}/{symbol_name}"
+    return result
+
+
+def _lookup_symbol_by_name(
+    file_path_part: str, symbol_name: str, state: WebServiceState
+) -> Optional[Dict[str, Any]] | PlainTextResponse:
+    """Finds a symbol by its fully qualified name in the trie."""
+    # The trie is expected to be up-to-date via _get_cached_file_data.
+    full_symbol_path = f"{file_path_part}/{symbol_name}"
+    if not full_symbol_path.startswith("symbol:"):
+        full_symbol_path = f"symbol:{full_symbol_path}"
+
+    result = state.file_symbol_trie.search_exact(full_symbol_path)
+    if not result:
+        return PlainTextResponse(f"Symbol not found: {full_symbol_path}", status_code=404)
+
+    # Make a copy to avoid modifying the cached data in the Trie
+    result = result.copy()
+    _normalize_symbol_location_in_place(result)
+
+    result["name"] = full_symbol_path.removeprefix("symbol:")
+    return result
+
+
+def _deduplicate_symbols(symbols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicates a list of symbol dictionaries based on file_path and name."""
+    seen: Set[Tuple[str, str]] = set()
+    deduplicated_list: List[Dict[str, Any]] = []
+    for symbol in symbols:
+        # Use a location-based key for better uniqueness if available
+        location = symbol.get("location")
+        if location and isinstance(location, dict) and "block_range" in location:
+            key = (symbol.get("file_path", ""), str(location["block_range"]))
+        else:  # Fallback for symbols without full location info yet
+            key = (symbol.get("file_path", ""), symbol.get("name", ""))
+
+        if key not in seen:
+            seen.add(key)
+            deduplicated_list.append(symbol)
+    return deduplicated_list
+
+
+def _enrich_symbols_with_content(symbols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reads source files and adds 'content' to each symbol dictionary."""
+    enriched_list = []
+    file_cache: Dict[str, bytes] = {}
+
+    for symbol in symbols:
+        file_path = symbol.get("file_path")
+        location = symbol.get("location")
+        if not file_path or not location:
             continue
-        cache_key = f"{def_path}:{def_item.get('range', {}).get('start', {}).get('line', 0)}"
-        if cache_key in lookup_cache:
+
+        if file_path not in file_cache:
+            try:
+                with open(file_path, "rb") as f:
+                    file_cache[file_path] = f.read()
+            except (IOError, OSError):
+                file_cache[file_path] = b""
+
+        source_code = file_cache.get(file_path)
+        if not source_code:
             continue
-        symbols = await _process_definition(def_item, call_name, file_content_cache, file_lines_cache, state)
-        lookup_cache[cache_key] = symbols
-        collected_symbols.extend(symbols)
-    return collected_symbols
 
-
-async def _process_definition(
-    def_item: Dict, call_name: str, file_content_cache: Dict, file_lines_cache: Dict, state: WebServiceState
-) -> List[Dict]:
-    uri = def_item.get("uri", "")
-    def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
-    if not def_path or not os.path.exists(def_path):
-        return []
-    rel_def_path = state.config.relative_path(def_path)
-    update_trie_if_needed(
-        f"symbol:{rel_def_path}", state.file_symbol_trie, state.file_parser_info_cache, just_path=True
-    )
-    lines = _get_file_content(def_path, file_content_cache, file_lines_cache)
-    symbol_name = _extract_symbol_name(def_item, lines)
-    if not symbol_name:
-        return []
-    return _collect_symbols(rel_def_path, symbol_name, call_name, file_content_cache, state)
-
-
-def _get_file_content(file_path: str, file_content_cache: Dict, file_lines_cache: Dict) -> List[str]:
-    if file_path not in file_content_cache:
-        content = _read_source_code(file_path)
-        if isinstance(content, bytes):
-            file_content_cache[file_path] = content
-            file_lines_cache[file_path] = content.decode("utf8").splitlines()
-        else:  # Is a PlainTextResponse
-            return []
-    return file_lines_cache[file_path]
-
-
-def _extract_symbol_name(def_item: Dict, lines: List[str]) -> str:
-    start = def_item.get("range", {}).get("start", {})
-    end = def_item.get("range", {}).get("end", {})
-    start_line, start_char = start.get("line", 0), start.get("character", 0)
-    end_char = end.get("character", start_char + 1)
-    if start_line >= len(lines):
-        return ""
-    target_line = lines[start_line]
-    symbol_name = target_line[start_char:end_char].strip()
-    return symbol_name or _expand_symbol_from_line(target_line, start_char, end_char)
-
-
-def _collect_symbols(
-    rel_def_path: str, symbol_name: str, call_name: str, file_content_cache: Dict, state: WebServiceState
-) -> List[Dict]:
-    symbols = perform_trie_search(
-        trie=state.file_symbol_trie,
-        prefix=f"symbol:{rel_def_path}/{symbol_name}",
-        max_results=5,
-        file_path=rel_def_path,
-        file_parser_info_cache=state.file_parser_info_cache,
-        search_exact=True,
-    )
-    collected = []
-    for s in symbols:
-        if not s:
+        # Ensure location is a dict with block_range
+        if isinstance(location, dict) and "block_range" in location:
+            block_range = location["block_range"]
+        # Handle tuple-based location for backward compatibility
+        elif isinstance(location, (list, tuple)) and len(location) == 3:
+            block_range = location[2]
+        else:
             continue
-        start_point, end_point, block_range = s["location"]
-        content = file_content_cache[os.path.abspath(rel_def_path)][block_range[0] : block_range[1]].decode("utf8")
-        collected.append(
-            {
-                "name": symbol_name,
-                "file_path": rel_def_path,
-                "location": {
-                    "start_line": start_point[0],
-                    "start_col": start_point[1],
-                    "end_line": end_point[0],
-                    "end_col": end_point[1],
-                    "block_range": block_range,
-                },
-                "content": content,
-                "jump_from": call_name,
-                "calls": s.get("calls", []),
-            }
-        )
-    return collected
 
+        start_byte, end_byte = block_range
+        symbol["content"] = source_code[start_byte:end_byte].decode("utf-8", errors="ignore")
+        enriched_list.append(symbol)
 
-def _expand_symbol_from_line(line: str, start: int, end: int) -> str:
-    while start > 0 and (line[start - 1].isidentifier() or line[start - 1] == "_"):
-        start -= 1
-    while end < len(line) and (line[end].isidentifier() or line[end] == "_"):
-        end += 1
-    return line[start:end].strip() or "<unnamed>"
+    return enriched_list
 
 
 # --- Handler for /lsp/didChange ---
@@ -361,24 +546,16 @@ async def handle_lsp_did_change(file_path: str, content: str, state: WebServiceS
 async def handle_search_to_symbols(
     results: FileSearchResults, max_context_size: int, state: WebServiceState
 ) -> JSONResponse:
-    parser_loader = ParserLoader()
-    parser_util = ParserUtil(parser_loader)
     symbol_results: Dict[str, Any] = {}
     total_start_time = time.time()
     for file_result in results.results:
-        try:
-            current_mtime = os.path.getmtime(file_result.file_path)
-            if file_result.file_path in state.symbol_cache:
-                cached_mtime, code_map = state.symbol_cache[file_result.file_path]
-                if cached_mtime == current_mtime:
-                    pass  # Use cache
-                else:
-                    _, code_map = parser_util.get_symbol_paths(file_result.file_path)
-                    state.symbol_cache[file_result.file_path] = (current_mtime, code_map)
-            else:
-                _, code_map = parser_util.get_symbol_paths(file_result.file_path)
-                state.symbol_cache[file_result.file_path] = (current_mtime, code_map)
+        parser_util, code_map = await _get_cached_file_data(file_result.file_path, state)
 
+        if not parser_util or not code_map:
+            logger.warning(f"Could not get parsed data for {file_result.file_path}, skipping.")
+            continue
+
+        try:
             locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
             symbols = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=max_context_size)
             rel_path = state.config.relative_to_current_path(file_result.file_path)
@@ -387,7 +564,7 @@ async def handle_search_to_symbols(
                 value["file_path"] = rel_path
             symbol_results.update(symbols)
         except (ValueError, FileNotFoundError) as e:
-            logger.warning(f"Error parsing {file_result.file_path}: {e}")
+            logger.warning(f"Error processing symbols for {file_result.file_path}: {e}")
             continue
     logger.info(f"Total processing time for search-to-symbols: {time.time() - total_start_time:.3f}s")
     return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
@@ -403,6 +580,10 @@ async def handle_symbol_completion_realtime(prefix: str, max_results: int, state
 
     results = []
     if current_prefix:
+        # Ensure the file is parsed and trie is up-to-date before searching
+        if file_path:
+            await _get_cached_file_data(file_path, state)
+
         results = perform_trie_search(
             trie=state.file_symbol_trie,
             prefix=current_prefix,
@@ -421,27 +602,42 @@ def _parse_symbol_prefix(prefix: str) -> tuple[str | None, list[str]]:
     remaining = prefix.removeprefix("symbol:")
     slash_idx = remaining.rfind("/")
     if slash_idx == -1:
+        # This handles cases like "symbol:filename" where there are no further symbols
+        file_path_only = remaining.split(",")[0]
+        symbols = remaining.split(",")
+        # A bit ambiguous, let's treat the whole thing as file_path if no slash
+        # and first part as symbol if comma exists.
+        # This part of logic is tricky based on original code.
+        # Let's stick to slash-based separation.
         return remaining, []
+
     file_path = remaining[:slash_idx]
     symbols = list(remaining[slash_idx + 1 :].split(","))
     return file_path, symbols
 
 
 def _determine_current_prefix(file_path: str | None, symbols: list[str]) -> str:
-    if symbols and any(symbols):
+    if not file_path:
+        return ""
+    # If there's an empty string at the end of symbols list, it means user typed a comma
+    # and is waiting for next suggestion. So we should search for the file prefix.
+    if symbols and symbols[-1]:
         return f"symbol:{file_path}/{symbols[-1]}"
-    if file_path:
-        return f"symbol:{file_path}"
-    return ""
+    return f"symbol:{file_path}/"
 
 
 def _build_completion_results(file_path: str | None, symbols: list[str], results: list) -> list[str]:
     if not file_path:
         return []
     base_str = f"symbol:{file_path}/"
-    symbol_prefix = ",".join(symbols[:-1]) + "," if len(symbols) > 1 else ""
+    # If the last symbol is empty, it means we are starting a new symbol completion
+    symbol_prefix = ",".join(symbols[:-1]) if (symbols and symbols[-1]) else ",".join(symbols)
+    if symbol_prefix:
+        symbol_prefix += ","
+
     completions = []
     for result in results:
+        # result["name"] is expected to be a full path like 'symbol:path/to/file.py/symbol'
         symbol_name = result["name"].split("/")[-1]
         full_path = f"{base_str}{symbol_prefix}{symbol_name}"
         completions.append(full_path.replace("//", "/"))
@@ -455,7 +651,6 @@ async def handle_symbol_completion_simple(prefix: str, max_results: int, state: 
 
     max_results = clamp(int(max_results), 1, 50)
     results = state.symbol_trie.search_prefix(prefix, max_results=max_results, use_bfs=True)
-    # Again, DB fallback is omitted.
 
     output = []
     for item in results:

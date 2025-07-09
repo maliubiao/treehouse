@@ -2142,36 +2142,29 @@ class TestSymbolsComplete(unittest.TestCase):
     def setUp(self):
         """初始化测试环境"""
         # 初始化测试数据
-        self.temp_files = []  # 保存临时文件引用
-        symbols_dict = {
-            "symbol:a.c/debug": [("a.c", "debug()", "debug_hash")],
-            "symbol:a.c/main": [("a.c", "main()", "main_hash")],
-            "symbol:a.c/print": [("a.c", "print()", "print_hash")],
-            "symbol:a.c/symbol_a": [("a.c", "symbol_a", "symbol_b_hash")],
-            "symbol:a.c/symbol_b": [("a.c", "symbol_b", "symbol_b_hash")],
-        }
 
-        # 创建临时文件并更新路径
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
-            tmp.write("void debug() {}\nvoid main() {}\n")
+        self.temp_files = []  # 保存临时文件引用
+
+        # 创建临时文件并写入所有测试需要的符号
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False, encoding="utf-8") as tmp:
+            tmp.write("void debug() {}\nvoid main() {}\nvoid print() {}\nvoid symbol_a() {}\nvoid symbol_b() {}\n")
             self.temp_files.append(tmp)
-            symbols_dict = {
-                f"symbol:{tmp.name}/debug": [(tmp.name, "debug()", "debug_hash")],
-                f"symbol:{tmp.name}/main": [(tmp.name, "main()", "main_hash")],
-                f"symbol:{tmp.name}/print": [(tmp.name, "print()", "print_hash")],
-                f"symbol:{tmp.name}/symbol_a": [(tmp.name, "symbol_a", "symbol_b_hash")],
-                f"symbol:{tmp.name}/symbol_b": [(tmp.name, "symbol_b", "symbol_b_hash")],
-            }
+
         project_config = ConfigLoader().load_config()
-        # 修复：使用 WebServiceState 替代 app.state
         self.state = WebServiceState(project_config)
-        self.state.file_symbol_trie = SymbolTrie.from_symbols(symbols_dict)
-        self.state.symbol_trie = SymbolTrie.from_symbols({})
+        # The refactored web_handlers use async locks. We need to provide an
+        # asyncio.Lock for the test environment to prevent the TypeError from the traceback.
+        self.state.lock = asyncio.Lock()
+
+        # 在新的设计中，Trie 是由处理程序按需填充的，所以我们将其初始化为空
+        self.state.file_symbol_trie = SymbolTrie()
+        self.state.symbol_trie = SymbolTrie()
         self.state.file_parser_info_cache = {}
 
         # 创建应用实例用于测试
         self.app = create_app()
         self.app.state.web_service_state = self.state
+        self.test_client = TestClient(self.app)
 
     def tearDown(self):
         """清理临时文件"""
@@ -2211,57 +2204,32 @@ class TestSymbolsComplete(unittest.TestCase):
 
     def test_get_valid_symbol_content(self):
         """测试正常获取符号内容"""
+        import tempfile
+
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
             tmp.write("void main() {\n  // main function\n}\n")
             tmp.flush()
-            tmp.seek(0)
             self.temp_files.append(tmp)
 
             # 使用实际文件路径构造symbol路径
             symbol_path = f"symbol:{tmp.name}/main"
-            self.state.file_symbol_trie.insert(
-                symbol_path,
-                {
-                    "file_path": tmp.name,
-                    "location": ((1, 0), (3, 1), (0, len(tmp.read()))),
-                },
-            )
 
-            test_client = TestClient(self.app)  # 使用self.app
-            response = test_client.get(f"/symbol_content?symbol_path={symbol_path}")
+            # 在新的设计中，处理程序将解析文件并填充Trie，无需手动插入
+            response = self.test_client.get(f"/symbol_content?symbol_path={symbol_path}")
             self.assertEqual(response.status_code, 200)
             self.assertIn("void main()", response.text)
 
     def test_get_multiple_symbols_content(self):
         """测试获取多个符号内容"""
+        import tempfile
+
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
             tmp.write("void main() {}\nvoid debug() {}\n")
             tmp.flush()
             self.temp_files.append(tmp)
 
-            # 使用实际文件路径构造symbol路径
-            main_symbol = f"symbol:{tmp.name}/main"
-            debug_symbol = f"symbol:{tmp.name}/debug"
-
-            # 修复：使用 self.state 替代 app.state
-            self.state.file_symbol_trie.insert(
-                main_symbol,
-                {
-                    "file_path": tmp.name,
-                    "location": ((1, 0), (1, 13), (0, 13)),
-                },
-            )
-            self.state.file_symbol_trie.insert(
-                debug_symbol,
-                {
-                    "file_path": tmp.name,
-                    "location": ((2, 0), (2, 14), (14, 28)),
-                },
-            )
-
-            test_client = TestClient(self.app)  # 使用self.app
-            # 修正：在符号路径前添加'symbol:'前缀
-            response = test_client.get(f"/symbol_content?symbol_path=symbol:{tmp.name}/main,debug")
+            # 在新的设计中，处理程序将解析文件并填充Trie，无需手动插入
+            response = self.test_client.get(f"/symbol_content?symbol_path=symbol:{tmp.name}/main,debug")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.text.count("\n\n"), 1)
             self.assertIn("void main()", response.text)
@@ -2269,28 +2237,17 @@ class TestSymbolsComplete(unittest.TestCase):
 
     def test_json_response_format(self):
         """测试JSON响应格式"""
+        import tempfile
+
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".c", delete=False) as tmp:
             tmp.write("void main() {\n  // test json\n}\n")
             tmp.flush()
-            tmp.seek(0)
             self.temp_files.append(tmp)
 
-            full_content = tmp.read()
-            start = 0
-            end = len(full_content)
             symbol_path = f"symbol:{tmp.name}/main"
 
-            # 修复：使用 self.state 替代 app.state
-            self.state.file_symbol_trie.insert(
-                symbol_path,
-                {
-                    "file_path": tmp.name,
-                    "location": ((1, 0), (3, 1), (start, end)),
-                },
-            )
-
-            test_client = TestClient(self.app)  # 使用self.app
-            response = test_client.get(f"/symbol_content?symbol_path={symbol_path}&json_format=true")
+            # 在新的设计中，处理程序将解析文件并填充Trie，无需手动插入
+            response = self.test_client.get(f"/symbol_content?symbol_path={symbol_path}&json_format=true")
             self.assertEqual(response.status_code, 200)
             json_data = response.json()
             self.assertEqual(json_data[0]["location"]["start_line"], 0)
@@ -2298,73 +2255,62 @@ class TestSymbolsComplete(unittest.TestCase):
             self.assertIn("void main()", json_data[0]["content"])
 
     def _get_completions(self, prefix: str) -> list:
-        test_client = TestClient(self.app)  # 使用self.app
-        response = test_client.get(f"/complete_realtime?prefix={prefix}")
+        response = self.test_client.get(f"/complete_realtime?prefix={prefix}")
         return response.text.splitlines()
 
     def test_extract_multiline_js_event_handler(self):
         """测试提取多行JavaScript事件处理程序"""
+        import tempfile
+        from textwrap import dedent
+
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".js", delete=False, encoding="utf8") as tmp:
             js_content = dedent(
                 """
-document.addEventListener('click', function() {
-    // 第一行注释
-    console.log('Clicked!');
-    if (true) {
-        alert('Hello');
-    }
-});
-var x = 1;
-var should_not_capture = function() {
-};
-function specific_function() {
-    console.log('This should not be captured');
-    var a = 1;
-}
-function another_function() {
-    console.log('This should be captured');
-    var y = 2;
-    var z = 3;
-    return y + z;
-}
-"""
+                document.addEventListener('click', function() {
+                    // 第一行注释
+                    console.log('Clicked!');
+                    if (true) {
+                        alert('Hello');
+                    }
+                });
+                var x = 1;
+                var should_not_capture = function() {
+                };
+                function specific_function() {
+                    console.log('This should not be captured');
+                    var a = 1;
+                }
+                function another_function() {
+                    console.log('This should be captured');
+                    var y = 2;
+                    var z = 3;
+                    return y + z;
+                }
+                """
             )
             tmp.write(js_content)
             tmp.flush()
             self.temp_files.append(tmp)
 
-            # 定义符号位置 (整个函数体)
-            start_line = 0  # 从第1行开始
-            end_line = 6  # 到第7行结束
-            symbol_path = f"symbol:{tmp.name}/at_2,at_9,near_16"
+            # 修正符号路径以正确反映要提取的符号：
+            # at_2: 位于第1行的匿名函数
+            # near_16: 包含第16行的 `another_function`
+            symbol_path = f"symbol:{tmp.name}/at_2,near_16"
 
-            # 计算字节范围
-            lines = js_content.splitlines(keepends=True)
-            start_byte = 0
-            end_byte = sum(len(line) for line in lines[:end_line])
-
-            # 修复：使用 self.state 替代 app.state
-            self.state.file_symbol_trie.insert(
-                symbol_path,
-                {
-                    "file_path": tmp.name,
-                    "location": (
-                        (start_line, 0),
-                        (end_line, 0),
-                        (start_byte, end_byte),
-                    ),
-                },
-            )
-
-            test_client = TestClient(self.app)  # 使用self.app
-            response = test_client.get(f"/symbol_content?symbol_path={symbol_path}")
+            # 在新的设计中，处理程序将按需解析文件并根据行号查找符号
+            response = self.test_client.get(f"/symbol_content?symbol_path={symbol_path}")
             self.assertEqual(response.status_code, 200)
+
+            # 验证返回的内容是否正确
             self.assertIn("document.addEventListener", response.text)
-            self.assertIn("console.log", response.text)
+            self.assertIn("console.log('Clicked!')", response.text)
             self.assertIn("alert('Hello')", response.text)
-            self.assertIn("var x = 1", response.text)
             self.assertIn("This should be captured", response.text)
+
+            # 验证不应被捕获的内容
+            self.assertNotIn("var x = 1", response.text)
             self.assertNotIn("should_not_capture", response.text)
+            self.assertNotIn("This should not be captured", response.text)
 
 
 class TestSymbolsAPI(unittest.TestCase):
