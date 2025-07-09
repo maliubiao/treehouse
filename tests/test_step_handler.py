@@ -19,7 +19,7 @@ from tracer.events import StepAction
 from tracer.expr_extractor import ExpressionExtractor
 from tracer.step_handler import StepHandler, SymbolHookMode
 
-from tree import ParserLoader, parse_code_file
+from tree_libs.ast import ParserLoader, parse_code_file
 
 # Note on lldb: The tests are designed to mock `lldb` where it's used within `tracer.step_handler`.
 # This is done using `patch('tracer.step_handler.lldb')` or similar, ensuring mocks are scoped

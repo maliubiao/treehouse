@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 import lldb
 from op_parser import OperandType, parse_operands
 
-from tree import ParserLoader, parse_code_file
+from tree_libs.ast import ParserLoader, parse_code_file
 
 from . import sb_value_printer  # Keep existing import
 from .debug_info_handler import DebugInfoHandler

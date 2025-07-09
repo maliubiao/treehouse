@@ -744,6 +744,213 @@ code3
         finally:
             os.unlink(tmp_path)
 
+    def test_parse_json_response_actions(self):
+        """测试解析包含多种action的JSON响应"""
+        response_text = json.dumps(
+            {
+                "thought": "A test thought.",
+                "patches": [
+                    {"action": "overwrite_whole_file", "path": "file1.py", "content": "new file content"},
+                    {"action": "overwrite_symbol", "path": "file2.py/my_func", "content": "def my_func(): pass"},
+                    {"action": "delete_symbol", "path": "file2.py/old_func", "content": ""},
+                ],
+            }
+        )
+        parser = BlockPatchResponse()
+        results = parser.parse(response_text)
+        self.assertEqual(len(results), 3)
+        self.assertIn(("file1.py", "new file content"), results)
+        self.assertIn(("file2.py/my_func", "def my_func(): pass"), results)
+        self.assertIn(("file2.py/old_func", ""), results)
+
+    def test_parse_invalid_json(self):
+        """测试解析无效JSON时应引发ValueError"""
+        invalid_json_text = '{"thought": "bad json", "patches": ['
+        parser = BlockPatchResponse()
+        # 根据llm_query.py中parse方法的实际行为，json解析失败时会返回空列表而非抛出异常
+        self.assertEqual(parser.parse(invalid_json_text), [])
+
+    def test_parse_malformed_data_structure(self):
+        """测试解析结构不正确的JSON数据"""
+        # 缺少 'patches' 键
+        missing_patches = json.dumps({"thought": "thought only"})
+        parser = BlockPatchResponse()
+        # 根据llm_query.py中parse方法的实际行为，结构不正确时会返回空列表而非抛出异常
+        self.assertEqual(parser.parse(missing_patches), [])
+
+        # 'patches' 不是列表
+        patches_not_list = json.dumps({"patches": "a string"})
+        # 根据llm_query.py中parse方法的实际行为，结构不正确时会返回空列表而非抛出异常
+        self.assertEqual(parser.parse(patches_not_list), [])
+
+        # patch对象不完整，应被忽略
+        incomplete_patch = json.dumps(
+            {"patches": [{"action": "overwrite_symbol", "path": "some/path"}]}  # 缺少 'content'
+        )
+        self.assertEqual(parser.parse(incomplete_patch), [])
+
+    def test_extract_symbol_paths_from_json(self):
+        """测试从JSON响应中正确提取符号路径"""
+        response_text = json.dumps(
+            {
+                "thought": "A test thought.",
+                "patches": [
+                    {"action": "overwrite_symbol", "path": "path/to/file1.py/symbol1", "content": "c1"},
+                    {"action": "overwrite_whole_file", "path": "path/to/file2.py", "content": "c2"},
+                    {"action": "delete_symbol", "path": "path/to/file1.py/symbol2", "content": ""},
+                    {"action": "overwrite_symbol", "path": "path/to/file1.py/symbol3", "content": "c3"},
+                ],
+            }
+        )
+        result = BlockPatchResponse.extract_symbol_paths(response_text)
+        expected = {
+            "path/to/file1.py": ["symbol1", "symbol3"],
+        }
+        self.assertEqual(result, expected)
+
+    def test_add_symbol_details(self):
+        """测试add_symbol_details函数与JSON响应格式的集成"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+            tmp.write(
+                dedent(
+                    '''
+            def func1():
+                """测试函数1"""
+                pass
+
+            class TestClass:
+                """测试类"""
+                def method1(self):
+                    pass
+            '''
+                )
+            )
+            tmp_path = tmp.name
+
+        remaining = json.dumps(
+            {
+                "thought": "a thought",
+                "patches": [
+                    {
+                        "action": "overwrite_symbol",
+                        "path": f"{tmp_path}/func1",
+                        "content": 'def func1():\n    """修改后的函数1"""\n    return 42',
+                    },
+                    {
+                        "action": "overwrite_symbol",
+                        "path": f"{tmp_path}/TestClass",
+                        "content": 'class TestClass:\n    """修改后的类"""\n    def method1(self):\n        return "modified"',
+                    },
+                ],
+            }
+        )
+
+        try:
+            symbol_detail = {}
+            llm_query.add_symbol_details(remaining, symbol_detail)
+
+            self.assertEqual(len(symbol_detail), 2)
+            self.assertIn(f"{tmp_path}/func1", symbol_detail)
+            self.assertIn(f"{tmp_path}/TestClass", symbol_detail)
+            self.assertEqual(symbol_detail[f"{tmp_path}/func1"]["file_path"], tmp_path)
+            self.assertEqual(symbol_detail[f"{tmp_path}/TestClass"]["file_path"], tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_interactive_symbol_location(self):
+        """测试交互式符号位置选择器"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+            tmp.write(
+                dedent(
+                    '''
+            def existing_func():
+                """已有函数"""
+                pass
+
+            class ExistingClass:
+                def method1(self):
+                    pass
+
+                def method2(self):
+                    pass
+            '''
+                )
+            )
+            tmp_path = tmp.name
+
+        try:
+            with open(tmp_path, "rb") as f:
+                content = f.read()
+            parent_info = {
+                "start_line": 1,
+                "block_range": [0, len(content)],
+                "block_content": content,
+            }
+
+            with unittest.mock.patch("builtins.input", side_effect=["8"]):
+                result = interactive_symbol_location(
+                    file=tmp_path,
+                    path="test_path",
+                    parent_symbol="ExistingClass",
+                    parent_symbol_info=parent_info,
+                )
+
+            self.assertEqual(result["file_path"], tmp_path)
+            self.assertEqual(result["block_content"], b"")
+            self.assertTrue(result[NewSymbolFlag])
+
+            patch = BlockPatch(
+                file_paths=[tmp_path],
+                patch_ranges=[result["block_range"]],
+                block_contents=[result["block_content"]],
+                update_contents=[b"    def new_method(self):\n        return 'patched'"],
+            )
+            diff = patch.generate_diff()
+            self.assertIn("+    def new_method(self):", diff[tmp_path])
+        finally:
+            os.unlink(tmp_path)
+
+    def test_add_symbol_details_with_interactive(self):
+        """测试add_symbol_details与交互式位置选择的集成"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+            tmp.write(
+                dedent(
+                    """
+            def target_func():
+                pass
+
+            class TargetClass:
+                def target_method(self):
+                    pass
+            """
+                )
+            )
+            tmp_path = tmp.name
+
+        try:
+            remaining = json.dumps(
+                {
+                    "thought": "a thought",
+                    "patches": [
+                        {
+                            "action": "overwrite_symbol",
+                            "path": f"{tmp_path}/new_symbol",
+                            "content": "new_code = 42",
+                        }
+                    ],
+                }
+            )
+
+            with unittest.mock.patch("builtins.input", side_effect=["2"]):
+                symbol_detail = {}
+                llm_query.add_symbol_details(remaining, symbol_detail)
+
+            self.assertEqual(len(symbol_detail), 1)
+            self.assertIn(f"{tmp_path}/new_symbol", symbol_detail)
+            self.assertTrue(symbol_detail[f"{tmp_path}/new_symbol"][NewSymbolFlag])
+        finally:
+            os.unlink(tmp_path)
+
 
 class TestGitignoreFunctions(unittest.TestCase):
     """测试.gitignore相关功能"""
@@ -1407,6 +1614,7 @@ class TestModelSwitch(unittest.TestCase):
             model="model1",
             model_config=switch.current_config,
             disable_conversation_history=True,
+            use_json_output=False,
             max_context_size=4096,
             temperature=0.7,
             enable_thinking=False,

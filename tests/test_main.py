@@ -9,15 +9,26 @@ import time
 import traceback
 import unittest
 from collections import defaultdict
+from typing import (
+    Any,
+    DefaultDict,
+    Dict,
+    List,
+    Optional,
+    Pattern,
+    Set,
+    Tuple,
+    Union,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Global cache to store source information of tests before they run.
 # This helps to locate test source even if methods are mocked during execution.
-TEST_SOURCE_INFO_CACHE = {}
+TEST_SOURCE_INFO_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run unit tests with flexible selection")
     parser.add_argument(
         "-v",
@@ -47,56 +58,58 @@ def parse_args():
     return parser.parse_args()
 
 
-def add_gpt_path_to_syspath():
+def add_gpt_path_to_syspath() -> None:
     gpt_path = os.getenv("GPT_PATH")
     if gpt_path and os.path.isdir(gpt_path):
         sys.path.insert(0, gpt_path)
         print(f"Added GPT_PATH to sys.path: {gpt_path}")
 
 
-def _cache_test_source_info(suite):
+def _cache_test_source_info(suite: unittest.TestSuite) -> None:
     """
-    Recursively traverse the test suite and cache source file and line number
+    Iteratively traverse the test suite and cache source file and line number
     for each test case. This is done before tests are run to ensure we can
     locate the original source code, even if methods are mocked or decorated.
     """
-    stack = [suite]
+    stack: List[Union[unittest.TestSuite, unittest.TestCase]] = [suite]
     while stack:
-        current_suite = stack.pop()
-        for test in current_suite:
-            if isinstance(test, unittest.TestCase):
-                test_id = test.id()
-                if test_id in TEST_SOURCE_INFO_CACHE:
-                    continue
-                try:
-                    test_method_obj = getattr(test, test._testMethodName)
+        current_suite_or_test = stack.pop()
+        if isinstance(current_suite_or_test, unittest.TestCase):
+            test = current_suite_or_test
+            test_id = test.id()
+            if test_id in TEST_SOURCE_INFO_CACHE:
+                continue
+            try:
+                test_method_obj = getattr(test, test._testMethodName)
 
-                    # Use inspect.unwrap to get to the original function,
-                    # bypassing decorators like @mock.patch.
-                    original_func = inspect.unwrap(test_method_obj)
+                # Use inspect.unwrap to get to the original function,
+                # bypassing decorators like @mock.patch.
+                original_func = inspect.unwrap(test_method_obj)
 
-                    # Now get source info from the unwrapped function object.
-                    file_path = inspect.getsourcefile(original_func)
-                    if not file_path:
-                        continue  # Cannot determine file path
+                # Now get source info from the unwrapped function object.
+                file_path = inspect.getsourcefile(original_func)
+                if not file_path:
+                    continue  # Cannot determine file path
 
-                    _, line_no = inspect.getsourcelines(original_func)
-                    func_name = original_func.__name__
+                _, line_no = inspect.getsourcelines(original_func)
+                func_name = original_func.__name__
 
-                    TEST_SOURCE_INFO_CACHE[test_id] = {
-                        "file_path": os.path.abspath(file_path),
-                        "line": line_no,
-                        "function": func_name,
-                    }
-                except (AttributeError, TypeError, OSError, inspect.Error):
-                    # This can fail for various reasons (e.g., dynamically generated tests),
-                    # so we silently pass. The fallback in _collect_error_details will handle it.
-                    pass
-            elif isinstance(test, unittest.TestSuite):
-                stack.append(test)
+                TEST_SOURCE_INFO_CACHE[test_id] = {
+                    "file_path": os.path.abspath(file_path),
+                    "line": line_no,
+                    "function": func_name,
+                }
+            except (AttributeError, TypeError, OSError, inspect.Error):
+                # This can fail for various reasons (e.g., dynamically generated tests),
+                # so we silently pass. The fallback in _collect_error_details will handle it.
+                pass
+        elif isinstance(current_suite_or_test, unittest.TestSuite):
+            # Add tests from the suite to the stack to be processed.
+            # We add them in reverse to maintain the original execution order.
+            stack.extend(reversed(list(current_suite_or_test)))
 
 
-def compile_pattern(pattern):
+def compile_pattern(pattern: str) -> Pattern[str]:
     """Compile pattern to regex or glob matcher"""
     if pattern.startswith("/") and pattern.endswith("/"):
         # Regular expression pattern
@@ -111,10 +124,10 @@ def compile_pattern(pattern):
         return re.compile(regex)
 
 
-def filter_tests(suite, patterns):
-    """Filter test suite based on inclusion/exclusion patterns"""
-    include_patterns = []
-    exclude_patterns = []
+def filter_tests(suite: unittest.TestSuite, patterns: List[str]) -> unittest.TestSuite:
+    """Filter test suite based on inclusion/exclusion patterns using an iterative approach."""
+    include_patterns: List[Pattern[str]] = []
+    exclude_patterns: List[Pattern[str]] = []
 
     # Parse patterns into include/exclude lists
     for pattern in patterns:
@@ -125,36 +138,47 @@ def filter_tests(suite, patterns):
                 pattern = pattern[1:]
             include_patterns.append(compile_pattern(pattern))
 
-    # Create new filtered test suite
-    filtered_suite = unittest.TestSuite()
-
-    def should_include(test_id):
+    def should_include(test_id: str) -> bool:
         """Check if test should be included based on patterns"""
         # If no include patterns, include by default
         included = not include_patterns
-        for pattern in include_patterns:
-            if pattern.search(test_id):
+        for p in include_patterns:
+            if p.search(test_id):
                 included = True
                 break
 
+        if not included:
+            return False
+
         # Check exclusion patterns
-        for pattern in exclude_patterns:
-            if pattern.search(test_id):
+        for p in exclude_patterns:
+            if p.search(test_id):
                 return False
 
-        return included
+        return True
 
-    # Recursively filter tests
-    for test in suite:
-        if isinstance(test, unittest.TestCase):
-            test_id = test.id()
-            if should_include(test_id):
-                filtered_suite.addTest(test)
-        elif isinstance(test, unittest.TestSuite):
-            # Recursively filter sub-suites
-            filtered_subsuite = filter_tests(test, patterns)
-            if filtered_subsuite.countTestCases() > 0:
-                filtered_suite.addTest(filtered_subsuite)
+    filtered_suite = unittest.TestSuite()
+    all_test_cases: List[unittest.TestCase] = []
+
+    # Iteratively flatten the suite to get all test cases
+    stack: List[Union[unittest.TestSuite, unittest.TestCase]] = [suite]
+    processed_suites: Set[int] = set()
+
+    while stack:
+        current = stack.pop()
+        if id(current) in processed_suites:
+            continue
+        if isinstance(current, unittest.TestSuite):
+            processed_suites.add(id(current))
+            # Add contained tests to the stack for processing, in reverse to maintain order
+            stack.extend(reversed(list(current)))
+        elif isinstance(current, unittest.TestCase):
+            all_test_cases.append(current)
+
+    # Filter the flattened list of test cases
+    for test in all_test_cases:
+        if should_include(test.id()):
+            filtered_suite.addTest(test)
 
     return filtered_suite
 
@@ -165,17 +189,17 @@ class JSONTestResult(unittest.TextTestResult):
     It is designed to be robust, especially against errors in setUp/tearDown.
     """
 
-    def __init__(self, stream, descriptions, verbosity):
+    def __init__(self, stream: Any, descriptions: bool, verbosity: int) -> None:
         super().__init__(stream, descriptions, verbosity)
-        self.results = defaultdict(list)
-        self.all_issues = []
-        self._test_start_times = {}
+        self.results: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self.all_issues: List[Dict[str, Any]] = []
+        self._test_start_times: Dict[str, float] = {}
 
-    def startTest(self, test):
+    def startTest(self, test: unittest.TestCase) -> None:
         self._test_start_times[test.id()] = time.time()
         super().startTest(test)
 
-    def addSuccess(self, test):
+    def addSuccess(self, test: unittest.TestCase) -> None:
         super().addSuccess(test)
         elapsed = time.time() - self._test_start_times.get(test.id(), time.time())
         # A simple check for slow tests, changed from "timeout" for clarity.
@@ -188,28 +212,33 @@ class JSONTestResult(unittest.TextTestResult):
                 }
             )
 
-    def addFailure(self, test, err):
+    def addFailure(self, test: unittest.TestCase, err: Tuple[Any, Any, Any]) -> None:
         super().addFailure(test, err)
         self._collect_error_details(test, err, "failures")
 
-    def addError(self, test, err):
+    def addError(self, test: unittest.TestCase, err: Tuple[Any, Any, Any]) -> None:
         super().addError(test, err)
         self._collect_error_details(test, err, "errors")
 
-    def addSkip(self, test, reason):
+    def addSkip(self, test: unittest.TestCase, reason: str) -> None:
         super().addSkip(test, reason)
         self.all_issues.append({"type": "skip", "test": str(test), "details": reason})
 
-    def addExpectedFailure(self, test, err):
+    def addExpectedFailure(self, test: unittest.TestCase, err: Tuple[Any, Any, Any]) -> None:
         super().addExpectedFailure(test, err)
         tb_string = self._exc_info_to_string(err, test)
         self.all_issues.append({"type": "expected_failure", "test": str(test), "details": tb_string})
 
-    def addUnexpectedSuccess(self, test):
+    def addUnexpectedSuccess(self, test: unittest.TestCase) -> None:
         super().addUnexpectedSuccess(test)
         self.all_issues.append({"type": "unexpected_success", "test": str(test), "details": None})
 
-    def addSubTest(self, test, sub_test, err):
+    def addSubTest(
+        self,
+        test: unittest.TestCase,
+        sub_test: unittest.TestCase,
+        err: Optional[Tuple[Any, Any, Any]],
+    ) -> None:
         """
         Called when a subtest finishes. This is a custom implementation
         to ensure subtest failures are routed through our detailed JSON
@@ -228,7 +257,7 @@ class JSONTestResult(unittest.TextTestResult):
             # which handles verbose printing is sufficient.
             super().addSubTest(test, sub_test, err)
 
-    def _collect_error_details(self, test, err, category):
+    def _collect_error_details(self, test: unittest.TestCase, err: Tuple[Any, Any, Any], category: str) -> None:
         """
         Robustly collects details about an error or failure.
 
@@ -246,7 +275,7 @@ class JSONTestResult(unittest.TextTestResult):
             error_message = str(err_value)
 
             # --- Collect full stack trace and prepare for location finding ---
-            frame_ref_lines = []
+            frame_ref_lines: List[Tuple[str, int]] = []
             tb_frames = None
             if err_tb:
                 tb_frames = traceback.extract_tb(err_tb)
@@ -295,7 +324,7 @@ class JSONTestResult(unittest.TextTestResult):
             if file_path and file_path != "Unknown" and not os.path.isabs(file_path):
                 file_path = os.path.abspath(file_path)
 
-            error_entry = {
+            error_entry: Dict[str, Any] = {
                 "test": str(test),
                 "test_id": test_id,
                 "error_type": error_type_name,
@@ -325,7 +354,7 @@ class JSONTestResult(unittest.TextTestResult):
             )
             self.all_issues.append({"type": "internal_error", "test": str(test), "details": internal_error_details})
 
-    def get_json_results(self):
+    def get_json_results(self) -> Dict[str, Any]:
         return {
             "total": self.testsRun,
             "success": self.testsRun - len(self.failures) - len(self.errors),
@@ -338,8 +367,8 @@ class JSONTestResult(unittest.TextTestResult):
             "all_issues": self.all_issues,
         }
 
-    def get_error_details(self):
-        error_details = []
+    def get_error_details(self) -> List[Dict[str, Any]]:
+        error_details: List[Dict[str, Any]] = []
         for category in ["errors", "failures"]:
             for error in self.results.get(category, []):
                 error_details.append(
@@ -355,9 +384,15 @@ class JSONTestResult(unittest.TextTestResult):
         return error_details
 
 
-def run_tests(test_patterns=None, verbosity=1, json_output=False, extract_errors=False, list_mode=False):
+def run_tests(
+    test_patterns: Optional[List[str]] = None,
+    verbosity: int = 1,
+    json_output: bool = False,
+    extract_errors: bool = False,
+    list_mode: bool = False,
+) -> Union[unittest.TestResult, Dict[str, Any], List[Dict[str, Any]]]:
     loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
+    suite: unittest.TestSuite
     try:
         # Always discover all tests first
         discovered = loader.discover(start_dir="tests", pattern="test*.py")
@@ -372,19 +407,24 @@ def run_tests(test_patterns=None, verbosity=1, json_output=False, extract_errors
             suite = discovered
 
         if list_mode:
-            test_cases = []
+            test_cases: List[str] = []
+            # Iteratively collect test IDs to avoid recursion limits
+            stack: List[Union[unittest.TestSuite, unittest.TestCase]] = [suite]
+            processed_suites: Set[int] = set()
 
-            def collect_test_ids(test_suite):
-                for test in test_suite:
-                    if isinstance(test, unittest.TestCase):
-                        test_cases.append(test.id())
-                    elif isinstance(test, unittest.TestSuite):
-                        collect_test_ids(test)
+            while stack:
+                current = stack.pop()
+                if id(current) in processed_suites:
+                    continue
+                if isinstance(current, unittest.TestSuite):
+                    processed_suites.add(id(current))
+                    stack.extend(reversed(list(current)))
+                elif isinstance(current, unittest.TestCase):
+                    test_cases.append(current.id())
 
-            collect_test_ids(suite)
             for test_id in sorted(test_cases):
                 print(test_id)
-            return {"test_cases": test_cases}
+            return {"test_cases": sorted(test_cases)}
 
         if json_output:
             # Use a stream that doesn't interfere with the final JSON output
@@ -408,7 +448,7 @@ def run_tests(test_patterns=None, verbosity=1, json_output=False, extract_errors
         raise
 
 
-def main():
+def main() -> None:
     add_gpt_path_to_syspath()
     args = parse_args()
 
@@ -422,9 +462,17 @@ def main():
         )
 
         if args.json:
+            # The result is already a dict, list, or other JSON-serializable object
             print(json.dumps(result, indent=2))
 
-        exit_code = 0 if (isinstance(result, dict) or result.wasSuccessful()) else 1
+        exit_code = 0
+        if isinstance(result, unittest.TestResult):
+            exit_code = 0 if result.wasSuccessful() else 1
+        elif isinstance(result, dict) and "total" in result:  # JSON result
+            if result["errors"] > 0 or result["failures"] > 0:
+                exit_code = 1
+        # For list mode or extract-errors, exit code is 0 unless an exception occurred.
+
         sys.exit(exit_code)
     except Exception:
         sys.exit(2)

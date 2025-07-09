@@ -33,10 +33,6 @@ import yaml
 
 # Windows控制台颜色修复
 from colorama import just_fix_windows_console
-from fastapi import Body, FastAPI, Form, HTTPException
-from fastapi import Query as QueryArgs
-from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
 from pygments import formatters, highlight, lexers, styles
 from tqdm import tqdm  # 用于显示进度条
 from tree_sitter import Language, Node, Parser, Query
@@ -82,14 +78,15 @@ class ProjectConfig:
         self.symbol_service_url: Optional[str] = None
         self._config_file_path: Optional[Path] = None
 
-    def relative_path(self, path: Path) -> str:
+    def relative_path(self, path: Union[Path, str]) -> str:
         """获取相对于项目根目录的路径"""
         try:
-            return str(path.relative_to(self.project_root_dir))
+            return str(Path(path).relative_to(self.project_root_dir))
         except ValueError:
             return str(path)
 
-    def relative_to_current_path(self, path: Path) -> str:
+    def relative_to_current_path(self, path: Union[Path, str]) -> str:
+        path = Path(path)
         if path.is_absolute():
             try:
                 return str(path.relative_to(Path.cwd()))
@@ -236,23 +233,22 @@ class TrieNode:
     __slots__ = ["children", "is_end", "symbols"]
 
     def __init__(self):
-        self.children = {}  # 字符到子节点的映射
-        self.is_end = False  # 是否单词结尾
-        self.symbols = []  # 存储符号详细信息（支持同名不同定义的符号）
+        self.children: Dict[str, TrieNode] = {}  # 字符到子节点的映射
+        self.is_end: bool = False  # 是否单词结尾
+        self.symbols: List[Dict[str, Any]] = []  # 存储符号详细信息（支持同名不同定义的符号）
 
 
 class SymbolTrie:
-    def __init__(self, case_sensitive=True):
+    def __init__(self, case_sensitive: bool = True):
         self.root = TrieNode()
         self.case_sensitive = case_sensitive
         self._size = 0  # 记录唯一符号数量
 
-    def _normalize(self, word):
+    def _normalize(self, word: str) -> str:
         """统一大小写处理"""
-        # return word
         return word if self.case_sensitive else word.lower()
 
-    def insert(self, symbol_name, symbol_info):
+    def insert(self, symbol_name: str, symbol_info: Dict[str, Any]):
         """插入符号到前缀树"""
         node = self.root
         word = self._normalize(symbol_name)
@@ -275,7 +271,7 @@ class SymbolTrie:
             # 使用新的symbol_info副本，防止引用问题
             self.insert(composite_key, symbol_info)
 
-    def search_exact(self, symbol_path):
+    def search_exact(self, symbol_path: str) -> Optional[Dict[str, Any]]:
         """精确搜索符号路径
 
         参数：
@@ -298,7 +294,9 @@ class SymbolTrie:
             return node.symbols[0]
         return None
 
-    def search_prefix(self, prefix, max_results=None, use_bfs=False):
+    def search_prefix(
+        self, prefix: str, max_results: Optional[int] = None, use_bfs: bool = False
+    ) -> List[Dict[str, Any]]:
         """前缀搜索
 
         参数：
@@ -319,25 +317,18 @@ class SymbolTrie:
             node = node.children[char]
 
         # 选择遍历算法
-        results = []
+        results: List[Dict[str, Any]] = []
         if use_bfs:
             self._bfs_collect(node, prefix, results, max_results)
         else:
             self._dfs_collect(node, prefix, results, max_results)
         return results
 
-    def _bfs_collect(self, node, current_prefix, results, max_results):
-        """广度优先收集符号
-
-        参数：
-            node: 起始节点
-            current_prefix: 当前前缀
-            results: 结果列表
-            max_results: 最大结果数量限制
-        """
+    def _bfs_collect(self, node: TrieNode, current_prefix: str, results: list, max_results: Optional[int]):
+        """广度优先收集符号"""
         from collections import deque
 
-        queue = deque([(node, current_prefix)])
+        queue: deque = deque([(node, current_prefix)])
 
         while queue:
             current_node, current_path = queue.popleft()
@@ -348,41 +339,31 @@ class SymbolTrie:
                     if max_results is not None and len(results) >= max_results:
                         return
 
-            # 按字母顺序入队保证确定性
             for char in sorted(current_node.children.keys()):
                 child = current_node.children[char]
                 queue.append((child, current_path + char))
 
-    def _dfs_collect(self, node, current_prefix, results, max_results):
-        """深度优先收集符号
-
-        参数：
-            node: 当前节点
-            current_prefix: 当前前缀
-            results: 结果列表
-            max_results: 最大结果数量限制
-        """
-        # 如果达到最大结果数量，直接返回
+    def _dfs_collect(self, node: TrieNode, current_prefix: str, results: list, max_results: Optional[int]):
+        """深度优先收集符号"""
         if max_results is not None and len(results) >= max_results:
             return
 
         if node.is_end:
             for symbol in node.symbols:
                 results.append({"name": current_prefix, "details": symbol})
-                # 检查是否达到最大结果数量
                 if max_results is not None and len(results) >= max_results:
                     return
 
         for char, child in node.children.items():
             self._dfs_collect(child, current_prefix + char, results, max_results)
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, List[Dict[str, Any]]]:
         """将前缀树转换为包含所有符号的字典"""
-        result = {}
+        result: Dict[str, List[Dict[str, Any]]] = {}
         self._collect_all_symbols(self.root, "", result)
         return result
 
-    def _collect_all_symbols(self, node, current_prefix, result):
+    def _collect_all_symbols(self, node: TrieNode, current_prefix: str, result: Dict):
         """递归收集所有符号"""
         if node.is_end:
             result[current_prefix] = list(node.symbols)
@@ -390,26 +371,13 @@ class SymbolTrie:
         for char, child in node.children.items():
             self._collect_all_symbols(child, current_prefix + char, result)
 
-    def __str__(self):
-        """将前缀树转换为字符串表示，列出所有符号"""
-        symbol_dict = self.to_dict()
-        output = []
-        for symbol_name, symbols in symbol_dict.items():
-            for symbol in symbols:
-                output.append(f"符号名称: {symbol_name}")
-                output.append(f"文件路径: {symbol['file_path']}")
-                output.append(f"签名: {symbol['signature']}")
-                output.append(f"定义哈希: {symbol['full_definition_hash']}")
-                output.append("-" * 40)
-        return "\n".join(output)
-
     @property
-    def size(self):
+    def size(self) -> int:
         """返回唯一符号数量"""
         return self._size
 
     @classmethod
-    def from_symbols(cls, symbols_dict, case_sensitive=True):
+    def from_symbols(cls, symbols_dict: Dict, case_sensitive: bool = True) -> "SymbolTrie":
         """从现有符号字典构建前缀树"""
         trie = cls(case_sensitive)
         for symbol_name, entries in symbols_dict.items():
@@ -467,7 +435,7 @@ class SearchConfig:
 
 
 class RipgrepSearcher:
-    def __init__(self, config: SearchConfig, debug: bool = False, file_list: list[str] = None):
+    def __init__(self, config: SearchConfig, debug: bool = False, file_list: Optional[list[str]] = None):
         self.config = config
         self.debug = debug
         self.file_pattern = self._build_file_pattern()
@@ -475,44 +443,24 @@ class RipgrepSearcher:
 
     def _build_file_pattern(self) -> str:
         """构建符合ripgrep要求的文件类型匹配模式"""
-        extensions = []
-        for ext in self.config.file_types:
-            clean_ext = ext.lstrip("*.")
-            extensions.append(clean_ext)
+        extensions = [ext.lstrip("*.") for ext in self.config.file_types]
+        return f"*.{{{','.join(extensions)}}}"
 
-        patterns = f"*.{{{','.join(extensions)}}}"
-        return patterns
-
-    def search(self, patterns: List[str], search_root: Path = None) -> List[SearchResult]:
-        """Execute ripgrep search with multiple patterns
-
-        Args:
-            patterns: List of regex patterns to search
-            search_root: 已废弃，使用config中的root_dir
-
-        Returns:
-            List of structured search results
-
-        Raises:
-            ValueError: If invalid search root or empty patterns
-            RuntimeError: If rg command execution fails
-        """
+    def search(self, patterns: List[str], search_root: Optional[Path] = None) -> List[SearchResult]:
+        """Execute ripgrep search with multiple patterns"""
         if not patterns:
             raise ValueError("At least one search pattern is required")
-        if search_root:
-            actual_root = search_root
-        else:
-            actual_root = self.config.root_dir
+        actual_root = search_root or self.config.root_dir
         if not actual_root.exists():
-            raise ValueError(f"配置的根目录不存在: {actual_root}")
+            raise ValueError(f"Configured root directory does not exist: {actual_root}")
 
         cmd = self._build_command(patterns, actual_root)
         if self.debug:
-            print("调试信息：执行命令:", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
+            logger.debug("Executing command: %s", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
         if self.debug:
-            print(result.stdout)
-        if result.returncode not in (0, 1):  # trace [subprocess.run, result.returncode]
+            logger.debug(result.stdout)
+        if result.returncode not in (0, 1):
             error_msg = f"rg command failed: {result.stderr}\nCommand: {' '.join(cmd)}"
             raise RuntimeError(error_msg)
 
@@ -528,158 +476,100 @@ class RipgrepSearcher:
             f"custom:{self.file_pattern}",
             "-t",
             "custom",
-            "--no-ignore",  # 确保遵守我们自己的过滤规则
+            "--no-ignore",
         ]
-        # 添加搜索模式
         for pattern in patterns:
             cmd.extend(["--regexp", pattern])
 
         if self.file_list:
-            cmd.extend(["--follow", "--glob"] + list(self.file_list))
+            cmd.extend(["--follow", "--glob"] + self.file_list)
         else:
-            # 添加排除目录
             for d in self.config.exclude_dirs:
                 cmd.extend(["--glob", f"!{d.replace(os.sep, '/')}/**"])
-
-            # 添加排除文件
             for f in self.config.exclude_files:
                 cmd.extend(["--glob", f"!{f.replace(os.sep, '/')}"])
-
-            # 添加包含目录（通过glob实现）
             for d in self.config.include_dirs:
                 cmd.extend(["--glob", f"{d.replace(os.sep, '/')}/**"])
-
-            # 最终添加搜索根目录
             cmd.append(str(search_root).replace(os.sep, "/"))
         return cmd
 
     def _parse_results(self, output: str) -> List[SearchResult]:
-        results: Dict[Path, Dict] = {}
-
+        results: Dict[Path, Dict[str, Any]] = defaultdict(lambda: {"matches": [], "stats": {}})
         for line in output.splitlines():
             try:
                 data = json.loads(line)
-                if data["type"] == "begin":
-                    path = Path(data["data"]["path"]["text"])
-                    if path not in results:
-                        results[path] = {"matches": [], "stats": {}}
-                elif data["type"] == "match":
-                    path = Path(data["data"]["path"]["text"])
+                path_str = data.get("data", {}).get("path", {}).get("text")
+                if not path_str:
+                    continue
+                path = Path(path_str)
+
+                if data["type"] == "match":
                     line_num = data["data"]["line_number"]
                     text = data["data"]["lines"]["text"]
                     for submatch in data["data"]["submatches"]:
-                        start = submatch["start"]
-                        end = submatch["end"]
-                        columns = (start, end)
-                        match = Match(line_num, columns, text)
-                        if path in results:
-                            results[path]["matches"].append(match)
+                        match = Match(line_num, (submatch["start"], submatch["end"]), text)
+                        results[path]["matches"].append(match)
                 elif data["type"] == "end":
-                    path = Path(data["data"]["path"]["text"])
-                    stats = data["data"].get("stats", {})
-                    if path in results:
-                        results[path]["stats"] = stats
+                    results[path]["stats"] = data["data"].get("stats", {})
             except (KeyError, json.JSONDecodeError):
                 continue
-
         return [SearchResult(path, entry["matches"], entry["stats"]) for path, entry in results.items()]
 
 
 BINARY_MAGIC_NUMBERS = {
-    b"\x89PNG",  # PNG
-    b"\xff\xd8",  # JPEG
-    b"GIF",  # GIF
-    b"BM",  # BMP
-    b"%PDF",  # PDF
-    b"MZ",  # Windows PE executable
-    b"\x7fELF",  # ELF executable
-    b"PK",  # ZIP
-    b"Rar!",  # RAR
-    b"\x1f\x8b",  # GZIP
-    b"BZh",  # BZIP2
-    b"\xfd7zXZ",  # XZ
-    b"7z\xbc\xaf\x27\x1c",  # 7-Zip
-    b"ITSF",  # CHM
-    b"\x49\x44\x33",  # MP3
-    b"\x00\x00\x01\xba",  # MPEG
-    b"\x00\x00\x01\xb3",  # MPEG video
-    b"FLV",  # Flash video
-    b"RIFF",  # WAV, AVI
-    b"OggS",  # OGG
-    b"fLaC",  # FLAC
-    b"\x1a\x45\xdf\xa3",  # WebM
-    b"\x30\x26\xb2\x75\x8e\x66\xcf\x11",  # WMV, ASF
-    b"\x00\x01\x00\x00",  # TrueType font
-    b"OTTO",  # OpenType font
-    b"wOFF",  # WOFF font
-    b"ttcf",  # TrueType collection
-    b"\xed\xab\xee\xdb",  # RPM package
-    b"\x53\x51\x4c\x69\x74\x65\x20\x66",  # SQLite
-    b"\x4d\x5a",  # MS Office documents (DOCX, XLSX etc)
-    b"\x50\x4b\x03\x04",  # ZIP-based formats (DOCX, XLSX etc)
-    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",  # MS Office legacy (DOC, XLS etc)
-    b"\x09\x08\x10\x00\x00\x06\x05\x00",  # Excel
-    b"\x50\x4b\x03\x04\x14\x00\x06\x00",  # OpenDocument
-    b"\x25\x50\x44\x46\x2d\x31\x2e",  # PDF (alternative)
-    b"\x46\x4c\x56\x01",  # FLV
-    b"\x4d\x54\x68\x64",  # MIDI
-    b"\x52\x49\x46\x46",  # WAV, AVI (alternative)
-    b"\x23\x21\x41\x4d\x52",  # AMR
-    b"\x23\x21\x53\x49\x4c\x4b",  # SILK
-    b"\x4f\x67\x67\x53",  # OGG (alternative)
-    b"\x66\x4c\x61\x43",  # FLAC (alternative)
-    b"\x4d\x34\x41\x20",  # M4A
-    b"\x00\x00\x00\x20\x66\x74\x79\x70",  # MP4
-    b"\x00\x00\x00\x18\x66\x74\x79\x70",  # 3GP
-    b"\x00\x00\x00\x14\x66\x74\x79\x70",  # MOV
-    b"\x52\x61\x72\x21\x1a\x07\x00",  # RAR (full signature)
-    b"\x37\x7a\xbc\xaf\x27\x1c",  # 7z (alternative)
-    b"\x53\x5a\x44\x44\x88\xf0\x27\x33",  # SZDD
-    b"\x75\x73\x74\x61\x72",  # TAR
-    b"\x1f\x9d",  # Z
-    b"\x1f\xa0",  # Z (alternative)
-    b"\x42\x5a\x68",  # BZ2
-    b"\x50\x4b\x05\x06",  # ZIP (empty archive)
-    b"\x50\x4b\x07\x08",  # ZIP (spanned archive)
+    b"\x89PNG",
+    b"\xff\xd8",
+    b"GIF",
+    b"BM",
+    b"%PDF",
+    b"MZ",
+    b"\x7fELF",
+    b"PK",
+    b"Rar!",
+    b"\x1f\x8b",
+    b"BZh",
+    b"\xfd7zXZ",
+    b"7z\xbc\xaf\x27\x1c",
+    b"ITSF",
+    b"\x49\x44\x33",
+    b"\x00\x00\x01\xba",
+    b"\x00\x00\x01\xb3",
+    b"FLV",
+    b"RIFF",
+    b"OggS",
+    b"fLaC",
+    b"\x1a\x45\xdf\xa3",
+    b"\x30\x26\xb2\x75\x8e\x66\xcf\x11",
+    b"\x00\x01\x00\x00",
+    b"OTTO",
+    b"wOFF",
+    b"ttcf",
+    b"\xed\xab\xee\xdb",
+    b"\x53\x51\x4c\x69\x74\x65\x20\x66",
+    b"\x50\x4b\x03\x04",
+    b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",
 }
 
 
 def find_diff() -> str:
-    """
-    检查系统PATH中是否存在git工具，支持Windows/Linux/MacOS
-    返回diff工具的完整路径
-    """
     git_path = shutil.which("git")
     if not git_path:
         return ""
-
-    if git_path.endswith("git.exe") or git_path.endswith("git.EXE"):  # Windows
+    if git_path.lower().endswith("git.exe"):
         return str(Path(git_path).parent.parent / "usr" / "bin" / "diff.exe")
-    elif shutil.which("diff"):  # Linux/MacOS
-        return shutil.which("diff")
-    return ""
+    return shutil.which("diff") or ""
 
 
 def find_patch() -> str:
-    """
-    检查系统PATH中是否存在git工具，支持Windows/Linux/MacOS
-    返回patch工具的完整路径
-    """
-
     git_path = shutil.which("git")
     if not git_path:
         return ""
-
-    if git_path.endswith("git.exe") or git_path.endswith("git.EXE"):  # Windows
+    if git_path.lower().endswith("git.exe"):
         return str(Path(git_path).parent.parent / "usr" / "bin" / "patch.exe")
-    elif shutil.which("patch"):  # Linux/MacOS
-        return shutil.which("patch")
-    return ""
+    return shutil.which("patch") or ""
 
 
 class BlockPatch:
-    """用于生成多文件代码块的差异补丁"""
-
     def __init__(
         self,
         file_paths: list[str],
@@ -688,1738 +578,320 @@ class BlockPatch:
         update_contents: list[bytes],
         manual_merge: bool = False,
     ):
-        """
-        初始化补丁对象（支持多文件）
-
-        参数：
-            file_paths: 源文件路径列表
-            patch_ranges: 补丁范围列表，每个元素格式为(start_pos, end_pos)
-            block_contents: 原始块内容列表(bytes)
-            update_contents: 更新后的内容列表(bytes)
-        """
-        if (
-            len(
-                {
-                    len(file_paths),
-                    len(patch_ranges),
-                    len(block_contents),
-                    len(update_contents),
-                }
-            )
-            != 1
-        ):
-            raise ValueError("所有参数列表的长度必须一致")
+        if not (len(file_paths) == len(patch_ranges) == len(block_contents) == len(update_contents)):
+            raise ValueError("All parameter lists must have the same length")
         self.manual_merge = manual_merge
-        # 过滤掉没有实际更新的块
-        self.file_paths = []
-        self.patch_ranges = []
-        self.block_contents = []
-        self.update_contents = []
-        for i, file_path in enumerate(file_paths):
+        self.file_paths, self.patch_ranges, self.block_contents, self.update_contents = [], [], [], []
+        for i, path in enumerate(file_paths):
             if block_contents[i] != update_contents[i]:
-                self.file_paths.append(file_path)
+                self.file_paths.append(path)
                 self.patch_ranges.append(patch_ranges[i])
                 self.block_contents.append(block_contents[i])
                 self.update_contents.append(update_contents[i])
 
-        # 如果没有需要更新的块，直接返回
+        self.source_codes: Dict[str, bytes] = {}
         if not self.file_paths:
             return
-        # 按文件路径分组存储源代码
-        self.source_codes = {}
-
         for path in set(self.file_paths):
             with open(path, "rb") as f:
                 content = f.read()
                 if self._is_binary_file(content):
-                    raise ValueError(f"文件 {path} 是二进制文件，拒绝修改以避免不可预测的结果")
+                    raise ValueError(f"File {path} is binary, refusing to modify.")
                 try:
-                    # 检测是否为UTF-8编码
                     content.decode("utf-8")
                 except UnicodeDecodeError as exc:
-                    raise ValueError(f"文件 {path} 不是UTF-8编码，拒绝修改以避免不可预测的结果") from exc
+                    raise ValueError(f"File {path} is not UTF-8 encoded, refusing to modify.") from exc
                 self.source_codes[path] = content
 
     def _is_binary_file(self, content: bytes) -> bool:
-        """判断文件是否为二进制文件"""
-        # 检查文件头是否匹配已知的二进制文件类型
-        for magic in BINARY_MAGIC_NUMBERS:
-            if content.startswith(magic):
-                return True
-        return False
+        return any(content.startswith(magic) for magic in BINARY_MAGIC_NUMBERS)
 
-    def _validate_ranges(self, original_code: str, ranges: list[tuple[int, int]]) -> None:
-        """验证范围列表是否有重叠"""
-        # 使用新列表存储已通过检测的range
-        checked_ranges = []
-        for current_range in ranges:
-            # 针对已通过检测的range做暴力检查
-            for checked_range in checked_ranges:
-                # 检查两个范围是否重叠
-                if not (current_range[1] <= checked_range[0] or checked_range[1] <= current_range[0]):
-                    raise ValueError(
-                        f"替换区间存在重叠：{current_range} 和 {checked_range}: bytes: {original_code[current_range[0] : current_range[1]]} vs {original_code[checked_range[0] : checked_range[1]]}"
-                    )
-            # 将当前range加入已通过检测的列表
-            checked_ranges.append(current_range)
+    def _validate_ranges(self, original_code: bytes, ranges: list[tuple[int, int]]) -> None:
+        checked_ranges: List[Tuple[int, int]] = []
+        for current in ranges:
+            for checked in checked_ranges:
+                if not (current[1] <= checked[0] or checked[1] <= current[0]):
+                    raise ValueError(f"Ranges overlap: {current} and {checked}")
+            checked_ranges.append(current)
 
-    def _build_modified_blocks(self, original_code: str, replacements: list) -> list[str]:
-        """构建修改后的代码块数组"""
-        # 验证所有块内容
-        for (start_pos, end_pos), old_content, _ in replacements:
-            if start_pos != end_pos:  # 仅对非插入操作进行验证
-                selected = original_code[start_pos:end_pos]
-                if selected.decode("utf8") != old_content:
-                    raise ValueError(f"内容不匹配\n选中内容：{selected}\n传入内容：{old_content}")
-
-        # 检查替换区间是否有重叠
-        self._validate_ranges(original_code, [(start_pos, end_pos) for (start_pos, end_pos), _, _ in replacements])
-
-        # 按起始位置排序替换区间
+    def _build_modified_blocks(self, original_code: bytes, replacements: list) -> list[bytes]:
+        for (start, end), old_content_bytes, _ in replacements:
+            if start != end and original_code[start:end] != old_content_bytes:
+                raise ValueError(f"Content mismatch for range {start}:{end}")
+        self._validate_ranges(original_code, [(s, e) for (s, e), _, _ in replacements])
         replacements.sort(key=lambda x: x[0][0])
 
-        # 初始化变量
-        blocks = []
+        blocks: List[bytes] = []
         last_pos = 0
-
-        # 遍历替换区间，拆分原始代码
-        for (start_pos, end_pos), old_content, new_content in replacements:
-            # 添加替换区间前的代码块
-            if last_pos < start_pos:
-                blocks.append(original_code[last_pos:start_pos].decode("utf8"))
-
-            # 添加替换区间代码块
-            blocks.append(new_content)  # 直接使用新内容，已经是utf8字符串
-
-            # 更新最后位置
-            last_pos = end_pos
-
-        # 添加最后一段代码
+        for (start, end), _, new_content_bytes in replacements:
+            if last_pos < start:
+                blocks.append(original_code[last_pos:start])
+            blocks.append(new_content_bytes)
+            last_pos = end
         if last_pos < len(original_code):
-            blocks.append(original_code[last_pos:].decode("utf8"))
-
+            blocks.append(original_code[last_pos:])
         return blocks
 
-    def _generate_system_diff(self, original_file: str, modified_file: str) -> str:
-        """使用系统diff工具生成差异"""
+    def _generate_system_diff(self, original_file: str, modified_file: str) -> Optional[str]:
         diff_tool = find_diff()
-        try:
-            # 在Windows上转换为相对路径并处理换行符
-            if os.name == "nt":
-                original_file = os.path.relpath(original_file)
-                modified_file = os.path.relpath(modified_file)
-                result = subprocess.run(
-                    [
-                        diff_tool,
-                        "-u",
-                        "--strip-trailing-cr",
-                        original_file,
-                        modified_file,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    encoding="utf8",
-                )
-            else:
-                result = subprocess.run(
-                    [diff_tool, "-u", original_file, modified_file],
-                    capture_output=True,
-                    encoding="utf8",
-                    text=True,
-                    check=False,
-                )
-            # 对于diff工具，返回0表示文件相同，返回1表示文件有差异，这都是正常情况
-            if result.returncode in (0, 1):
-                return result.stdout
+        if not diff_tool:
             return None
+        try:
+            cmd = [diff_tool, "-u", original_file, modified_file]
+            if os.name == "nt":
+                cmd = [
+                    diff_tool,
+                    "-u",
+                    "--strip-trailing-cr",
+                    os.path.relpath(original_file),
+                    os.path.relpath(modified_file),
+                ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False, encoding="utf8")
+            return result.stdout if result.returncode in (0, 1) else None
         except FileNotFoundError:
             return None
 
     def _launch_diff_tool(self, original_path: str, modified_path: str) -> None:
-        """启动可视化diff工具进行手动合并"""
-        # 优先尝试VS Code，其次vimdiff
-        if platform.system() == "Darwin":
-            vscode_paths = [
-                "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
-                "/Applications/VSCode.app/Contents/Resources/app/bin/code",
-            ]
-            for code_path in vscode_paths:
-                if os.path.exists(code_path):
-                    subprocess.run([code_path, "-d", original_path, modified_path], check=True)
-                    print("请在VS Code中完成合并，完成后请按回车继续...")
-                    input()
-                    return
-        elif platform.system() == "Windows":
-            code_exe = shutil.which("code.exe")
-            if code_exe:
-                subprocess.run([code_exe, "-d", original_path, modified_path], check=True)
-                print("请在VS Code中完成合并，完成后请按回车继续...")
-                input()
-                return
-        else:  # Linux
-            if shutil.which("code"):
-                subprocess.run(["code", "-d", original_path, modified_path], check=True)
-                print("请在VS Code中完成合并，完成后请按回车继续...")
-                input()
-                return
-
-        # 回退到vimdiff
-        if shutil.which("vimdiff"):
-            subprocess.run(["vimdiff", original_path, modified_path], check=True)
+        if shutil.which("code"):
+            tool_cmd = ["code", "-d", original_path, modified_path]
+        elif shutil.which("vimdiff"):
+            tool_cmd = ["vimdiff", original_path, modified_path]
         else:
-            raise RuntimeError("未找到可用的diff工具，请安装VS Code或vim")
+            raise RuntimeError("No suitable diff tool found (VS Code or vim).")
+        subprocess.run(tool_cmd, check=True)
+        if "code" in tool_cmd[0]:
+            input("Press Enter to continue after merging in VS Code...")
 
-    def file_mtime(self, path):
+    def file_mtime(self, path: str) -> str:
         t = datetime.fromtimestamp(os.stat(path).st_mtime, timezone.utc)
         return t.astimezone().isoformat()
 
     def _process_single_file_diff(self, file_path: str, indices: list[int]) -> list[str]:
-        """处理单个文件的差异生成"""
         original_code = self.source_codes[file_path]
-
-        # 收集所有需要替换的块
-        replacements = []
-        for idx in indices:
-            start_pos, end_pos = self.patch_ranges[idx]
-            replacements.append(
-                (
-                    (start_pos, end_pos),
-                    self.block_contents[idx].decode("utf8"),
-                    self.update_contents[idx].decode("utf8"),
-                )
-            )
-
-        # 构建修改后的代码块
+        replacements = [((self.patch_ranges[i]), self.block_contents[i], self.update_contents[i]) for i in indices]
         modified_blocks = self._build_modified_blocks(original_code, replacements)
-        modified_code = "".join(modified_blocks)
+        modified_code_bytes = b"".join(modified_blocks)
 
         with (
-            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".original", encoding="utf8") as f_orig,
-            tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".modified", encoding="utf8") as f_mod,
+            tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".original") as f_orig,
+            tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".modified") as f_mod,
         ):
-            f_orig.write(original_code.decode("utf8"))
-            f_orig_path = f_orig.name
-            f_mod.write(modified_code)
-            f_mod_path = f_mod.name
+            f_orig.write(original_code)
+            f_mod.write(modified_code_bytes)
+            f_orig_path, f_mod_path = f_orig.name, f_mod.name
 
         if self.manual_merge:
             self._launch_diff_tool(f_orig_path, f_mod_path)
-            # 重新读取用户修改后的内容
             with open(f_mod_path, "rb") as f:
-                modified_code = f.read()
-            # 更新替换内容
-            for idx in indices:
-                self.update_contents[idx] = modified_code
+                modified_code_bytes = f.read()
+            for i in indices:
+                self.update_contents[i] = modified_code_bytes
 
         system_diff = self._generate_system_diff(f_orig_path, f_mod_path)
-
         os.unlink(f_orig_path)
         os.unlink(f_mod_path)
 
-        # 回退到Python实现
-        if not system_diff:
-            print("系统diff工具不存在，使用python difflib实现")
-            diff_lines = list(
+        if system_diff:
+            diff_lines = []
+            for line in system_diff.splitlines(keepends=True):
+                if line.startswith("--- ") or line.startswith("+++ "):
+                    parts = line.split("\t", 1)
+                    diff_lines.append(
+                        f"{parts[0].split()[0]} {file_path}\t{parts[1]}"
+                        if len(parts) > 1
+                        else f"{parts[0].split()[0]} {file_path}\n"
+                    )
+                else:
+                    diff_lines.append(line)
+            return diff_lines
+        else:
+            logger.warning("System diff tool failed, falling back to difflib.")
+            return list(
                 unified_diff(
                     original_code.decode("utf8").splitlines(keepends=True),
-                    modified_code.splitlines(keepends=True),
+                    modified_code_bytes.decode("utf8").splitlines(keepends=True),
                     fromfile=file_path,
                     tofile=file_path,
-                    fromfiledate=self.file_mtime(f_orig_path),
-                    tofiledate=self.file_mtime(f_mod_path),
                 )
             )
-            # Add newline character to lines starting with --- or +++
-            for i, line in enumerate(diff_lines):
-                if line.startswith("---") or line.startswith("+++"):
-                    diff_lines[i] = line + "\n"
-            return diff_lines
 
-        # 调整系统diff输出中的文件路径
-        diff_lines = []
-        for line in system_diff.splitlines(keepends=True):
-            if line.startswith("--- ") or line.startswith("+++ "):
-                if "\t" in line:
-                    first, timestamp = line.split("\t")
-                    diff_lines.append(f"{first.split()[0]} {file_path}\t{timestamp}")
-                else:
-                    diff_lines.append(f"{line.split()[0]} {file_path}")
-            else:
-                diff_lines.append(line)
-
-        return diff_lines
-
-    def generate_diff(self) -> str:
-        """生成多文件差异补丁"""
+    def generate_diff(self) -> Dict[str, str]:
         if not self.file_paths:
             return {}
-
-        # 按文件分组处理
         file_groups = defaultdict(list)
-        for idx, path in enumerate(self.file_paths):
-            file_groups[path].append(idx)
-        m = {}
-        for file_path, indices in file_groups.items():
-            m[file_path] = "".join(self._process_single_file_diff(file_path, indices))
-        return m
+        for i, path in enumerate(self.file_paths):
+            file_groups[path].append(i)
+        return {path: "".join(self._process_single_file_diff(path, indices)) for path, indices in file_groups.items()}
 
     def _process_single_file_patch(self, file_path: str, indices: list[int]) -> bytes:
-        """处理单个文件的补丁应用"""
         original_code = self.source_codes[file_path]
-
-        # 收集所有需要替换的块
-        replacements = []
-        for idx in indices:
-            start_pos, end_pos = self.patch_ranges[idx]
-            replacements.append(
-                (
-                    (start_pos, end_pos),
-                    self.block_contents[idx].decode("utf8"),
-                    self.update_contents[idx].decode("utf8"),
-                )
-            )
-
-        # 构建修改后的代码块
+        replacements = [((self.patch_ranges[i]), self.block_contents[i], self.update_contents[i]) for i in indices]
         modified_blocks = self._build_modified_blocks(original_code, replacements)
-        return "".join(modified_blocks).encode("utf8")
+        return b"".join(modified_blocks)
 
-    def apply_patch(self) -> dict[str, bytes]:
-        """应用多文件补丁，返回修改后的代码字典"""
+    def apply_patch(self) -> Dict[str, bytes]:
         if not self.file_paths:
             return {}
-
         patched_files = {}
-        # 按文件分组处理
         file_groups = defaultdict(list)
-        for idx, path in enumerate(self.file_paths):
-            file_groups[path].append(idx)
-
-        for file_path, indices in file_groups.items():
-            patched_files[file_path] = self._process_single_file_patch(file_path, indices)
-
+        for i, path in enumerate(self.file_paths):
+            file_groups[path].append(i)
+        for path, indices in file_groups.items():
+            patched_files[path] = self._process_single_file_patch(path, indices)
         return patched_files
 
 
 def split_source(source: str, start_row: int, start_col: int, end_row: int, end_col: int) -> tuple[str, str, str]:
-    """
-    根据行列位置将源代码分割为三段
-
-    参数：
-        source: 原始源代码字符串
-        start_row: 起始行号(0-based)
-        start_col: 起始列号(0-based)
-        end_row: 结束行号(0-based)
-        end_col: 结束列号(0-based)
-
-    返回：
-        tuple: (前段内容, 选中内容, 后段内容)
-    """
     lines = source.splitlines(keepends=True)
     if not lines:
         return ("", "", "") if source == "" else (source, "", "")
-
-    # 处理越界行号
     max_row = len(lines) - 1
-    start_row = max(0, min(start_row, max_row))
-    end_row = max(0, min(end_row, max_row))
+    start_row, end_row = max(0, min(start_row, max_row)), max(0, min(end_row, max_row))
 
-    # 计算行列位置对应的绝对字节偏移
     def calc_pos(row: int, col: int) -> int:
-        line = lines[row]
-        # 列号限制在[0, 当前行长度]范围内
-        clamped_col = max(0, min(col, len(line)))
-        # 计算该行之前的累计长度
-        prev_lines_len = sum(len(line) for line in lines[:row])
-        return prev_lines_len + clamped_col
+        return sum(len(line) for line in lines[:row]) + max(0, min(col, len(lines[row])))
 
-    # 获取实际偏移位置
-    start_pos = calc_pos(start_row, start_col)
-    end_pos = calc_pos(end_row, end_col)
-
-    # 确保顺序正确
+    start_pos, end_pos = calc_pos(start_row, start_col), calc_pos(end_row, end_col)
     if start_pos > end_pos:
         start_pos, end_pos = end_pos, start_pos
-
     return (source[:start_pos], source[start_pos:end_pos], source[end_pos:])
 
 
-def get_node_segment(code: str, node) -> tuple[str, str, str]:
-    """根据AST节点获取代码分段"""
-    start_row = node.start_point[0]
-    start_col = node.start_point[1]
-    end_row = node.end_point[0]
-    end_col = node.end_point[1]
-    return split_source(code, start_row, start_col, end_row, end_col)
+def get_node_segment(code: str, node: Node) -> tuple[str, str, str]:
+    return split_source(code, node.start_point[0], node.start_point[1], node.end_point[0], node.end_point[1])
 
 
 def safe_replace(code: str, new_code: str, start: tuple[int, int], end: tuple[int, int]) -> str:
-    """安全替换代码段"""
     before, _, after = split_source(code, *start, *end)
     return before + new_code + after
 
 
-def test_split_source_and_patch():
-    """使用tree-sitter验证代码提取功能"""
-    pass
-
-
-def parse_code_file(file_path, lang_parser):
-    """解析代码文件"""
-    with open(file_path, "r", encoding="utf-8") as f:
+def parse_code_file(file_path: Path, lang_parser: Parser) -> Node:
+    with open(file_path, "rb") as f:
         code = f.read()
-    tree = lang_parser.parse(bytes(code, "utf-8"))
-    # 打印调试信息
-    # print("解析树结构：")
-    # print(tree.root_node)
-    # print("\n代码内容：")
-    # print(code)
-    return tree
+    tree = lang_parser.parse(code)
+    return tree.root_node
 
 
-def get_code_from_node(code, node):
-    """根据Node对象提取代码片段"""
+def get_code_from_node(code: bytes, node: Node) -> bytes:
     return code[node.start_byte : node.end_byte]
 
 
-# import pprint
-
-
-def captures_dump(captures):
-    # 结构化输出captures字典内容，用于调试
-    print("===========\nCaptures 字典内容：")
-    for key, nodes in captures.items():
-        print(f"Key: {key}")
-        for i, node in enumerate(nodes):
-            # 输出节点文本内容及其位置范围
-            print(f"  Node {i}: {node.text.decode('utf-8')} (位置: {node.start_point} -> {node.end_point})")
-
-
-def process_matches(matches: List[Tuple[Any, Dict]], lang_name: str) -> Dict:
-    """处理查询匹配结果，支持多语言符号提取"""
-    symbols: Dict = {}
-    block_array: List[Tuple] = []
-    function_calls: List = []
-
-    for match in matches:
-        _, captures = match
-        if not captures:
-            continue
-
-        if "class-name" in captures:
-            process_class_definition(captures, symbols, block_array)
-        elif "function.name" in captures:
-            process_function_definition(captures, lang_name, symbols, block_array)
-        elif "called_function" in captures:
-            function_calls.append(captures)
-
-    process_function_calls(function_calls, block_array, symbols)
-    return symbols
-
-
-def process_class_definition(captures: Dict, symbols: Dict, block_array: List) -> None:
-    """处理类定义及其方法"""
-    class_node = captures["class-name"][0]
-    class_name = class_node.text.decode("utf-8")
-    class_def_node = captures["class"][0]
-
-    symbols[class_name] = {
-        "type": "class",
-        "signature": f"class {class_name}",
-        "calls": [],
-        "methods": [],
-        "full_definition": class_def_node.text.decode("utf8"),
-    }
-
-    async_lines = [x.start_point[0] for x in captures.get("method.async", [])]
-
-    for i, _ in enumerate(captures.get("method.name", [])):
-        process_class_method(captures, i, async_lines, class_name, symbols, block_array)
-
-
-def process_class_method(
-    captures: Dict,
-    index: int,
-    async_lines: List[int],
-    class_name: str,
-    symbols: Dict,
-    block_array: List,
-) -> None:
-    """处理类方法"""
-    method_node = captures["method.name"][index]
-    method_name = method_node.text.decode("utf-8")
-    symbol_name = f"{class_name}.{method_name}"
-
-    decorators = extract_decorators(captures.get("method.decorator", []))
-    is_async = check_async_status(captures["method.def"][index], async_lines)
-
-    params_node = captures["method.params"][index]
-    body_node = captures["method.body"][index]
-
-    async_prefix = "async " if is_async else ""
-    signature = f"{async_prefix}def {symbol_name}{params_node.text.decode('utf-8')}:"
-
-    symbols[class_name]["methods"].append(signature)
-    symbols[symbol_name] = {
-        "type": "method",
-        "signature": signature,
-        "body": body_node.text.decode("utf-8"),
-        "full_definition": captures["functions"][index].text.decode("utf8"),
-        "calls": [],
-        "decorators": decorators,
-    }
-    block_array.append((symbol_name, body_node.start_point, body_node.end_point))
-
-
-def process_function_definition(captures: Dict, lang_name: str, symbols: Dict, block_array: List) -> None:
-    """分发函数处理逻辑"""
-    if lang_name == C_LANG:
-        process_c_function(captures, symbols, block_array)
-    elif lang_name == PYTHON_LANG:
-        process_python_function(captures, symbols, block_array)
-
-
-def process_c_function(captures: Dict, symbols: Dict, block_array: List) -> None:
-    """处理C语言函数"""
-    function_node = captures["function.name"][0]
-    return_type_node = captures["function.return_type"][0]
-    params_node = captures["function.params"][0]
-    body_node = captures["function.body"][0]
-
-    function_name = function_node.text.decode("utf-8")
-    signature = f"{return_type_node.text.decode('utf-8')} {function_name}{params_node.text.decode('utf-8')}"
-
-    symbols[function_name] = {
-        "type": "function",
-        "signature": signature,
-        "body": body_node.text.decode("utf-8"),
-        "full_definition": f"{signature} {{\n{body_node.text.decode('utf-8')}\n}}",
-        "calls": [],
-    }
-    block_array.append((function_name, body_node.start_point, body_node.end_point))
-
-
-def process_python_function(captures: Dict, symbols: Dict, block_array: List) -> None:
-    """处理Python函数"""
-    function_node = captures["function.name"][0]
-    function_name = function_node.text.decode("utf-8")
-
-    decorators = extract_decorators(captures.get("function.decorator", []))
-    is_async = "function.async" in captures
-    params_node = captures["function.params"][0]
-    body_node = captures["function.body"][0]
-
-    async_prefix = "async " if is_async else ""
-    signature = f"{async_prefix}def {function_name}{params_node.text.decode('utf-8')}:"
-
-    symbols[function_name] = {
-        "type": "function",
-        "signature": signature,
-        "body": body_node.text.decode("utf-8"),
-        "full_definition": captures["function-full"][0].text.decode("utf8"),
-        "calls": [],
-        "async": is_async,
-        "decorators": decorators,
-    }
-    block_array.append((function_name, body_node.start_point, body_node.end_point))
-
-
-def process_function_calls(function_calls: List, block_array: List, symbols: Dict) -> None:
-    """处理函数调用关系"""
-    block_array.sort(key=lambda x: x[1][0])
-
-    for call in function_calls:
-        called_node = call["called_function"][0]
-        called_func = called_node.text.decode("utf-8")
-        called_line = called_node.start_point[0]
-
-        containing_blocks = find_containing_blocks(called_line, block_array)
-
-        for symbol_name, start, end in containing_blocks:
-            if is_within_block(called_node, start, end):
-                update_symbol_calls(symbol_name, called_func, symbols)
-
-
-def find_containing_blocks(line: int, blocks: List) -> List:
-    """使用二分查找定位包含指定行的代码块"""
-    left, right = 0, len(blocks) - 1
-    found = []
-
-    while left <= right:
-        mid = (left + right) // 2
-        block_start = blocks[mid][1][0]
-        block_end = blocks[mid][2][0]
-
-        if block_start <= line <= block_end:
-            found.extend(collect_adjacent_blocks(mid, line, blocks))
-            break
-        if line < block_start:
-            right = mid - 1
-        else:
-            left = mid + 1
-    return found
-
-
-def collect_adjacent_blocks(mid: int, line: int, blocks: List) -> List:
-    """收集相邻的可能包含指定行的代码块"""
-    collected = [blocks[mid]]
-
-    # 向左收集
-    i = mid - 1
-    while i >= 0 and blocks[i][1][0] <= line <= blocks[i][2][0]:
-        collected.append(blocks[i])
-        i -= 1
-
-    # 向右收集
-    i = mid + 1
-    while i < len(blocks) and blocks[i][1][0] <= line <= blocks[i][2][0]:
-        collected.append(blocks[i])
-        i += 1
-
-    return collected
-
-
-def is_within_block(node: Any, start: Tuple[int, int], end: Tuple[int, int]) -> bool:
-    """检查节点是否完全包含在代码块范围内"""
-    node_start = node.start_point
-    node_end = node.end_point
-
-    # 检查行号范围
-    if not start[0] <= node_start[0] <= end[0]:
-        return False
-
-    # 检查起始行首列
-    if node_start[0] == start[0] and node_start[1] < start[1]:
-        return False
-
-    # 检查结束行尾列
-    if node_end[0] == end[0] and node_end[1] > end[1]:
-        return False
-
-    return True
-
-
-def update_symbol_calls(symbol_name: str, called_func: str, symbols: Dict) -> None:
-    """更新符号的调用关系"""
-    if symbol_name in symbols and called_func not in symbols[symbol_name]["calls"]:
-        symbols[symbol_name]["calls"].append(called_func)
-
-
-def extract_decorators(decorator_nodes: List) -> List[str]:
-    """提取装饰器列表"""
-    return [node.text.decode("utf-8") for node in decorator_nodes]
-
-
-def check_async_status(def_node: Any, async_lines: List[int]) -> bool:
-    """检查是否为异步函数"""
-    return def_node.start_point[0] in async_lines
-
-
-def generate_mermaid_dependency_graph(symbols):
-    """生成 Mermaid 格式的依赖关系图"""
-    mermaid_graph = "graph TD\n"
-
-    for name, details in symbols.items():
-        if details["type"] == "function":
-            mermaid_graph += f"    {name}[{name}]\n"
-            for called_func in details["calls"]:
-                if called_func in symbols:
-                    mermaid_graph += f"    {name} --> {called_func}\n"
-                else:
-                    mermaid_graph += f"    {name} --> {called_func}[未定义函数]\n"
-
-    return mermaid_graph
-
-
-def print_mermaid_dependency_graph(symbols):
-    """打印 Mermaid 格式的依赖关系图"""
-    print("\nMermaid 依赖关系图：")
-    print(generate_mermaid_dependency_graph(symbols))
-    print("\n提示：可以将上述输出复制到支持 Mermaid 的 Markdown 编辑器中查看图形化结果")
-
-
-def generate_json_output(symbols):
-    """生成 JSON 格式的输出"""
-    output = {"symbols": [{"name": name, **details} for name, details in symbols.items()]}
-    return json.dumps(output, indent=2)
-
-
-def find_symbol_call_chain(symbols, start_symbol):
-    """查找并打印指定符号的调用链"""
-    if start_symbol in symbols and symbols[start_symbol]["type"] == "function":
-        print(f"\n{start_symbol} 函数调用链：")
-        for called_func in symbols[start_symbol]["calls"]:
-            if called_func in symbols:
-                print(f"\n{called_func} 函数的完整定义：")
-                print(symbols[called_func]["full_definition"])
-            else:
-                print(f"\n警告：函数 {called_func} 未找到定义")
-
-
-def print_main_call_chain(symbols):
-    """打印 main 函数调用链"""
-    find_symbol_call_chain(symbols, "main")
-
-
-def demo_main():
-    """主函数，用于演示功能"""
-    # 初始化解析器加载器
-    parser_loader = ParserLoader()
-
-    # 获取解析器和查询对象
-    lang_parser, query, lang_name = parser_loader.get_parser("test.c")
-
-    # 解析代码文件
-    tree = parse_code_file("test-code-files/test.c", lang_parser)
-
-    # 执行查询并处理结果
-    matches = query.matches(tree.root_node)
-    symbols = process_matches(matches, lang_name)
-
-    # 生成并打印 JSON 输出
-    output = generate_json_output(symbols)
-    print(output)
-    print(generate_mermaid_dependency_graph(symbols))
-    # 打印 main 函数调用链
-    print_main_call_chain(symbols)
-
-
-app = FastAPI()
-
-
-@app.get("/complete")
-async def symbol_completion(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
-    """处理符号自动补全请求，支持前缀树和数据库两种搜索方式
-
-    Args:
-        prefix: 用户输入的搜索前缀，最小长度为1
-        max_results: 最大返回结果数量，自动限制在1-50之间
-    """
-    # 如果前缀为空，直接返回空结果
-    if not prefix:
-        return {"completions": []}
-
-    trie = app.state.symbol_trie
-    # 确保max_results是整数类型（处理可能的字符串输入）
-    max_results = int(max_results)
-    # 限制结果范围在1到50之间，避免过大或非法的请求
-    max_results = max(1, min(50, max_results))
-
-    # 首先尝试使用前缀树搜索（高效的前缀匹配算法）
-    results = trie.search_prefix(prefix)[:max_results]
-
-    # 如果前缀树搜索结果为空，则使用数据库模糊搜索（回退机制保证覆盖率）
-    if not results:
-        # 使用数据库的LIKE查询进行模糊匹配
-        results = get_symbols_from_db(prefix, max_results)
-
-    # 返回标准化格式的补全结果列表
-    return {"completions": results}
-
-
 def extract_identifiable_path(file_path: str) -> str:
-    """提取路径中易于识别的部分
-    检测输入路径是否相对于当前文件的目录，如果不是则返回绝对路径
-
-    Args:
-        file_path: 文件路径（相对或绝对路径）
-
-    Returns:
-        相对路径（如果在当前文件目录下）或绝对路径（统一使用Linux路径分隔符）
-    """
     current_dir = str(GLOBAL_PROJECT_CONFIG.project_root_dir)
-
-    # 转换为绝对路径
-    if os.path.isabs(file_path):
-        abs_path = file_path
-    else:
-        # 将相对路径视为相对于当前文件目录解析
-        abs_path = os.path.abspath(os.path.join(current_dir, file_path))
-
-    # 检查是否在当前文件目录下
+    abs_path = os.path.abspath(os.path.join(current_dir, file_path) if not os.path.isabs(file_path) else file_path)
     if abs_path.startswith(current_dir):
-        # 返回相对于当前目录的路径
-        rel_path = os.path.relpath(abs_path, current_dir)
-        return rel_path.replace("\\", "/")
-
-    # 返回绝对路径（当路径不在当前目录下时）
+        return os.path.relpath(abs_path, current_dir).replace("\\", "/")
     return abs_path.replace("\\", "/")
 
 
-async def location_to_symbol(
-    symbol: Dict,
-    trie: SymbolTrie,
-    lsp_client: GenericLSPClient,
-    lookup_cache: Dict | None = None,
-) -> List[Dict]:
-    """通过LSP获取定义位置并更新符号前缀树
-
-    Args:
-        symbol: 包含调用信息的符号字典
-        trie: 符号前缀树
-        lsp_client: LSP客户端实例
-        lookup_cache: 符号查找缓存，避免重复查找相同位置的符号
-
-    Returns:
-        收集到的符号定义信息列表
-    """
-    collected_symbols = []
-    file_content_cache = {}
-    file_lines_cache = {}
-    if not lookup_cache:
-        lookup_cache = {}
-
-    # 初始化LSP服务器
-    await _initialize_lsp_server(symbol, lsp_client)
-    symbol_file_path = symbol["file_path"]
-    # 处理每个调用
-    calls = [(1, symbol) for symbol in symbol.get("calls", [])]
-    symbols_filter = set()
-    for level, call in calls:
-        if level > 3:
-            break
-        try:
-            symbols = await _process_call(
-                call,
-                symbol["file_path"],
-                trie,
-                lsp_client,
-                file_content_cache,
-                file_lines_cache,
-                lookup_cache,
-            )
-            for sym in symbols:
-                if sym["file_path"] == symbol_file_path:
-                    if sym["name"] in symbols_filter:
-                        continue
-                    symbols_filter.add(sym["name"])
-                    logger.info("检查同文件符号%s.%s的调用", sym["file_path"], sym["name"])
-                    calls.extend([(level + 1, call) for call in sym["calls"]])
-            collected_symbols.extend(symbols)
-        except (ConnectionError, TimeoutError, RuntimeError) as e:
-            print(f"处理调用 {call['name']} 时发生错误: {str(e)}")
-
-    return collected_symbols
-
-
-async def _initialize_lsp_server(symbol: Dict, lsp_client: GenericLSPClient) -> None:
-    """初始化LSP服务器，发送文件打开通知"""
-    file_path = symbol["file_path"]
-    with open(file_path, "r", encoding="utf-8") as f:
-        file_content = f.read()
-
-    language_id = LanguageId.get_language_id(file_path)
-    abs_file_path = os.path.abspath(file_path)
-    lsp_client.send_notification(
-        "textDocument/didOpen",
-        {
-            "textDocument": {
-                "uri": f"file://{abs_file_path}",
-                "languageId": language_id,
-                "version": 1,
-                "text": file_content,
-            }
-        },
-    )
-
-
-async def _process_call(
-    call: Dict,
-    file_path: str,
-    trie: SymbolTrie,
-    lsp_client: GenericLSPClient,
-    file_content_cache: Dict,
-    file_lines_cache: Dict,
-    lookup_cache: Dict | None = None,
-) -> List[Dict]:
-    """处理单个调用，返回收集到的符号信息"""
-    call_name = call["name"]
-    line = call["start_point"][0] + 1
-    char = call["start_point"][1] + 1
-
-    # 获取定义信息
-    definition = await lsp_client.get_definition(os.path.abspath(file_path), line, char)
-    if not definition:
-        return []
-
-    definitions = definition if isinstance(definition, list) else [definition]
-
-    collected_symbols = []
-    for def_item in definitions:
-        # 生成缓存key
-        uri = def_item.get("uri", "")
-        def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
-        if not def_path:
-            continue
-
-        cache_key = f"{def_path}:{def_item.get('range', {}).get('start', {}).get('line', 0)}"
-        if lookup_cache and cache_key in lookup_cache:
-            continue
-        symbols = await _process_definition(def_item, trie, call_name, file_content_cache, file_lines_cache)
-        if lookup_cache:
-            lookup_cache[cache_key] = symbols
-        collected_symbols.extend(symbols)
-
-    return collected_symbols
-
-
-async def _process_definition(
-    def_item: Dict,
-    trie: SymbolTrie,
-    call_name: str,
-    file_content_cache: Dict,
-    file_lines_cache: Dict,
-) -> List[Dict]:
-    """处理单个定义项，返回收集到的符号信息"""
-    # 解析定义位置
-    uri = def_item.get("uri", "")
-    def_path = unquote(urlparse(uri).path) if uri.startswith("file://") else ""
-    if not def_path or not os.path.exists(def_path):
-        return []
-
-    # 更新前缀树
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    rel_def_path = os.path.relpath(def_path, current_dir)
-    update_trie_if_needed(f"symbol:{rel_def_path}", trie, app.state.file_parser_info_cache, just_path=True)
-
-    # 获取文件内容
-    lines = _get_file_content(def_path, file_content_cache, file_lines_cache)
-
-    # 提取符号信息
-    symbol_name = _extract_symbol_name(def_item, lines)
-    if not symbol_name:
-        return []
-
-    # 搜索并收集符号
-    return _collect_symbols(rel_def_path, symbol_name, call_name, trie, file_content_cache)
-
-
-def _get_file_content(file_path: str, file_content_cache: Dict, file_lines_cache: Dict) -> List[str]:
-    """获取文件内容，使用缓存优化性能"""
-    if file_path not in file_content_cache:
-        with open(file_path, "rb") as f:
-            file_content_cache[file_path] = f.read()
-            file_lines_cache[file_path] = file_content_cache[file_path].decode("utf8").splitlines()
-    return file_lines_cache[file_path]
-
-
-def _extract_symbol_name(def_item: Dict, lines: List[str]) -> str:
-    """从定义项中提取符号名称"""
-    range_info = def_item.get("range", {})
-    start = range_info.get("start", {})
-    end = range_info.get("end", {})
-
-    # 处理行号
-    start_line = start.get("line", 0)
-    if start_line >= len(lines):
-        return ""
-    target_line = lines[start_line]
-
-    # 处理字符位置
-    start_char = start.get("character", 0)
-    end_char = end.get("character", start_char + 1)
-
-    # 提取符号名称
-    symbol_name = target_line[start_char:end_char].strip()
-    if not symbol_name:
-        symbol_name = _expand_symbol_from_line(target_line, start_char, end_char)
-    return symbol_name
-
-
-def _collect_symbols(
-    rel_def_path: str,
-    symbol_name: str,
-    call_name: str,
-    trie: SymbolTrie,
-    file_content_cache: Dict,
-) -> List[Dict]:
-    """收集符号信息"""
-    symbols = perform_trie_search(
-        trie=trie,
-        prefix=f"symbol:{rel_def_path}/{symbol_name}",
-        max_results=5,
-        file_path=rel_def_path,
-        updated=True,
-        search_exact=True,
-    )
-
-    collected_symbols = []
-    for s in symbols:
-        if not s:
-            continue
-        # 获取符号的完整位置信息
-        start_point, end_point, block_range = s["location"]
-        # 提取符号对应的源代码内容
-        content = file_content_cache[os.path.abspath(rel_def_path)][block_range[0] : block_range[1]].decode("utf8")
-        # 构造完整的符号信息
-        symbol_info = {
-            "name": symbol_name,
-            "file_path": rel_def_path,
-            "location": {
-                "start_line": start_point[0],
-                "start_col": start_point[1],
-                "end_line": end_point[0],
-                "end_col": end_point[1],
-                "block_range": block_range,
-            },
-            "content": content,
-            "jump_from": call_name,
-            "calls": s.get("calls", []),
-        }
-        collected_symbols.append(symbol_info)
-
-    return collected_symbols
-
-
-def _expand_symbol_from_line(line: str, start: int, end: int) -> str:
-    """从行内容扩展符号边界"""
-    # 向左扩展边界
-    while start > 0 and (line[start - 1].isidentifier() or line[start - 1] == "_"):
-        start -= 1
-
-    # 向右扩展边界
-    while end < len(line) and (line[end].isidentifier() or line[end] == "_"):
-        end += 1
-
-    return line[start:end].strip() or "<无名符号>"
-
-
-@app.get("/symbol_content")
-async def get_symbol_content(
-    symbol_path: str = QueryArgs(..., min_length=1),
-    json_format: bool = False,
-    lsp_enabled: bool = False,
-):
-    """根据符号路径获取符号对应的源代码内容
-
-    Args:
-        symbol_path: 符号路径，格式为file_path/symbol1,symbol2,... 例如 "main.c/a,b,c"
-        json_format: 是否返回JSON格式，包含每个符号的行号信息
-        lsp_enabled: 是否启用LSP增强功能
-
-    Returns:
-        纯文本格式的源代码内容（多个符号内容用空行分隔），或包含每个符号信息的JSON数组
-    """
-    trie: SymbolTrie = app.state.file_symbol_trie
-    file_parser_info_cache = app.state.file_parser_info_cache
-    # 参数解析
-    parsed = parse_symbol_path(symbol_path)
-    if isinstance(parsed, PlainTextResponse):
-        return parsed
-    file_path_part, symbols = parsed
-
-    # 符号查找
-    symbol_results = validate_and_lookup_symbols(file_path_part, symbols, trie, file_parser_info_cache)
-    if isinstance(symbol_results, PlainTextResponse):
-        return symbol_results
-
-    # 读取源代码
-    source_code = read_source_code(symbol_results[0]["file_path"])
-    if isinstance(source_code, PlainTextResponse):
-        return source_code
-
-    # 内容提取
-    contents = extract_contents(source_code, symbol_results)
-    collected_symbols = []
-    lookup_cache = {}
-    if lsp_enabled:
-        for symbol in symbol_results:
-            collected_symbols.extend(
-                await location_to_symbol(
-                    symbol,
-                    trie,
-                    start_lsp_client_once(GLOBAL_PROJECT_CONFIG, symbol_results[0]["file_path"]),
-                    lookup_cache,
-                )
-            )
-    # 构建响应
-    return (
-        collected_symbols + build_json_response(symbol_results, contents)
-        if json_format
-        else build_plaintext_response(contents)
-    )
-
-
-def parse_symbol_path(symbol_path: str) -> tuple[str, list] | PlainTextResponse:
-    """解析符号路径参数"""
-    if "/" not in symbol_path:
-        return PlainTextResponse("符号路径格式错误，应为文件路径/符号1,符号2,...", status_code=400)
-
-    last_slash_index = symbol_path.rfind("/", 1)
-    file_path_part = symbol_path[:last_slash_index]
-    symbols_part = symbol_path[last_slash_index + 1 :]
-    symbols = [s.strip() for s in symbols_part.split(",") if s.strip()]
-
-    if not symbols:
-        return PlainTextResponse("至少需要一个符号", status_code=400)
-
-    return (file_path_part, symbols)
-
-
-def validate_and_lookup_symbols(
-    file_path_part: str, symbols: list[str], trie: SymbolTrie, file_parser_info_cache
-) -> list | PlainTextResponse:
-    """验证并查找符号"""
-    update_trie_if_needed(file_path_part, trie, file_parser_info_cache, just_path=True)
-
-    symbol_results = []
-    for symbol in symbols:
-        full_symbol_path = f"{file_path_part}/{symbol}"
-        line_number = line_number_from_unnamed_symbol(symbol)
-        if line_number != -1:
-            # 如果符号是无名符号，使用行号生成符号名称
-            parser_instance: ParserUtil = file_parser_info_cache[file_path_part][0]
-            fromatted_path = file_parser_info_cache[file_path_part][2]
-            if symbol.startswith("near_"):
-                result = parser_instance.near_symbol_at_line(line_number - 1)
-            else:
-                result = parser_instance.symbol_at_line(line_number - 1)
-            if not result:
-                return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
-            result["file_path"] = fromatted_path
-        else:
-            result = trie.search_exact(full_symbol_path)
-            if not result:
-                return PlainTextResponse(f"未找到符号: {symbol}", status_code=404)
-        if full_symbol_path.startswith("symbol:"):
-            result["name"] = full_symbol_path[len("symbol:") :]
-        else:
-            result["name"] = full_symbol_path
-        symbol_results.append(result)
-    return symbol_results
-
-
-def read_source_code(file_path: str) -> bytes | PlainTextResponse:
-    """读取源代码文件"""
-    try:
-        with open(file_path, "rb") as f:
-            return f.read()
-    except (FileNotFoundError, PermissionError, IsADirectoryError) as e:
-        return PlainTextResponse(f"无法读取文件: {str(e)}", status_code=500)
-
-
-def extract_contents(source_code: bytes, symbol_results: list) -> list[str]:
-    """提取符号内容"""
-    return [
-        source_code[result["location"][2][0] : result["location"][2][1]].decode("utf8") for result in symbol_results
-    ]
-
-
-def build_json_response(symbol_results: list, contents: list) -> list:
-    """构建JSON响应"""
-    return [
-        {
-            "name": result["name"],
-            "file_path": result["file_path"],
-            "content": content,
-            "location": {
-                "start_line": result["location"][0][0],
-                "start_col": result["location"][0][1],
-                "end_line": result["location"][1][0],
-                "end_col": result["location"][1][1],
-                "block_range": result["location"][2],
-            },
-            "calls": result.get("calls", []),
-        }
-        for result, content in zip(symbol_results, contents)
-    ]
-
-
-def build_plaintext_response(contents: list) -> PlainTextResponse:
-    """构建纯文本响应"""
-    return PlainTextResponse("\n\n".join(contents))
-
-
-def update_trie_if_needed(prefix: str, trie, file_parser_info_cache, just_path=False) -> bool:
-    """根据前缀更新前缀树，如果需要的话
-
-    Args:
-        prefix: 要检查的前缀
-        trie: 前缀树对象
-        file_parser_info_cache: 文件修改时间缓存
-
-    Returns:
-        bool: 是否执行了更新操作
-    """
+def update_trie_if_needed(prefix: str, trie: SymbolTrie, file_parser_info_cache: Dict, just_path: bool = False) -> bool:
     if not prefix.startswith("symbol:"):
         return False
-    if not just_path:
-        # 使用rfind找到最后一个/的位置
-        last_slash_idx = prefix.rfind("/")
-        if last_slash_idx == -1:
-            # 没有斜杠时，直接去掉'symbol:'前缀
-            file_path = prefix[len("symbol:") :]
-        else:
-            # 提取从'symbol:'到最后一个/之间的部分作为文件路径
-            file_path = prefix[len("symbol:") : last_slash_idx]
-    else:
-        file_path = prefix[len("symbol:") :] if prefix.startswith("symbol:") else prefix
-    # 检查文件扩展名是否在支持的语言中
-    pos = file_path.rfind(".")
-    if pos < 0:
-        return False
-    ext = file_path[pos:].lower()
+    path_part = prefix.removeprefix("symbol:")
+    file_path = path_part[: path_part.rfind("/")] if "/" in path_part and not just_path else path_part
+    ext = Path(file_path).suffix.lower()
     if ext not in SUPPORTED_LANGUAGES:
         return False
 
-    current_mtime = os.path.getmtime(file_path)
-    parser_instance, cached_mtime, _ = file_parser_info_cache.get(file_path, (None, 0, ""))
+    try:
+        current_mtime = os.path.getmtime(file_path)
+    except FileNotFoundError:
+        return False
 
+    parser_instance, cached_mtime, _ = file_parser_info_cache.get(file_path, (None, 0, ""))
     if current_mtime > cached_mtime:
-        print(f"[DEBUG] 检测到文件修改: {file_path} (旧时间:{cached_mtime} 新时间:{current_mtime})")
+        logger.debug("File modified, re-parsing: %s", file_path)
         parser_loader = ParserLoader()
         parser_instance = ParserUtil(parser_loader)
         parser_instance.update_symbol_trie(file_path, trie)
         file_parser_info_cache[file_path] = (parser_instance, current_mtime, file_path)
-        file_parser_info_cache[prefix] = (parser_instance, current_mtime, file_path)
         return True
-
     return False
-
-
-@app.post("/lsp/didChange")
-async def lsp_file_didChange(file_path: str = Form(...), content: str = Form(...)):
-    """
-    处理LSP文档变更通知的接口
-
-    参数要求:
-    - file_path: 文件路径参数，必须非空
-    - content: 文件最新内容
-
-    流程说明:
-    1. 检查全局LSP_CLIENT是否可用，不可用时返回501错误
-    2. 验证客户端是否支持文档同步功能
-    3. 调用客户端的did_change方法发送变更通知
-    4. 记录操作日志并返回成功响应
-
-    异常处理:
-    - 客户端未初始化返回HTTP 501
-    - 功能不支持返回HTTP 400
-    - 其他错误返回HTTP 500
-    """
-    client = getattr(app.state, "LSP_CLIENT", None)
-    if not client or not client.running:
-        return JSONResponse(status_code=501, content={"message": "LSP client not initialized"})
-
-    try:
-        client.did_change(file_path, content)
-        print("Processed didChange notification for %s", file_path)
-        return {"status": "success"}
-
-    except LSPFeatureError as e:
-        print("Feature not supported: %s", str(e))
-        return JSONResponse(status_code=400, content={"message": f"Feature not supported: {e.feature}"})
-    except Exception as e:
-        traceback.print_exc()
-        print("Failed to process didChange: %s", str(e))
-        return JSONResponse(status_code=500, content={"message": "Internal server error"})
-
-
-class MatchResult(BaseModel):
-    line: int
-    column_range: tuple[int, int]
-    text: str
-
-
-MatchResults = list[MatchResult]
-
-
-class FileSearchResult(BaseModel):
-    file_path: str
-    matches: list[MatchResult]
-
-
-class FileSearchResults(BaseModel):
-    results: list[FileSearchResult]
-
-    def to_json(self) -> str:
-        return self.model_dump_json()
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "FileSearchResults":
-        return cls.model_validate_json(json_str)
-
-
-@app.post("/search-to-symbols")
-async def search_to_symbols(
-    max_context_size: int = QueryArgs(default=16384),
-    results: FileSearchResults = Body(...),
-):
-    """根据文件搜索结果解析符号路径"""
-
-    # t = start_trace(config=TraceConfig(target_files=["*.py"], enable_var_trace=True, report_name="search.html"))
-    parser_loader_s = ParserLoader()
-    parser_util = ParserUtil(parser_loader_s)
-    symbol_results = {}
-    symbol_cache = app.state.symbol_cache
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    total_start_time = time.time()
-    total_parse_time = 0.0
-
-    for file_result in results.results:
-        file_path_str = file_result.file_path
-        file_path = Path(file_path_str)
-        try:
-            current_mtime = file_path.stat().st_mtime
-        except FileNotFoundError:
-            print(f"File not found, skip: {file_path_str}")
-            continue
-
-        try:
-            if file_path_str in symbol_cache:
-                cached_mtime, code_map = symbol_cache[file_path_str]
-                if cached_mtime != current_mtime:
-                    parse_start = time.time()
-                    _, code_map = parser_util.get_symbol_paths(file_path_str)
-                    parse_time = time.time() - parse_start
-                    total_parse_time += parse_time
-                    print(f"Parse {file_path_str}: {parse_time:.3f}s (total: {total_parse_time:.3f}s)")
-                    symbol_cache[file_path_str] = (current_mtime, code_map)
-            else:
-                parse_start = time.time()
-                _, code_map = parser_util.get_symbol_paths(file_path_str)
-                parse_time = time.time() - parse_start
-                total_parse_time += parse_time
-                print(f"Parse {file_path_str}: {parse_time:.3f}s (total: {total_parse_time:.3f}s)")
-                symbol_cache[file_path_str] = (current_mtime, code_map)
-        except ValueError as e:
-            print(f"Parse error {file_path_str}: {e}")
-            continue
-
-        locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
-        symbols = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=max_context_size)
-
-        file_abs = os.path.abspath(file_path_str)
-        if os.path.commonpath([file_abs, script_dir]) == script_dir:
-            rel_path = os.path.relpath(file_abs, script_dir)
-        else:
-            rel_path = file_abs
-
-        for key, value in symbols.items():
-            value["name"] = f"{rel_path}/{key}"
-            value["file_path"] = rel_path
-        symbol_results.update(symbols)
-
-    total_time = time.time() - total_start_time
-    print(f"Total processing time: {total_time:.3f}s (parse time: {total_parse_time:.3f}s)")
-    # t.stop()
-    return JSONResponse(content={"results": symbol_results, "count": len(symbol_results)})
-
-
-@app.get("/complete_realtime")
-async def symbol_completion_realtime(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
-    """实时符号补全，直接解析指定文件并返回符号列表
-
-    Args:
-        prefix: 补全前缀，格式为symbol:文件路径/符号1,符号2,...
-        max_results: 最大返回结果数量，默认为10，范围1-50
-
-    Returns:
-        纯文本格式的补全列表，每行一个补全结果
-    """
-    prefix = unquote(prefix)
-    print(f"[INFO] 处理实时补全请求: {prefix[:50]}...")
-    trie = app.state.file_symbol_trie
-    max_results = clamp(max_results, 1, 50)
-    file_path, symbols = parse_symbol_prefix(prefix)
-    print("debug", file_path, symbols)
-    current_prefix = determine_current_prefix(file_path, symbols)
-    print("prefix", current_prefix)
-    updated = update_trie_for_completion(file_path, trie, app.state.file_parser_info_cache)
-
-    results = perform_trie_search(trie, current_prefix, max_results, file_path, updated)
-    completions = build_completion_results(file_path, symbols, results)
-
-    print(f"[INFO] 返回 {len(completions)} 个补全结果")
-    return PlainTextResponse("\n".join(completions))
-
-
-def parse_symbol_prefix(prefix: str) -> tuple[str | None, list[str]]:
-    """解析符号前缀为文件路径和符号层级"""
-    if not prefix.startswith("symbol:"):
-        return None, []
-
-    remaining = prefix[len("symbol:") :]
-    slash_idx = remaining.rfind("/")
-
-    if slash_idx == -1:
-        return remaining, []
-
-    file_path = remaining[:slash_idx]
-    symbols = list(remaining[slash_idx + 1 :].split(","))
-    return file_path, symbols
-
-
-def determine_current_prefix(file_path: str | None, symbols: list[str]) -> str:
-    """确定当前搜索前缀"""
-    if symbols and any(symbols):
-        return f"symbol:{file_path}/{symbols[-1]}"
-    if file_path:
-        return f"symbol:{file_path}"
-    return ""
-
-
-def update_trie_for_completion(file_path: str | None, trie: Any, mtime_cache: Any) -> bool:
-    """更新前缀树数据"""
-    if not file_path:
-        return False
-    return update_trie_if_needed(f"symbol:{file_path}", trie, mtime_cache, just_path=True)
 
 
 def perform_trie_search(
     trie: SymbolTrie,
     prefix: str,
     max_results: int,
-    file_path: str | None = None,
-    updated: bool = False,
+    file_parser_info_cache: Dict,
+    file_path: Optional[str] = None,
+    use_bfs: bool = False,
     search_exact: bool = False,
 ) -> list:
-    """执行前缀树搜索"""
     if search_exact:
-        results = [trie.search_exact(prefix)]
-    else:
-        results = trie.search_prefix(prefix, max_results=max_results, use_bfs=True) if file_path else []
-    if not results and file_path and not updated:
-        if update_trie_if_needed(f"symbol:{file_path}", trie, app.state.file_parser_info_cache):
-            return trie.search_prefix(prefix, max_results)
+        result = trie.search_exact(prefix)
+        return [result] if result else []
 
+    results = trie.search_prefix(prefix, max_results=max_results, use_bfs=use_bfs)
+    if not results and file_path:
+        if update_trie_if_needed(f"symbol:{file_path}", trie, file_parser_info_cache, just_path=True):
+            return trie.search_prefix(prefix, max_results=max_results, use_bfs=use_bfs)
     return results
 
 
-def build_completion_results(file_path: str | None, symbols: list[str], results: list) -> list[str]:
-    """构建补全结果列表"""
-
-    base_str = f"symbol:{file_path}/"
-    symbol_prefix = ",".join(symbols[:-1]) + "," if len(symbols) > 1 else ""
-
-    completions = []
-    for result in results:
-        symbol_name = result["name"][result["name"].rfind("/") + 1 :]
-        full_path = f"{base_str}{symbol_prefix}{symbol_name}"
-        completions.append(full_path.replace("//", "/"))
-
-    return completions
-
-
-def clamp(value: int, min_val: int, max_val: int) -> int:
-    """限制数值范围"""
-    return max(min_val, min(max_val, value))
-
-
-@app.get("/complete_simple")
-async def symbol_completion_simple(prefix: str = QueryArgs(..., min_length=1), max_results: int = 10):
-    """简化版符号补全，返回纯文本格式：symbol:filebase/symbol"""
-    # 如果前缀为空，直接返回空响应
-    if not prefix:
-        return PlainTextResponse("")
-
-    trie = app.state.symbol_trie
-    max_results = max(1, min(50, int(max_results)))
-
-    # 无论是否包含路径，都先尝试前缀树搜索
-    results = trie.search_prefix(prefix)[:max_results]
-
-    # 如果前缀树搜索结果为空，则根据情况从数据库搜索
-    if not results:
-        # 处理以symbol:开头的情况
-        if prefix.startswith("symbol:"):
-            # 去掉symbol:前缀
-            clean_prefix = prefix[len("symbol:") :]
-            # 判断是否包含路径分隔符
-            if "/" in clean_prefix:
-                # 如果包含路径，则拆分路径和符号名
-                parts = clean_prefix.rsplit("/", 1)
-                path_prefix = parts[0] if len(parts) > 1 else ""
-                symbol_prefix = parts[-1]
-                # 将路径和符号名分别传入
-                results = get_symbols_from_db(symbol_prefix, max_results, path_prefix)
-            else:
-                # 如果不包含路径，则只传入符号名，路径为空
-                results = get_symbols_from_db(clean_prefix, max_results, "")
-        else:
-            # 如果不以symbol:开头，则直接进行模糊搜索，路径为空
-            results = get_symbols_from_db(prefix, max_results, "")
-
-    # 处理每个结果，提取文件名和符号名
-    output = []
-    for item in results:
-        file_path = item["details"]["file_path"]
-        file_base = extract_identifiable_path(file_path)
-        symbol_name = item["name"]
-        if symbol_name.startswith("symbol:"):
-            output.append(symbol_name)
-        else:
-            output.append(f"symbol:{file_base}/{symbol_name}")
-
-    return PlainTextResponse("\n".join(output))
-
-
-def debug_tree_source_file(file_path: Path):
-    """调试函数：解析指定文件并打印整个语法树结构
-
-    Args:
-        file_path: 要调试的源代码文件路径
-    """
-    try:
-        # 获取解析器和查询对象
-        parser, _, _ = ParserLoader().get_parser(str(file_path))
-        print("[DEBUG] 开始解析文件: {file_path}")
-
-        # 解析文件并获取语法树
-        tree = parse_code_file(file_path, parser)
-        print("[DEBUG] 文件解析完成，开始打印语法树")
-
-        # 递归打印语法树结构
-        def print_tree(node, indent=0):
-            # 获取节点文本内容
-            node_text = node.text.decode("utf-8") if node.text else ""
-            # 打印节点类型、位置和内容
-            print(" " * indent + f"type={node.type} ({node.start_point} -> {node.end_point}): {node_text}")
-            for child in node.children:
-                print_tree(child, indent + 2)
-
-        # 从根节点开始打印
-        print_tree(tree.root_node)
-        print("[DEBUG] 语法树打印完成")
-
-    except Exception as e:
-        print(f"[ERROR] 调试语法树时发生错误: {str(e)}")
-        raise
-
-
-def debug_process_source_file(file_path: Path, project_dir: Path):
-    """调试版本的源代码处理函数，直接打印符号信息而不写入数据库"""
-    try:
-        # 解析代码文件并构建符号表
-        parser, query, lang_name = ParserLoader().get_parser(str(file_path))
-        print(f"[DEBUG] 即将开始解析文件: {file_path}")
-        tree = parse_code_file(file_path, parser)
-        print("[DEBUG] 文件解析完成，开始匹配查询")
-        matches = query.matches(tree.root_node)
-        print(f"[DEBUG] 查询匹配完成，共找到 {len(matches)} 个匹配项，开始处理符号")
-        symbols = process_matches(matches, lang_name)
-        print(f"[DEBUG] 符号处理完成，共提取 {len(symbols)} 个符号")
-
-        # 获取完整文件路径（规范化处理）
-        full_path = str((project_dir / file_path).resolve().absolute())
-
-        print(f"\n处理文件: {full_path}")
-        print("=" * 50)
-
-        for symbol_name, symbol_info in symbols.items():
-            if not symbol_info.get("full_definition"):
-                continue
-
-            print(f"\n符号名称: {symbol_name}")
-            print(f"类型: {symbol_info['type']}")
-            print(f"签名: {symbol_info['signature']}")
-            print(f"完整定义:\n{symbol_info['full_definition']}")
-            print(f"调用关系: {symbol_info['calls']}")
-            print("-" * 50)
-
-        print(f"\n处理完成，共找到 {len(symbols)} 个符号")
-
-    except Exception as e:
-        print(f"处理文件时发生错误: {str(e)}")
-        raise
-
-
-def format_c_code_in_directory(directory: Path):
-    """使用 clang-format 对指定目录下的所有 C 语言代码进行原位格式化，并利用多线程并行处理
-
-    Args:
-        directory: 要格式化的目录路径
-    """
-
-    # 支持的 C 语言文件扩展名
-    c_extensions = [".c", ".h"]
-
-    # 获取系统CPU核心数
-    cpu_count = os.cpu_count() or 1
-
-    # 记录已格式化文件的点号文件路径
-    formatted_file_path = directory / ".formatted_files"
-
-    # 读取已格式化的文件列表
-    formatted_files = set()
-    if formatted_file_path.exists():
-        with open(formatted_file_path, "r", encoding="utf-8") as f:
-            formatted_files = set(f.read().splitlines())
-
-    # 收集所有需要格式化的文件路径
-    files_to_format = [
-        str(file_path)
-        for file_path in directory.rglob("*")
-        if file_path.suffix.lower() in c_extensions and str(file_path) not in formatted_files
-    ]
-
-    def format_file(file_path):
-        """格式化单个文件的内部函数"""
-        start_time = time.time()
-        try:
-            subprocess.run(["clang-format", "-i", file_path], check=True)
-            formatted_files.add(file_path)
-            return file_path, True, time.time() - start_time, None
-        except subprocess.CalledProcessError as e:
-            return file_path, False, time.time() - start_time, str(e)
-
-    def process_future(future, pbar):
-        """处理单个future结果的内部函数"""
-        file_path, success, duration, error = future.result()
-        pbar.set_postfix_str(f"正在处理: {os.path.basename(file_path)}")
-        if success:
-            pbar.write(f"✓ 成功格式化: {file_path} (耗时: {duration:.2f}s)")
-        else:
-            pbar.write(f"✗ 格式化失败: {file_path} (错误: {error})")
-        pbar.update(1)
-
-    # 创建线程池
-    with ThreadPoolExecutor(max_workers=cpu_count) as executor:
-        try:
-            # 使用 tqdm 显示进度条
-            with tqdm(total=len(files_to_format), desc="格式化进度", unit="文件") as pbar:
-                futures = {executor.submit(format_file, file_path): file_path for file_path in files_to_format}
-
-                for future in as_completed(futures):
-                    process_future(future, pbar)
-
-            # 将已格式化的文件列表写入点号文件
-            with open(formatted_file_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(formatted_files))
-
-            # 打印已跳过格式化的文件
-            skipped_files = [
-                str(file_path)
-                for file_path in directory.rglob("*")
-                if file_path.suffix.lower() in c_extensions and str(file_path) in formatted_files
-            ]
-            if skipped_files:
-                print("\n以下文件已经格式化过，本次跳过：")
-                for file in skipped_files:
-                    print(f"  {file}")
-
-        except FileNotFoundError:
-            print("未找到 clang-format 命令，请确保已安装 clang-format")
-
-
-def parse_source_file(file_path: Path, parser, query, lang_name):
-    """解析源代码文件并返回符号表"""
-    tree = parse_code_file(file_path, parser)
-    matches = query.matches(tree.root_node)
-    return process_matches(matches, lang_name)
-
-
-def validate_project_paths(project_paths: List[str]):
-    non_existent_paths = [path for path in project_paths if not Path(path).exists()]
-    if non_existent_paths:
-        raise ValueError(f"以下路径不存在: {', '.join(non_existent_paths)}")
-
-
-def initialize_symbol_trie(all_existing_symbols: dict):
-    trie = SymbolTrie.from_symbols(all_existing_symbols)
-    app.state.symbol_trie = trie
-    app.state.file_symbol_trie = SymbolTrie.from_symbols({})
-    app.state.file_parser_info_cache = {}
-    app.state.symbol_cache = {}
-
-
-def dynamic_import(module_name: str):
-    """动态导入模块"""
+def dynamic_import(module_name: str) -> Any:
     return importlib.import_module(module_name)
 
 
 def main(
     host: str = "127.0.0.1",
     port: int = 8000,
-    project_paths: List[str] = None,
-    excludes: List[str] = None,
-    include_suffixes: List[str] = None,
+    project_paths: Optional[List[str]] = None,
     db_path: str = "symbols.db",
-    parallel: int = -1,
 ):
-    """启动FastAPI服务
-    Args:
-        host: 服务器地址
-        port: 服务器端口
-        project_paths: 项目路径列表
-        include_suffixes: 要包含的文件后缀列表
-        db_path: 符号数据库文件路径，默认为当前目录下的symbols.db
-        parallel: 并行度，-1表示使用CPU核心数，0或1表示单进程
-    """
-    # 初始化数据库连接
-    # build_index(project_paths, excludes, include_suffixes, db_path, parallel)
-    # 启动FastAPI服务
-    initialize_symbol_trie({})
-    dynamic_import("uvicorn").run(app, host=host, port=port)
+    # This function is now a simple launcher for the web service.
+    # The actual app is created by the factory in tree_libs.app
+    app_factory = dynamic_import("tree_libs.app")
+    app = app_factory.create_app()
+
+    # Initialization logic that might have been in `build_index` or `initialize_symbol_trie`
+    # can now be performed here, populating the app's state.
+    # For now, we start with an empty symbol trie.
+    # To populate, you would run a separate indexing command.
+
+    logger.info(f"Starting web service at http://{host}:{port}")
+    uvicorn = dynamic_import("uvicorn")
+    uvicorn.run(app, host=host, port=port)
 
 
-def start_lsp_client_once(config: ProjectConfig, file_path: str):
-    """启动LSP客户端线程
-
-    参数:
-        config: 项目配置对象
-        file_path: 要分析的文件路径
-
-    返回:
-        已启动的LSP客户端对象
-    """
+def start_lsp_client_once(config: ProjectConfig, file_path: str) -> GenericLSPClient:
     try:
         path = Path(file_path)
         if not path.exists():
-            raise FileNotFoundError(f"文件不存在: {file_path}")
-        logger.debug("启动LSP客户端，文件: %s", file_path)
-        suffix = path.suffix
+            raise FileNotFoundError(f"File does not exist: {file_path}")
+        logger.debug("Attempting to start LSP client for: %s", file_path)
         relative_path = config.relative_path(path)
 
-        # 确定LSP配置
-        lsp_config = _determine_lsp_config(config, relative_path, suffix)
-        lsp_key = lsp_config["lsp_key"]
-        workspace_path = lsp_config["workspace_path"]
-        cache_key = f"lsp:{lsp_key}:{workspace_path}"
+        lsp_config = _determine_lsp_config(config, relative_path, path.suffix)
+        cache_key = f"lsp:{lsp_config['lsp_key']}:{lsp_config['workspace_path']}"
 
-        # 检查缓存
         cached_client = config.get_lsp_client(cache_key)
         if cached_client:
-            logger.debug("使用缓存的LSP客户端: %s", cache_key)
+            logger.debug("Using cached LSP client for: %s", cache_key)
             return cached_client
 
-        # 初始化客户端
-        client = _initialize_lsp_client(config, lsp_key, workspace_path)
-
-        # 启动客户端线程
+        client = _initialize_lsp_client(config, lsp_config["lsp_key"], lsp_config["workspace_path"])
         _start_lsp_thread(
             client,
             {
                 "key": cache_key,
-                "command": config.lsp.get("commands", {}).get(lsp_key, lsp_key),
-                "workspace": workspace_path,
-                "file": file_path,
-                "suffix": suffix,
-                "lsp_key": lsp_key,
+                "command": config.lsp.get("commands", {}).get(lsp_config["lsp_key"], lsp_config["lsp_key"]),
             },
         )
 
-        # 缓存客户端
         config.set_lsp_client(cache_key, client)
-        logger.debug("已缓存LSP客户端: %s", cache_key)
-        client.initialized_event.wait(timeout=5)
+        logger.debug("Cached new LSP client: %s", cache_key)
+        client.initialized_event.wait(timeout=10)
         return client
     except Exception as e:
-        logger.error("LSP客户端启动失败: %s，文件: %s", str(e), file_path)
+        logger.error("LSP client startup failed for %s: %s", file_path, e, exc_info=True)
         raise
 
 
 def _determine_lsp_config(config: ProjectConfig, relative_path: str, suffix: str) -> dict:
-    """确定LSP配置
-
-    返回包含以下键的字典:
-    - lsp_key: LSP命令键
-    - workspace_path: 工作区路径
-    """
     workspace_path = config.project_root_dir
-    lsp_key = None
-    # 2. 如果没有后缀匹配，尝试根据子项目路径匹配
+    lsp_key = config.lsp.get("suffix", {}).get(suffix.lstrip("."))
     if not lsp_key and "subproject" in config.lsp:
         for subpath, cmd_key in config.lsp["subproject"].items():
             if relative_path.startswith(subpath):
@@ -2427,189 +899,107 @@ def _determine_lsp_config(config: ProjectConfig, relative_path: str, suffix: str
                 workspace_path = str(Path(config.project_root_dir) / subpath)
                 break
     if not lsp_key:
-        # 1. 首先尝试根据文件后缀匹配LSP
-        lsp_key = config.lsp.get("suffix", {}).get(suffix.lstrip("."))
-    # 3. 最后使用默认LSP
-    if not lsp_key:
         lsp_key = config.lsp.get("default", "py")
-
-    return {
-        "lsp_key": lsp_key,
-        "workspace_path": workspace_path,
-    }
+    return {"lsp_key": lsp_key, "workspace_path": workspace_path}
 
 
 def _initialize_lsp_client(config: ProjectConfig, lsp_key: str, workspace_path: str) -> GenericLSPClient:
-    """初始化LSP客户端"""
-    lsp_command = config.lsp.get("commands", {}).get(lsp_key, "")
-    assert lsp_command, f"LSP命令未配置: {lsp_key}"
-    logger.info(
-        "正在初始化LSP客户端，服务器命令：%s，工作区路径：%s",
-        lsp_command,
-        workspace_path,
-    )
+    lsp_command = config.lsp.get("commands", {}).get(lsp_key)
+    if not lsp_command:
+        raise ValueError(f"LSP command not configured for key: {lsp_key}")
+    logger.info("Initializing LSP client. Command: %s, Workspace: %s", lsp_command, workspace_path)
     return GenericLSPClient(lsp_command.split(), workspace_path)
 
 
 def _start_lsp_thread(client: GenericLSPClient, client_info: dict):
-    """启动LSP客户端线程"""
-
-    def run_event_loop(client_info: dict):
-        """运行LSP客户端事件循环"""
+    def run_event_loop():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            logger.debug(
-                "启动LSP客户端线程: %s，命令: %s",
-                client_info["key"],
-                client_info["command"],
-            )
+            logger.debug("Starting LSP client thread: %s", client_info["key"])
             client.start()
             loop.run_forever()
-        except (ConnectionError, RuntimeError) as e:
-            traceback.print_exc()
-            logger.error("LSP客户端运行异常: %s，客户端信息: %s", str(e), client_info)
+        except Exception as e:
+            logger.error("LSP client event loop error: %s", e, exc_info=True)
         finally:
-            logger.debug("关闭LSP客户端: %s", client_info["key"])
-            loop.run_until_complete(client.shutdown())
+            logger.debug("Shutting down LSP client: %s", client_info["key"])
+            if client.running:
+                loop.run_until_complete(client.shutdown())
             loop.close()
-            logger.info("LSP客户端已关闭: %s", client_info["key"])
 
-    thread = threading.Thread(
-        target=run_event_loop,
-        daemon=True,
-        kwargs={"client_info": client_info},
-        name=f"LSP-{client_info['lsp_key']}-{threading.get_ident()}",
-    )
+    thread = threading.Thread(target=run_event_loop, daemon=True, name=f"LSP-{client_info['key']}")
     thread.start()
 
 
 class SyntaxHighlight:
-    """
-    自动语法高亮处理器
-    输入假设:
-    - 必须提供file_path或lang_type至少一个
-    - 源代码需为字符串格式
-    - 主题需存在于pygments.styles内置主题中
-    """
-
-    def __init__(self, source_code=None, file_path=None, lang_type=None, theme="default"):
+    def __init__(
+        self, source_code: str, file_path: Optional[str] = None, lang_type: Optional[str] = None, theme: str = "default"
+    ):
         self.source_code = source_code
         self.lexer = None
         self.theme = theme
-        self.available_themes = list(styles.get_all_styles())
-
-        if lang_type:
-            self.lexer = lexers.get_lexer_by_name(lang_type)
-        elif file_path:
-            self.lexer = lexers.get_lexer_for_filename(file_path)
-
+        try:
+            if lang_type:
+                self.lexer = lexers.get_lexer_by_name(lang_type)
+            elif file_path:
+                self.lexer = lexers.get_lexer_for_filename(file_path)
+        except Exception:
+            self.lexer = lexers.get_lexer_by_name("text")
         if not self.lexer:
-            raise ValueError("无法确定语言类型，请指定lang_type或file_path")
+            raise ValueError("Could not determine language type.")
 
-    def render(self):
+    def render(self) -> str:
         formatter = formatters.Terminal256Formatter(style=self.theme)
         return highlight(self.source_code, self.lexer, formatter)
 
-    def output(self):
-        highlighted = self.render()
-        print(highlighted)
-
     @staticmethod
-    def highlight_if_terminal(source_code, file_path=None, lang_type=None, theme="default"):
-        """根据终端是否支持颜色输出，决定是否进行语法高亮"""
+    def highlight_if_terminal(
+        source_code: str, file_path: Optional[str] = None, lang_type: Optional[str] = None, theme: str = "default"
+    ) -> str:
         if sys.stdout.isatty():
-            highlighter = SyntaxHighlight(source_code, file_path, lang_type, theme)
-            return highlighter.render()
+            return SyntaxHighlight(source_code, file_path, lang_type, theme).render()
         return source_code
 
 
 if __name__ == "__main__":
-    # 配置日志格式
     logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(name)s - %(levelname)s - [%(threadName)s] - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    arg_parser = argparse.ArgumentParser(description="代码分析工具")
-    arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP服务器绑定地址")
-    arg_parser.add_argument("--port", type=int, default=8000, help="HTTP服务器绑定端口")
-    arg_parser.add_argument(
-        "--project",
-        type=str,
-        nargs="+",
-        default=["."],
-        help="项目根目录路径（可指定多个）",
-    )
-    arg_parser.add_argument("--demo", action="store_true", help="运行演示模式")
-    arg_parser.add_argument(
-        "--include",
-        type=str,
-        nargs="+",
-        help="要包含的文件后缀列表（可指定多个，如 .c .h）",
-    )
-    arg_parser.add_argument("--debug-file", type=str, help="单文件调试模式，指定要调试的文件路径")
-    arg_parser.add_argument("--debug-tree", type=str, help="树结构调试模式，指定要调试的文件路径")
-    arg_parser.add_argument("--format-dir", type=str, help="指定要格式化的目录路径")
-    arg_parser.add_argument(
-        "--excludes",
-        type=str,
-        nargs="+",
-        help="要排除的文件或目录路径列表（可指定多个）",
-    )
-    arg_parser.add_argument("--debug-symbol-path", type=str, help="输出指定文件的符号路径")
-    arg_parser.add_argument("--debug-skeleton", type=str, help="调试源代码框架，指定要调试的文件路径")
+    arg_parser = argparse.ArgumentParser(description="Code Analysis and Interaction Tool")
+    arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP server host")
+    arg_parser.add_argument("--port", type=int, default=8000, help="HTTP server port")
+    arg_parser.add_argument("--project", type=str, nargs="+", default=["."], help="Project root directories")
+    arg_parser.add_argument("--debug-symbol-path", type=str, help="Print symbol paths for a given file")
+    arg_parser.add_argument("--debug-skeleton", type=str, help="Generate and print a source code skeleton for a file")
     arg_parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="设置日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL",
+        help="Set logging level",
     )
-    arg_parser.add_argument("--lsp", type=str, help="启动LSP客户端，指定LSP服务器命令（如：pylsp）")
-    arg_parser.add_argument("--debugger-port", type=int, default=9911, help="调试器服务端口")
+
+    # The 'db_path' and 'parallel' args seem related to a DB indexing feature not fully present in the provided code.
+    # I'm keeping them for compatibility but the main `main` function doesn't use them anymore.
+    arg_parser.add_argument("--db-path", type=str, default="symbols.db", help="Path to symbol database")
+    arg_parser.add_argument("--parallel", type=int, default=-1, help="Parallel processes for indexing")
 
     args = arg_parser.parse_args()
+    logger.setLevel(args.log_level.upper())
 
-    logger.info("启动代码分析工具: 日志输出: %s", args.log_level)
-    logger.setLevel(args.log_level)
-
-    DEFAULT_DB = args.db_path
-
-    # 根据命令行参数启动对应功能
-    if args.lsp:
-        start_lsp_client_once(GLOBAL_PROJECT_CONFIG, GLOBAL_PROJECT_CONFIG.project_root_dir)
-    if args.demo:
-        logger.debug("进入演示模式")
-        test_split_source_and_patch()
-        demo_main()
-    elif args.debug_file:
-        logger.debug("单文件调试模式，文件路径：%s", args.debug_file)
-        debug_process_source_file(Path(args.debug_file), Path(args.project[0]))
-    elif args.debug_tree:
-        debug_tree_source_file(Path(args.debug_tree))
-    elif args.format_dir:
-        logger.debug("格式化目录：%s", args.format_dir)
-        format_c_code_in_directory(Path(args.format_dir))
-    elif args.debug_symbol_path:
-        logger.debug("输出符号路径：%s", args.debug_symbol_path)
-        parser_loader_s = ParserLoader()
-        parser_util = ParserUtil(parser_loader_s)
+    if args.debug_symbol_path:
+        logger.info("Debug Mode: Printing symbol paths for %s", args.debug_symbol_path)
+        parser_loader = ParserLoader()
+        parser_util = ParserUtil(parser_loader)
         parser_util.print_symbol_paths(args.debug_symbol_path)
     elif args.debug_skeleton:
-        parser_loader_s = ParserLoader()
-        skeleton = SourceSkeleton(parser_loader_s)
+        logger.info("Debug Mode: Generating skeleton for %s", args.debug_skeleton)
+        parser_loader = ParserLoader()
+        skeleton = SourceSkeleton(parser_loader)
         framework = skeleton.generate_framework(args.debug_skeleton)
-        print("源代码框架信息：")
         print(SyntaxHighlight.highlight_if_terminal(framework, file_path=args.debug_skeleton))
     else:
-        logger.info("启动FastAPI服务")
-        main(
-            host=args.host,
-            port=args.port,
-            project_paths=args.project,
-            excludes=args.excludes,
-            include_suffixes=args.include,
-            db_path=args.db_path,
-            parallel=args.parallel,
-        )
+        logger.info("Starting Code Analysis Service...")
+        main(host=args.host, port=args.port, project_paths=args.project, db_path=args.db_path)

@@ -30,7 +30,7 @@ from llm_query import (
 )
 
 
-def extract_frame_id_from_log(log_file_path: str, test_id: str) -> Optional[int]:
+def extract_test_case_trace_from_log(log_file_path: str, test_id: str) -> Optional[int]:
     """
     从日志文件中提取指定 test_id 对应的 CALL 语句的 frame_id。
 
@@ -58,7 +58,7 @@ def extract_frame_id_from_log(log_file_path: str, test_id: str) -> Optional[int]
                 # 1. 快速字符串查找过滤：
                 # 检查行中是否包含 "↘ CALL" 和 目标 testMethod 字符串。
                 # 这是一个高效的初步过滤，避免对不相关的行进行正则匹配。
-                if "↘ CALL" in line and target_test_method_str in line:
+                if "↘ CALL" in line and target_test_method_str in line and "startTest(" in line:
                     # 2. 进一步检查是否包含 "[frame:"，如果包含，才尝试正则匹配
                     # 再次避免不必要的正则操作，因为有些行可能匹配前两个条件但没有 frame id
                     if "[frame:" in line:
@@ -303,10 +303,10 @@ class TestAutoFix:
         # # log_extractor = tracer.TraceLogExtractor(fn)
         # logs, references_group = log_extractor.lookup(file_path, line, sibling_config=config)
         # if not logs and test_id:
-        frame_id = extract_frame_id_from_log(str(fn), test_id=test_id.split(".")[-1])
+        frame_id = extract_test_case_trace_from_log(str(fn), test_id=test_id.split(".")[-1])
         logs, references_group = log_extractor.lookup(frame_id=frame_id, next_siblings=2)
         if frame_ref_lines:
-            for item in frame_ref_lines:
+            for item in frame_ref_lines[:3]:
                 self.uniq_references.add(item)
         self.uniq_references.add((file_path, line))
         try:
@@ -546,6 +546,7 @@ class TestAutoFix:
         ignore_system_paths=True,
         disable_html=True,
         source_base_dir=Path(__file__).parent.parent,
+        exclude_functions=["get_symbol_paths", "traverse", "search_exact", "__init__", "insert"],
     )
     def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
         """

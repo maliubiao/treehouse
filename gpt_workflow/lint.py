@@ -22,10 +22,12 @@ from llm_query import (
     generate_patch_prompt,
     process_patch_response,
 )
-from tree import (
+from tree_libs.app import (
     FileSearchResult,
     FileSearchResults,
     MatchResult,
+)
+from tree_libs.ast import (
     ParserLoader,
     ParserUtil,
 )

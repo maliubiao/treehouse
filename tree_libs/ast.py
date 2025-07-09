@@ -880,56 +880,6 @@ class NodeProcessor(BaseNodeProcessor):
     def __init__(self, lang_spec: Optional[LangSpec] = None):
         self.lang_spec = lang_spec
 
-    # def get_symbol_name(self, node: Node) -> Optional[Union[str, Tuple[str, str]]]:
-    #     """提取节点的符号名称"""
-    #     if not hasattr(node, "type"):
-    #         return None
-    #     if node.type == NodeTypes.CLASS_DEFINITION:
-    #         return self.get_class_name(node)
-
-    #     # 优先处理装饰器，找到其包裹的实际定义（函数或类）
-    #     if node.type == NodeTypes.DECORATED_DEFINITION:
-    #         # 在装饰器节点内查找函数或类定义
-    #         definition_node = self.find_child_by_type(
-    #             node, NodeTypes.FUNCTION_DEFINITION
-    #         ) or self.find_child_by_type(node, NodeTypes.CLASS_DEFINITION)
-    #         if definition_node:
-    #             # 不能递归调用 get_symbol_name(definition_node)，因为该调用会
-    #             # 在一个父节点是 DECORATED_DEFINITION 的 FUNCTION_DEFINITION 上，
-    #             # 这种节点为了避免重复计数而被（正确地）忽略。
-    #             # 因此，我们在这里直接从 definition_node 提取名称，绕过父节点检查。
-    #             if definition_node.type == NodeTypes.CLASS_DEFINITION:
-    #                 # 从 get_class_name 内联的逻辑，不带父节点检查。
-    #                 for child in definition_node.children:
-    #                     if child.type == NodeTypes.IDENTIFIER:
-    #                         return child.text.decode("utf8")
-    #                 return None
-    #             if definition_node.type == NodeTypes.FUNCTION_DEFINITION:
-    #                 # 从 get_function_name 内联的逻辑，不带父节点检查。
-    #                 name_node = BaseNodeProcessor.find_child_by_field(definition_node, NodeTypes.NAME)
-    #                 if name_node:
-    #                     return name_node.text.decode("utf8")
-    #                 word_node = BaseNodeProcessor.find_child_by_type(definition_node, NodeTypes.WORD)
-    #                 if word_node:
-    #                     return word_node.text.decode("utf8")
-    #                 identifier_node = BaseNodeProcessor.find_child_by_type(definition_node, NodeTypes.IDENTIFIER)
-    #                 if identifier_node:
-    #                     return identifier_node.text.decode("utf8")
-    #         return None
-
-    #     if node.type == NodeTypes.FUNCTION_DEFINITION:
-    #         return self.get_function_name(node)
-
-    #     # 对于赋值操作，需要判断其作用域
-    #     if node.type == NodeTypes.ASSIGNMENT:
-    #         # The original logic ignored assignments inside functions.
-    #         # However, tests like `test_find_symbol_by_location` expect
-    #         # local variables to be captured as symbols.
-    #         return self.get_assignment_name(node)
-
-    #     if self.lang_spec:
-    #         return self.lang_spec.get_symbol_name(node)
-    #     return None
     def get_symbol_name(self, node: Node) -> Optional[Union[str, Tuple[str, str]]]:
         """提取节点的符号名称"""
         if not hasattr(node, "type"):
@@ -1888,3 +1838,135 @@ class SourceSkeleton:
         result = "\n".join(framework_lines + framework_content)
         return re.sub(r"\n{3,}", "\n\n", result).strip() + "\n"
         # 常见二进制文件的magic number
+
+
+def split_source(source: str, start_row: int, start_col: int, end_row: int, end_col: int) -> Tuple[str, str, str]:
+    """
+    根据行列位置将源代码分割为三段
+
+    参数：
+        source: 原始源代码字符串
+        start_row: 起始行号(0-based)
+        start_col: 起始列号(0-based)
+        end_row: 结束行号(0-based)
+        end_col: 结束行号(0-based)
+
+    返回：
+        tuple: (前段内容, 选中内容, 后段内容)
+    """
+    lines = source.splitlines(keepends=True)
+    if not lines:
+        return ("", "", "") if source == "" else (source, "", "")
+
+    # 处理越界行号
+    max_row = len(lines) - 1
+    start_row = max(0, min(start_row, max_row))
+    end_row = max(0, min(end_row, max_row))
+
+    # 计算行列位置对应的绝对字节偏移
+    def calc_pos(row: int, col: int) -> int:
+        line = lines[row]
+        # 列号限制在[0, 当前行长度]范围内
+        clamped_col = max(0, min(col, len(line)))
+        # 计算该行之前的累计长度
+        prev_lines_len = sum(len(line) for line in lines[:row])
+        return prev_lines_len + clamped_col
+
+    # 获取实际偏移位置
+    start_pos = calc_pos(start_row, start_col)
+    end_pos = calc_pos(end_row, end_col)
+
+    # 确保顺序正确
+    if start_pos > end_pos:
+        start_pos, end_pos = end_pos, start_pos
+
+    return (source[:start_pos], source[start_pos:end_pos], source[end_pos:])
+
+
+def get_node_segment(code: str, node: Any) -> Tuple[str, str, str]:
+    """根据AST节点获取代码分段"""
+    start_row = node.start_point[0]
+    start_col = node.start_point[1]
+    end_row = node.end_point[0]
+    end_col = node.end_point[1]
+    return split_source(code, start_row, start_col, end_row, end_col)
+
+
+def safe_replace(code: str, new_code: str, start: Tuple[int, int], end: Tuple[int, int]) -> str:
+    """安全替换代码段"""
+    before, _, after = split_source(code, *start, *end)
+    return before + new_code + after
+
+
+def parse_code_file(file_path: Path, lang_parser: Parser) -> Any:
+    """解析代码文件"""
+    with open(file_path, "r", encoding="utf-8") as f:
+        code = f.read()
+    tree = lang_parser.parse(bytes(code, "utf-8"))
+    return tree
+
+
+def get_code_from_node(code: str, node: Any) -> str:
+    """根据Node对象提取代码片段"""
+    return code[node.start_byte : node.end_byte]
+
+
+def process_matches(matches: List[Tuple[Any, Dict]], lang_name: str) -> Dict:
+    """处理查询匹配结果，支持多语言符号提取"""
+    symbols: Dict = {}
+    block_array: List[Tuple] = []
+    function_calls: List = []
+
+    for match in matches:
+        _, captures = match
+        if not captures:
+            continue
+        if "class-name" in captures:
+            process_class_definition(captures, symbols, block_array)
+        elif "function.name" in captures:
+            process_function_definition(captures, lang_name, symbols, block_array)
+        elif "called_function" in captures:
+            function_calls.append(captures)
+    return symbols
+
+
+def parse_file(file_path_str: str, project_root: Path) -> Tuple[List[Dict[str, Any]], Any]:
+    """
+    解析一个源代码文件以提取符号信息。
+
+    此函数是解析工具的高级入口，它实例化必要的组件
+    并以测试套件期望的格式输出结果。
+
+    Args:
+        file_path_str: 要解析的文件的绝对路径。
+        project_root: 项目的根路径（为保持接口兼容性而保留）。
+
+    Returns:
+        一个元组，包含：
+        - 一个符号字典列表，每个字典包含'name'、'signature'和'full_definition_hash'。
+        - 解析过程中生成的完整 code_map。
+    """
+    # project_root 参数为保持与测试调用者的接口兼容性而保留。
+    parser_loader = ParserLoader()
+    parser_util = ParserUtil(parser_loader)
+
+    paths, code_map = parser_util.get_symbol_paths(file_path_str)
+
+    symbols: List[Dict[str, Any]] = []
+    for path in paths:
+        info = code_map.get(path)
+        if not info:
+            continue
+
+        # 使用现有的构建器创建详细的符号信息，其中包括哈希值。
+        symbol_info_details = parser_util.code_map_builder.build_symbol_info(info, file_path_str)
+
+        symbol_dict: Dict[str, Any] = {
+            "name": path,
+            "signature": symbol_info_details.get("signature", ""),  # 签名功能尚待稳健实现。
+            "full_definition_hash": symbol_info_details.get("full_definition_hash", ""),
+            "location": symbol_info_details.get("location", ((0, 0), (0, 0), (0, 0))),
+        }
+        symbols.append(symbol_dict)
+
+    return symbols, code_map

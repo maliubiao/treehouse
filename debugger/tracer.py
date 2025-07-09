@@ -214,6 +214,7 @@ class TraceConfig:
             if in_system_path:
                 # 使用pathlib.parts来跨平台地检查路径组件
                 path_components = set(resolved_path.parts)
+                path_components.add(resolved_path.stem)
                 is_included_stdlib = any(mod in path_components for mod in self.include_stdlibs)
                 if is_included_stdlib:
                     return True  # 即使位于系统路径，但属于特别包含的模块，允许跟踪
@@ -267,6 +268,7 @@ class TraceConfig:
             ignore_system_paths=config_data.get("ignore_system_paths", True),
             source_base_dir=config_data.get("source_base_dir", None),
             include_stdlibs=config_data.get("include_stdlibs", []),  # 新增配置项
+            disable_html=config_data.get("disable_html", False),
         )
 
     @staticmethod
@@ -484,7 +486,6 @@ class TraceDispatcher:
         self.path_cache = {}
         self._logic = TraceLogic(config)
         self.active_frames = set()
-        self.bad_frame = None
 
     def add_target_frame(self, frame):
         if self.is_target_frame(frame):
@@ -536,37 +537,40 @@ class TraceDispatcher:
 
     def _handle_call_event(self, frame, _arg=None):
         """处理函数调用事件"""
-        if frame.f_code.co_name in self.config.exclude_functions:
-            frame.f_trace_lines = False
-            self.bad_frame = frame
-            return None
+        if self._logic.inside_unwanted_frame(frame):
+            return self.trace_dispatch
+        self._logic.maybe_unwanted_frame(frame)
         if self.is_target_frame(frame):
             self.active_frames.add(frame)
             self._logic.handle_call(frame)
         return self.trace_dispatch
 
     def _handle_return_event(self, frame, arg):
-        """处理函数返回事件"""
-        if frame == self.bad_frame:
-            self.bad_frame = None
+        # 总是通知 TraceLogic 离开此帧的作用域，无论其调用是否被 Dispatcher 完全处理。
+        # 这确保了 TraceLogic 正确管理其内部的非追踪帧堆栈。
+        self._logic.leave_unwanted_frame(frame)
+
+        # 仅当帧是活动帧（即其 CALL 事件未被 Dispatcher 过滤）时，才调用 handle_return。
         if frame in self.active_frames:
             self._logic.handle_return(frame, arg)
-            self.active_frames.discard(frame)
+            self._logic.frame_cleanup(frame)
+            self.active_frames.remove(frame)
+
         return self.trace_dispatch
 
     def _handle_line_event(self, frame, _arg=None):
         """处理行号事件"""
-        if self.bad_frame:
-            return self.trace_dispatch
         if frame in self.active_frames:
+            if self._logic.inside_unwanted_frame(frame):
+                return self.trace_dispatch
             self._logic.handle_line(frame)
         return self.trace_dispatch
 
     def _handle_exception_event(self, frame, arg):
         """处理异常事件"""
-        if self.bad_frame:
-            return self.trace_dispatch
         if frame in self.active_frames:
+            if self._logic.inside_unwanted_frame(frame):
+                return self.trace_dispatch
             exc_type, exc_value, _ = arg
             self._logic.handle_exception(exc_type, exc_value, frame)
         return self.trace_dispatch
@@ -594,7 +598,6 @@ class SysMonitoringTraceDispatcher:
         self.path_cache = {}
         self._logic = TraceLogic(config)
         self.active_frames = set()
-        self.bad_frame = None
         self._tool_id = None
         self._registered = False
         self.monitoring_module: MonitoringModule = sys.monitoring
@@ -726,7 +729,9 @@ class SysMonitoringTraceDispatcher:
         frame = sys._getframe(1)  # Get the frame of the function being called
         if not self.is_target_frame(frame):
             return self.monitoring_module.DISABLE
-
+        if self._logic.inside_unwanted_frame(frame):
+            return self.monitoring_module.DISABLE
+        self._logic.maybe_unwanted_frame(frame)
         # If we're already tracing after finding the start function
         if self.start_function and self.start_at_enable:
             self.active_frames.add(frame)
@@ -749,50 +754,49 @@ class SysMonitoringTraceDispatcher:
 
     def handle_py_resume(self, _code, _offset):
         """Handle PY_RESUME event (function resume)"""
-        # frame = sys._getframe(1)
-        # if frame in self.active_frames:
-        #     print(" resume in active frame: %s", frame)
         pass
 
     def handle_py_return(self, _code, _offset, retval):
         """Handle PY_RETURN event (function return)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
-            # self._logic.flush_exception()
-            self._logic.handle_return(frame, retval)
+            self._logic.leave_unwanted_frame(frame)
+            if not self._logic.inside_unwanted_frame(frame):
+                self._logic.handle_return(frame, retval)
+            self._logic.frame_cleanup(frame)
             self.active_frames.discard(frame)
 
     def handle_line(self, _code, _line_number):
         """Handle LINE event"""
         frame = sys._getframe(1)  # Get the current frame
         if frame in self.active_frames:
-            self._logic.handle_line(frame)
+            if not self._logic.inside_unwanted_frame(frame):
+                self._logic.handle_line(frame)
 
     def handle_raise(self, _code, _offset, exc):
         """Handle RAISE event (exception raised)"""
         frame = sys._getframe(1)  # Get the frame where exception was raised
         if frame in self.active_frames:
-            self._logic.handle_exception(type(exc), exc, frame)
+            if not self._logic.inside_unwanted_frame(frame):
+                self._logic.handle_exception(type(exc), exc, frame)
 
     def handle_exception_handled(self, _code, _offset, exc):
         """Handle EXCEPTION_HANDLED event"""
         frame = sys._getframe(1)  # Get the frame where exception was handled
         if frame in self.active_frames:
-            self._logic.handle_exception_was_handled(frame)
+            if not self._logic.inside_unwanted_frame(frame):
+                self._logic.handle_exception_was_handled(frame)
 
     def handle_py_yield(self, _code, _offset, value):
         """Handle PY_YIELD event (generator yield)"""
-        # frame = sys._getframe(1)
-        # if frame in self.active_frames:
-        #     func_name = frame.f_code.co_name
-        #     pass
         pass
 
     def handle_py_throw(self, _code, _offset, exc):
         """Handle PY_THROW event (generator throw)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
-            self._logic.handle_exception(type(exc), exc, frame)
+            if not self._logic.inside_unwanted_frame(frame):
+                self._logic.handle_exception(type(exc), exc, frame)
 
     def handle_py_unwind(self, *args):
         """Handle PY_UNWIND event (stack unwinding)"""
@@ -801,29 +805,23 @@ class SysMonitoringTraceDispatcher:
             for exception in self._logic.exception_chain:
                 self._logic._add_to_buffer(exception[0], exception[1])
             self._logic.exception_chain = []
-
             # 减少堆栈深度（函数因异常退出）
             self._logic.decrement_stack_depth()
-
-            # BUG FIX: Add resource cleanup for frames exiting via exception
-            frame_id = self._logic._get_frame_id(frame)
-            if frame_id in self._logic._frame_data._frame_locals_map:
-                del self._logic._frame_data._frame_locals_map[frame_id]
-            if frame_id in self._logic._last_vars_by_frame:
-                del self._logic._last_vars_by_frame[frame_id]
-
+            self._logic.leave_unwanted_frame(frame)
+            self._logic.frame_cleanup(frame)
             self.active_frames.discard(frame)
 
     def _handle_reraise(self, _code, _offset, exc):
         """Handle RERAISE event (exception re-raised)"""
         frame = sys._getframe(1)
         if frame in self.active_frames:
-            self._logic.handle_exception(type(exc), exc, frame)
+            if not self._logic.inside_unwanted_frame(frame):
+                self._logic.handle_exception(type(exc), exc, frame)
 
     def is_target_frame(self, frame):
         """Check if frame matches target files"""
-        if self.config.is_excluded_function(frame.f_code.co_name):
-            return
+        # if self.config.is_excluded_function(frame.f_code.co_name):
+        #     return
         if frame.f_code.co_name.startswith("<genexpr>"):
             # one line code, ignore
             return False
@@ -1325,18 +1323,6 @@ class TraceLogExtractor:
 
 
 class TraceLogic:
-    class _UniqueIDGenerator:
-        """线程安全的唯一ID生成器"""
-
-        def __init__(self):
-            self._counter = 0
-            self._lock = threading.Lock()
-
-        def get_id(self):
-            with self._lock:
-                self._counter += 1
-                return self._counter
-
     class _FileCache:
         def __init__(self):
             self._file_name_cache = {}
@@ -1376,27 +1362,50 @@ class TraceLogic:
         # 分组属性
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
-        self._frame_id_generator = self._UniqueIDGenerator()
         self._output = self._OutputHandlers(self)
         self.last_statement_vars = None
         self._last_vars_by_frame = {}  # Cache for tracking variable changes
         self._local = threading.local()  # 线程本地存储
-
+        self._local.bad_frame = None
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         if self.config.disable_html:
             self.disable_output("html")
+
+    def maybe_unwanted_frame(self, frame):
+        if frame.f_code.co_name in self.config.exclude_functions and self._local.bad_frame is None:
+            if not hasattr(self._local, "bad_frame"):
+                self._local.bad_frame = None
+
+            self._local.bad_frame = self.get_or_reuse_frame_id(frame)
+
+    def leave_unwanted_frame(self, frame):
+        if not hasattr(self._local, "bad_frame"):
+            self._local.bad_frame = None
+        if self.get_or_reuse_frame_id(frame) == self._local.bad_frame:
+            self._local.bad_frame = None
+
+    def inside_unwanted_frame(self, frame):
+        if not hasattr(self._local, "bad_frame"):
+            self._local.bad_frame = None
+        return self._local.bad_frame is not None
 
     def decrement_stack_depth(self):
         """减少堆栈深度（用于异常退出时调用）"""
         self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
-    def _get_frame_id(self, frame):
+    def get_or_reuse_frame_id(self, frame):
         """获取或为帧分配一个唯一的、持久的ID。"""
         frame_key = id(frame)
         if frame_key not in self._frame_data._frame_id_map:
             self._frame_data._current_frame_id += 1
             self._frame_data._frame_id_map[frame_key] = self._frame_data._current_frame_id
         return self._frame_data._frame_id_map[frame_key]
+
+    def _remove_frame_id(self, frame):
+        """移除帧的ID映射（用于异常退出时调用）"""
+        frame_key = id(frame)
+        if frame_key in self._frame_data._frame_id_map:
+            del self._frame_data._frame_id_map[frame_key]
 
     def enable_output(self, output_type: str, **kwargs):
         """启用特定类型的输出"""
@@ -1573,20 +1582,26 @@ class TraceLogic:
             if frame.f_code.co_name == "<module>":
                 log_prefix = TraceTypes.PREFIX_MODULE
             else:
-                args, _, _, values = inspect.getargvalues(frame)
-                args_to_show = [arg for arg in args if arg not in ("self", "cls")]
+                try:
+                    value = inspect.getargvalues(frame)
+                    args, _, _, values = value
+                    args_to_show = [arg for arg in args if arg not in ("self", "cls")]
+                except (TypeError, IndexError):
+                    args = []
+                    values = {}
+                    args_to_show = []
                 args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args_to_show]
                 log_prefix = TraceTypes.PREFIX_CALL
 
             parent_frame = frame.f_back
             parent_lineno = 0
             if parent_frame is not None:
-                parent_frame_id = self._get_frame_id(parent_frame)
+                parent_frame_id = self.get_or_reuse_frame_id(parent_frame)
                 parent_lineno = parent_frame.f_lineno
             else:
                 parent_frame_id = 0
             filename = self._get_formatted_filename(frame.f_code.co_filename)
-            frame_id = self._get_frame_id(frame)
+            frame_id = self.get_or_reuse_frame_id(frame)
             self._frame_data._frame_locals_map[frame_id] = frame.f_locals
             self._add_to_buffer(
                 {
@@ -1617,6 +1632,14 @@ class TraceLogic:
                 TraceTypes.ERROR,
             )
 
+    def frame_cleanup(self, frame):
+        frame_id = self.get_or_reuse_frame_id(frame)
+        if frame_id in self._frame_data._frame_locals_map:
+            del self._frame_data._frame_locals_map[frame_id]
+        if frame_id in self._last_vars_by_frame:
+            del self._last_vars_by_frame[frame_id]  # Clean up var cache
+        self._remove_frame_id(frame)
+
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
         if not hasattr(self._local, "stack_depth"):
@@ -1624,26 +1647,32 @@ class TraceLogic:
 
         return_str = truncate_repr_value(return_value)
         filename = self._get_formatted_filename(frame.f_code.co_filename)
-        frame_id = self._get_frame_id(frame)
-        if frame_id in self._frame_data._frame_locals_map:
-            del self._frame_data._frame_locals_map[frame_id]
-        if frame_id in self._last_vars_by_frame:
-            del self._last_vars_by_frame[frame_id]  # Clean up var cache
+        frame_id = self.get_or_reuse_frame_id(frame)
+        all_traced_vars = {}
+        if self.config.enable_var_trace:
+            if self.last_statement_vars:
+                # Get the current values of variables from the *previous* statement
+                all_traced_vars = self.trace_variables(frame, self.last_statement_vars)
+        log_data = {
+            "template": "{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]",
+            "data": {
+                "indent": _INDENT * (self._local.stack_depth - 1),
+                "filename": filename,
+                "lineno": frame.f_lineno,
+                "return_value": return_str,
+                "frame_id": frame_id,
+                "func": frame.f_code.co_name,
+                "original_filename": frame.f_code.co_filename,
+                "thread_id": threading.get_native_id(),
+                "tracked_vars": all_traced_vars,
+            },
+        }
+        if all_traced_vars:
+            log_data["template"] += " # Debug: {vars}"
+            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in all_traced_vars.items()])
 
         self._add_to_buffer(
-            {
-                "template": "{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]",
-                "data": {
-                    "indent": _INDENT * (self._local.stack_depth - 1),
-                    "filename": filename,
-                    "lineno": frame.f_lineno,
-                    "return_value": return_str,
-                    "frame_id": frame_id,
-                    "func": frame.f_code.co_name,
-                    "original_filename": frame.f_code.co_filename,
-                    "thread_id": threading.get_native_id(),
-                },
-            },
+            log_data,
             TraceTypes.COLOR_RETURN,
         )
         self._local.stack_depth = max(0, self._local.stack_depth - 1)
@@ -1739,25 +1768,13 @@ class TraceLogic:
             return
 
         formatted_filename = self._get_formatted_filename(filename)
-        frame_id = self._get_frame_id(frame)
+        frame_id = self.get_or_reuse_frame_id(frame)
         self._message_id += 1
-        changed_vars = {}
-
+        all_traced_vars = {}
         if self.config.enable_var_trace:
             if self.last_statement_vars:
                 # Get the current values of variables from the *previous* statement
                 all_traced_vars = self.trace_variables(frame, self.last_statement_vars)
-
-                # Compare with cached values to find what changed
-                last_frame_vars = self._last_vars_by_frame.get(frame_id, {})
-                for name, value_repr in all_traced_vars.items():
-                    if last_frame_vars.get(name) != value_repr:
-                        changed_vars[name] = value_repr
-
-                # Update the cache for this frame with the latest values
-                last_frame_vars.update(all_traced_vars)
-                self._last_vars_by_frame[frame_id] = last_frame_vars
-
             # Determine variables for the *current* statement for the next trace
             self.last_statement_vars = self._get_vars_in_range(frame.f_code, start_line, end_line)
 
@@ -1774,14 +1791,14 @@ class TraceLogic:
                 "raw_line": full_statement,
                 "frame_id": frame_id,
                 "original_filename": filename,
-                "tracked_vars": changed_vars,
+                "tracked_vars": all_traced_vars,
                 "thread_id": threading.get_native_id(),
             },
         }
 
-        if changed_vars:
+        if all_traced_vars:
             log_data["template"] += " # Debug: {vars}"
-            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in changed_vars.items()])
+            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in all_traced_vars.items()])
 
         self._add_to_buffer(log_data, TraceTypes.COLOR_LINE)
 
@@ -1817,7 +1834,7 @@ class TraceLogic:
                     "indent": _INDENT * (self._local.stack_depth),
                     "expr": cached_expr,
                     "value": formatted,
-                    "frame_id": self._get_frame_id(frame),
+                    "frame_id": self.get_or_reuse_frame_id(frame),
                 },
             },
             TraceTypes.COLOR_TRACE,
@@ -1833,17 +1850,11 @@ class TraceLogic:
                     "data": {
                         "indent": _INDENT * (self._local.stack_depth + 1),
                         "vars": ", ".join(f"{k}={v}" for k, v in captured_vars.items()),
-                        "frame_id": self._get_frame_id(frame),
+                        "frame_id": self.get_or_reuse_frame_id(frame),
                     },
                 },
                 TraceTypes.COLOR_VAR,
             )
-
-    # def flush_exception(self):
-    #     """将暂存的异常链刷入日志队列"""
-    #     for item in self.exception_chain:
-    #         self._log_queue.put(item)
-    #     self.exception_chain = []
 
     def handle_exception(self, exc_type, exc_value, frame):
         """
@@ -1857,31 +1868,34 @@ class TraceLogic:
 
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
-        frame_id = self._get_frame_id(frame)
-
-        # BUG FIX: Add resource cleanup for frames exiting via exception
-        if frame_id in self._frame_data._frame_locals_map:
-            del self._frame_data._frame_locals_map[frame_id]
-        if frame_id in self._last_vars_by_frame:
-            del self._last_vars_by_frame[frame_id]
-
-        msg = (
-            {
-                "template": (
-                    "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
-                ),
-                "data": {
-                    "indent": _INDENT * (self._local.stack_depth - 1),
-                    "filename": filename,
-                    "lineno": lineno,
-                    "exc_type": exc_type.__name__,
-                    "exc_value": str(exc_value),
-                    "frame_id": frame_id,
-                    "func": frame.f_code.co_name,
-                    "original_filename": frame.f_code.co_filename,
-                    "thread_id": threading.get_native_id(),
-                },
+        frame_id = self.get_or_reuse_frame_id(frame)
+        all_traced_vars = {}
+        if self.config.enable_var_trace:
+            if self.last_statement_vars:
+                # Get the current values of variables from the *previous* statement
+                all_traced_vars = self.trace_variables(frame, self.last_statement_vars)
+        log_data = {
+            "template": (
+                "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
+            ),
+            "data": {
+                "indent": _INDENT * (self._local.stack_depth - 1),
+                "filename": filename,
+                "lineno": lineno,
+                "exc_type": exc_type.__name__,
+                "exc_value": str(exc_value),
+                "frame_id": frame_id,
+                "func": frame.f_code.co_name,
+                "original_filename": frame.f_code.co_filename,
+                "thread_id": threading.get_native_id(),
+                "tracked_vars": all_traced_vars,
             },
+        }
+        if all_traced_vars:
+            log_data["template"] += " # Debug: {vars}"
+            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in all_traced_vars.items()])
+        msg = (
+            log_data,
             TraceTypes.COLOR_EXCEPTION,
         )
         # 对于非 monitoring 模式，直接记录

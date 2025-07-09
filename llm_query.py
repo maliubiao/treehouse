@@ -48,14 +48,12 @@ from tree import (
     LLM_PROJECT_CONFIG,
     BlockPatch,
     ConfigLoader,
-    FileSearchResult,
-    FileSearchResults,
-    MatchResult,
     RipgrepSearcher,
     SyntaxHighlight,
     find_diff,
     find_patch,
 )
+from tree_libs.app import FileSearchResult, FileSearchResults, MatchResult
 
 just_fix_windows_console()
 sys.path.insert(0, os.path.dirname(__file__))
@@ -65,7 +63,7 @@ class ModelConfig:
     key: str
     base_url: str
     model_name: str
-    tokenizer_name: str  # 新增tokenizer_name字段
+    tokenizer_name: str
     max_context_size: int | None = None
     temperature: float = 0.0
     is_thinking: bool = False
@@ -75,15 +73,16 @@ class ModelConfig:
     top_p: float = 0.95
     price_1m_input: float | None = None
     price_1m_output: float | None = None
-    http_proxy: str | None = None  # 新增HTTP代理字段
-    https_proxy: str | None = None  # 新增HTTPS代理字段
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    supports_json_output: bool = False  # 新增JSON输出支持字段
 
     def __init__(
         self,
         key: str,
         base_url: str,
         model_name: str,
-        tokenizer_name: str | None = None,  # 新增参数
+        tokenizer_name: str | None = None,
         max_context_size: int | None = None,
         temperature: float = 0.0,
         is_thinking: bool = False,
@@ -93,13 +92,14 @@ class ModelConfig:
         top_p: float = 0.95,
         price_1m_input: float | None = None,
         price_1m_output: float | None = None,
-        http_proxy: str | None = None,  # 新增参数
-        https_proxy: str | None = None,  # 新增参数
+        http_proxy: str | None = None,
+        https_proxy: str | None = None,
+        supports_json_output: bool = False,  # 新增参数
     ):
         self.key = key
         self.base_url = base_url
         self.model_name = model_name
-        self.tokenizer_name = tokenizer_name or model_name  # 默认使用model_name
+        self.tokenizer_name = tokenizer_name or model_name
         self.max_context_size = max_context_size
         self.temperature = temperature
         self.is_thinking = is_thinking
@@ -109,19 +109,21 @@ class ModelConfig:
         self.top_p = top_p
         self.price_1m_input = price_1m_input
         self.price_1m_output = price_1m_output
-        self.http_proxy = http_proxy  # 初始化HTTP代理
-        self.https_proxy = https_proxy  # 初始化HTTPS代理
+        self.http_proxy = http_proxy
+        self.https_proxy = https_proxy
+        self.supports_json_output = supports_json_output  # 初始化
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
         return (
             f"ModelConfig(base_url={self.base_url!r}, model_name={self.model_name!r}, "
-            f"tokenizer_name={self.tokenizer_name!r}, "  # 新增字段
+            f"tokenizer_name={self.tokenizer_name!r}, "
             f"max_context_size={self.max_context_size}, temperature={self.temperature}, "
             f"is_thinking={self.is_thinking}, max_tokens={self.max_tokens}, "
             f"thinking_budget={self.thinking_budget}, top_k={self.top_k}, top_p={self.top_p}, "
             f"price_1M_input={self.price_1m_input}, price_1M_output={self.price_1m_output}, "
-            f"http_proxy={self.http_proxy}, https_proxy={self.https_proxy}, "  # 新增字段
+            f"http_proxy={self.http_proxy}, https_proxy={self.https_proxy}, "
+            f"supports_json_output={self.supports_json_output}, "  # 新增字段
             f"key={masked_key})"
         )
 
@@ -130,7 +132,7 @@ class ModelConfig:
         return {
             "base_url": self.base_url,
             "model_name": self.model_name,
-            "tokenizer_name": self.tokenizer_name,  # 新增字段
+            "tokenizer_name": self.tokenizer_name,
             "max_context_size": self.max_context_size,
             "temperature": self.temperature,
             "is_thinking": self.is_thinking,
@@ -140,8 +142,9 @@ class ModelConfig:
             "top_p": self.top_p,
             "price_1M_input": self.price_1m_input,
             "price_1M_output": self.price_1m_output,
-            "http_proxy": self.http_proxy,  # 新增字段
-            "https_proxy": self.https_proxy,  # 新增字段
+            "http_proxy": self.http_proxy,
+            "https_proxy": self.https_proxy,
+            "supports_json_output": self.supports_json_output,  # 新增字段
             "key_prefix": self.key[:3] + "***" if self.key else "None",
         }
 
@@ -165,7 +168,7 @@ class ModelConfig:
         if not model_name:
             raise ValueError("环境变量GPT_MODEL未设置")
 
-        tokenizer_name = os.environ.get("GPT_TOKENIZER")  # 新增环境变量
+        tokenizer_name = os.environ.get("GPT_TOKENIZER")
 
         max_context_size = os.environ.get("GPT_MAX_CONTEXT_SIZE")
         temperature = os.environ.get("GPT_TEMPERATURE")
@@ -176,6 +179,7 @@ class ModelConfig:
         top_p = os.environ.get("GPT_TOP_P")
         price_1M_input = os.environ.get("GPT_PRICE_INPUT")
         price_1M_output = os.environ.get("GPT_PRICE_OUTPUT")
+        supports_json_output = os.environ.get("GPT_SUPPORTS_JSON_OUTPUT")  # 新增环境变量
 
         # 从环境变量加载代理设置
         http_proxy = os.environ.get("HTTP_PROXY")
@@ -195,7 +199,7 @@ class ModelConfig:
             raise ValueError(f"无效的temperature值: {temperature}") from exc
 
         try:
-            is_thinking = bool(is_thinking) if is_thinking is not None else False
+            is_thinking = str(is_thinking).lower() == "true" if is_thinking is not None else False
         except ValueError as exc:
             raise ValueError(f"无效的is_thinking值: {is_thinking}") from exc
 
@@ -229,11 +233,16 @@ class ModelConfig:
         except ValueError as exc:
             raise ValueError(f"无效的price_1M_output值: {price_1M_output}") from exc
 
+        try:
+            supports_json_output = str(supports_json_output).lower() == "true" if supports_json_output else False
+        except ValueError as exc:
+            raise ValueError(f"无效的supports_json_output值: {supports_json_output}") from exc
+
         return cls(
             key=key,
             base_url=base_url,
             model_name=model_name,
-            tokenizer_name=tokenizer_name,  # 新增参数
+            tokenizer_name=tokenizer_name,
             max_context_size=max_context_size,
             temperature=temperature,
             is_thinking=is_thinking,
@@ -243,8 +252,9 @@ class ModelConfig:
             top_p=top_p,
             price_1M_input=price_1M_input,
             price_1M_output=price_1M_output,
-            http_proxy=http_proxy,  # 传递HTTP代理
-            https_proxy=https_proxy,  # 传递HTTPS代理
+            http_proxy=http_proxy,
+            https_proxy=https_proxy,
+            supports_json_output=supports_json_output,  # 传递参数
         )
 
 
@@ -519,6 +529,7 @@ def query_gpt_api(
             thinking_budget (int): 思考预算限制
             top_k (int): 采样时保留的top k个token
             top_p (float): 核采样概率阈值
+            use_json_output (bool): 是否强制使用JSON输出模式
 
     返回:
         dict: 包含API响应结果的字典
@@ -535,6 +546,11 @@ def query_gpt_api(
 
         # 添加用户新提问到历史
         history.append({"role": "user", "content": prompt})
+
+        # 获取模型配置和JSON模式状态
+        model_config = kwargs.get("model_config") or GLOBAL_MODEL_CONFIG
+        use_json_output = kwargs.get("use_json_output", False)
+        is_json_mode = use_json_output and model_config and model_config.supports_json_output
 
         # 获取API响应
         response = _get_api_response(api_key, model, history, kwargs)
@@ -628,7 +644,7 @@ def _get_api_response(
         kwargs (dict): 其他参数
 
     返回:
-        Generator: 流式响应生成器
+        Generator or ChatCompletion: 流式响应生成器或完整的ChatCompletion对象
     """
     # 检查是否为Gemini模型
     is_gemini = "gemini" in model.lower()
@@ -678,16 +694,28 @@ def _get_api_response(
         #    "enable_thinking": True if kwargs.get("enable_thinking") else False,
         #    "thinking_budget": kwargs.get("thinking_budget", 32 * 1024),
         # }
+
+        model_config = kwargs.get("model_config") or GLOBAL_MODEL_CONFIG
+        use_json_output = kwargs.get("use_json_output", False)
+        is_json_mode = use_json_output and model_config and model_config.supports_json_output
+
+        create_params = {
+            "model": model,
+            "messages": history,
+            "reasoning_effort": "medium",
+            "temperature": kwargs.get("temperature", 0.0),
+            "extra_body": extra_body,
+            "top_p": 0.8,
+        }
+
+        if is_json_mode:
+            create_params["stream"] = False
+            create_params["response_format"] = {"type": "json_object"}
+        else:
+            create_params["stream"] = True
+
         try:
-            return client.chat.completions.create(
-                model=model,
-                messages=history,
-                reasoning_effort="medium",
-                temperature=kwargs.get("temperature", 0.0),
-                extra_body=extra_body,
-                top_p=0.8,
-                stream=True,
-            )
+            return client.chat.completions.create(**create_params)
         except Exception as e:
             err_msg = f"API请求失败: {str(e)}"
             raise RuntimeError(err_msg) from e
@@ -2033,22 +2061,36 @@ class AutoGitCommit:
 
 
 class BlockPatchResponse:
-    """大模型响应解析器"""
+    """大模型响应解析器，兼容传统格式和JSON格式"""
 
     def __init__(self, symbol_names=None):
         self.symbol_names = symbol_names
 
-    def parse(self, response_text):
+    def parse(self, response_text: str) -> list[tuple[str, str]]:
         """
         解析大模型返回的响应内容
         返回格式: [(identifier, source_code), ...]
         """
+        # 尝试解析为JSON格式
+        try:
+            data = json.loads(response_text)
+            if "patches" in data and isinstance(data["patches"], list):
+                results = []
+                for patch in data["patches"]:
+                    if isinstance(patch, dict) and "action" in patch and "path" in patch and "content" in patch:
+                        # 兼容旧格式，返回(路径, 内容)元组
+                        results.append((patch["path"], patch["content"]))
+                return results
+        except (json.JSONDecodeError, TypeError):
+            # 如果不是合法的JSON或格式不符，则回退到旧的正则解析
+            pass
+
+        # 旧的正则解析逻辑
         results = []
         pending_code = []  # 暂存未注册符号的代码片段
 
-        # 匹配两种响应格式：传统格式和 Markdown 代码块格式
         pattern = re.compile(
-            r"(\[overwrite whole (symbol|block)\]:\s*([^\n]+)\s*\n\[start\](.*?)\n\[end\]|"
+            r"(\[overwrite whole (symbol|block|file)\]:\s*([^\n]+)\s*\n\[start?\](.*?)\n\[end?\]|"
             r"```([a-zA-Z0-9_]+)?:([^\n`]+)\n(.*?)```)",
             re.DOTALL,
         )
@@ -2065,6 +2107,10 @@ class BlockPatchResponse:
                 section_type = "symbol"  # 代码块格式默认为符号类型
                 identifier = match.group(6).strip()
                 source_code = match.group(7)
+
+            # `overwrite_whole_file` 等同于 `block`
+            if section_type == "file":
+                section_type = "block"
 
             # 处理未注册符号的暂存逻辑
             if section_type == "symbol":
@@ -2087,15 +2133,34 @@ class BlockPatchResponse:
         return results
 
     @staticmethod
-    def extract_symbol_paths(response_text):
+    def extract_symbol_paths(response_text: str) -> dict[str, list[str]]:
         """
         从响应文本中提取所有符号路径
         返回格式: {"file": [symbol_path1, symbol_path2, ...]}
         """
+        # 尝试解析为JSON格式
+        try:
+            data = json.loads(response_text)
+            if "patches" in data and isinstance(data["patches"], list):
+                symbol_paths = defaultdict(list)
+                for patch in data["patches"]:
+                    if isinstance(patch, dict) and patch.get("action") == "overwrite_symbol" and "path" in patch:
+                        whole_path = patch["path"].strip()
+                        idx = whole_path.rfind("/")
+                        if idx == -1:
+                            continue
+                        symbol_path = whole_path[idx + 1 :].strip()
+                        file_path = whole_path[:idx]
+                        symbol_paths[file_path].append(symbol_path)
+                return symbol_paths
+        except (json.JSONDecodeError, TypeError):
+            # 回退到旧的正则解析
+            pass
+
+        # 旧的正则解析逻辑
         symbol_paths = {}
-        # 匹配传统格式和 Markdown 代码块格式
         pattern = re.compile(
-            r"\[overwrite whole symbol\]:\s*([^\n]+)\s*\n\[start\]|"
+            r"\[overwrite whole symbol\]:\s*([^\n]+)\s*\n\[start?\]|"
             r"```[a-zA-Z0-9_]+?:([^\n`]+)\n",
             re.DOTALL,
         )
@@ -3928,6 +3993,7 @@ class ModelSwitch:
             price_1m_output=config_dict.get("price_1M_output"),
             http_proxy=config_dict.get("http_proxy"),
             https_proxy=config_dict.get("https_proxy"),
+            supports_json_output=config_dict.get("supports_json_output", False),
         )
 
     def _get_config(self) -> dict[str, ModelConfig]:
@@ -3977,6 +4043,7 @@ class ModelSwitch:
                 price_1m_output=1.5,
                 http_proxy=None,
                 https_proxy=None,
+                supports_json_output=True,
             )
         }
 
@@ -4270,13 +4337,17 @@ class ModelSwitch:
 
         raise RuntimeError(f"API调用失败，重试次数已用尽: {max_retries}")
 
-    def query(self, model_name: str, prompt: str, disable_conversation_history=True, **kwargs) -> str:
+    def query(
+        self, model_name: str, prompt: str, disable_conversation_history=True, use_json_output: bool = False, **kwargs
+    ) -> str:
         """
         根据模型名称查询API
 
         参数:
             model_name (str): 配置中的模型名称(如'14b')
             prompt (str): 用户输入的提示词
+            disable_conversation_history (bool): 是否禁用对话历史
+            use_json_output (bool): 是否强制使用JSON输出模式
             kwargs: 其他传递给query_gpt_api的参数
 
         返回:
@@ -4295,6 +4366,7 @@ class ModelSwitch:
         # 准备查询参数
         query_kwargs = {
             "disable_conversation_history": disable_conversation_history,
+            "use_json_output": use_json_output,
             "max_context_size": config.max_context_size,
             "temperature": config.temperature,
             "enable_thinking": config.is_thinking,
