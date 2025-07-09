@@ -489,7 +489,8 @@ class TestLSPDidChangeHandler(unittest.IsolatedAsyncioTestCase):
 
     async def test_handle_lsp_did_change_feature_error(self):
         """Test LSP didChange with feature error."""
-        from tree_libs.web_handlers import LSPFeatureError
+
+        from lsp.client import LSPFeatureError
 
         mock_error = LSPFeatureError("textDocumentSync")
         self.mock_lsp_client.did_change.side_effect = mock_error

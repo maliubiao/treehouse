@@ -58,16 +58,11 @@ class TranslationWorkflow:
         for case in test_cases:
             self.translation_cache.clear()
             self.source_lines = case["original"].splitlines(keepends=True)
-            para = {
-                "line_range": f"1-{len(self.source_lines)}",
-                "type": "code",
-                "summary": case["description"],
-            }
 
             # Perform actual translation
             prompt = get_translation_prompt(case["original"], "zh-en")
             response = self.model_switch.query("translate", prompt, verbose=False)
-            translated_text = response["choices"][0]["message"]["content"]
+            translated_text = response
 
             if "[translation start]" in translated_text:
                 translated_text = translated_text.split("[translation start]")[1].split("[translation end]")[0].strip()
@@ -83,8 +78,8 @@ class TranslationWorkflow:
                 )
                 self.logger.error(error_msg)
                 raise AssertionError(error_msg)
-            else:
-                self.logger.info(f"Test passed: {case['description']}")
+
+            self.logger.info(f"Test passed: {case['description']}")
 
         self.logger.info("All gap translation tests completed successfully")
 

@@ -51,7 +51,7 @@ def translate_parallel(
             prompt = get_translation_prompt(paragraph_text, direction)
             logger.info(f"Translating lines {start}-{end} (direction: {direction})")
             response = model_switch.query("translate", prompt, verbose=False)
-            translated_text = response["choices"][0]["message"]["content"]
+            translated_text = response
 
             if "[translation start]" in translated_text and "[translation end]" in translated_text:
                 translated_text = translated_text.split("[translation start]")[1].split("[translation end]")[0]
@@ -83,7 +83,7 @@ def translate_parallel(
                 )
                 return start, end, translated_text
 
-        except Exception as e:
+        except (requests.exceptions.RequestException, json.JSONDecodeError, ValueError) as e:
             logger.error(f"Error translating lines {start}-{end}: {e}")
             return start, end, paragraph_text
 

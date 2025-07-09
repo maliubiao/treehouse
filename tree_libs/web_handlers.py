@@ -9,10 +9,9 @@ from urllib.parse import unquote, urlparse
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from lsp.client import GenericLSPClient, LSPFeatureError
+from lsp.language_id import LanguageId
 from tree import (
-    GenericLSPClient,
-    LanguageId,
-    LSPFeatureError,
     ParserLoader,
     ParserUtil,
     SymbolTrie,

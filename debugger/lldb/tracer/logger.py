@@ -31,8 +31,11 @@ class BufferedHandler(logging.Handler):
 
         # 使用目标处理器输出合并后的日志
         if self.target_handler:
-            self.target_handler.stream.write(combined_msg + "\n")
-            self.target_handler.flush()
+            try:
+                self.target_handler.stream.write(combined_msg + "\n")
+                self.target_handler.flush()
+            except ValueError:
+                pass
 
     def setTarget(self, target_handler):
         self.target_handler = target_handler

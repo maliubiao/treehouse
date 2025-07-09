@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from tree_sitter import Node
 
-from tree import dump_tree
+from tree_libs.ast import dump_tree
 
 from .expr_types import ExprType, ExprTypeHandler
 

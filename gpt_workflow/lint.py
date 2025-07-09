@@ -79,40 +79,50 @@ class LintParser:
                 continue
 
             if match := cls._LINE_PATTERN.match(line):
-                groups = match.groupdict()
-                message = groups["message"].strip()
-                column = int(groups["column"])
-                start_col = column
-                end_col = column
-
-                if column_range_match := re.search(r"column (\d+)-(\d+)", message):
-                    start_col = int(column_range_match.group(1))
-                    end_col = int(column_range_match.group(2))
-
-                file_path = groups["path"]
-                line_num = int(groups["line"])
-                original_line = ""
-
-                try:
-                    # 使用上下文管理器确保文件正确关闭
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        file_lines = f.readlines()
-                        if 0 < line_num <= len(file_lines):
-                            original_line = file_lines[line_num - 1].rstrip("\n")
-                except OSError as e:
-                    print(f"Error reading {file_path}:{line_num} - {str(e)}")
-
-                results.append(
-                    LintResult(
-                        file_path=file_path,
-                        line=line_num,
-                        column_range=(start_col, end_col),
-                        code=groups["code"],
-                        message=message,
-                        original_line=original_line,
-                    )
-                )
+                result = cls._create_lint_result(match)
+                if result:
+                    results.append(result)
         return results
+
+    @classmethod
+    def _create_lint_result(cls, match: re.Match) -> LintResult | None:
+        """Create LintResult from regex match object"""
+        groups = match.groupdict()
+        message = groups["message"].strip()
+        column = int(groups["column"])
+
+        start_col, end_col = cls._parse_column_range(message, column)
+        file_path = groups["path"]
+        line_num = int(groups["line"])
+        original_line = cls._read_source_line(file_path, line_num)
+
+        return LintResult(
+            file_path=file_path,
+            line=line_num,
+            column_range=(start_col, end_col),
+            code=groups["code"],
+            message=message,
+            original_line=original_line,
+        )
+
+    @classmethod
+    def _parse_column_range(cls, message: str, default_col: int) -> tuple[int, int]:
+        """Parse column range from message or use default column"""
+        if column_range_match := re.search(r"column (\d+)-(\d+)", message):
+            return (int(column_range_match.group(1)), int(column_range_match.group(2)))
+        return (default_col, default_col)
+
+    @classmethod
+    def _read_source_line(cls, file_path: str, line_num: int) -> str:
+        """Read original source line from file"""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                file_lines = f.readlines()
+                if 0 < line_num <= len(file_lines):
+                    return file_lines[line_num - 1].rstrip("\n")
+        except OSError as e:
+            print(f"Error reading {file_path}:{line_num} - {str(e)}")
+        return ""
 
 
 class LintReportFix:
@@ -143,7 +153,7 @@ class LintReportFix:
         print(prompt)
         response = self.model_switch.query("coder", prompt)
         process_patch_response(
-            response["choices"][0]["message"]["content"],
+            response,
             symbol_map,
             auto_commit=False,
             auto_lint=False,
@@ -250,9 +260,13 @@ class PylintFixer:
 
         try:
             self.fixer.fix_symbol(symbol, symbol_map)
-        except Exception as e:
+        except (RuntimeError, ValueError, IOError) as e:  # 更具体的异常类型
             traceback.print_exc()
             print("无法自动修复当前错误组", str(e))
+        except Exception as e:  # 保留最外层Exception捕获但添加详细日志
+            traceback.print_exc()
+            print("发生未预期的错误:", str(e))
+            raise  # 重新抛出以便上层处理
 
     def _get_symbol_locations(self, file_path: str) -> list[tuple[int, int]]:
         """获取符号定位信息"""

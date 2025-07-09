@@ -125,9 +125,11 @@ def _process_single_chunk(
     logger: TranslationLogger,
 ) -> Tuple[List[Dict], str, str]:
     """Process a single chunk of the source file"""
+    # Combine with previous tail content
     current_chunk = previous_chunk_tail + original_chunk
     current_numbered_chunk = previous_numbered_tail + numbered_chunk
 
+    # Create temp files context
     with (
         tempfile.NamedTemporaryFile(mode="w", suffix=".txt", encoding="utf-8", delete=False) as chunk_file,
         tempfile.NamedTemporaryFile(mode="w", suffix=".txt", encoding="utf-8", delete=False) as numbered_chunk_file,
@@ -145,14 +147,15 @@ def _process_single_chunk(
         if not chunk_paragraphs:
             return [], "", ""
 
-        # Handle tail content for next chunk
+        # Process tail content if needed
         if chunk_index < endline:
             last_para = chunk_paragraphs[-1]
-            start, _ = map(int, last_para["line_range"].split("-"))
-            previous_chunk_tail = current_chunk[start - 1 : endline]
+            start = int(last_para["line_range"].split("-")[0])
+            tail_slice = slice(start - 1, endline)
+
+            previous_chunk_tail = current_chunk[tail_slice]
             previous_numbered_tail = "".join(
-                f"{line_num:4d} | {line}"
-                for line_num, line in enumerate(current_chunk[start - 1 : endline], start=start)
+                f"{line_num:4d} | {line}" for line_num, line in enumerate(current_chunk[tail_slice], start=start)
             )
 
         return chunk_paragraphs, previous_chunk_tail, previous_numbered_tail
@@ -199,7 +202,7 @@ def _get_chunk_config(numbered_chunk_file: Path, logger: TranslationLogger) -> D
     prompt = f"@source-paragraph @{numbered_chunk_file}"
     text = GPTContextProcessor().process_text(prompt)
     response = ModelSwitch().query("segment", text)
-    config_text = response["choices"][0]["message"]["content"]
+    config_text = response
 
     try:
         return yaml.safe_load(config_text)
@@ -216,7 +219,7 @@ def _extract_config_from_error(config_text: str, logger: TranslationLogger) -> D
     try:
         t = GPTContextProcessor().process_text(f"@yaml-extract @{tmp_path}")
         extract_response = ModelSwitch().query("segment", t, verbose=False)
-        extracted_text = extract_response["choices"][0]["message"]["content"]
+        extracted_text = extract_response
         return yaml.safe_load(extracted_text)
     except Exception as e:
         logger.error(f"Failed to extract config from error: {e}")

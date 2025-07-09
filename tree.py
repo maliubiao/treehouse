@@ -1,54 +1,36 @@
 import argparse
 import asyncio
-import fnmatch
-import hashlib
 import importlib
 import json
 import logging
 import os
-import platform
-import re
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
-import time
-import traceback
-import typing
-import zlib
-from abc import ABC, abstractmethod
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from difflib import unified_diff
-from functools import partial
-from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import unquote, urlparse
 
 import yaml
 
 # Windows控制台颜色修复
 from colorama import just_fix_windows_console
-from pygments import formatters, highlight, lexers, styles
-from tqdm import tqdm  # 用于显示进度条
-from tree_sitter import Language, Node, Parser, Query
+from pygments import formatters, highlight, lexers
+from tree_sitter import Node, Parser
 
-from lsp.client import GenericLSPClient, LSPFeatureError
-from lsp.language_id import LanguageId
-
-just_fix_windows_console()
+from lsp.client import GenericLSPClient
 from tree_libs.ast import (
     SUPPORTED_LANGUAGES,
     ParserLoader,
     ParserUtil,
     SourceSkeleton,
-    dump_tree,
-    line_number_from_unnamed_symbol,
 )
+
+just_fix_windows_console()
 
 # 设置日志级别
 logger = logging.getLogger(__name__)
@@ -66,13 +48,13 @@ class ProjectConfig:
         exclude: Dict[str, List[str]],
         include: Dict[str, List[str]],
         file_types: List[str],
-        lsp: Dict[str, Any] = {},
+        lsp: Optional[Dict[str, Any]] = None,
     ):
         self.project_root_dir = project_root_dir
         self.exclude = exclude
         self.include = include
         self.file_types = file_types
-        self.lsp = lsp
+        self.lsp = lsp if lsp is not None else {}
         self._lsp_clients: Dict[str, Any] = {}
         self._lsp_lock = threading.Lock()
         self.symbol_service_url: Optional[str] = None
@@ -326,7 +308,6 @@ class SymbolTrie:
 
     def _bfs_collect(self, node: TrieNode, current_prefix: str, results: list, max_results: Optional[int]):
         """广度优先收集符号"""
-        from collections import deque
 
         queue: deque = deque([(node, current_prefix)])
 
@@ -457,7 +438,7 @@ class RipgrepSearcher:
         cmd = self._build_command(patterns, actual_root)
         if self.debug:
             logger.debug("Executing command: %s", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=False)
         if self.debug:
             logger.debug(result.stdout)
         if result.returncode not in (0, 1):
@@ -838,7 +819,6 @@ def main(
     host: str = "127.0.0.1",
     port: int = 8000,
     project_paths: Optional[List[str]] = None,
-    db_path: str = "symbols.db",
 ):
     # This function is now a simple launcher for the web service.
     # The actual app is created by the factory in tree_libs.app
@@ -980,15 +960,12 @@ if __name__ == "__main__":
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Set logging level",
     )
-
-    # The 'db_path' and 'parallel' args seem related to a DB indexing feature not fully present in the provided code.
-    # I'm keeping them for compatibility but the main `main` function doesn't use them anymore.
-    arg_parser.add_argument("--db-path", type=str, default="symbols.db", help="Path to symbol database")
-    arg_parser.add_argument("--parallel", type=int, default=-1, help="Parallel processes for indexing")
-
+    arg_parser.add_argument("--lsp", type=str, help="启动LSP客户端，指定LSP服务器命令（如：pylsp）")
+    arg_parser.add_argument("--debugger-port", type=int, default=9911, help="调试器服务端口")
     args = arg_parser.parse_args()
     logger.setLevel(args.log_level.upper())
-
+    if args.lsp:
+        start_lsp_client_once(GLOBAL_PROJECT_CONFIG, GLOBAL_PROJECT_CONFIG.project_root_dir)
     if args.debug_symbol_path:
         logger.info("Debug Mode: Printing symbol paths for %s", args.debug_symbol_path)
         parser_loader = ParserLoader()
@@ -1002,4 +979,4 @@ if __name__ == "__main__":
         print(SyntaxHighlight.highlight_if_terminal(framework, file_path=args.debug_skeleton))
     else:
         logger.info("Starting Code Analysis Service...")
-        main(host=args.host, port=args.port, project_paths=args.project, db_path=args.db_path)
+        main(host=args.host, port=args.port, project_paths=args.project)
