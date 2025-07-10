@@ -51,58 +51,107 @@ async def _get_cached_file_data(
     This is the single source of truth for file parsing.
     Returns (ParserUtil, code_map) or (None, None) if parsing fails.
     """
+    # Step 1: Normalize the file_path to a consistent relative path for cache key
+    original_file_path = file_path
     clean_file_path = file_path.removeprefix("symbol:")
     try:
-        current_mtime = os.path.getmtime(clean_file_path)
-    except (FileNotFoundError, OSError):
+        rel_path = state.config.relative_path(clean_file_path)  # Normalize to project-relative path
+        abs_path = state.config.absolute_path(rel_path)  # Assume ProjectConfig has absolute_path method; add if not
+        logger.debug(
+            f"_get_cached_file_data: Normalized '{original_file_path}' to rel_path='{rel_path}' and abs_path='{abs_path}'"
+        )
+    except (ValueError, OSError) as e:
+        logger.warning(f"_get_cached_file_data: Failed to normalize path '{clean_file_path}': {e}")
         return None, None
 
-    # Get the current asyncio event loop to run the synchronous lock in an executor.
-    # This is necessary because state.lock is a standard threading.Lock, which is
-    # not compatible with the `async with` statement that caused the TypeError.
-    loop = asyncio.get_running_loop()
+    # Step 2: Get current mtime using absolute path
+    try:
+        current_mtime = os.path.getmtime(abs_path)
+        logger.debug(f"_get_cached_file_data: File mtime for '{rel_path}' (abs: '{abs_path}'): {current_mtime}")
+    except (FileNotFoundError, OSError) as e:
+        logger.debug(f"_get_cached_file_data: File not found or OS error for '{rel_path}' (abs: '{abs_path}'): {e}")
+        return None, None
 
-    # First, check cache with the lock
+    # Step 3: Use asyncio loop for lock (as before)
+    loop = asyncio.get_running_loop()
+    logger.debug(f"_get_cached_file_data: Acquired event loop for '{rel_path}'")
+
+    # First, check cache with the lock (use rel_path as key for consistency)
+    logger.debug(f"_get_cached_file_data: Acquiring lock to check cache for '{rel_path}'")
     await loop.run_in_executor(None, state.lock.acquire)
     try:
-        if clean_file_path in state.file_parser_info_cache:
-            cached_mtime, parser, code_map = state.file_parser_info_cache[clean_file_path]
+        if rel_path in state.file_parser_info_cache:
+            cached_mtime, parser, code_map = state.file_parser_info_cache[rel_path]
+            logger.debug(f"_get_cached_file_data: Found cached entry for '{rel_path}' with mtime {cached_mtime}")
             if cached_mtime == current_mtime:
+                logger.info(
+                    f"_get_cached_file_data: Cache hit for '{rel_path}' - returning cached data"
+                )  # Upgraded to info for better visibility
                 return parser, code_map
+            else:
+                logger.debug(
+                    f"_get_cached_file_data: Cache stale for '{rel_path}' - cached: {cached_mtime}, current: {current_mtime}"
+                )
+        else:
+            logger.debug(f"_get_cached_file_data: No cached entry found for '{rel_path}'")
     finally:
         state.lock.release()
+        logger.debug(f"_get_cached_file_data: Released lock after cache check for '{rel_path}'")
 
     # If not in cache or modified, parse the file (outside the lock to avoid blocking)
+    logger.info(f"File '{rel_path}' (abs: '{abs_path}') has been modified or is new, parsing...")
+    logger.debug(f"_get_cached_file_data: Starting file parsing for '{rel_path}'")
     parser_loader = ParserLoader()
     parser = ParserUtil(parser_loader)
     try:
-        paths, code_map = parser.get_symbol_paths(clean_file_path)
+        paths, code_map = parser.get_symbol_paths(abs_path)  # Parse using absolute path
+        logger.debug(
+            f"_get_cached_file_data: Successfully parsed '{rel_path}' - found {len(code_map) if code_map else 0} symbols"
+        )
     except (ValueError, FileNotFoundError) as e:
-        logger.warning(f"Error parsing {clean_file_path}: {e}")
+        logger.warning(f"Error parsing {rel_path} (abs: '{abs_path}'): {e}")
+        logger.debug(f"_get_cached_file_data: Caching parse failure for '{rel_path}'")
         # Cache failure to avoid re-parsing a broken file repeatedly
         await loop.run_in_executor(None, state.lock.acquire)
         try:
-            state.file_parser_info_cache[clean_file_path] = (current_mtime, None, None)
+            state.file_parser_info_cache[rel_path] = (current_mtime, None, None)
+            logger.debug(f"_get_cached_file_data: Cached parse failure for '{rel_path}' with mtime {current_mtime}")
         finally:
             state.lock.release()
         return None, None
 
     # After parsing, acquire lock to update cache and trie
+    logger.debug(f"_get_cached_file_data: Acquiring lock to update cache for '{rel_path}'")
     await loop.run_in_executor(None, state.lock.acquire)
     try:
         # Re-check in case another thread parsed and cached it while we were parsing
-        if clean_file_path in state.file_parser_info_cache:
-            cached_mtime, cached_parser, cached_code_map = state.file_parser_info_cache[clean_file_path]
+        if rel_path in state.file_parser_info_cache:
+            cached_mtime, cached_parser, cached_code_map = state.file_parser_info_cache[rel_path]
+            logger.debug(
+                f"_get_cached_file_data: Re-checking cache for '{rel_path}' - cached mtime: {cached_mtime}, current: {current_mtime}"
+            )
             if cached_mtime >= current_mtime:
+                logger.info(
+                    f"_get_cached_file_data: Another thread cached newer data for '{rel_path}' - using cached version"
+                )  # Upgraded to info
                 return cached_parser, cached_code_map
 
         # Update cache and trie
-        state.file_parser_info_cache[clean_file_path] = (current_mtime, parser, code_map)
-        _update_trie_from_code_map(clean_file_path, code_map, state, parser)
+        logger.debug(f"_get_cached_file_data: Updating cache for '{rel_path}' with mtime {current_mtime}")
+        state.file_parser_info_cache[rel_path] = (current_mtime, parser, code_map)
 
+        logger.debug(f"_get_cached_file_data: Updating trie for '{rel_path}'")
+        _update_trie_from_code_map(
+            abs_path, code_map, state, parser
+        )  # Pass original abs_path if needed, but rel_path is computed inside
+
+        logger.info(
+            f"_get_cached_file_data: Successfully cached and updated trie for '{rel_path}'"
+        )  # Upgraded to info for visibility
         return parser, code_map
     finally:
         state.lock.release()
+        logger.debug(f"_get_cached_file_data: Released lock after cache update for '{rel_path}'")
 
 
 # --- Handler for /complete ---
@@ -562,6 +611,7 @@ async def handle_search_to_symbols(
     symbol_results: Dict[str, Any] = {}
     total_start_time = time.time()
     for file_result in results.results:
+        # Normalize file_path before calling _get_cached_file_data (though it's handled inside now)
         parser_util, code_map = await _get_cached_file_data(file_result.file_path, state)
 
         if not parser_util or not code_map:
@@ -571,7 +621,7 @@ async def handle_search_to_symbols(
         try:
             locations = [(match.line - 1, match.column_range[0] - 1) for match in file_result.matches]
             symbols = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=max_context_size)
-            rel_path = state.config.relative_to_current_path(file_result.file_path)
+            rel_path = state.config.relative_path(file_result.file_path)  # Use relative_path for consistency
             for key, value in symbols.items():
                 value["name"] = f"{rel_path}/{key}"
                 value["file_path"] = rel_path

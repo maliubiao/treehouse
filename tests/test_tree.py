@@ -8,7 +8,6 @@ import unittest
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
-from urllib.parse import unquote, urlparse
 
 from fastapi.testclient import TestClient
 
@@ -864,7 +863,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         print(paths)
         expected_symbols = [
@@ -901,7 +900,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         print(paths)
         expected_symbols = [
@@ -931,7 +930,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = [
             "mathOperations",
@@ -955,7 +954,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["fetchData", "asyncArrow"]
         self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
@@ -978,7 +977,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         print(paths)
         expected_symbols = ["numberGenerator", "objectWithGenerator.generatorMethod"]
@@ -994,7 +993,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         self.assertIn("__import__", paths)
 
@@ -1007,7 +1006,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".js")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         print(paths)
         os.unlink(path)
         self.assertIn("anonymous", paths)
@@ -1034,7 +1033,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = [
             "Calculator",
@@ -1059,7 +1058,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         print(paths)
         os.unlink(path)
         expected_symbols = ["Animal", "Animal.makeSound", "Animal.move"]
@@ -1077,7 +1076,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         self.assertIn("Point", paths)
 
@@ -1089,7 +1088,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         self.assertIn("StringOrNumber", paths)
 
@@ -1105,7 +1104,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["User", "User.name", "User.age", "User.id"]
         self.assertCountEqual([s for s in paths if s.startswith("User")], expected_symbols)
@@ -1135,7 +1134,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["identity", "arrowFunctionWithParams", "greet"]
         self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
@@ -1161,7 +1160,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = [
             "identity",
@@ -1183,7 +1182,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         self.assertIn("createElement", paths)
 
@@ -1206,7 +1205,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         expected_symbols = ["sealed", "Greeter", "Greeter.constructor"]
         self.assertCountEqual([s for s in paths if s in expected_symbols], expected_symbols)
@@ -1249,7 +1248,7 @@ class TestJavascriptSymbolPaths(TestParserUtil):
             """
         )
         path = self.create_temp_file(code, suffix=".ts")
-        paths, code_map = self.parser_util.get_symbol_paths(path)
+        paths, _ = self.parser_util.get_symbol_paths(path)
         os.unlink(path)
         self.assertIn("__import__", paths)
 
@@ -2174,35 +2173,35 @@ class TestSymbolsComplete(unittest.TestCase):
             except OSError:
                 pass
 
-    def test_complete_debug_from_main_d(self):
+    async def test_complete_debug_from_main_d(self):
         tmp = self.temp_files[0]
         prefix = f"symbol:{tmp.name}/main,d"
         expected = f"symbol:{tmp.name}/main,debug"
-        results = self._get_completions(prefix)
+        results = await self._get_completions(prefix)
         self.assertIn(expected, results)
 
-    def test_complete_main_from_m(self):
+    async def test_complete_main_from_m(self):
         tmp = self.temp_files[0]
         prefix = f"symbol:{tmp.name}/m"
         expected = f"symbol:{tmp.name}/main"
-        results = self._get_completions(prefix)
+        results = await self._get_completions(prefix)
         self.assertIn(expected, results)
 
-    def test_complete_print_in_multi_symbol_context(self):
+    async def test_complete_print_in_multi_symbol_context(self):
         tmp = self.temp_files[0]
         prefix = f"symbol:{tmp.name}/main,debug,pr"
         expected = f"symbol:{tmp.name}/main,debug,print"
-        results = self._get_completions(prefix)
+        results = await self._get_completions(prefix)
         self.assertIn(expected, results)
 
-    def test_complete_symbol_b_after_symbol_a(self):
+    async def test_complete_symbol_b_after_symbol_a(self):
         tmp = self.temp_files[0]
         prefix = f"symbol:{tmp.name}/symbol_a,symbol_"
         expected = f"symbol:{tmp.name}/symbol_a,symbol_b"
-        results = self._get_completions(prefix)
+        results = await self._get_completions(prefix)
         self.assertIn(expected, results)
 
-    def test_get_valid_symbol_content(self):
+    async def test_get_valid_symbol_content(self):
         """测试正常获取符号内容"""
         import tempfile
 
@@ -2215,11 +2214,11 @@ class TestSymbolsComplete(unittest.TestCase):
             symbol_path = f"symbol:{tmp.name}/main"
 
             # 在新的设计中，处理程序将解析文件并填充Trie，无需手动插入
-            response = self.test_client.get(f"/symbol_content?symbol_path={symbol_path}")
+            response = await self._async_get(f"/symbol_content?symbol_path={symbol_path}")
             self.assertEqual(response.status_code, 200)
             self.assertIn("void main()", response.text)
 
-    def test_get_multiple_symbols_content(self):
+    async def test_get_multiple_symbols_content(self):
         """测试获取多个符号内容"""
         import tempfile
 
@@ -2229,13 +2228,13 @@ class TestSymbolsComplete(unittest.TestCase):
             self.temp_files.append(tmp)
 
             # 在新的设计中，处理程序将解析文件并填充Trie，无需手动插入
-            response = self.test_client.get(f"/symbol_content?symbol_path=symbol:{tmp.name}/main,debug")
+            response = await self._async_get(f"/symbol_content?symbol_path=symbol:{tmp.name}/main,debug")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.text.count("\n\n"), 1)
             self.assertIn("void main()", response.text)
             self.assertIn("void debug()", response.text)
 
-    def test_json_response_format(self):
+    async def test_json_response_format(self):
         """测试JSON响应格式"""
         import tempfile
 
@@ -2247,18 +2246,23 @@ class TestSymbolsComplete(unittest.TestCase):
             symbol_path = f"symbol:{tmp.name}/main"
 
             # 在新的设计中，处理程序将解析文件并填充Trie，无需手动插入
-            response = self.test_client.get(f"/symbol_content?symbol_path={symbol_path}&json_format=true")
+            response = await self._async_get(f"/symbol_content?symbol_path={symbol_path}&json_format=true")
             self.assertEqual(response.status_code, 200)
             json_data = response.json()
             self.assertEqual(json_data[0]["location"]["start_line"], 0)
             self.assertEqual(json_data[0]["location"]["end_line"], 2)
             self.assertIn("void main()", json_data[0]["content"])
 
-    def _get_completions(self, prefix: str) -> list:
-        response = self.test_client.get(f"/complete_realtime?prefix={prefix}")
+    async def _async_get(self, url: str):
+        """Asynchronously performs a GET request using the synchronous test client."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.test_client.get, url)
+
+    async def _get_completions(self, prefix: str) -> list:
+        response = await self._async_get(f"/complete_realtime?prefix={prefix}")
         return response.text.splitlines()
 
-    def test_extract_multiline_js_event_handler(self):
+    async def test_extract_multiline_js_event_handler(self):
         """测试提取多行JavaScript事件处理程序"""
         import tempfile
         from textwrap import dedent
@@ -2298,7 +2302,7 @@ class TestSymbolsComplete(unittest.TestCase):
             symbol_path = f"symbol:{tmp.name}/at_2,near_16"
 
             # 在新的设计中，处理程序将按需解析文件并根据行号查找符号
-            response = self.test_client.get(f"/symbol_content?symbol_path={symbol_path}")
+            response = await self._async_get(f"/symbol_content?symbol_path={symbol_path}")
             self.assertEqual(response.status_code, 200)
 
             # 验证返回的内容是否正确

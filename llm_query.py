@@ -700,7 +700,7 @@ def _get_api_response(
         create_params = {
             "model": model,
             "messages": history,
-            "reasoning_effort": "medium",
+            # "reasoning_effort": "medium",
             "temperature": kwargs.get("temperature", 0.0),
             "extra_body": extra_body,
             "top_p": 0.8,
@@ -1764,17 +1764,17 @@ def read_last_query(_):
         return ""
 
 
-PATCH_PROMPT_HEADER = """
-[project description start]
-当前目录: {current_dir}
-[project description end]
-{patch_rule}
-[symbol path rule start]
-{symbol_path_rule_content}
-[symbol path rule end]
-"""
+# PATCH_PROMPT_HEADER = """
+# [project description start]
+# 当前目录: {current_dir}
+# [project description end]
+# {patch_rule}
+# [symbol path rule start]
+# {symbol_path_rule_content}
+# [symbol path rule end]
+# """
 
-PATCH_PROMPT_HEADER_V3 = """
+PATCH_PROMPT_HEADER = """
 [project description start]
 当前目录: {current_dir}
 [project description end]
@@ -2059,128 +2059,238 @@ class AutoGitCommit:
 
 
 class BlockPatchResponse:
-    """大模型响应解析器，兼容JSON格式和传统的标签格式"""
+    """大模型响应解析器，兼容JSON格式(包括markdown块)和传统的标签格式"""
 
-    def __init__(self, symbol_names=None):
+    # 为旧格式解析预编译正则表达式，提高效率
+    _LEGACY_HEADER_RE = re.compile(r"\[overwrite whole (symbol|block|file)\]:\s*([^\n]+)")
+    _MARKDOWN_HEADER_RE = re.compile(r"```([a-zA-Z0-9_]+)?:([^\n`]+)")
+    _START_TAG_RE = re.compile(r"\[start(?:\.\d+)?\]")
+    _END_TAG_RE = re.compile(r"\[end(?:\.\d+)?\]")
+
+    def __init__(self, symbol_names=None, use_json=False):
         self.symbol_names = symbol_names
+        self.use_json = use_json
 
-    def parse(self, response_text: str) -> list[tuple[str, str]]:
-        """
-        解析大模型返回的响应内容
-        返回格式: [(identifier, source_code), ...]
-        """
-        # 尝试解析为JSON格式
-        try:
-            data = json.loads(response_text)
-            if "patches" in data and isinstance(data["patches"], list):
-                results = []
-                for patch in data["patches"]:
-                    if isinstance(patch, dict) and "action" in patch and "path" in patch and "content" in patch:
-                        # 兼容旧格式，返回(路径, 内容)元组
-                        results.append((patch["path"], patch["content"]))
-                return results
-        except (json.JSONDecodeError, TypeError):
-            # 如果不是合法的JSON或格式不符，则回退到旧的正则解析
-            pass
+    def _extract_json_from_markdown(self, text: str) -> str | None:
+        """从 ```json ... ``` markdown块中提取JSON内容。"""
+        match = re.search(r"```json\s*\n(.*?)\n```", text, re.DOTALL)
+        return match.group(1).strip() if match else None
 
-        # 旧的正则解析逻辑
+    def _parse_json(self, json_text: str) -> list[tuple[str, str]]:
+        """将JSON字符串解析为补丁列表格式。"""
+        data = json.loads(json_text)
         results = []
-        pending_code = []  # 暂存未注册符号的代码片段
+        # 兼容新的action格式和旧的直接kv格式
+        if "patches" in data and isinstance(data["patches"], list):
+            for patch in data["patches"]:
+                if isinstance(patch, dict) and "path" in patch and "content" in patch:
+                    # 'action' 键是可选的，以实现向后兼容
+                    results.append((patch["path"], patch["content"]))
+            return results
+        return []
 
-        pattern = re.compile(
-            r"(\[overwrite whole (symbol|block|file)\]:\s*([^\n]+)\s*\n\[start?\](.*?)\n\[end?\]|"
-            r"```([a-zA-Z0-9_]+)?:([^\n`]+)\n(.*?)```)",
-            re.DOTALL,
-        )
+    def _parse_legacy(self, response_text: str) -> list[tuple[str, str]]:
+        """使用基于行的状态机解析旧的标签格式，提取所有类型的补丁块（symbol/block/file）。
+        支持嵌套标签，并收集 (whole_path, block_content) 对。
+        """
+        results = []
+        lines = response_text.splitlines()
 
-        for match in pattern.finditer(response_text):
-            # 传统格式处理
-            if match.group(1):
-                section_type = match.group(2)
-                identifier = match.group(3).strip()
-                source_code = match.group(4)
+        header_re = self._LEGACY_HEADER_RE
+        start_re = self._START_TAG_RE
+        end_re = self._END_TAG_RE
 
-            # Markdown 代码块格式处理
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            header_match = header_re.match(line)
+
+            if not header_match:
+                i += 1
+                continue
+
+            # Found a header
+            whole_path = header_match.group(2).strip()
+
+            # Search for the block for this header
+            j = i + 1
+            nesting_level = 0
+            block_started = False
+            block_start_line = -1
+            block_end_line = -1
+
+            while j < len(lines):
+                current_line = lines[j]
+                current_line_stripped = current_line.strip()
+
+                if start_re.fullmatch(current_line_stripped):
+                    if nesting_level == 0:
+                        block_start_line = j + 1  # Content starts after [start]
+                    nesting_level += 1
+                    block_started = True
+                elif end_re.fullmatch(current_line_stripped):
+                    if nesting_level > 0:
+                        nesting_level -= 1
+                        if nesting_level == 0:
+                            block_end_line = j  # End before [end]
+                            break
+
+                j += 1
+
+            if block_start_line != -1 and block_end_line != -1 and block_start_line < block_end_line:
+                # Extract content (excluding [start] and [end] lines)
+                content_lines = lines[block_start_line:block_end_line]
+                block_content = "\n".join(content_lines)
+
+                # Append to results regardless of type (symbol/block/file)
+                results.append((whole_path, block_content))
+
+                # Jump outer loop cursor past the processed block
+                i = block_end_line + 1
             else:
-                section_type = "symbol"  # 代码块格式默认为符号类型
-                identifier = match.group(6).strip()
-                source_code = match.group(7)
-
-            # `overwrite_whole_file` 等同于 `block`
-            if section_type == "file":
-                section_type = "block"
-
-            # 处理未注册符号的暂存逻辑
-            if section_type == "symbol":
-                if self.symbol_names is not None and identifier not in self.symbol_names:
-                    pending_code.append(source_code)
-                    continue
-
-                # 合并暂存代码到当前合法符号
-                combined_source = "\n".join(pending_code + [source_code]) if pending_code else source_code
-                pending_code = []
-                results.append((identifier, combined_source))
-            else:
-                # 块类型直接添加不处理暂存
-                results.append((identifier, source_code))
-
-        # 兼容旧格式校验
-        if not results and ("[start.15]" in response_text or "[end.15]" in response_text or "```" in response_text):
-            raise ValueError("响应包含代码块标签但格式不正确，请使用正确的标签格式")
+                # No complete block found for this header, move to next line
+                i += 1
 
         return results
 
-    @staticmethod
-    def extract_symbol_paths(response_text: str) -> dict[str, list[str]]:
+    def parse(self, response_text: str) -> list[tuple[str, str]]:
         """
-        从响应文本中提取所有符号路径
+        解析大模型返回的响应内容，优先处理JSON格式。
+        返回格式: [(identifier, source_code), ...]
+        """
+        if self.use_json:
+            json_content = self._extract_json_from_markdown(response_text)
+
+            if json_content is not None:
+                # 如果存在JSON块，则将其视为唯一信源
+                try:
+                    return self._parse_json(json_content)
+                except (json.JSONDecodeError, TypeError):
+                    return []  # 格式错误的JSON块导致解析失败
+            try:
+                # 尝试将整个响应作为JSON解析
+                return self._parse_json(response_text)
+            except (json.JSONDecodeError, TypeError):
+                # 如果无法作为JSON解析，说明是无效输入，返回空列表
+                return []
+        else:
+            return self._parse_legacy(response_text)
+
+    @staticmethod
+    def _extract_json_from_markdown_static(text: str) -> str | None:
+        """从 ```json ... ``` markdown块中提取JSON内容。"""
+        match = re.search(r"```json\s*\n(.*?)\n```", text, re.DOTALL)
+        return match.group(1).strip() if match else None
+
+    @staticmethod
+    def _extract_symbols_from_json(json_text: str) -> dict[str, list[str]]:
+        """从JSON字符串中提取符号路径。"""
+        from collections import defaultdict
+
+        data = json.loads(json_text)
+        symbol_paths = defaultdict(list)
+        if "patches" in data and isinstance(data["patches"], list):
+            for patch in data["patches"]:
+                # 仅当 action 为 overwrite_symbol 时才提取符号
+                if isinstance(patch, dict) and patch.get("action") == "overwrite_symbol" and "path" in patch:
+                    whole_path = patch["path"].strip()
+                    idx = whole_path.rfind("/")
+                    if idx != -1:
+                        file_path = whole_path[:idx]
+                        symbol_path = whole_path[idx + 1 :].strip()
+                        symbol_paths[file_path].append(symbol_path)
+        return dict(symbol_paths)
+
+    @staticmethod
+    def _extract_symbols_from_legacy(response_text: str) -> dict[str, list[str]]:
+        """使用基于行的状态机解析旧的标签格式，以正确处理嵌套标签。
+        这样实现，
+        遇到header [overwrite ...], 则启用一个stack,
+        [start.55] push
+        [end.55] pop
+        pop , stack为0 则header 完成
+        从下一个header开始， 如果stack不为0， 不忽视遇到的header
+        此处不考虑markdown 的情况
+        """
+        symbol_paths = {}
+        lines = response_text.splitlines()
+
+        header_re = BlockPatchResponse._LEGACY_HEADER_RE
+        start_re = BlockPatchResponse._START_TAG_RE
+        end_re = BlockPatchResponse._END_TAG_RE
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            header_match = header_re.match(line)
+
+            if not header_match:
+                i += 1
+                continue
+
+            # Found a header
+            header_type = header_match.group(1)  # symbol/block/file
+            whole_path = header_match.group(2).strip()
+
+            # Search for the block for this header
+            j = i + 1
+            nesting_level = 0
+            block_started = False
+            block_end_line = -1
+
+            while j < len(lines):
+                current_line = lines[j]
+                current_line_stripped = current_line.strip()
+                if start_re.fullmatch(current_line_stripped):
+                    nesting_level += 1
+                    block_started = True
+                elif end_re.fullmatch(current_line_stripped):
+                    if nesting_level > 0:
+                        nesting_level -= 1
+
+                if block_started and nesting_level == 0:
+                    block_end_line = j
+                    break  # Found complete block
+
+                j += 1
+
+            if block_end_line != -1:
+                # Block was found and processed
+                if header_type == "symbol":
+                    idx = whole_path.rfind("/")
+                    if idx != -1:
+                        file_path = whole_path[:idx]
+                        symbol_name = whole_path[idx + 1 :].strip()
+                        if file_path not in symbol_paths:
+                            symbol_paths[file_path] = []
+                        symbol_paths[file_path].append(symbol_name)
+
+                # Jump outer loop cursor past the processed block
+                i = block_end_line + 1
+            else:
+                # No block found for this header, just move to the next line
+                i += 1
+
+        return symbol_paths
+
+    @staticmethod
+    def extract_symbol_paths(response_text: str, use_json: bool = False) -> dict[str, list[str]]:
+        """
+        从响应文本中提取所有符号路径，优先处理JSON格式。
         返回格式: {"file": [symbol_path1, symbol_path2, ...]}
         """
-        # 尝试解析为JSON格式
-        try:
-            data = json.loads(response_text)
-            if "patches" in data and isinstance(data["patches"], list):
-                symbol_paths = defaultdict(list)
-                for patch in data["patches"]:
-                    # 仅当 action 为 overwrite_symbol 时才提取符号
-                    if isinstance(patch, dict) and patch.get("action") == "overwrite_symbol" and "path" in patch:
-                        whole_path = patch["path"].strip()
-                        idx = whole_path.rfind("/")
-                        if idx == -1:
-                            continue
-                        symbol_path = whole_path[idx + 1 :].strip()
-                        file_path = whole_path[:idx]
-                        symbol_paths[file_path].append(symbol_path)
-                return symbol_paths
-        except (json.JSONDecodeError, TypeError):
-            # 回退到旧的正则解析
-            pass
+        if use_json:
+            # 1. 检查并解析Markdown块中的JSON
 
-        # 旧的正则解析逻辑
-        symbol_paths = {}
-        pattern = re.compile(
-            r"\[overwrite whole symbol\]:\s*([^\n]+)\s*\n\[start?\]|"
-            r"```[a-zA-Z0-9_]+?:([^\n`]+)\n",
-            re.DOTALL,
-        )
-
-        for match in pattern.finditer(response_text):
-            if match.group(1):  # 传统格式
-                whole_path = match.group(1).strip()
-            else:  # Markdown 格式
-                whole_path = match.group(2).strip()
-
-            # 提取符号路径
-            idx = whole_path.rfind("/")
-            if idx == -1:
-                continue  # 跳过无效格式
-
-            symbol_path = whole_path[idx + 1 :].strip()
-            file_path = whole_path[:idx]
-            if file_path not in symbol_paths:
-                symbol_paths[file_path] = []
-            symbol_paths[file_path].append(symbol_path)
-        return symbol_paths
+            json_content = BlockPatchResponse._extract_json_from_markdown_static(response_text)
+            if json_content:
+                try:
+                    return BlockPatchResponse._extract_symbols_from_json(json_content)
+                except (json.JSONDecodeError, TypeError):
+                    # Markdown中的JSON格式错误，返回空
+                    return {}
+        else:
+            return BlockPatchResponse._extract_symbols_from_legacy(response_text)
 
 
 def parse_llm_response(response_text, symbol_names=None):
@@ -2298,7 +2408,7 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     }
 
 
-def add_symbol_details(remaining, symbol_detail):
+def add_symbol_details(remaining, symbol_detail, use_json=False):
     require_info_map = BlockPatchResponse.extract_symbol_paths(remaining)
     require_info_syms = {}
     # First pass: collect required symbols
@@ -2336,14 +2446,14 @@ def _display_thought_and_summary(response_text: str):
         patches = data.get("patches")
 
         if thought:
-            print(Fore.BLUE + "━━━━━━━━━━ AI's Thought Process ━━━━━━━━━━" + Style.RESET_ALL)
+            print(Fore.BLUE + "━━━━━━━━━━ AI's Thought Process ━━━━━━━━━━" + ColorStyle.RESET_ALL)
             # 使用textwrap填充文本，使其更易于阅读
             wrapped_thought = textwrap.fill(thought, width=100, initial_indent="  ", subsequent_indent="  ")
-            print(Fore.CYAN + wrapped_thought + Style.RESET_ALL)
-            print(Fore.BLUE + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + Style.RESET_ALL)
+            print(Fore.CYAN + wrapped_thought + ColorStyle.RESET_ALL)
+            print(Fore.BLUE + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ColorStyle.RESET_ALL)
 
         if patches and isinstance(patches, list):
-            print(Fore.BLUE + "\nSummary of Planned Changes:" + Style.RESET_ALL)
+            print(Fore.BLUE + "\nSummary of Planned Changes:" + ColorStyle.RESET_ALL)
             for i, patch in enumerate(patches):
                 action = patch.get("action", "UNKNOWN").upper().replace("_", " ")
                 path = patch.get("path", "N/A")
@@ -2352,7 +2462,7 @@ def _display_thought_and_summary(response_text: str):
                     action_color = Fore.RED
                 elif "FILE" in action:
                     action_color = Fore.MAGENTA
-                print(f"  - {action_color}{action:<20}{Style.RESET_ALL} {path}")
+                print(f"  - {action_color}{action:<20}{ColorStyle.RESET_ALL} {path}")
             print()
 
     except (json.JSONDecodeError, TypeError):
@@ -2360,6 +2470,17 @@ def _display_thought_and_summary(response_text: str):
         pass
 
 
+@staticmethod
+@trace(
+    target_files=["*.py"],
+    enable_var_trace=True,
+    report_name="process_patch_response.html",
+    ignore_self=False,
+    ignore_system_paths=True,
+    disable_html=False,
+    source_base_dir=Path(__file__).parent.parent,
+    exclude_functions=["symbol_at_line", "get_symbol_paths", "traverse", "search_exact", "__init__", "insert"],
+)
 def process_patch_response(
     response_text,
     symbol_detail,
@@ -2385,24 +2506,24 @@ def process_patch_response(
     ).strip()
     if not ignore_new_symbol:
         add_symbol_details(filtered_response, symbol_detail)
-    if not no_mix:
-        file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
+    # if not no_mix:
+    #     file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
 
-        if file_part:
-            extract_and_diff_files(file_part, save=False)
-    else:
-        remaining = filtered_response
+    #     if file_part:
+    #         extract_and_diff_files(file_part, save=False)
+    # else:
+    remaining = filtered_response
 
     results = parse_llm_response(remaining, symbol_detail.keys())
     if not results:
-        print(Fore.YELLOW + "未从模型响应中解析出任何有效补丁。" + Style.RESET_ALL)
+        print(Fore.YELLOW + "未从模型响应中解析出任何有效补丁。" + ColorStyle.RESET_ALL)
         return None
 
     # 准备补丁数据
     patch_items = []
     for symbol_name, source_code in results:
         if symbol_name not in symbol_detail:
-            print(Fore.RED + f"错误：在symbol_detail中未找到符号 '{symbol_name}'，跳过此补丁。" + Style.RESET_ALL)
+            print(Fore.RED + f"错误：在symbol_detail中未找到符号 '{symbol_name}'，跳过此补丁。" + ColorStyle.RESET_ALL)
             continue
 
         if relative_to_root:
@@ -2425,7 +2546,7 @@ def process_patch_response(
         )
 
     if not patch_items:
-        print(Fore.YELLOW + "所有解析出的补丁均无效，操作终止。" + Style.RESET_ALL)
+        print(Fore.YELLOW + "所有解析出的补丁均无效，操作终止。" + ColorStyle.RESET_ALL)
         return None
 
     patch = BlockPatch(
@@ -3227,7 +3348,7 @@ class PatchPromptBuilder:
             #     current_dir=str(Path.cwd()), patch_rule=patch_text, symbol_path_rule_content=text
             # )
             v3 = (Path(__file__).parent / "prompts/patch-v3").read_text("utf8")
-            prompt += PATCH_PROMPT_HEADER_V3.format(current_dir=str(Path.cwd()), patch_rule=v3)
+            prompt += PATCH_PROMPT_HEADER.format(current_dir=str(Path.cwd()), patch_rule=v3)
             self.tokens_left -= len(prompt)
 
         file_range_prompt = self._build_file_range_prompt()
@@ -3437,8 +3558,21 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
 
     # 优先显示思考过程（如果响应是JSON格式）
     try:
-        data = json.loads(content)
-        if "thinking_process" in data:
+        data = None
+        # 方案一：从markdown块中提取
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
+        if match:
+            json_str = match.group(1).strip()
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                pass  # 如果块内不是有效JSON，则忽略
+
+        # 方案二：如果方案一未成功，尝试解析整个内容
+        if data is None:
+            data = json.loads(content)
+
+        if isinstance(data, dict) and "thinking_process" in data:
             display_llm_plan(data["thinking_process"])
     except (json.JSONDecodeError, TypeError):
         # 不是有效的JSON格式，静默处理，后续解析器会处理旧格式

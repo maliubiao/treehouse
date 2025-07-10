@@ -415,7 +415,9 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
         # Handle primitive and special types
         if isinstance(value, str):
             if len(value) > _MAX_VALUE_LENGTH:
-                return value[:_MAX_VALUE_LENGTH] + f"... (total length: {len(value)})"
+                half = _MAX_VALUE_LENGTH // 2
+                omitted = len(value) - 2 * half
+                return value[:half] + "..." + value[-half:] + f" (total length: {len(value)}, omitted: {omitted})"
             return value
         # Detect unittest.mock.Mock objects
         elif isinstance(value, Mock):

@@ -402,10 +402,34 @@ class LLMInstructionParser:
         "end": re.compile(r"^\[end.*\]$"),
     }
 
+    @staticmethod
+    def _extract_json_block(text: str) -> Optional[str]:
+        """
+        从markdown代码块（如 ```json ... ```）中提取JSON字符串。
+        此方法能健壮地处理周围的文本。
+
+        Args:
+            text: 来自LLM响应的原始字符串。
+
+        Returns:
+            提取出的JSON字符串，如果未找到有效块则返回None。
+        """
+        # 这个正则表达式寻找一个json块，允许可选的 "json" 语言提示。
+        # 它捕获围栏之间的内容。
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+        if match:
+            # 捕获的内容在块内可能仍有前导/尾随空格，因此我们对其进行strip。
+            return match.group(1).strip()
+        return None
+
     @classmethod
     def parse(cls, text: str) -> List[Dict[str, Any]]:
         """
         解析输入文本，自动检测并处理JSON或旧版标签格式。
+
+        该解析器是向后兼容的。它首先尝试从markdown代码块中查找并解析JSON。
+        如果失败或未找到，它会尝试将整个输入作为JSON解析。如果仍然失败，
+        它会回退到基于文本标签的旧格式进行解析。
 
         Args:
             text: 包含指令的原始字符串，可以是JSON或文本标签格式。
@@ -413,12 +437,22 @@ class LLMInstructionParser:
         Returns:
             一个指令字典的列表。
         """
+        # 方案一：从markdown块中提取并解析JSON
+        json_str = cls._extract_json_block(text)
+        if json_str:
+            try:
+                data = json.loads(json_str)
+                return cls._parse_from_json(data)
+            except json.JSONDecodeError:
+                # 如果提取的块不是有效的JSON，则继续尝试其他方案
+                pass
+
+        # 方案二：将整个文本作为JSON解析
         try:
-            # 优先尝试解析为JSON格式
             data = json.loads(text)
             return cls._parse_from_json(data)
         except json.JSONDecodeError:
-            # 如果JSON解析失败，回退到旧的文本标签格式解析
+            # 方案三：回退到旧的文本标签解析器
             return cls._parse_from_legacy_text(text)
 
     @classmethod

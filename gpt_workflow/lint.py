@@ -178,6 +178,14 @@ class PylintFixer:
         self.root_dir = root_dir if root_dir is not None else Path.cwd().resolve()
         self.git_hint = git_hint
 
+    def _get_pylint_args(self) -> List[str]:
+        """获取pylint的配置参数"""
+        args: List[str] = []
+        pylintrc_path = self.root_dir / ".pylintrc"
+        if pylintrc_path.exists():
+            args.extend(["--rcfile", str(pylintrc_path)])
+        return args
+
     def load_and_validate_log(self) -> None:
         """加载并验证日志文件或从git命令获取日志"""
         files_result = None
@@ -204,10 +212,7 @@ class PylintFixer:
                     )
 
                 # 准备pylint参数
-                pylint_args: List[str] = []
-                pylintrc_path = self.root_dir / ".pylintrc"
-                if pylintrc_path.exists():
-                    pylint_args.extend(["--rcfile", str(pylintrc_path)])
+                pylint_args = self._get_pylint_args()
 
                 # 一次性对所有文件执行pylint
                 pylint_files = files_result.stdout.splitlines() if files_result else []
@@ -347,24 +352,6 @@ class PylintFixer:
             ]
         return new_symbol_map
 
-    def _group_symbols_by_token_limit(self, symbol_map: Dict) -> list[list]:
-        """按token限制分组符号"""
-        groups: List[List[Dict]] = []
-        current_group: List[Dict] = []
-        current_size = 0
-        for symbol in symbol_map.values():
-            symbol_size = len(symbol["code"])
-            if current_size + symbol_size > llm_query.GLOBAL_MODEL_CONFIG.max_context_size:
-                groups.append(current_group)
-                current_group = [symbol]
-                current_size = symbol_size
-            else:
-                current_group.append(symbol)
-                current_size += symbol_size
-        if current_group:
-            groups.append(current_group)
-        return groups
-
     def update_symbol_map(self, file_path: str) -> Tuple[ParserUtil, Dict]:
         """更新符号映射"""
         parser_loader = ParserLoader()
@@ -372,17 +359,54 @@ class PylintFixer:
         _, code_map = parser_util.get_symbol_paths(file_path)
         return parser_util, code_map
 
+    def _rerun_pylint_for_file(self, file_path: str) -> None:
+        """针对单个文件重新运行pylint并更新结果"""
+        try:
+            pylint_args = self._get_pylint_args()
+            result = subprocess.run(
+                ["pylint", *pylint_args, file_path],
+                capture_output=True,
+                text=True,
+                cwd=self.root_dir,
+                check=False,
+            )
+            new_results = LintParser.parse(result.stdout)
+
+            # 更新全局results：移除旧的，添加新的
+            self.results = [r for r in self.results if r.file_path != file_path] + new_results
+
+            # 更新file_groups
+            self.file_groups[file_path] = new_results
+
+        except Exception as e:
+            print(f"重新运行pylint失败 for {file_path}: {str(e)}")
+            raise
+
     def _process_symbols_for_file(self, file_path: str) -> None:
-        """处理单个文件的所有符号"""
-        parser_util, code_map = self.update_symbol_map(file_path)
-        locations = self._get_symbol_locations(file_path)
-        symbol_map = self._associate_errors_with_symbols(file_path, parser_util, code_map, locations)
-        symbol_groups = self._group_symbols_by_token_limit(symbol_map)
-        for group in symbol_groups:
-            for symbol in group:
-                self._process_symbol_group(symbol, symbol_map)
-                # 更新后重新获取符号映射
-                parser_util, code_map = self.update_symbol_map(file_path)
+        """处理单个文件的所有符号，使用迭代修复循环"""
+        while self.file_groups.get(file_path):
+            parser_util, code_map = self.update_symbol_map(file_path)
+            locations = self._get_symbol_locations(file_path)
+            if not locations:
+                break
+
+            symbol_map = self._associate_errors_with_symbols(file_path, parser_util, code_map, locations)
+
+            # 获取有错误的symbols，按起始行排序（从上到下修复）
+            symbols_with_errors = [s for s in symbol_map.values() if s.get("own_errors")]
+            if not symbols_with_errors:
+                break
+
+            symbols_with_errors.sort(key=lambda s: min(l[0] for l in s["locations"]))
+
+            # 处理第一个有错误的symbol
+            symbol = symbols_with_errors[0]
+            self._process_symbol_group(symbol, symbol_map)
+
+            # 修复后重新运行pylint更新错误列表
+            self._rerun_pylint_for_file(file_path)
+
+        print(f"Finished processing {file_path}")
 
     def execute(self) -> None:
         """执行完整的修复流程"""
