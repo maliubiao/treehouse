@@ -296,7 +296,7 @@ This is a separate, valid instruction.
             ],
         }
         instructions_text = json.dumps(json_input, indent=2)
-        instructions = LLMInstructionParser.parse(instructions_text)
+        instructions = LLMInstructionParser.parse(instructions_text, use_json=True)
 
         self.assertEqual(len(instructions), 3)
 
@@ -318,7 +318,7 @@ This is a separate, valid instruction.
         """测试当JSON的actions数组为空时，解析器是否返回空列表。"""
         json_input = {"thinking_process": {}, "actions": []}
         instructions_text = json.dumps(json_input)
-        instructions = LLMInstructionParser.parse(instructions_text)
+        instructions = LLMInstructionParser.parse(instructions_text, use_json=True)
         self.assertEqual(instructions, [])
 
     def test_parser_json_format_ignores_unknown_action(self) -> None:
@@ -331,7 +331,7 @@ This is a separate, valid instruction.
             ],
         }
         instructions_text = json.dumps(json_input)
-        instructions = LLMInstructionParser.parse(instructions_text)
+        instructions = LLMInstructionParser.parse(instructions_text, use_json=True)
 
         self.assertEqual(len(instructions), 1)
         self.assertEqual(instructions[0]["type"], "created_file")

@@ -2068,7 +2068,7 @@ class BlockPatchResponse:
     _END_TAG_RE = re.compile(r"\[end(?:\.\d+)?\]")
 
     def __init__(self, symbol_names=None, use_json=False):
-        self.symbol_names = symbol_names
+        self.symbol_names = symbol_names or []  # 确保symbol_names是列表
         self.use_json = use_json
 
     def _extract_json_from_markdown(self, text: str) -> str | None:
@@ -2092,6 +2092,7 @@ class BlockPatchResponse:
     def _parse_legacy(self, response_text: str) -> list[tuple[str, str]]:
         """使用基于行的状态机解析旧的标签格式，提取所有类型的补丁块（symbol/block/file）。
         支持嵌套标签，并收集 (whole_path, block_content) 对。
+        总是提取所有符号，不附加非匹配符号的内容。
         """
         results = []
         lines = response_text.splitlines()
@@ -2101,6 +2102,7 @@ class BlockPatchResponse:
         end_re = self._END_TAG_RE
 
         i = 0
+
         while i < len(lines):
             line = lines[i]
             header_match = header_re.match(line)
@@ -2110,6 +2112,7 @@ class BlockPatchResponse:
                 continue
 
             # Found a header
+            header_type = header_match.group(1)
             whole_path = header_match.group(2).strip()
 
             # Search for the block for this header
@@ -2125,24 +2128,24 @@ class BlockPatchResponse:
 
                 if start_re.fullmatch(current_line_stripped):
                     if nesting_level == 0:
-                        block_start_line = j + 1  # Content starts after [start]
+                        block_start_line = j + 1  # Content starts after [start.93]
                     nesting_level += 1
                     block_started = True
                 elif end_re.fullmatch(current_line_stripped):
                     if nesting_level > 0:
                         nesting_level -= 1
                         if nesting_level == 0:
-                            block_end_line = j  # End before [end]
+                            block_end_line = j  # End before [end.93]
                             break
 
                 j += 1
 
             if block_start_line != -1 and block_end_line != -1 and block_start_line < block_end_line:
-                # Extract content (excluding [start] and [end] lines)
+                # Extract content (excluding [start.93] and [end.93] lines)
                 content_lines = lines[block_start_line:block_end_line]
                 block_content = "\n".join(content_lines)
 
-                # Append to results regardless of type (symbol/block/file)
+                # 总是提取所有符号，不附加pending_contents
                 results.append((whole_path, block_content))
 
                 # Jump outer loop cursor past the processed block
@@ -2160,7 +2163,8 @@ class BlockPatchResponse:
         """
         if self.use_json:
             json_content = self._extract_json_from_markdown(response_text)
-
+            if not json_content:
+                json_content = response_text
             if json_content is not None:
                 # 如果存在JSON块，则将其视为唯一信源
                 try:
@@ -2283,6 +2287,8 @@ class BlockPatchResponse:
             # 1. 检查并解析Markdown块中的JSON
 
             json_content = BlockPatchResponse._extract_json_from_markdown_static(response_text)
+            if not json_content:
+                json_content = response_text
             if json_content:
                 try:
                     return BlockPatchResponse._extract_symbols_from_json(json_content)
@@ -2293,12 +2299,12 @@ class BlockPatchResponse:
             return BlockPatchResponse._extract_symbols_from_legacy(response_text)
 
 
-def parse_llm_response(response_text, symbol_names=None):
+def parse_llm_response(response_text, symbol_names=None, use_json=False):
     """
     快速解析响应内容
     返回格式: [(symbol_name, source_code), ...]
     """
-    parser = BlockPatchResponse(symbol_names=symbol_names)
+    parser = BlockPatchResponse(symbol_names=None, use_json=use_json)  # 总是解析所有符号，不使用symbol_names过滤
     return parser.parse(response_text)
 
 
@@ -2363,13 +2369,26 @@ def lookup_symbols(file, symbol_names):
 NewSymbolFlag = "new_symbol_add_newlines"
 
 
-def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
+def interactive_symbol_location(file, path, parent_symbol=None, parent_symbol_info=None):
     if not os.path.exists(file):
         raise FileNotFoundError(f"Source file not found: {file}")
 
-    start_line = parent_symbol_info.get("start_line", 1)
-    block_content = parent_symbol_info["block_content"].decode("utf-8")
-    lines = block_content.splitlines()
+    # 如果没有提供parent_symbol_info，则使用整个文件作为父级
+    if parent_symbol_info is None:
+        with open(file, "rb") as f:
+            block_content = f.read()
+        start_line = 1
+        lines = block_content.decode("utf-8").splitlines()
+        parent_symbol = "__file__" if parent_symbol is None else parent_symbol
+        parent_symbol_info = {
+            "start_line": start_line,
+            "block_range": [0, len(block_content)],
+            "block_content": block_content,
+        }
+    else:
+        start_line = parent_symbol_info.get("start_line", 1)
+        block_content = parent_symbol_info["block_content"].decode("utf-8")
+        lines = block_content.splitlines()
 
     print(f"\nParent symbol: {parent_symbol}, New symbol: {path}")
     print(f"File: {file}")
@@ -2380,14 +2399,14 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
 
     for i, line in enumerate(highlighted_lines):
         print(f"{Fore.YELLOW}{start_line + i:4d}{ColorStyle.RESET_ALL} | {line}")
-    print(f"{Fore.YELLOW}{start_line + i + 1:4d}{ColorStyle.RESET_ALL} |")
+    print(f"{Fore.YELLOW}{start_line + len(highlighted_lines):4d}{ColorStyle.RESET_ALL} |")
     while True:
         try:
             selected_line = int(input("\nEnter insert line number for new symbol location: "))
-            if start_line <= selected_line <= start_line + len(lines):
+            if start_line <= selected_line <= start_line + len(lines) + 1:  # 允许插入到文件末尾
                 break
             print(
-                f"{Fore.RED}Line number must be between {start_line} and {start_line + len(lines) - 1}{ColorStyle.RESET_ALL}"
+                f"{Fore.RED}Line number must be between {start_line} and {start_line + len(lines) + 1}{ColorStyle.RESET_ALL}"
             )
         except ValueError:
             print(f"{Fore.RED}Please enter a valid integer{ColorStyle.RESET_ALL}")
@@ -2395,11 +2414,16 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
     parent_content = parent_symbol_info["block_content"]
     line_offsets = [0]
     offset = 0
-    for line in parent_content.splitlines(keepends=True):
-        offset += len(line)
+    for line in parent_content.decode("utf-8").splitlines(keepends=True):
+        offset += len(line.encode("utf-8"))
         line_offsets.append(offset)
 
-    selected_offset = parent_symbol_info["block_range"][0] + line_offsets[selected_line - start_line]
+    # 如果选择的是文件末尾，offset为文件长度
+    if selected_line == start_line + len(lines) + 1:
+        selected_offset = parent_symbol_info["block_range"][0] + len(parent_content)
+    else:
+        selected_offset = parent_symbol_info["block_range"][0] + line_offsets[selected_line - start_line]
+
     return {
         "file_path": file,
         "block_range": [selected_offset, selected_offset],
@@ -2409,7 +2433,7 @@ def interactive_symbol_location(file, path, parent_symbol, parent_symbol_info):
 
 
 def add_symbol_details(remaining, symbol_detail, use_json=False):
-    require_info_map = BlockPatchResponse.extract_symbol_paths(remaining)
+    require_info_map = BlockPatchResponse.extract_symbol_paths(remaining, use_json=use_json)
     require_info_syms = {}
     # First pass: collect required symbols
     for file, symbols in require_info_map.items():
@@ -2491,6 +2515,7 @@ def process_patch_response(
     ignore_new_symbol: bool = False,
     no_mix: bool = False,
     confirm: str = "",
+    use_json_output=False,
 ):
     """处理大模型的补丁响应，生成差异并应用补丁"""
     # 优先显示v4格式的思考过程
@@ -2514,10 +2539,23 @@ def process_patch_response(
     # else:
     remaining = filtered_response
 
-    results = parse_llm_response(remaining, symbol_detail.keys())
+    results = parse_llm_response(remaining, symbol_names=None)  # 总是解析所有符号
     if not results:
         print(Fore.YELLOW + "未从模型响应中解析出任何有效补丁。" + ColorStyle.RESET_ALL)
         return None
+
+    # 处理新符号：对于不在symbol_detail中的符号，提供UI选择插入位置
+    for symbol_name, _ in results:
+        if symbol_name not in symbol_detail:
+            # 提取文件路径和符号名
+            if "/" in symbol_name:
+                file, sym = symbol_name.rsplit("/", 1)
+            else:
+                file = symbol_name  # 假设是文件路径
+                sym = symbol_name
+            # 调用interactive_symbol_location，选择插入位置（无parent时使用整个文件）
+            symbol_info = interactive_symbol_location(file=file, path=sym)
+            symbol_detail[symbol_name] = symbol_info
 
     # 准备补丁数据
     patch_items = []
@@ -3062,7 +3100,12 @@ class GPTContextProcessor:
                 result.append(TextNode(content=part.replace("\\@", "@")))
             if i < len(commands):
                 cmd = commands[i].lstrip("@")
-                if ":" in cmd and not cmd.startswith("http"):
+                if cmd.startswith("symbol_"):
+                    # 将命令拆分为 "symbol" 和参数
+                    command_type = "symbol"
+                    args = cmd[len("symbol_") :]
+                    result.append(CmdNode(command=command_type, command_type=command_type, args=args.split(",")))
+                elif ":" in cmd and not cmd.startswith("http"):
                     symbol, _, arg = cmd.partition(":")
                     cmd_groups[symbol].append(arg)
                 else:
@@ -3080,7 +3123,9 @@ class GPTContextProcessor:
 
         return result
 
-    def process_text(self, text: str, ignore_text: bool = False, tokens_left: int = None) -> str:
+    def process_text(
+        self, text: str, ignore_text: bool = False, tokens_left: int = None, use_json_output: bool = False
+    ) -> str:
         """处理文本并生成上下文提示"""
         if not tokens_left:
             if not GLOBAL_MODEL_CONFIG:
@@ -3121,13 +3166,17 @@ class GPTContextProcessor:
         # 处理符号节点
         symbol_prompt = ""
         if symbol_nodes:
-            symbol_prompt = self.generate_symbol_patch_prompt(symbol_nodes, tokens_left - processed_parts_len)
+            symbol_prompt = self.generate_symbol_patch_prompt(
+                symbol_nodes, tokens_left - processed_parts_len, use_json_output=use_json_output
+            )
             tokens_left -= len(symbol_prompt)
         return symbol_prompt + self._finalize_output(processed_parts_text, tokens_left)
 
-    def generate_symbol_patch_prompt(self, symbol_nodes, tokens_left: int) -> str:
+    def generate_symbol_patch_prompt(self, symbol_nodes, tokens_left: int, use_json_output: bool = False) -> str:
         """生成符号补丁提示"""
-        builder = PatchPromptBuilder(GPT_FLAGS.get(GPT_FLAG_PATCH), symbol_nodes, tokens_left=tokens_left)
+        builder = PatchPromptBuilder(
+            GPT_FLAGS.get(GPT_FLAG_PATCH), symbol_nodes, tokens_left=tokens_left, use_json_output=use_json_output
+        )
         return builder.build()
 
     def _process_command(self, cmd_node: CmdNode) -> str:
@@ -3176,13 +3225,20 @@ class GPTContextProcessor:
 
 
 class PatchPromptBuilder:
-    def __init__(self, use_patch: bool, symbols: List[Union[SearchSymbolNode, CmdNode]], tokens_left: int = None):
+    def __init__(
+        self,
+        use_patch: bool,
+        symbols: List[Union[SearchSymbolNode, CmdNode]],
+        tokens_left: int = None,
+        use_json_output: bool = False,
+    ):
         self.use_patch = use_patch
         self.symbols = symbols
         self.symbol_map = {}
         self.file_ranges = None
         self.max_tokens = tokens_left
         self.tokens_left = tokens_left or GLOBAL_MODEL_CONFIG.max_context_size
+        self.use_json_output = use_json_output
 
     def process_search_results(self, search_results: dict) -> None:
         """处理perform_search返回的结果并更新symbol_map"""
@@ -3348,6 +3404,8 @@ class PatchPromptBuilder:
             #     current_dir=str(Path.cwd()), patch_rule=patch_text, symbol_path_rule_content=text
             # )
             v3 = (Path(__file__).parent / "prompts/patch-v3").read_text("utf8")
+            if self.use_json_output:
+                v3 = (Path(__file__).parent / "prompts/patch-v4").read_text("utf8")
             prompt += PATCH_PROMPT_HEADER.format(current_dir=str(Path.cwd()), patch_rule=v3)
             self.tokens_left -= len(prompt)
 
@@ -3551,35 +3609,34 @@ def _apply_patch(diff_file):
         raise RuntimeError(error_msg) from e
 
 
-def extract_and_diff_files(content, auto_apply=False, save=True):
+def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output: bool = False):
     """从内容中提取文件、执行替换并生成diff"""
     if save:
         _save_response_content(content)
 
-    # 优先显示思考过程（如果响应是JSON格式）
+    if use_json_output:
+        try:
+            data = None
+            # 方案一：从markdown块中提取
+            match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
+            if match:
+                json_str = match.group(1).strip()
+                try:
+                    data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    pass  # 如果块内不是有效JSON，则忽略
+
+            # 方案二：如果方案一未成功，尝试解析整个内容
+            if data is None:
+                data = json.loads(content)
+
+            if isinstance(data, dict) and "thinking_process" in data:
+                display_llm_plan(data["thinking_process"])
+        except (json.JSONDecodeError, TypeError):
+            # 不是有效的JSON格式，静默处理，后续解析器会处理旧格式
+            pass
     try:
-        data = None
-        # 方案一：从markdown块中提取
-        match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
-        if match:
-            json_str = match.group(1).strip()
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError:
-                pass  # 如果块内不是有效JSON，则忽略
-
-        # 方案二：如果方案一未成功，尝试解析整个内容
-        if data is None:
-            data = json.loads(content)
-
-        if isinstance(data, dict) and "thinking_process" in data:
-            display_llm_plan(data["thinking_process"])
-    except (json.JSONDecodeError, TypeError):
-        # 不是有效的JSON格式，静默处理，后续解析器会处理旧格式
-        pass
-
-    try:
-        instructions = LLMInstructionParser.parse(content)
+        instructions = LLMInstructionParser.parse(content, use_json=use_json_output)
     except Exception as e:
         print(f"解析LLM响应时出错: {e}", file=sys.stderr)
         return
@@ -3900,7 +3957,7 @@ def display_llm_plan(thinking_process: dict):
     print("Now, reviewing the proposed code changes...\n")
 
 
-def process_response(prompt, content, file_path, save=True, obsidian_doc=None, ask_param=None):
+def process_response(prompt, content, file_path, save=True, obsidian_doc=None, ask_param=None, use_json_output=False):
     """处理API响应并保存结果"""
 
     # 处理文件路径
@@ -3936,7 +3993,9 @@ def process_response(prompt, content, file_path, save=True, obsidian_doc=None, a
         extract_and_diff_files(content)
     if GPT_FLAGS.get(GPT_FLAG_PATCH):
         os.chdir(GLOBAL_PROJECT_CONFIG.project_root_dir)
-        process_patch_response(content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], relative_to_root=True)
+        process_patch_response(
+            content, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH], relative_to_root=True, use_json_output=use_json_output
+        )
 
 
 def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
@@ -4015,9 +4074,13 @@ def handle_ask_mode(program_args, proxies):
     model_switch = ModelSwitch()
     model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
-    text = context_processor.process_text(program_args.ask)
+    # 根据模型配置自动设置use_json_output
+    use_json_output = GLOBAL_MODEL_CONFIG.supports_json_output
+    text = context_processor.process_text(program_args.ask, use_json_output=use_json_output)
     print(text)
-    response_data = model_switch.query(os.environ["GPT_MODEL_KEY"], text, proxies=proxies)
+    response_data = model_switch.query(
+        os.environ["GPT_MODEL_KEY"], text, proxies=proxies, use_json_output=use_json_output
+    )
     process_response(
         text,
         response_data,
@@ -4025,6 +4088,7 @@ def handle_ask_mode(program_args, proxies):
         save=True,
         obsidian_doc=program_args.obsidian_doc,
         ask_param=program_args.ask,
+        use_json_output=use_json_output,  # 新增传递use_json_output
     )
 
 

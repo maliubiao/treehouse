@@ -67,6 +67,10 @@ class ProjectConfig:
         except ValueError:
             return str(path)
 
+    def absolute_path(self, path: Union[Path, str]) -> str:
+        """获取绝对路径"""
+        return str(Path(self.project_root_dir) / path)
+
     def relative_to_current_path(self, path: Union[Path, str]) -> str:
         path = Path(path)
         if path.is_absolute():

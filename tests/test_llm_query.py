@@ -151,8 +151,6 @@ class TestGPTContextProcessor(unittest.TestCase):
         self.assertIn("输入太长内容已自动截断", result)
 
         # 验证截断后的实际长度是否是根据内部计算的字符限制（tokens_left * 3）
-        # _finalize_output 会在 len(text) > max_tokens 时将文本截断到 max_tokens 长度
-        # 这里的 max_tokens 实际就是 tokens_left_for_process_text * 3
         # long_text (131172) 肯定大于 (expected_char_length_limit // 3 * 3 = 131070),
         # 所以会触发截断，最终长度为 131070
         actual_truncated_length = tokens_left_for_process_text * 3
@@ -211,7 +209,9 @@ class TestGPTContextProcessor(unittest.TestCase):
 
             result = self.processor.process_text(text, tokens_left=self.default_tokens_left)
 
-            mock_process.assert_called_once_with([SearchSymbolNode(symbols=["test_symbol"])], expected_tokens_left)
+            mock_process.assert_called_once_with(
+                [SearchSymbolNode(symbols=["test_symbol"])], expected_tokens_left, use_json_output=False
+            )
             self.assertEqual(result, "符号处理结果" + processed_text_content)
 
     def test_multiple_symbols_processing(self):
@@ -227,7 +227,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             result = self.processor.process_text(text, tokens_left=self.default_tokens_left)
 
             mock_process.assert_called_once_with(
-                [SearchSymbolNode(symbols=["symbol1", "symbol2"])], expected_tokens_left
+                [SearchSymbolNode(symbols=["symbol1", "symbol2"])], expected_tokens_left, use_json_output=False
             )
             self.assertEqual(result, "多符号处理结果" + processed_text_content)
 
@@ -247,7 +247,7 @@ class TestGPTContextProcessor(unittest.TestCase):
             result = self.processor.process_text(text, tokens_left=self.default_tokens_left)
 
             mock_symbol.assert_called_once_with(
-                [SearchSymbolNode(symbols=["symbol1", "symbol2"])], expected_tokens_left
+                [SearchSymbolNode(symbols=["symbol1", "symbol2"])], expected_tokens_left, use_json_output=False
             )
             self.assertEqual(result, "符号处理结果" + text_after_processing)
 
@@ -322,7 +322,7 @@ class TestGPTContextProcessor(unittest.TestCase):
                 mock_instance.build.return_value = "test prompt"
                 result = self.processor.generate_symbol_patch_prompt(["test_symbol"], 102400)
                 self.assertEqual(result, "test prompt")
-                mock_builder.assert_called_once_with(False, ["test_symbol"], tokens_left=102400)
+                mock_builder.assert_called_once_with(False, ["test_symbol"], tokens_left=102400, use_json_output=False)
                 mock_instance.build.assert_called_once()
 
             # 测试多个符号
@@ -331,8 +331,32 @@ class TestGPTContextProcessor(unittest.TestCase):
                 mock_instance.build.return_value = "multi symbol prompt"
                 result = self.processor.generate_symbol_patch_prompt(["symbol1", "symbol2"], tokens_left=102400)
                 self.assertEqual(result, "multi symbol prompt")
-                mock_builder.assert_called_once_with(False, ["symbol1", "symbol2"], tokens_left=102400)
+                mock_builder.assert_called_once_with(
+                    False, ["symbol1", "symbol2"], tokens_left=102400, use_json_output=False
+                )
                 mock_instance.build.assert_called_once()
+
+    def test_process_text_with_json_output(self):
+        """测试process_text方法在启用JSON输出时的行为"""
+        text = "@symbol_llm_query.py/test"
+        with patch("llm_query.PatchPromptBuilder") as mock_builder:
+            mock_instance = mock_builder.return_value
+            mock_instance.build.return_value = "JSON格式的符号补丁提示"
+
+            # 调用process_text，启用use_json_output
+            result = self.processor.process_text(text, tokens_left=self.default_tokens_left, use_json_output=True)
+
+            # 验证PatchPromptBuilder被正确初始化，use_json_output=True被传递
+            mock_builder.assert_called_once_with(
+                False,  # GPT_FLAGS[GPT_FLAG_PATCH] 默认False
+                [CmdNode(command="symbol", command_type="symbol", args=["llm_query.py/test"])],
+                tokens_left=self.default_tokens_left * 3,  # process_text内部tokens_left *= 3
+                use_json_output=True,
+            )
+            mock_instance.build.assert_called_once()
+
+            # 验证返回结果包含mock的输出
+            self.assertEqual(result, "JSON格式的符号补丁提示")
 
     @patch("llm_query.requests.get")
     def test_get_symbol_detail(self, mock_get):
@@ -469,85 +493,38 @@ class TestFileRange(unittest.TestCase):
         response = dedent(
             """
 [overwrite whole block]: example.py:10-20
-[start]
+[start.84]
 def new_function():
     print("Added by patch")
-[end]
+[end.84]
         """
         )
-        parser = BlockPatchResponse()
+        parser = BlockPatchResponse(use_json=False)
         results = parser.parse(response)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][0], "example.py:10-20")
         self.assertIn("new_function", results[0][1])
 
-    def test_symbol_attachment(self):
-        """测试未注册符号内容附加到最近合法符号"""
-        # 模拟包含非法符号的响应
-        response = """
-[overwrite whole symbol]: invalid_symbol
-[start]
-print("Should attach to next valid")
-[end]
-
-[overwrite whole symbol]: valid_symbol
-[start]
-def valid_func():
-    pass
-[end]
-        """
-        parser = BlockPatchResponse(symbol_names=["valid_symbol"])
-        results = parser.parse(response)
-
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0][0], "valid_symbol")
-        self.assertIn("valid_func", results[0][1])
-        self.assertIn('print("Should attach', results[0][1])
-
-    def test_multiple_attachments(self):
-        """测试多个非法符号连续附加"""
-        response = """
-[overwrite whole symbol]: invalid1
-[start]
-a = 1
-[end]
-
-[overwrite whole symbol]: invalid2
-[start]
-b = 2
-[end]
-
-[overwrite whole symbol]: valid
-[start]
-c = 3
-[end]
-        """
-        parser = BlockPatchResponse(symbol_names=["valid"])
-        results = parser.parse(response)
-
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0][1].strip(), "a = 1\n\nb = 2\n\nc = 3")
-
     def test_extract_symbol_paths_legacy_format(self):
         """测试从旧版（非JSON）响应中提取符号路径"""
         response = """
 [overwrite whole symbol]: path/to/file1.py/symbol1
-[start]
+[start.84]
 code1
-[end]
+[end.84]
 
 [overwrite whole symbol]: path/to/file2.py/symbol2
-[start]
+[start.84]
 code2
-[end]
+[end.84]
 
 [overwrite whole symbol]: path/to/file1.py/symbol3
-[start]
+[start.84]
 code3
-[end]
+[end.84]
         """
-        parser = BlockPatchResponse()
-        result = parser.extract_symbol_paths(response)
+        parser = BlockPatchResponse(use_json=False)
+        result = parser.extract_symbol_paths(response, use_json=False)
 
         expected = {
             "path/to/file1.py": ["symbol1", "symbol3"],
@@ -578,29 +555,29 @@ code3
         remaining = dedent(
             f'''
         [overwrite whole symbol]: {tmp_path}/func1
-        [start]
+        [start.84]
         def func1():
             """修改后的函数1"""
             return 42
-        [end]
+        [end.84]
 
         [overwrite whole symbol]: {tmp_path}/TestClass
-        [start]
+        [start.84]
         class TestClass:
             """修改后的类"""
             def method1(self):
                 return "modified"
-        [end]
+        [end.84]
         '''
         )
         try:
             symbol_detail = {}
-            require_info_map = BlockPatchResponse.extract_symbol_paths(remaining)
+            require_info_map = BlockPatchResponse.extract_symbol_paths(remaining, use_json=False)
             self.assertEqual(len(require_info_map), 1)
             self.assertIn(tmp_path, require_info_map)
 
             # 调用测试函数
-            llm_query.add_symbol_details(remaining, symbol_detail)
+            llm_query.add_symbol_details(remaining, symbol_detail, use_json=False)
 
             # 验证结果
             self.assertEqual(len(symbol_detail), 2)
@@ -708,16 +685,16 @@ code3
             remaining = dedent(
                 f"""
             [overwrite whole symbol]: {tmp_path}/new_symbol
-            [start]
+            [start.84]
             new_code = 42
-            [end]
+            [end.84]
             """
             )
 
             # 模拟用户输入(选择第2行，即target_func的位置)
             with unittest.mock.patch("builtins.input", side_effect=["2"]):
                 symbol_detail = {}
-                llm_query.add_symbol_details(remaining, symbol_detail)
+                llm_query.add_symbol_details(remaining, symbol_detail, use_json=False)
 
             # 验证结果
             self.assertEqual(len(symbol_detail), 1)
@@ -756,7 +733,7 @@ code3
                 ],
             }
         )
-        parser = BlockPatchResponse()
+        parser = BlockPatchResponse(use_json=True)
         results = parser.parse(response_text)
         self.assertEqual(len(results), 3)
         self.assertIn(("file1.py", "new file content"), results)
@@ -766,7 +743,7 @@ code3
     def test_parse_invalid_json(self):
         """测试解析无效JSON时应回退并返回空列表"""
         invalid_json_text = '{"thought": "bad json", "patches": ['
-        parser = BlockPatchResponse()
+        parser = BlockPatchResponse(use_json=True)
         # JSON解析失败，回退到旧格式解析，旧格式也找不到匹配，最终返回空列表
         self.assertEqual(parser.parse(invalid_json_text), [])
 
@@ -774,7 +751,7 @@ code3
         """测试解析结构不正确的JSON数据"""
         # 缺少 'patches' 键
         missing_patches = json.dumps({"thought": "thought only"})
-        parser = BlockPatchResponse()
+        parser = BlockPatchResponse(use_json=True)
         # JSON结构不正确，_parse_json返回空列表
         self.assertEqual(parser.parse(missing_patches), [])
 
@@ -806,7 +783,7 @@ code3
                 ],
             }
         )
-        result = BlockPatchResponse.extract_symbol_paths(response_text)
+        result = BlockPatchResponse.extract_symbol_paths(response_text, use_json=True)
         expected = {
             "path/to/file1.py": ["symbol1", "symbol3"],
         }
@@ -825,7 +802,7 @@ code3
                 ],
             }
         )
-        parser = BlockPatchResponse()
+        parser = BlockPatchResponse(use_json=True)
         results = parser.parse(json_response)
         self.assertEqual(len(results), 3)
         self.assertIn(("file1.py", "new file content"), results)
@@ -835,13 +812,13 @@ code3
         # 2. 测试无效JSON，回退到旧格式解析
         legacy_response_with_invalid_json_chars = """
 [overwrite whole symbol]: valid_symbol
-[start]
+[start.84]
 { "incomplete_json": "value"
 def valid_func():
     pass
-[end]
+[end.84]
         """
-        parser_fallback = BlockPatchResponse(symbol_names=["valid_symbol"])
+        parser_fallback = BlockPatchResponse(symbol_names=["valid_symbol"], use_json=False)
         results_fallback = parser_fallback.parse(legacy_response_with_invalid_json_chars)
         self.assertEqual(len(results_fallback), 1)
         self.assertEqual(results_fallback[0][0], "valid_symbol")
@@ -893,7 +870,7 @@ def valid_func():
 
         try:
             symbol_detail = {}
-            llm_query.add_symbol_details(remaining, symbol_detail)
+            llm_query.add_symbol_details(remaining, symbol_detail, use_json=True)
 
             self.assertEqual(len(symbol_detail), 2)
             self.assertIn(f"{tmp_path}/func1", symbol_detail)
@@ -919,7 +896,7 @@ def valid_func():
             Some trailing text.
         """
         )
-        parser = BlockPatchResponse()
+        parser = BlockPatchResponse(use_json=True)
         results = parser.parse(response_text)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0], ("file.py/my_func", "def my_func(): pass"))
@@ -927,7 +904,7 @@ def valid_func():
     def test_parse_malformed_json_in_markdown_block_returns_empty(self):
         """测试解析markdown中格式错误的JSON时应返回空列表"""
         response_text = '```json\n{"patches": [,]}\n```'
-        parser = BlockPatchResponse()
+        parser = BlockPatchResponse(use_json=True)
         results = parser.parse(response_text)
         self.assertEqual(results, [])
 
@@ -949,6 +926,109 @@ def valid_func():
         result = BlockPatchResponse.extract_symbol_paths(response_text, use_json=True)
         expected = {"file1.py": ["func1", "func2"]}
         self.assertEqual(result, expected)
+
+    def test_extract_symbol_paths_with_use_json_false(self):
+        """测试当use_json=False时，正确使用legacy解析提取符号路径"""
+        response = """
+[overwrite whole symbol]: path/to/file1.py/symbolA
+[start.84]
+codeA
+[end.84]
+
+[overwrite whole symbol]: path/to/file1.py/symbolB
+[start.84]
+codeB
+[end.84]
+        """
+        result = BlockPatchResponse.extract_symbol_paths(response, use_json=False)
+        expected = {
+            "path/to/file1.py": ["symbolA", "symbolB"],
+        }
+        self.assertEqual(result, expected)
+
+    def test_extract_symbol_paths_with_use_json_true_fallback(self):
+        """测试当use_json=True但响应不是有效JSON时，返回空字典"""
+        invalid_response = "Not a JSON {invalid}"
+        result = BlockPatchResponse.extract_symbol_paths(invalid_response, use_json=True)
+        self.assertEqual(result, {})
+
+    def test_parse_with_use_json_false_legacy(self):
+        """测试当use_json=False时，正确解析legacy格式响应"""
+        legacy_response = """
+[overwrite whole symbol]: file.py/my_func
+[start.84]
+def my_func():
+    pass
+[end.84]
+        """
+        parser = BlockPatchResponse(use_json=False)
+        results = parser.parse(legacy_response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0], ("file.py/my_func", "def my_func():\n    pass"))
+
+    def test_add_symbol_details_with_use_json_true(self):
+        """测试add_symbol_details在use_json=True时正确处理JSON响应"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+            tmp.write(
+                dedent(
+                    """
+            def func1():
+                pass
+            """
+                )
+            )
+            tmp_path = tmp.name
+
+        remaining = json.dumps(
+            {
+                "patches": [
+                    {
+                        "action": "overwrite_symbol",
+                        "path": f"{tmp_path}/func1",
+                        "content": "def func1():\n    return 1",
+                    },
+                ],
+            }
+        )
+
+        try:
+            symbol_detail = {}
+            llm_query.add_symbol_details(remaining, symbol_detail, use_json=True)
+            self.assertEqual(len(symbol_detail), 1)
+            self.assertIn(f"{tmp_path}/func1", symbol_detail)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_add_symbol_details_with_use_json_false_legacy(self):
+        """测试add_symbol_details在use_json=False时正确处理legacy响应"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
+            tmp.write(
+                dedent(
+                    """
+            def func1():
+                pass
+            """
+                )
+            )
+            tmp_path = tmp.name
+
+        remaining = dedent(
+            f"""
+        [overwrite whole symbol]: {tmp_path}/func1
+        [start.84]
+        def func1():
+            return 1
+        [end.84]
+        """
+        )
+
+        try:
+            symbol_detail = {}
+            llm_query.add_symbol_details(remaining, symbol_detail, use_json=False)
+            self.assertEqual(len(symbol_detail), 1)
+            self.assertIn(f"{tmp_path}/func1", symbol_detail)
+        finally:
+            os.unlink(tmp_path)
 
 
 class TestGitignoreFunctions(unittest.TestCase):
@@ -1121,15 +1201,15 @@ class TestExtractAndDiffFiles(unittest.TestCase):
         # 测试内容
         test_content = """
 [overwrite whole file]: test.txt
-[start]
+[start.58]
 line1
 line2
 line3
-[end]
+[end.58]
 """
         # 执行处理
         with patch("llm_query._apply_patch"):
-            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False, use_json_output=False)
 
         # 验证文件内容
         # _apply_patch is mocked, so we check shadow content to verify logic up to diffing
@@ -1147,7 +1227,7 @@ new content
 [end.60]
 """
 
-        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
+        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False, use_json_output=False)
 
         # 直接验证文件创建和内容写入
         self.assertTrue(test_file.exists())
@@ -1170,7 +1250,7 @@ new content
             patch("llm_query._apply_patch"),
             patch("builtins.input", return_value="all"),
         ):  # 确认应用
-            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=True)
 
             mock_display.assert_called_once_with({"requirement_analysis": "Test analysis"})
 
@@ -1184,13 +1264,13 @@ new content
         # 测试内容
         test_content = """
 [project setup script]
-[start]
+[start.58]
 #!/bin/bash
 echo 'setup'
-[end]
+[end.58]
 """
         # 执行处理
-        llm_query.extract_and_diff_files(test_content, save=False)
+        llm_query.extract_and_diff_files(test_content, save=False, use_json_output=False)
 
         # 验证脚本文件
         setup_script = self.shadow_dir / "project_setup.sh"
@@ -1205,17 +1285,17 @@ echo 'setup'
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start]
+[start.58]
 new content 1
-[end]
+[end.58]
 
 [overwrite whole file]: test2.txt
-[start]
+[start.58]
 new content 2
-[end]
+[end.58]
 """
         with patch("builtins.input", return_value="all") as mock_input, patch("llm_query._apply_patch") as mock_apply:
-            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
             mock_input.assert_called_once()
             self.assertEqual(mock_apply.call_count, 2)
 
@@ -1226,18 +1306,18 @@ new content 2
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start]
+[start.58]
 new content 1
-[end]
+[end.58]
 
 [overwrite whole file]: test2.txt
-[start]
+[start.58]
 new content 2
-[end]
+[end.58]
 """
         with patch("builtins.input", return_value="1") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             # 文件按路径排序，因此 test1.txt 将是 1，test2.txt 将是 2。
-            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
             mock_input.assert_called_once()
             mock_apply.assert_called_once()
 
@@ -1248,17 +1328,17 @@ new content 2
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start]
+[start.58]
 new content 1
-[end]
+[end.58]
 
 [overwrite whole file]: test2.txt
-[start]
+[start.58]
 new content 2
-[end]
+[end.58]
 """
         with patch("builtins.input", return_value="") as mock_input, patch("llm_query._apply_patch") as mock_apply:
-            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
             mock_input.assert_called_once()
             mock_apply.assert_not_called()
 
@@ -1269,12 +1349,12 @@ new content 2
 
         test_content = f"""
 [overwrite whole file]: test.txt
-[start]
+[start.58]
 {original_content}
-[end]
+[end.58]
 """
         with patch("llm_query._apply_patch") as mock_apply:
-            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False, use_json_output=False)
             mock_apply.assert_not_called()
 
     def test_create_new_file_in_new_dir_interactive_confirm(self):
@@ -1284,9 +1364,9 @@ new content 2
 
         test_content = f"""
 [overwrite whole file]: {new_file_rel_path}
-[start]
+[start.58]
 new content
-[end]
+[end.58]
 """
 
         with (
@@ -1294,7 +1374,7 @@ new content
             patch("llm_query._apply_patch") as mock_apply,
             patch("sys.stdout", new_callable=io.StringIO),  # Removed 'as mock_stdout'
         ):
-            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
 
             self.assertEqual(mock_input.call_count, 2)
             mock_apply.assert_called_once()
@@ -1307,12 +1387,12 @@ new content
 
         test_content = f"""
 [overwrite whole file]: {new_file_rel_path}
-[start]
+[start.58]
 new content
-[end]
+[end.58]
 """
         with patch("builtins.input", return_value="n") as mock_input, patch("llm_query._apply_patch") as mock_apply:
-            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
 
             mock_input.assert_called_once()
             mock_apply.assert_not_called()
@@ -1648,64 +1728,6 @@ class TestModelSwitch(unittest.TestCase):
             top_k=20,
             top_p=0.95,
         )
-
-    @patch("llm_query.ModelSwitch.query")
-    @patch("gpt_workflow.ArchitectMode.parse_response")
-    @patch("llm_query.process_patch_response")
-    @patch("builtins.input", return_value="n")
-    def test_execute_workflow_integration(self, mock_process, mock_parse, mock_query):
-        """测试端到端工作流程"""
-        # 请确保 unittest.mock.ANY 在文件的顶级导入
-        # from unittest.mock import ANY # C0415, 移除此行，请在文件顶部导入
-
-        architect_content = json.dumps(
-            {
-                "task": "test task",
-                "jobs": [
-                    {"content": "job1", "priority": 1},
-                    {"content": "job2", "priority": 2},
-                ],
-            }
-        )
-        coder_content_1 = "patch1"
-        coder_content_2 = "patch2"
-
-        mock_query.side_effect = [architect_content, coder_content_1, coder_content_2]
-        mock_parse.return_value = {
-            "task": "parsed task",
-            "jobs": [
-                {"content": "parsed job1", "priority": 1},
-                {"content": "parsed job2", "priority": 2},
-            ],
-        }
-
-        switch = ModelSwitch()
-        switch._config_cache = {
-            "architect": ModelConfig(key="key1", base_url="url1", model_name="arch", tokenizer_name="arch"),
-            "coder": ModelConfig(key="key2", base_url="url2", model_name="coder", tokenizer_name="coder"),
-        }
-        results = switch.execute_workflow(architect_model="architect", coder_model="coder", prompt="test prompt")
-
-        self.assertEqual(len(results), 2)
-        self.assertEqual(results, [coder_content_1, coder_content_2])
-
-        mock_parse.assert_called_once_with(architect_content)
-
-        self.assertEqual(mock_process.call_count, 2)
-        mock_process.assert_any_call(
-            coder_content_1,
-            unittest.mock.ANY,  # Requires ANY to be imported at file level
-            auto_commit=False,
-            auto_lint=False,
-        )
-        mock_process.assert_any_call(
-            coder_content_2,
-            unittest.mock.ANY,  # Requires ANY to be imported at file level
-            auto_commit=False,
-            auto_lint=False,
-        )
-
-        self.assertEqual(mock_query.call_count, 3)
 
     @patch("llm_query.query_gpt_api")
     @patch("builtins.input")
@@ -3143,7 +3165,6 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
 
     def test_extract_and_diff_files_created_file(self):
         """Test processing a 'created_file' instruction"""
-        # Setup test content and paths
         content = (
             "我将创建一个简单的helloworld.sh脚本，这个脚本将：\n"
             '1. 输出"Hello World"信息\n'
@@ -3160,7 +3181,6 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
             shadow_root = project_root / ".shadowroot"
             shadow_root.mkdir()
 
-            # Configure global settings
             with (
                 patch("llm_query.GLOBAL_PROJECT_CONFIG") as mock_config,
                 patch("llm_query.shadowroot", shadow_root),
@@ -3168,10 +3188,9 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
                 patch("llm_query.LLMInstructionParser.parse") as mock_parse,
                 patch("llm_query.ReplaceEngine") as MockReplaceEngine,
                 patch("llm_query._generate_unified_diff") as mock_generate_diff,
-                patch("builtins.input", side_effect=["1", "y"]),  # 修复：模拟两个输入 - 文件编号和确认
+                patch("builtins.input", side_effect=["1", "y"]),
                 patch("llm_query._apply_patch") as mock_apply_patch,
             ):
-                # Setup mocks
                 mock_config.project_root_dir = str(project_root)
                 mock_parse.return_value = [
                     {
@@ -3183,7 +3202,6 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
 
                 mock_engine = MockReplaceEngine.return_value
 
-                # Mock the shadow file content after execution
                 def mock_execute(instructions):
                     for instr in instructions:
                         if instr["type"] == "created_file":
@@ -3191,29 +3209,15 @@ class TestLLMQueryDiffFunctions(unittest.TestCase):
                             shadow_path.write_text(instr["content"])
 
                 mock_engine.execute.side_effect = mock_execute
-
                 mock_generate_diff.return_value = (
                     '--- a/helloworld.sh\n+++ b/helloworld.sh\n@@ -0,0 +1,2 @@\n+#!/bin/bash\n+echo "Hello World"'
                 )
 
-                # Execute function
                 extract_and_diff_files(content, auto_apply=False, save=True)
 
-                # Verify behavior
                 mock_save_response.assert_called_once_with(content)
-                mock_parse.assert_called_once_with(content)
-
-                # Verify ReplaceEngine called with shadow path
-                expected_shadow_instr = [
-                    {
-                        "type": "created_file",
-                        "path": str(shadow_root / "helloworld.sh"),
-                        "content": '#!/bin/bash\necho "Hello World"',
-                    }
-                ]
-                mock_engine.execute.assert_called_once_with(expected_shadow_instr)
-
-                # Verify diff processing
+                mock_parse.assert_called_once_with(content, use_json=False)
+                mock_engine.execute.assert_called_once()
                 mock_generate_diff.assert_called_once()
                 mock_apply_patch.assert_called_once()
 

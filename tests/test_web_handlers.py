@@ -325,6 +325,7 @@ class TestSearchToSymbolsHandler(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.mock_config = Mock()
         self.mock_config.relative_to_current_path.return_value = "test/path.py"
+        self.mock_config.relative_path.return_value = "test/path.py"
         self.mock_state = Mock(spec=WebServiceState)
         self.mock_state.config = self.mock_config
         self.mock_state.symbol_cache = {}

@@ -423,7 +423,7 @@ class LLMInstructionParser:
         return None
 
     @classmethod
-    def parse(cls, text: str) -> List[Dict[str, Any]]:
+    def parse(cls, text: str, use_json=False) -> List[Dict[str, Any]]:
         """
         解析输入文本，自动检测并处理JSON或旧版标签格式。
 
@@ -437,22 +437,19 @@ class LLMInstructionParser:
         Returns:
             一个指令字典的列表。
         """
-        # 方案一：从markdown块中提取并解析JSON
-        json_str = cls._extract_json_block(text)
-        if json_str:
-            try:
-                data = json.loads(json_str)
-                return cls._parse_from_json(data)
-            except json.JSONDecodeError:
-                # 如果提取的块不是有效的JSON，则继续尝试其他方案
-                pass
-
-        # 方案二：将整个文本作为JSON解析
-        try:
+        if use_json:
+            # 方案一：从markdown块中提取并解析JSON
+            json_str = cls._extract_json_block(text)
+            if json_str:
+                try:
+                    data = json.loads(json_str)
+                    return cls._parse_from_json(data)
+                except json.JSONDecodeError:
+                    # 如果提取的块不是有效的JSON，则继续尝试其他方案
+                    pass
             data = json.loads(text)
             return cls._parse_from_json(data)
-        except json.JSONDecodeError:
-            # 方案三：回退到旧的文本标签解析器
+        else:
             return cls._parse_from_legacy_text(text)
 
     @classmethod

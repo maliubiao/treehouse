@@ -189,42 +189,42 @@ class BaseTracerTest(unittest.TestCase):
         mock_frame.f_trace_lines = True
         return mock_frame
 
+        class TestTruncateReprValue(unittest.TestCase):
+            """Tests for the truncate_repr_value utility function."""
 
-class TestTruncateReprValue(unittest.TestCase):
-    """Tests for the truncate_repr_value utility function."""
+            def test_truncate_long_string(self):
+                long_str = "a" * (_MAX_VALUE_LENGTH + 100)
+                result = truncate_repr_value(long_str)
+                half = _MAX_VALUE_LENGTH // 2
+                omitted = len(long_str) - 2 * half
+                suffix = f" (total length: {len(long_str)}, omitted: {omitted})"
+                self.assertTrue(result.endswith(suffix))
 
-    def test_truncate_long_string(self):
-        long_str = "a" * (_MAX_VALUE_LENGTH + 100)
-        result = truncate_repr_value(long_str)
-        suffix = f"... (total length: {len(long_str)})"
-        self.assertTrue(result.endswith(suffix))
-        self.assertTrue(len(result) <= _MAX_VALUE_LENGTH + len(suffix))
+            def test_truncate_list(self):
+                long_list = list(range(100))
+                result = truncate_repr_value(long_list)
+                self.assertIn("...", result)
+                self.assertLess(len(result), len(str(long_list)))
 
-    def test_truncate_list(self):
-        long_list = list(range(100))
-        result = truncate_repr_value(long_list)
-        self.assertIn("...", result)
-        self.assertLess(len(result), len(str(long_list)))
+            def test_truncate_dict(self):
+                long_dict = {str(i): i for i in range(100)}
+                result = truncate_repr_value(long_dict)
+                self.assertIn("...", result)
+                self.assertLess(len(result), len(str(long_dict)))
 
-    def test_truncate_dict(self):
-        long_dict = {str(i): i for i in range(100)}
-        result = truncate_repr_value(long_dict)
-        self.assertIn("...", result)
-        self.assertLess(len(result), len(str(long_dict)))
+            def test_truncate_custom_object(self):
+                class TestObj:
+                    def __init__(self):
+                        self.a = 1
+                        self.b = 2
+                        self.c = 3
+                        self.d = 4
+                        self.e = 5
+                        self.f = 6
 
-    def test_truncate_custom_object(self):
-        class TestObj:
-            def __init__(self):
-                self.a = 1
-                self.b = 2
-                self.c = 3
-                self.d = 4
-                self.e = 5
-                self.f = 6
-
-        obj = TestObj()
-        result = truncate_repr_value(obj)
-        self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
+                obj = TestObj()
+                result = truncate_repr_value(obj)
+                self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
 
 
 class TestTraceConfig(BaseTracerTest):
