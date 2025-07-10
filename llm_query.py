@@ -2092,12 +2092,30 @@ class BlockPatchResponse:
         if "patches" in data and isinstance(data["patches"], list):
             for patch in data["patches"]:
                 if isinstance(patch, dict) and "path" in patch:
+                    # 验证patch的完整性
+                    if not self._validate_patch(patch):
+                        continue
                     # 对于delete_symbol操作，我们将其内容设置为空字符串
                     content = patch.get("content", "")
                     if patch.get("action") == "delete_symbol":
                         content = ""
                     results.append((patch["path"], content))
         return results
+
+    def _validate_patch(self, patch: dict) -> bool:
+        """验证单个patch对象的完整性"""
+        action = patch.get("action")
+        path = patch.get("path")
+        # 检查action和path是否存在
+        if action is None or path is None:
+            print(f"警告: 忽略无效的patch对象，缺少action或path: {patch}")
+            return False
+        # 对于overwrite_symbol操作，必须存在content键（值可以是空字符串）
+        if action == "overwrite_symbol":
+            if "content" not in patch:
+                print(f"警告: 忽略无效的overwrite_symbol操作，缺少content: {patch}")
+                return False
+        return True
 
     def _parse_legacy(self, response_text: str) -> list[tuple[str, str]]:
         """使用基于行的状态机解析旧的标签格式，提取所有类型的补丁块（symbol/block/file）。
@@ -2542,7 +2560,7 @@ def process_patch_response(
         flags=re.DOTALL,
     ).strip()
     if not ignore_new_symbol:
-        add_symbol_details(filtered_response, symbol_detail)
+        add_symbol_details(filtered_response, symbol_detail, use_json=use_json_output)
     # if not no_mix:
     #     file_part, remaining = process_file_change(filtered_response, symbol_detail.keys())
 
@@ -3948,7 +3966,7 @@ def display_llm_plan(thinking_process: dict):
     ):
         return
 
-    print(Fore.CYAN + Style.BRIGHT + "\n💡 AI Architect's Plan & Rationale" + ColorStyle.RESET_ALL)
+    print(Fore.CYAN + ColorStyle.BRIGHT + "\n💡 AI Architect's Plan & Rationale" + ColorStyle.RESET_ALL)
     print(Fore.CYAN + "------------------------------------" + ColorStyle.RESET_ALL)
 
     key_mapping = {
@@ -3961,7 +3979,7 @@ def display_llm_plan(thinking_process: dict):
     for key, title in key_mapping.items():
         content = thinking_process.get(key)
         if content and content.strip():
-            print(Style.BRIGHT + Fore.YELLOW + f"\n▶ {title}:" + ColorStyle.RESET_ALL)
+            print(ColorStyle.BRIGHT + Fore.YELLOW + f"\n▶ {title}:" + ColorStyle.RESET_ALL)
             indented_content = "\n".join([f"  {line}" for line in content.splitlines()])
             print(f"{indented_content}")
 
@@ -4002,7 +4020,7 @@ def process_response(prompt, content, file_path, save=True, obsidian_doc=None, a
             print(f"glow运行失败: {e}")
 
     if GPT_FLAGS.get(GPT_FLAG_EDIT):
-        extract_and_diff_files(content)
+        extract_and_diff_files(content, use_json_output=use_json_output)
     if GPT_FLAGS.get(GPT_FLAG_PATCH):
         os.chdir(GLOBAL_PROJECT_CONFIG.project_root_dir)
         process_patch_response(
@@ -4108,11 +4126,15 @@ def handle_ask_mode(program_args, proxies):
             text = edit_prompt + "\n" + text
         else:
             print(f"警告: 未找到提示文件 {prompt_file}")
+        # 添加当前工作目录到提示的开头
+        cwd = os.getcwd()
+        text = "# Current working directory: " + cwd + "\n\n" + text
 
     print(text)
     response_data = model_switch.query(
         os.environ["GPT_MODEL_KEY"], text, proxies=proxies, use_json_output=use_json_output
     )
+
     process_response(
         text,
         response_data,
