@@ -547,10 +547,8 @@ def query_gpt_api(
         # 添加用户新提问到历史
         history.append({"role": "user", "content": prompt})
 
-        # 获取模型配置和JSON模式状态
+        # 获取模型配置
         model_config = kwargs.get("model_config") or GLOBAL_MODEL_CONFIG
-        use_json_output = kwargs.get("use_json_output", False)
-        is_json_mode = use_json_output and model_config and model_config.supports_json_output
 
         # 获取API响应
         response = _get_api_response(api_key, model, history, kwargs)
@@ -2061,7 +2059,7 @@ class AutoGitCommit:
 
 
 class BlockPatchResponse:
-    """大模型响应解析器，兼容传统格式和JSON格式"""
+    """大模型响应解析器，兼容JSON格式和传统的标签格式"""
 
     def __init__(self, symbol_names=None):
         self.symbol_names = symbol_names
@@ -2127,7 +2125,7 @@ class BlockPatchResponse:
                 results.append((identifier, source_code))
 
         # 兼容旧格式校验
-        if not results and ("[start]" in response_text or "[end]" in response_text or "```" in response_text):
+        if not results and ("[start.15]" in response_text or "[end.15]" in response_text or "```" in response_text):
             raise ValueError("响应包含代码块标签但格式不正确，请使用正确的标签格式")
 
         return results
@@ -2144,6 +2142,7 @@ class BlockPatchResponse:
             if "patches" in data and isinstance(data["patches"], list):
                 symbol_paths = defaultdict(list)
                 for patch in data["patches"]:
+                    # 仅当 action 为 overwrite_symbol 时才提取符号
                     if isinstance(patch, dict) and patch.get("action") == "overwrite_symbol" and "path" in patch:
                         whole_path = patch["path"].strip()
                         idx = whole_path.rfind("/")
@@ -2327,6 +2326,40 @@ def add_symbol_details(remaining, symbol_detail):
             }
 
 
+def _display_thought_and_summary(response_text: str):
+    """
+    解析响应文本，如果为JSON格式，则格式化并显示thought和patches摘要。
+    """
+    try:
+        data = json.loads(response_text)
+        thought = data.get("thought")
+        patches = data.get("patches")
+
+        if thought:
+            print(Fore.BLUE + "━━━━━━━━━━ AI's Thought Process ━━━━━━━━━━" + Style.RESET_ALL)
+            # 使用textwrap填充文本，使其更易于阅读
+            wrapped_thought = textwrap.fill(thought, width=100, initial_indent="  ", subsequent_indent="  ")
+            print(Fore.CYAN + wrapped_thought + Style.RESET_ALL)
+            print(Fore.BLUE + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + Style.RESET_ALL)
+
+        if patches and isinstance(patches, list):
+            print(Fore.BLUE + "\nSummary of Planned Changes:" + Style.RESET_ALL)
+            for i, patch in enumerate(patches):
+                action = patch.get("action", "UNKNOWN").upper().replace("_", " ")
+                path = patch.get("path", "N/A")
+                action_color = Fore.YELLOW
+                if "DELETE" in action:
+                    action_color = Fore.RED
+                elif "FILE" in action:
+                    action_color = Fore.MAGENTA
+                print(f"  - {action_color}{action:<20}{Style.RESET_ALL} {path}")
+            print()
+
+    except (json.JSONDecodeError, TypeError):
+        # 如果不是JSON或者格式不符，则静默处理，交由后续的传统解析器
+        pass
+
+
 def process_patch_response(
     response_text,
     symbol_detail,
@@ -2339,6 +2372,9 @@ def process_patch_response(
     confirm: str = "",
 ):
     """处理大模型的补丁响应，生成差异并应用补丁"""
+    # 优先显示v4格式的思考过程
+    _display_thought_and_summary(response_text)
+
     # 处理响应文本
     prevent_escape = ("<thi" + "nk>", "</thi" + "nk>")
     filtered_response = re.sub(
@@ -2359,11 +2395,16 @@ def process_patch_response(
 
     results = parse_llm_response(remaining, symbol_detail.keys())
     if not results:
+        print(Fore.YELLOW + "未从模型响应中解析出任何有效补丁。" + Style.RESET_ALL)
         return None
 
     # 准备补丁数据
     patch_items = []
     for symbol_name, source_code in results:
+        if symbol_name not in symbol_detail:
+            print(Fore.RED + f"错误：在symbol_detail中未找到符号 '{symbol_name}'，跳过此补丁。" + Style.RESET_ALL)
+            continue
+
         if relative_to_root:
             symbol_path = str(
                 Path(symbol_detail[symbol_name]["file_path"])
@@ -2382,6 +2423,10 @@ def process_patch_response(
                 source_code.encode("utf-8"),
             )
         )
+
+    if not patch_items:
+        print(Fore.YELLOW + "所有解析出的补丁均无效，操作终止。" + Style.RESET_ALL)
+        return None
 
     patch = BlockPatch(
         file_paths=[item[0] for item in patch_items],
@@ -3390,6 +3435,15 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
     if save:
         _save_response_content(content)
 
+    # 优先显示思考过程（如果响应是JSON格式）
+    try:
+        data = json.loads(content)
+        if "thinking_process" in data:
+            display_llm_plan(data["thinking_process"])
+    except (json.JSONDecodeError, TypeError):
+        # 不是有效的JSON格式，静默处理，后续解析器会处理旧格式
+        pass
+
     try:
         instructions = LLMInstructionParser.parse(content)
     except Exception as e:
@@ -3672,6 +3726,44 @@ def extract_and_diff_files(content, auto_apply=False, save=True):
                 print(Fore.GREEN + f"已成功应用对 {relative_path} 的补丁。" + ColorStyle.RESET_ALL)
             else:
                 print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+
+
+def display_llm_plan(thinking_process: dict):
+    """
+    格式化并显示从LLM响应中提取的思考过程和计划。
+
+    Args:
+        thinking_process (dict): 包含'requirement_analysis', 'solution_design'等键的字典。
+    """
+    if not isinstance(thinking_process, dict) or not thinking_process:
+        return
+
+    # 检查是否有任何实际内容需要显示
+    if not any(
+        thinking_process.get(key, "").strip()
+        for key in ["requirement_analysis", "solution_design", "technical_decisions", "implementation_steps"]
+    ):
+        return
+
+    print(Fore.CYAN + Style.BRIGHT + "\n💡 AI Architect's Plan & Rationale" + ColorStyle.RESET_ALL)
+    print(Fore.CYAN + "------------------------------------" + ColorStyle.RESET_ALL)
+
+    key_mapping = {
+        "requirement_analysis": "Requirement Analysis",
+        "solution_design": "Solution Design",
+        "technical_decisions": "Technical Decisions",
+        "implementation_steps": "Implementation Steps",
+    }
+
+    for key, title in key_mapping.items():
+        content = thinking_process.get(key)
+        if content and content.strip():
+            print(Style.BRIGHT + Fore.YELLOW + f"\n▶ {title}:" + ColorStyle.RESET_ALL)
+            indented_content = "\n".join([f"  {line}" for line in content.splitlines()])
+            print(f"{indented_content}")
+
+    print("\n" + Fore.CYAN + "------------------------------------" + ColorStyle.RESET_ALL)
+    print("Now, reviewing the proposed code changes...\n")
 
 
 def process_response(prompt, content, file_path, save=True, obsidian_doc=None, ask_param=None):

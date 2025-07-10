@@ -937,28 +937,6 @@ class TestConfigManagerPathAndPatternValidation(unittest.TestCase):
             ]
         )
 
-    # Removed: This test assumes ConfigManager directly triggers LogManager updates via a setter,
-    # which is not how Tracer orchestrates these components.
-    # The relevant behavior is already tested in TestTracerInitialization.test_init_sets_correct_attributes_and_relationships.
-    # def test_config_update_triggers_logger_update(self):
-    #     """Test that config updates propagate to LogManager."""
-    #     # Setup
-    #     mock_open = MagicMock()
-    #     mock_exists = MagicMock(return_value=True)
-    #     mock_safe_load = MagicMock(return_value={'log_buffer_size': 20})
-
-    #     with patch('tracer.config.open', new=mock_open), \
-    #          patch('tracer.config.os.path.exists', return_value=True), \
-    #          patch('tracer.config.yaml.safe_load', new=mock_safe_load):
-
-    #         config_manager = ConfigManager(config_file="update.yaml")
-    #         mock_log_manager = MagicMock()
-    #         config_manager.log_manager = mock_log_manager  # Simulate Tracer's log manager setting this
-
-    #         # Verify: the setter for log_manager calls update_config on the log_manager
-    #         mock_log_manager.update_config.assert_called_once_with(config_manager.config)
-    #         self.assertEqual(mock_log_manager.config['log_buffer_size'], 20)
-
 
 if __name__ == "__main__":
     unittest.main()

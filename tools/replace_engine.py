@@ -1,9 +1,11 @@
 import hashlib
+import json
 import os
 import random
 import re
 import tempfile
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
 class TagRandomizer:
@@ -29,12 +31,12 @@ class TagRandomizer:
     # print('[start] a block [end]')
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.random_suffix = f"{random.randint(0, 99):02d}"
         self.tag_pattern = re.compile(r"\[(start|end)\]")
         self.randomized_pattern = re.compile(r"\[(start|end)\.\d{2}\]")
 
-    def randomize_tags(self, content):
+    def randomize_tags(self, content: str) -> str:
         """
         将内容中的标准标签替换为随机化标签。
 
@@ -45,14 +47,14 @@ class TagRandomizer:
             str: 处理后的文本，所有[start]和[end]标签被替换为随机化版本。
         """
 
-        def replace_tag(match):
+        def replace_tag(match: re.Match[str]) -> str:
             tag_type = match.group(1)
             return f"[{tag_type}.{self.random_suffix}]"
 
         return self.tag_pattern.sub(replace_tag, content)
 
     @staticmethod
-    def restore_tags(content):
+    def restore_tags(content: str) -> str:
         """
         将内容中的随机化标签还原为标准标签。
 
@@ -88,7 +90,7 @@ class ReplaceEngine:
     >>> engine.execute(instructions)
     """
 
-    def execute(self, instructions):
+    def execute(self, instructions: List[Dict[str, Any]]) -> None:
         """
         按顺序执行一个指令集。
 
@@ -133,11 +135,11 @@ class ReplaceEngine:
                 # 统一异常出口，附加文件路径信息，方便调试
                 raise RuntimeError(f"操作失败 @ {instr.get('path', 'project_setup_script')}: {e}") from e
 
-    def _restore_randomized_tags(self, instructions):
+    def _restore_randomized_tags(self, instructions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         还原指令内容中的所有随机化标签。
         """
-        restored = []
+        restored: List[Dict[str, Any]] = []
         for instr in instructions:
             new_instr = instr.copy()
             if new_instr["type"] in ("replace", "replace_lines"):
@@ -151,7 +153,7 @@ class ReplaceEngine:
             restored.append(new_instr)
         return restored
 
-    def _validate_path_for_instruction(self, path_str, instr_type):
+    def _validate_path_for_instruction(self, path_str: str, instr_type: str) -> str:
         """验证指令中的路径，并返回解析后的绝对路径。"""
         path = Path(path_str)
         if instr_type == "created_file":
@@ -168,12 +170,12 @@ class ReplaceEngine:
 
         return str(path.resolve())
 
-    def _validate_instructions(self, instr_set):
+    def _validate_instructions(self, instr_set: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """验证指令集的有效性，并解析为内部格式。"""
         if not instr_set:
             return []
 
-        validated = []
+        validated: List[Dict[str, Any]] = []
         for i, instr in enumerate(instr_set):
             if not self._is_valid_instruction(instr):
                 raise ValueError(f"无效或不完整的指令 @ 索引 {i}: {instr}")
@@ -199,7 +201,7 @@ class ReplaceEngine:
         return validated
 
     @staticmethod
-    def _is_valid_instruction(instr):
+    def _is_valid_instruction(instr: Dict[str, Any]) -> bool:
         """检查单个指令是否包含所有必需的键。"""
         if not isinstance(instr, dict) or "type" not in instr:
             return False
@@ -207,7 +209,7 @@ class ReplaceEngine:
         instr_type = instr["type"]
 
         # 定义每种指令类型所需的键
-        requirements = {
+        requirements: Dict[str, set] = {
             "project_setup_script": {"content"},
             "replace": {"path", "src", "dst"},
             "replace_lines": {"path", "start_line", "end_line", "src", "dst"},
@@ -222,7 +224,7 @@ class ReplaceEngine:
 
         return requirements[instr_type].issubset(instr.keys())
 
-    def _safe_create_file(self, path, content):
+    def _safe_create_file(self, path: str, content: str) -> None:
         """
         安全地创建或覆盖一个文件。
 
@@ -242,10 +244,10 @@ class ReplaceEngine:
         with open(path_obj, "w", encoding="utf-8") as f:
             f.write(content)
 
-    def _safe_overwrite_file(self, path, content):
+    def _safe_overwrite_file(self, path: str, content: str) -> None:
         """安全地用新内容覆盖整个文件，使用备份和回滚机制。"""
         self._validate_path_for_instruction(path, "overwrite_whole_file")
-        backup_path = None
+        backup_path: Optional[Path] = None
         try:
             with open(path, "r", encoding="utf-8") as f:
                 original_content = f.read()
@@ -261,7 +263,7 @@ class ReplaceEngine:
             if backup_path and backup_path.exists():
                 backup_path.unlink()
 
-    def _safe_replace(self, path, src, dst):
+    def _safe_replace(self, path: str, src: str, dst: str) -> None:
         """安全地替换文件中的唯一匹配字符串，使用备份和回滚机制。"""
         self._validate_path_for_instruction(path, "replace")
         with open(path, "r", encoding="utf-8") as f:
@@ -283,13 +285,14 @@ class ReplaceEngine:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(updated_content)
         except Exception:
-            self._restore_backup(backup_path, path)
+            if backup_path:
+                self._restore_backup(backup_path, path)
             raise
         finally:
             if backup_path and backup_path.exists():
                 backup_path.unlink()
 
-    def _safe_replace_lines(self, path, start_line, end_line, src, dst):
+    def _safe_replace_lines(self, path: str, start_line: int, end_line: int, src: str, dst: str) -> None:
         """安全地替换指定行范围的内容，使用备份和回滚机制。"""
         self._validate_path_for_instruction(path, "replace_lines")
         with open(path, "r", encoding="utf-8") as f:
@@ -321,13 +324,14 @@ class ReplaceEngine:
             with open(path, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
         except Exception:
-            self._restore_backup(backup_path, path)
+            if backup_path:
+                self._restore_backup(backup_path, path)
             raise
         finally:
             if backup_path and backup_path.exists():
                 backup_path.unlink()
 
-    def _safe_insert(self, path, line_num, content):
+    def _safe_insert(self, path: str, line_num: int, content: str) -> None:
         """安全地在指定行号插入内容，使用备份和回滚机制。"""
         self._validate_path_for_instruction(path, "insert")
         with open(path, "r", encoding="utf-8") as f:
@@ -350,14 +354,15 @@ class ReplaceEngine:
             with open(path, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
         except Exception:
-            self._restore_backup(backup_path, path)
+            if backup_path:
+                self._restore_backup(backup_path, path)
             raise
         finally:
             if backup_path and backup_path.exists():
                 backup_path.unlink()
 
     @staticmethod
-    def _create_backup(original_path, content):
+    def _create_backup(original_path: str, content: str) -> Path:
         """创建临时备份文件。"""
         backup_dir = Path(tempfile.gettempdir())
         file_hash = hashlib.md5(str(original_path).encode()).hexdigest()[:8]
@@ -368,7 +373,7 @@ class ReplaceEngine:
         return backup_path
 
     @staticmethod
-    def _restore_backup(backup_path, target_path):
+    def _restore_backup(backup_path: Path, target_path: str) -> None:
         """从备份恢复文件。"""
         if backup_path and backup_path.exists():
             with open(backup_path, "r", encoding="utf-8") as f_bak, open(target_path, "w", encoding="utf-8") as f_orig:
@@ -377,15 +382,17 @@ class ReplaceEngine:
 
 class LLMInstructionParser:
     """
-    一个基于状态机的解析器，从LLM响应中提取结构化文件操作指令。
+    一个解析器，能从LLM响应中提取结构化文件操作指令。
 
-    该解析器通过逐行扫描输入文本来工作，能够智能地处理嵌套的指令块。
-    它使用一个嵌套级别计数器来识别最外层的指令，忽略所有被包含在其他
-    指令块内部的伪指令。这确保了即使LLM的输出格式不完美，也能得到准确、
-    无歧义的解析结果，解决了原始正则表达式实现的根本缺陷。
+    该解析器是向后兼容的。它首先尝试将输入解析为JSON格式。如果失败，
+    它会回退到基于文本标签的旧格式进行解析。这确保了对新旧两种指令
+    格式的健壮支持。
+
+    - **JSON格式**: 一个包含 `actions` 数组的JSON对象，结构清晰。
+    - **旧格式**: 基于`[command]: ... [start] ... [end]`标签的文本格式。
     """
 
-    # 正则表达式用于匹配指令头
+    # 用于旧格式解析的状态机
     _HEADER_RE = {
         "setup": re.compile(r"^\[project setup script\]$"),
         "file_op": re.compile(r"^\[(overwrite whole file|created file|replace|insert)\]:\s*(.*)$"),
@@ -396,11 +403,81 @@ class LLMInstructionParser:
     }
 
     @classmethod
-    def parse(cls, text):
+    def parse(cls, text: str) -> List[Dict[str, Any]]:
         """
-        使用状态机从文本中解析所有最外层的指令。
+        解析输入文本，自动检测并处理JSON或旧版标签格式。
+
+        Args:
+            text: 包含指令的原始字符串，可以是JSON或文本标签格式。
+
+        Returns:
+            一个指令字典的列表。
         """
-        instructions = []
+        try:
+            # 优先尝试解析为JSON格式
+            data = json.loads(text)
+            return cls._parse_from_json(data)
+        except json.JSONDecodeError:
+            # 如果JSON解析失败，回退到旧的文本标签格式解析
+            return cls._parse_from_legacy_text(text)
+
+    @classmethod
+    def _parse_from_json(cls, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """从解析后的JSON对象中提取指令。"""
+        instructions: List[Dict[str, Any]] = []
+        if not isinstance(data, dict) or "actions" not in data or not isinstance(data["actions"], list):
+            return []
+
+        # 定义JSON action_type到内部type的映射
+        action_map = {
+            "run_shell_script": "project_setup_script",
+            "create_file": "created_file",
+            "overwrite_file": "overwrite_whole_file",
+        }
+        # 定义JSON字段名到内部字段名的映射
+        field_map = {
+            "script_content": "content",
+            "file_path": "path",
+        }
+
+        for action in data["actions"]:
+            if not isinstance(action, dict) or "action_type" not in action:
+                continue
+
+            action_type = action.get("action_type")
+            internal_type = action_map.get(action_type)
+
+            if not internal_type:
+                # 忽略未知的action类型，以实现前向兼容
+                continue
+
+            instr: Dict[str, Any] = {"type": internal_type}
+            all_fields_present = True
+            for json_field, internal_field in field_map.items():
+                if json_field in action:
+                    instr[internal_field] = action[json_field]
+
+            # 'content'是通用字段，也需要检查
+            if "content" in action and "content" not in instr:
+                instr["content"] = action["content"]
+
+            # 验证指令是否完整
+            # 此处简化验证逻辑，依赖于ReplaceEngine中的_is_valid_instruction
+            # 但我们可以做一个基本检查
+            if internal_type in ("created_file", "overwrite_whole_file") and "path" not in instr:
+                all_fields_present = False
+
+            if all_fields_present:
+                instructions.append(instr)
+
+        return instructions
+
+    @classmethod
+    def _parse_from_legacy_text(cls, text: str) -> List[Dict[str, Any]]:
+        """
+        使用状态机从文本中解析所有最外层的指令（旧版格式）。
+        """
+        instructions: List[Dict[str, Any]] = []
         lines = text.splitlines()
         i = 0
         while i < len(lines):
@@ -428,10 +505,12 @@ class LLMInstructionParser:
         return instructions
 
     @classmethod
-    def _parse_file_op_body(cls, lines, start_index, op_type, path):
+    def _parse_file_op_body(
+        cls, lines: List[str], start_index: int, op_type: str, path: str
+    ) -> Optional[tuple[Dict[str, Any], int]]:
         """解析文件操作指令的元数据和内容块。"""
         i = start_index
-        instr = {"type": op_type, "path": path}
+        instr: Dict[str, Any] = {"type": op_type, "path": path}
 
         # 处理 replace 和 insert 的元数据行
         if op_type == "replace":
@@ -449,19 +528,19 @@ class LLMInstructionParser:
                     instr["line_num"] = int(line_match.group(1))
                     i += 1
                 else:
-                    return None, start_index  # 格式错误，跳过
+                    return None  # 格式错误，跳过
             else:
-                return None, start_index  # 文件结束，指令不完整
+                return None  # 文件结束，指令不完整
 
         # 消耗内容块
         current_op_type = instr["type"]
         if current_op_type in ("replace", "replace_lines"):
             src, i_after_src = cls._consume_block(lines, i)
             if src is None:
-                return None, start_index
+                return None
             dst, i_after_dst = cls._consume_block(lines, i_after_src)
             if dst is None:
-                return None, start_index
+                return None
             instr["src"] = src
             instr["dst"] = dst
             return instr, i_after_dst
@@ -469,12 +548,12 @@ class LLMInstructionParser:
         # created_file, overwrite_whole_file, insert
         content, i_after_content = cls._consume_block(lines, i)
         if content is None:
-            return None, start_index
+            return None
         instr["content"] = content
         return instr, i_after_content
 
     @classmethod
-    def _consume_block(cls, lines, start_index):
+    def _consume_block(cls, lines: List[str], start_index: int) -> Optional[tuple[str, int]]:
         """
         从指定索引开始，消耗一个由[start]...[end]包围的块。
         支持嵌套块，只在最外层块结束时停止。
@@ -486,7 +565,7 @@ class LLMInstructionParser:
                 break
             i += 1
         else:
-            return None, len(lines)  # 没有找到 [start]
+            return None  # 没有找到 [start]
 
         nesting_level = 1
         start_block_index = i + 1
@@ -507,4 +586,4 @@ class LLMInstructionParser:
             i += 1
 
         # 如果循环结束但嵌套级别不为0，说明格式错误
-        return None, len(lines)
+        return None

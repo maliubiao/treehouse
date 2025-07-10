@@ -1,8 +1,10 @@
+import json
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # 将项目根目录添加到 sys.path，以便能够导入 tools 包中的模块
 # 这种方式比相对导入更健壮，因为它不依赖于当前工作目录
@@ -20,7 +22,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
     为 ReplaceEngine 和 LLMInstructionParser 提供全面的单元测试。
     """
 
-    def setUp(self):
+    def setUp(self) -> None:
         """
         在每个测试方法运行前执行。
         - 创建一个临时的测试目录。
@@ -30,14 +32,14 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         self.test_dir = Path(tempfile.mkdtemp(prefix="engine_tests_"))
         self.engine = ReplaceEngine()
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         """
         在每个测试方法运行后执行。
         - 递归删除临时测试目录及其所有内容。
         """
         shutil.rmtree(self.test_dir)
 
-    def _prepare_file(self, relative_path, content):
+    def _prepare_file(self, relative_path: str, content: str) -> str:
         """
         在测试目录中准备一个文件。
         - 支持创建子目录。
@@ -48,7 +50,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
             f.write(content)
         return str(full_path)
 
-    def _read_file(self, relative_path):
+    def _read_file(self, relative_path: str) -> Optional[str]:
         """读取测试目录中文件的内容。"""
         full_path = self.test_dir / relative_path
         if not full_path.exists():
@@ -56,7 +58,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         with open(full_path, "r", encoding="utf-8") as f:
             return f.read()
 
-    def test_create_new_file(self):
+    def test_create_new_file(self) -> None:
         """测试 'created_file' 指令，验证新文件是否正确创建。"""
         file_path = self.test_dir / "file1.txt"
         instructions_text = f"[created file]: {file_path}\n[start]\nHello, new world!\n[end]"
@@ -67,7 +69,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         self.assertTrue(file_path.exists())
         self.assertEqual(self._read_file("file1.txt"), "Hello, new world!")
 
-    def test_created_file_overwrites_existing_file(self):
+    def test_created_file_overwrites_existing_file(self) -> None:
         """测试 'created_file' 指令是否能覆盖已存在的文件，以确保幂等性。"""
         file_path_str = self._prepare_file("file1.txt", "Original content.")
         instructions_text = f"[created file]: {file_path_str}\n[start]\nOverwritten content.\n[end]"
@@ -77,7 +79,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
 
         self.assertEqual(self._read_file("file1.txt"), "Overwritten content.")
 
-    def test_overwrite_whole_file(self):
+    def test_overwrite_whole_file(self) -> None:
         """测试 'overwrite_whole_file' 指令，验证文件内容是否被完全覆盖。"""
         file_path_str = self._prepare_file("file1.txt", "Old content.")
         instructions_text = f"[overwrite whole file]: {file_path_str}\n[start]\nNew content.\n[end]"
@@ -87,7 +89,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
 
         self.assertEqual(self._read_file("file1.txt"), "New content.")
 
-    def test_basic_string_replacement(self):
+    def test_basic_string_replacement(self) -> None:
         """测试 'replace' 指令，验证简单的字符串替换是否成功。"""
         file_path_str = self._prepare_file("file1.txt", "This is old content.")
         instructions_text = f"[replace]: {file_path_str}\n[start]\nold\n[end]\n[start]\nnew\n[end]"
@@ -97,7 +99,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
 
         self.assertEqual(self._read_file("file1.txt"), "This is new content.")
 
-    def test_line_range_replacement(self):
+    def test_line_range_replacement(self) -> None:
         """测试 'replace_lines' 指令，验证指定行范围的替换。"""
         file_content = "Line 1\nLine 2\nLine 3\nLine 4\n"
         file_path_str = self._prepare_file("file1.txt", file_content)
@@ -109,7 +111,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         expected_content = "Line 1\nNew Line 2\nNew Line 3\n\nLine 4\n"
         self.assertEqual(self._read_file("file1.txt"), expected_content)
 
-    def test_insert_content(self):
+    def test_insert_content(self) -> None:
         """测试 'insert' 指令，验证内容是否在指定行号后插入。"""
         file_path_str = self._prepare_file("file1.txt", "Line 1\nLine 2\n")
         instructions_text = f"[insert]: {file_path_str}\n[line]: 1\n[start]\nInserted Line\n[end]"
@@ -121,7 +123,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         expected_content = "Line 1\nInserted Line\n\nLine 2\n"
         self.assertEqual(self._read_file("file1.txt"), expected_content)
 
-    def test_fail_on_multiple_matches_for_replace(self):
+    def test_fail_on_multiple_matches_for_replace(self) -> None:
         """测试 'replace' 在找到多个匹配项时是否按预期失败。"""
         file_path_str = self._prepare_file("file1.txt", "fail fail")
         instructions_text = f"[replace]: {file_path_str}\n[start]\nfail\n[end]\n[start]\npass\n[end]"
@@ -131,7 +133,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
             self.engine.execute(instructions)
         self.assertIn("找到 2 个匹配项", str(cm.exception))
 
-    def test_fail_on_source_mismatch_for_line_replace(self):
+    def test_fail_on_source_mismatch_for_line_replace(self) -> None:
         """测试 'replace_lines' 在源内容不匹配时是否按预期失败。"""
         file_path_str = self._prepare_file("file1.txt", "Correct source\n")
         instructions_text = (
@@ -145,7 +147,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         expected_error = "源字符串与文件指定行范围的内容不匹配"
         self.assertIn(expected_error, str(context.exception))
 
-    def test_randomized_tag_restoration(self):
+    def test_randomized_tag_restoration(self) -> None:
         """测试随机化标签 [start.XX] 是否能被正确还原为 [start]。"""
         file_path_str = self._prepare_file("file1.txt", "Initial")
         # 模拟LLM可能生成的、包含随机化标签的指令
@@ -157,7 +159,7 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         # engine._restore_randomized_tags 会将内容中的标签还原
         self.assertEqual(self._read_file("file1.txt"), "This has [start] and [end] tags.")
 
-    def test_create_file_in_new_subdirectory(self):
+    def test_create_file_in_new_subdirectory(self) -> None:
         """测试 'created_file' 是否能自动创建尚不存在的父目录。"""
         file_path = self.test_dir / "new_dir" / "file.txt"
         instructions_text = f"[created file]: {file_path}\n[start]\nSubdir content\n[end]"
@@ -168,8 +170,8 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         self.assertTrue(file_path.exists())
         self.assertEqual(self._read_file("new_dir/file.txt"), "Subdir content")
 
-    def test_parser_with_all_instruction_types(self):
-        """测试 LLMInstructionParser 是否能一次性解析所有类型的指令。"""
+    def test_parser_with_all_instruction_types(self) -> None:
+        """测试 LLMInstructionParser 是否能一次性解析所有类型的指令（旧格式）。"""
         text = """
 [project setup script]
 [start]
@@ -223,10 +225,10 @@ content_d
         self.assertEqual(instructions[4]["line_num"], 15)
         self.assertEqual(instructions[4]["content"], "content_d")
 
-    def test_parser_handles_nested_instructions(self):
+    def test_parser_handles_nested_instructions(self) -> None:
         """
         测试解析器是否能正确处理嵌套指令，只保留最外层的指令。
-        这是对新的状态机解析器的关键测试。
+        这是对旧格式状态机解析器的关键测试。
         """
         nested_instructions_text = """
 [overwrite whole file]: /outer/file.txt
@@ -274,6 +276,66 @@ This is a separate, valid instruction.
         self.assertEqual(second_instr["type"], "created_file")
         self.assertEqual(second_instr["path"], "/another/real_file.txt")
         self.assertEqual(second_instr["content"], "This is a separate, valid instruction.")
+
+    def test_parser_json_format_happy_path(self) -> None:
+        """测试解析器是否能正确处理新的JSON指令格式。"""
+        json_input = {
+            "thinking_process": {},
+            "actions": [
+                {
+                    "action_type": "run_shell_script",
+                    "description": "Install dependencies.",
+                    "script_content": "pip install numpy",
+                },
+                {"action_type": "create_file", "file_path": "/tmp/new_data.csv", "content": "id,value\n1,100"},
+                {
+                    "action_type": "overwrite_file",
+                    "file_path": "/tmp/existing_config.json",
+                    "content": '{ "key": "new_value" }',
+                },
+            ],
+        }
+        instructions_text = json.dumps(json_input, indent=2)
+        instructions = LLMInstructionParser.parse(instructions_text)
+
+        self.assertEqual(len(instructions), 3)
+
+        # 验证 shell script
+        self.assertEqual(instructions[0]["type"], "project_setup_script")
+        self.assertEqual(instructions[0]["content"], "pip install numpy")
+
+        # 验证 create file
+        self.assertEqual(instructions[1]["type"], "created_file")
+        self.assertEqual(instructions[1]["path"], "/tmp/new_data.csv")
+        self.assertEqual(instructions[1]["content"], "id,value\n1,100")
+
+        # 验证 overwrite file
+        self.assertEqual(instructions[2]["type"], "overwrite_whole_file")
+        self.assertEqual(instructions[2]["path"], "/tmp/existing_config.json")
+        self.assertEqual(instructions[2]["content"], '{ "key": "new_value" }')
+
+    def test_parser_json_format_with_empty_actions(self) -> None:
+        """测试当JSON的actions数组为空时，解析器是否返回空列表。"""
+        json_input = {"thinking_process": {}, "actions": []}
+        instructions_text = json.dumps(json_input)
+        instructions = LLMInstructionParser.parse(instructions_text)
+        self.assertEqual(instructions, [])
+
+    def test_parser_json_format_ignores_unknown_action(self) -> None:
+        """测试解析器是否会忽略JSON中未知的action_type。"""
+        json_input = {
+            "thinking_process": {},
+            "actions": [
+                {"action_type": "create_file", "file_path": "/tmp/real_file.txt", "content": "This is real."},
+                {"action_type": "some_future_action", "description": "This should be ignored.", "details": {}},
+            ],
+        }
+        instructions_text = json.dumps(json_input)
+        instructions = LLMInstructionParser.parse(instructions_text)
+
+        self.assertEqual(len(instructions), 1)
+        self.assertEqual(instructions[0]["type"], "created_file")
+        self.assertEqual(instructions[0]["path"], "/tmp/real_file.txt")
 
 
 if __name__ == "__main__":

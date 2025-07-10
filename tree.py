@@ -598,7 +598,31 @@ class BlockPatch:
     def _build_modified_blocks(self, original_code: bytes, replacements: list) -> list[bytes]:
         for (start, end), old_content_bytes, _ in replacements:
             if start != end and original_code[start:end] != old_content_bytes:
+                expected_bytes = original_code[start:end]
+
+                print(f"ERROR: Content mismatch for range {start}:{end}.", file=sys.stderr)
+
+                try:
+                    # We assume unified_diff is imported at the file level as it's used in _process_single_file_diff
+                    expected_str_lines = expected_bytes.decode("utf-8").splitlines(keepends=True)
+                    actual_str_lines = old_content_bytes.decode("utf-8").splitlines(keepends=True)
+
+                    diff = unified_diff(
+                        expected_str_lines,
+                        actual_str_lines,
+                        fromfile="expected_in_file",
+                        tofile="actual_from_model",
+                    )
+                    print("Showing diff on stderr:", file=sys.stderr)
+                    sys.stderr.writelines(diff)
+                    sys.stderr.flush()
+                except (UnicodeDecodeError, NameError):
+                    print("Cannot generate text diff. Showing raw bytes:", file=sys.stderr)
+                    print(f"Expected: {expected_bytes!r}", file=sys.stderr)
+                    print(f"Actual:   {old_content_bytes!r}", file=sys.stderr)
+
                 raise ValueError(f"Content mismatch for range {start}:{end}")
+
         self._validate_ranges(original_code, [(s, e) for (s, e), _, _ in replacements])
         replacements.sort(key=lambda x: x[0][0])
 

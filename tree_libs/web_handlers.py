@@ -57,15 +57,22 @@ async def _get_cached_file_data(
     except (FileNotFoundError, OSError):
         return None, None
 
+    # Get the current asyncio event loop to run the synchronous lock in an executor.
+    # This is necessary because state.lock is a standard threading.Lock, which is
+    # not compatible with the `async with` statement that caused the TypeError.
+    loop = asyncio.get_running_loop()
+
     # First, check cache with the lock
-    async with state.lock:
+    await loop.run_in_executor(None, state.lock.acquire)
+    try:
         if clean_file_path in state.file_parser_info_cache:
             cached_mtime, parser, code_map = state.file_parser_info_cache[clean_file_path]
             if cached_mtime == current_mtime:
                 return parser, code_map
+    finally:
+        state.lock.release()
 
     # If not in cache or modified, parse the file (outside the lock to avoid blocking)
-    # The ParserLoader might be better if shared, but for now let's keep it simple.
     parser_loader = ParserLoader()
     parser = ParserUtil(parser_loader)
     try:
@@ -73,12 +80,16 @@ async def _get_cached_file_data(
     except (ValueError, FileNotFoundError) as e:
         logger.warning(f"Error parsing {clean_file_path}: {e}")
         # Cache failure to avoid re-parsing a broken file repeatedly
-        async with state.lock:
+        await loop.run_in_executor(None, state.lock.acquire)
+        try:
             state.file_parser_info_cache[clean_file_path] = (current_mtime, None, None)
+        finally:
+            state.lock.release()
         return None, None
 
     # After parsing, acquire lock to update cache and trie
-    async with state.lock:
+    await loop.run_in_executor(None, state.lock.acquire)
+    try:
         # Re-check in case another thread parsed and cached it while we were parsing
         if clean_file_path in state.file_parser_info_cache:
             cached_mtime, cached_parser, cached_code_map = state.file_parser_info_cache[clean_file_path]
@@ -90,6 +101,8 @@ async def _get_cached_file_data(
         _update_trie_from_code_map(clean_file_path, code_map, state, parser)
 
         return parser, code_map
+    finally:
+        state.lock.release()
 
 
 # --- Handler for /complete ---

@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -74,8 +75,6 @@ class TestGPTContextProcessor(unittest.TestCase):
         # 恢复原始工作目录
         os.chdir(self.original_cwd)
         # 使用 shutil.rmtree 更安全地删除目录及其内容
-        import shutil
-
         shutil.rmtree(self.test_dir)
         # 停止patcher
         self.patcher.stop()
@@ -390,7 +389,7 @@ class TestSymbolLocation(unittest.TestCase):
         self.whole_content = self.original_content + "\n"
 
     def _setup_test_file(self):
-        with open(self.file_path, "w") as f:
+        with open(self.file_path, "w", encoding="utf-8") as f:
             f.write(self.whole_content)
 
     def _setup_mock_api(self):
@@ -431,7 +430,7 @@ class TestSymbolLocation(unittest.TestCase):
         block_range = (0, len(content))
         code_range = ((1, 0), (3, 4))
 
-        with open(self.file_path, "w", encoding="utf8") as f:
+        with open(self.file_path, "w", encoding="utf-8") as f:
             f.write(content)
 
         self.symbol_data["content"] = content
@@ -448,7 +447,7 @@ class TestSymbolLocation(unittest.TestCase):
         block_range = (0, 0)
         code_range = ((1, 0), (1, 0))
 
-        with open(self.file_path, "w", encoding="utf8") as f:
+        with open(self.file_path, "w", encoding="utf-8") as f:
             f.write(content)
 
         self.symbol_data["content"] = content
@@ -529,8 +528,8 @@ c = 3
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][1].strip(), "a = 1\n\nb = 2\n\nc = 3")
 
-    def test_extract_symbol_paths(self):
-        """测试从响应中提取符号路径"""
+    def test_extract_symbol_paths_legacy_format(self):
+        """测试从旧版（非JSON）响应中提取符号路径"""
         response = """
 [overwrite whole symbol]: path/to/file1.py/symbol1
 [start]
@@ -556,8 +555,8 @@ code3
         }
         self.assertEqual(result, expected)
 
-    def test_add_symbol_details(self):
-        """测试add_symbol_details函数"""
+    def test_add_symbol_details_legacy_format(self):
+        """测试add_symbol_details函数与旧版（非JSON）响应格式的集成"""
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
             tmp.write(
                 dedent(
@@ -575,23 +574,24 @@ code3
             )
             tmp_path = tmp.name
             # 准备测试数据
+        # Fixed: C0209 (f-string) and W1308 (duplicate format arg)
         remaining = dedent(
-            '''
-        [overwrite whole symbol]: {}/func1
+            f'''
+        [overwrite whole symbol]: {tmp_path}/func1
         [start]
         def func1():
             """修改后的函数1"""
             return 42
         [end]
 
-        [overwrite whole symbol]: {}/TestClass
+        [overwrite whole symbol]: {tmp_path}/TestClass
         [start]
         class TestClass:
             """修改后的类"""
             def method1(self):
                 return "modified"
         [end]
-        '''.format(tmp_path, tmp_path)
+        '''
         )
         try:
             symbol_detail = {}
@@ -652,7 +652,7 @@ code3
                 "block_content": content,
             }
 
-            # 模拟用户输入(选择第7行，即method2的位置)
+            # 模拟用户输入(选择第8行，即method2的位置)
             with unittest.mock.patch("builtins.input", side_effect=["8"]):
                 result = interactive_symbol_location(
                     file=tmp_path,
@@ -667,8 +667,8 @@ code3
             self.assertEqual(result["block_content"], b"")
             self.assertTrue(result[NewSymbolFlag])  # 新增验证NewSymbolFlag
 
-            # 测试与BlockPatch的联动
-            patch = BlockPatch(
+            # Test with BlockPatch (assuming BlockPatch is available)
+            patch = BlockPatch(  # W0621 warning for 'patch' is intentionally ignored as it's local to method.
                 file_paths=[tmp_path],
                 patch_ranges=[result["block_range"]],
                 block_contents=[result["block_content"]],
@@ -706,12 +706,12 @@ code3
         try:
             # 准备测试数据
             remaining = dedent(
-                """
-            [overwrite whole symbol]: {}/new_symbol
+                f"""
+            [overwrite whole symbol]: {tmp_path}/new_symbol
             [start]
             new_code = 42
             [end]
-            """.format(tmp_path)
+            """
             )
 
             # 模拟用户输入(选择第2行，即target_func的位置)
@@ -724,9 +724,9 @@ code3
             self.assertIn(f"{tmp_path}/new_symbol", symbol_detail)
             self.assertTrue(symbol_detail[f"{tmp_path}/new_symbol"][NewSymbolFlag])  # 新增验证NewSymbolFlag
 
-            # 测试与BlockPatch的联动
+            # Test with BlockPatch (assuming BlockPatch is available)
             symbol_info = symbol_detail[f"{tmp_path}/new_symbol"]
-            patch = BlockPatch(
+            patch = BlockPatch(  # W0621 warning for 'patch' is intentionally ignored as it's local to method.
                 file_paths=[tmp_path],
                 patch_ranges=[symbol_info["block_range"]],
                 block_contents=[symbol_info["block_content"]],
@@ -789,15 +789,19 @@ code3
         )
         self.assertEqual(parser.parse(incomplete_patch), [])
 
-    def test_extract_symbol_paths_from_json(self):
+    def test_extract_symbol_paths_json_format(self):
         """测试从JSON响应中正确提取符号路径"""
         response_text = json.dumps(
             {
                 "thought": "A test thought.",
                 "patches": [
+                    # This should be extracted
                     {"action": "overwrite_symbol", "path": "path/to/file1.py/symbol1", "content": "c1"},
+                    # This should be ignored
                     {"action": "overwrite_whole_file", "path": "path/to/file2.py", "content": "c2"},
+                    # This should be ignored
                     {"action": "delete_symbol", "path": "path/to/file1.py/symbol2", "content": ""},
+                    # This should be extracted
                     {"action": "overwrite_symbol", "path": "path/to/file1.py/symbol3", "content": "c3"},
                 ],
             }
@@ -808,7 +812,46 @@ code3
         }
         self.assertEqual(result, expected)
 
-    def test_add_symbol_details(self):
+    def test_parse_v4_json_format_and_fallback(self):
+        """测试解析V4 JSON格式响应以及对旧格式的回退"""
+        # 1. 测试V4 JSON格式
+        json_response = json.dumps(
+            {
+                "thought": "A test thought.",
+                "patches": [
+                    {"action": "overwrite_whole_file", "path": "file1.py", "content": "new file content"},
+                    {"action": "overwrite_symbol", "path": "file2.py/my_func", "content": "def my_func(): pass"},
+                    {"action": "delete_symbol", "path": "file2.py/old_func", "content": ""},
+                ],
+            }
+        )
+        parser = BlockPatchResponse()
+        results = parser.parse(json_response)
+        self.assertEqual(len(results), 3)
+        self.assertIn(("file1.py", "new file content"), results)
+        self.assertIn(("file2.py/my_func", "def my_func(): pass"), results)
+        self.assertIn(("file2.py/old_func", ""), results)
+
+        # 2. 测试无效JSON，回退到旧格式解析
+        # Note: This test implies BlockPatchResponse's parse method attempts JSON first,
+        # and if it fails, falls back to the legacy regex parsing.
+        legacy_response_with_invalid_json_chars = """
+[overwrite whole symbol]: valid_symbol
+[start]
+{ "incomplete_json": "value"
+def valid_func():
+    pass
+[end]
+        """
+        parser_fallback = BlockPatchResponse(symbol_names=["valid_symbol"])
+        results_fallback = parser_fallback.parse(legacy_response_with_invalid_json_chars)
+        self.assertEqual(len(results_fallback), 1)
+        self.assertEqual(results_fallback[0][0], "valid_symbol")
+        # The content will include the incomplete JSON line because it's treated as part of the block
+        self.assertIn("valid_func", results_fallback[0][1])
+        self.assertIn('{ "incomplete_json": "value"', results_fallback[0][1])
+
+    def test_add_symbol_details_json_format(self):
         """测试add_symbol_details函数与JSON响应格式的集成"""
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
             tmp.write(
@@ -839,7 +882,12 @@ code3
                     {
                         "action": "overwrite_symbol",
                         "path": f"{tmp_path}/TestClass",
-                        "content": 'class TestClass:\n    """修改后的类"""\n    def method1(self):\n        return "modified"',
+                        # Fixed: C0301 (line too long)
+                        "content": dedent('''\
+                            class TestClass:
+                                """修改后的类"""
+                                def method1(self):
+                                    return "modified"'''),
                     },
                 ],
             }
@@ -854,100 +902,6 @@ code3
             self.assertIn(f"{tmp_path}/TestClass", symbol_detail)
             self.assertEqual(symbol_detail[f"{tmp_path}/func1"]["file_path"], tmp_path)
             self.assertEqual(symbol_detail[f"{tmp_path}/TestClass"]["file_path"], tmp_path)
-        finally:
-            os.unlink(tmp_path)
-
-    def test_interactive_symbol_location(self):
-        """测试交互式符号位置选择器"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
-            tmp.write(
-                dedent(
-                    '''
-            def existing_func():
-                """已有函数"""
-                pass
-
-            class ExistingClass:
-                def method1(self):
-                    pass
-
-                def method2(self):
-                    pass
-            '''
-                )
-            )
-            tmp_path = tmp.name
-
-        try:
-            with open(tmp_path, "rb") as f:
-                content = f.read()
-            parent_info = {
-                "start_line": 1,
-                "block_range": [0, len(content)],
-                "block_content": content,
-            }
-
-            with unittest.mock.patch("builtins.input", side_effect=["8"]):
-                result = interactive_symbol_location(
-                    file=tmp_path,
-                    path="test_path",
-                    parent_symbol="ExistingClass",
-                    parent_symbol_info=parent_info,
-                )
-
-            self.assertEqual(result["file_path"], tmp_path)
-            self.assertEqual(result["block_content"], b"")
-            self.assertTrue(result[NewSymbolFlag])
-
-            patch = BlockPatch(
-                file_paths=[tmp_path],
-                patch_ranges=[result["block_range"]],
-                block_contents=[result["block_content"]],
-                update_contents=[b"    def new_method(self):\n        return 'patched'"],
-            )
-            diff = patch.generate_diff()
-            self.assertIn("+    def new_method(self):", diff[tmp_path])
-        finally:
-            os.unlink(tmp_path)
-
-    def test_add_symbol_details_with_interactive(self):
-        """测试add_symbol_details与交互式位置选择的集成"""
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False, encoding="utf8") as tmp:
-            tmp.write(
-                dedent(
-                    """
-            def target_func():
-                pass
-
-            class TargetClass:
-                def target_method(self):
-                    pass
-            """
-                )
-            )
-            tmp_path = tmp.name
-
-        try:
-            remaining = json.dumps(
-                {
-                    "thought": "a thought",
-                    "patches": [
-                        {
-                            "action": "overwrite_symbol",
-                            "path": f"{tmp_path}/new_symbol",
-                            "content": "new_code = 42",
-                        }
-                    ],
-                }
-            )
-
-            with unittest.mock.patch("builtins.input", side_effect=["2"]):
-                symbol_detail = {}
-                llm_query.add_symbol_details(remaining, symbol_detail)
-
-            self.assertEqual(len(symbol_detail), 1)
-            self.assertIn(f"{tmp_path}/new_symbol", symbol_detail)
-            self.assertTrue(symbol_detail[f"{tmp_path}/new_symbol"][NewSymbolFlag])
         finally:
             os.unlink(tmp_path)
 
@@ -1076,6 +1030,9 @@ class TestDirectoryHandling(unittest.TestCase):
             self.assertNotIn("node_modules", result)
 
 
+import json
+
+
 class TestExtractAndDiffFiles(unittest.TestCase):
     def setUp(self):
         # 创建临时目录
@@ -1139,9 +1096,9 @@ line3
 
         test_content = """
 [overwrite whole file]: new_test.txt
-[start]
+[start.60]
 new content
-[end]
+[end.60]
 """
 
         llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False)
@@ -1149,6 +1106,31 @@ new content
         # 直接验证文件创建和内容写入
         self.assertTrue(test_file.exists())
         self.assertEqual(test_file.read_text(), "new content")
+
+    def test_json_format_with_thinking_process(self):
+        """测试新的JSON格式，包括thinking_process的显示"""
+        test_content = json.dumps(
+            {
+                "thinking_process": {"requirement_analysis": "Test analysis"},
+                "actions": [{"action_type": "create_file", "file_path": "test.txt", "content": "new json content"}],
+            }
+        )
+
+        new_file = self.tmp_path / "test.txt"
+
+        with (
+            patch("llm_query.display_llm_plan") as mock_display,
+            patch("llm_query._apply_patch"),
+            patch("builtins.input", return_value="all"),
+        ):  # 确认应用
+            llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False)
+
+            mock_display.assert_called_once_with({"requirement_analysis": "Test analysis"})
+
+            # 验证影子文件是否已按预期创建
+            shadow_file = self.shadow_dir / "test.txt"
+            self.assertTrue(shadow_file.exists())
+            self.assertEqual(shadow_file.read_text(), "new json content")
 
     def test_setup_script_processing(self):
         """测试处理项目设置脚本"""

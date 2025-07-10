@@ -130,7 +130,7 @@ class LintReportFix:
 
     _MAX_CONTEXT_SPAN = 100  # 最大上下文跨度行数
 
-    def __init__(self, model_switch: ModelSwitch = None):
+    def __init__(self, model_switch: Optional[ModelSwitch] = None) -> None:
         self.model_switch = model_switch or ModelSwitch()
 
     def _build_prompt(self, symbol: Dict, symbol_map: Dict) -> str:
@@ -170,7 +170,7 @@ class PylintFixer:
         root_dir: Optional[Path] = None,
         git_hint: str = "",
     ):
-        self.log_path = Path(linter_log_path)
+        self.log_path = Path(linter_log_path) if linter_log_path else None
         self.results: list[LintResult] = []
         self.file_groups: dict[str, list[LintResult]] = {}
         self.fixer = LintReportFix()
@@ -204,20 +204,24 @@ class PylintFixer:
                     )
 
                 # 准备pylint参数
-                pylint_args = []
+                pylint_args: List[str] = []
                 pylintrc_path = self.root_dir / ".pylintrc"
                 if pylintrc_path.exists():
                     pylint_args.extend(["--rcfile", str(pylintrc_path)])
 
                 # 一次性对所有文件执行pylint
-                result = subprocess.run(
-                    ["pylint", *pylint_args, *files_result.stdout.splitlines()],
-                    capture_output=True,
-                    text=True,
-                    cwd=self.root_dir,
-                    check=False,
-                )
-                log_content = result.stdout
+                pylint_files = files_result.stdout.splitlines() if files_result else []
+                if not pylint_files:
+                    log_content = ""
+                else:
+                    result = subprocess.run(
+                        ["pylint", *pylint_args, *pylint_files],
+                        capture_output=True,
+                        text=True,
+                        cwd=self.root_dir,
+                        check=False,
+                    )
+                    log_content = result.stdout
                 self.results = LintParser.parse(log_content)
 
             except subprocess.CalledProcessError as e:
@@ -225,7 +229,7 @@ class PylintFixer:
             except Exception as e:
                 raise RuntimeError(f"执行过程中出错: {str(e)}") from e
 
-        else:
+        elif self.log_path:
             if not self.log_path.is_file():
                 raise FileNotFoundError(f"日志文件 '{self.log_path}' 不存在或不是文件")
 
@@ -241,6 +245,58 @@ class PylintFixer:
         self.file_groups = defaultdict(list)
         for res in self.results:
             self.file_groups[res.file_path].append(res)
+
+    def _select_files_interactively(self) -> List[str]:
+        """
+        在'stage'模式下，以交互方式提示用户选择要修复的文件。
+
+        显示带有pylint错误的文件列表，并要求用户做出选择。
+
+        Returns:
+            用户选择要修复的文件的路径列表。
+        """
+        if self.git_hint != "stage" or not self.file_groups:
+            return list(self.file_groups.keys())
+
+        print("\n--- Pylint Fixer: Interactive File Selection (Stage Mode) ---")
+        print("The following staged files have linting errors:")
+
+        indexed_files = list(self.file_groups.keys())
+
+        for i, file_path in enumerate(indexed_files):
+            errors = self.file_groups[file_path]
+            error_count = len(errors)
+            print(f"\n[{i + 1}] {file_path} ({error_count} {'error' if error_count == 1 else 'errors'})")
+            for error in errors[:3]:
+                print(f"  - L{error.line}: {error.code}: {error.message}")
+            if error_count > 3:
+                print(f"  - ... and {error_count - 3} more.")
+
+        while True:
+            prompt_message = "\nEnter the numbers of the files to fix (e.g., 1,3), 'all', or 'none': "
+            choice = input(prompt_message).strip().lower()
+
+            if not choice or choice == "none":
+                print("No files selected. Exiting.")
+                return []
+
+            if choice == "all":
+                print(f"All {len(indexed_files)} files selected for fixing.")
+                return indexed_files
+
+            try:
+                selected_indices = [int(x.strip()) - 1 for x in choice.split(",")]
+
+                if all(0 <= idx < len(indexed_files) for idx in selected_indices):
+                    selected_files = [indexed_files[i] for i in selected_indices]
+                    print("\nSelected files for fixing:")
+                    for f in selected_files:
+                        print(f" - {f}")
+                    return selected_files
+                else:
+                    print(f"Error: Invalid number. Please enter numbers between 1 and {len(indexed_files)}.")
+            except ValueError:
+                print("Error: Invalid input. Please enter numbers, 'all', or 'none'.")
 
     def _process_symbol_group(self, symbol: Dict, symbol_map: Dict) -> None:
         """处理单个符号的错误组"""
@@ -260,13 +316,13 @@ class PylintFixer:
 
         try:
             self.fixer.fix_symbol(symbol, symbol_map)
-        except (RuntimeError, ValueError, IOError) as e:  # 更具体的异常类型
+        except (RuntimeError, ValueError, IOError) as e:
             traceback.print_exc()
             print("无法自动修复当前错误组", str(e))
-        except Exception as e:  # 保留最外层Exception捕获但添加详细日志
+        except Exception:
             traceback.print_exc()
-            print("发生未预期的错误:", str(e))
-            raise  # 重新抛出以便上层处理
+            print("发生未预期的错误")
+            raise
 
     def _get_symbol_locations(self, file_path: str) -> list[tuple[int, int]]:
         """获取符号定位信息"""
@@ -277,7 +333,7 @@ class PylintFixer:
     ) -> Dict[str, Dict]:
         """关联错误信息到符号"""
         symbol_map = parser_util.find_symbols_for_locations(code_map, locations, max_context_size=1024 * 1024)
-        new_symbol_map = {}
+        new_symbol_map: Dict[str, Dict] = {}
         for name, symbol in symbol_map.items():
             symbol["original_name"] = name
             symbol["name"] = f"{file_path}/{name}"
@@ -293,8 +349,8 @@ class PylintFixer:
 
     def _group_symbols_by_token_limit(self, symbol_map: Dict) -> list[list]:
         """按token限制分组符号"""
-        groups = []
-        current_group = []
+        groups: List[List[Dict]] = []
+        current_group: List[Dict] = []
         current_size = 0
         for symbol in symbol_map.values():
             symbol_size = len(symbol["code"])
@@ -334,11 +390,18 @@ class PylintFixer:
         if not self.results:
             print("未发现可修复的错误")
             return
-        ModelSwitch().select("coder")
-        self.group_results_by_file()
 
-        for file_path in self.file_groups:
-            self._process_symbols_for_file(file_path)
+        self.group_results_by_file()
+        selected_files = self._select_files_interactively()
+
+        if not selected_files:
+            return
+
+        ModelSwitch().select("coder")
+
+        for file_path in selected_files:
+            if file_path in self.file_groups:
+                self._process_symbols_for_file(file_path)
 
         print("\n修复流程完成")
 
