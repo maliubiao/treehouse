@@ -643,6 +643,66 @@ class UnitTestGeneratorDecorator:
 
         print(f"\n{Fore.GREEN}{Style.BRIGHT}=== Unit Test Generation Workflow Finished ==={Style.RESET_ALL}")
 
+    @classmethod
+    def run_manual_generation(cls, analyzer: CallAnalyzer, config: Dict[str, Any]):
+        """
+        Executes the test generation workflow manually from a single analyzer instance.
+
+        This method is for non-decorator usage where tracing is started/stopped
+        explicitly. It does not use process locks or the atexit registry.
+
+        Args:
+            analyzer: The CallAnalyzer instance containing the trace data.
+            config: A dictionary with generation configurations.
+        """
+        print(f"\n{Fore.CYAN}{Style.BRIGHT}=== Starting Manual Unit Test Generation Workflow ==={Style.RESET_ALL}")
+
+        analyzer.finalize()
+        master_call_tree = analyzer.call_trees
+
+        all_discovered_calls = cls._discover_all_calls_from_tree(master_call_tree)
+
+        all_discovered_calls = {
+            filename: {
+                func_name: records
+                for func_name, records in funcs.items()
+                if not (func_name.startswith("<") and func_name.endswith(">"))
+            }
+            for filename, funcs in all_discovered_calls.items()
+        }
+        all_discovered_calls = {filename: funcs for filename, funcs in all_discovered_calls.items() if funcs}
+
+        report_path = cls._save_unified_report(all_discovered_calls, config)
+        if not report_path:
+            return
+
+        if not all_discovered_calls:
+            print(f"{Fore.YELLOW}No function executions were captured in the manual trace.{Style.RESET_ALL}")
+            return
+        cls._check_for_multithreading(all_discovered_calls)
+
+        presets = config.get("target_functions") or []
+        is_preset_defined = bool(presets)
+
+        targets_by_file, final_target_funcs = cls._determine_targets(
+            all_discovered_calls, config, presets, is_preset_defined
+        )
+
+        cls._verify_and_print_traces(all_discovered_calls, targets_by_file, final_target_funcs)
+
+        if not targets_by_file and not final_target_funcs:
+            print(f"{Fore.BLUE}No functions selected or test generation cancelled.{Style.RESET_ALL}")
+            return
+
+        cls._save_unified_import_map(config)
+        generator = cls._initialize_generator(config, report_path)
+        if not generator:
+            return
+
+        cls._run_generation_tasks(generator, config, targets_by_file, final_target_funcs)
+
+        print(f"\n{Fore.GREEN}{Style.BRIGHT}=== Manual Unit Test Generation Workflow Finished ==={Style.RESET_ALL}")
+
     @staticmethod
     def _load_calls_from_report(report_path: str) -> Dict[str, Dict[str, List[Dict]]]:
         """Reads a report file and organizes all found function calls by file and function name."""
