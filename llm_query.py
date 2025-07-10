@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import trace
@@ -692,7 +693,6 @@ def _get_api_response(
         #    "enable_thinking": True if kwargs.get("enable_thinking") else False,
         #    "thinking_budget": kwargs.get("thinking_budget", 32 * 1024),
         # }
-
         model_config = kwargs.get("model_config") or GLOBAL_MODEL_CONFIG
         use_json_output = kwargs.get("use_json_output", False)
         is_json_mode = use_json_output and model_config and model_config.supports_json_output
@@ -707,7 +707,7 @@ def _get_api_response(
         }
 
         if is_json_mode:
-            create_params["stream"] = False
+            create_params["stream"] = True
             create_params["response_format"] = {"type": "json_object"}
         else:
             create_params["stream"] = True
@@ -2078,16 +2078,26 @@ class BlockPatchResponse:
 
     def _parse_json(self, json_text: str) -> list[tuple[str, str]]:
         """将JSON字符串解析为补丁列表格式。"""
-        data = json.loads(json_text)
+        try:
+            data = json.loads(json_text)
+        except json.JSONDecodeError:
+            return []
+
+        # 兼容旧版格式：如果顶层是列表，则将其视为patches列表
+        if isinstance(data, list):
+            data = {"patches": data}
+
         results = []
         # 兼容新的action格式和旧的直接kv格式
         if "patches" in data and isinstance(data["patches"], list):
             for patch in data["patches"]:
-                if isinstance(patch, dict) and "path" in patch and "content" in patch:
-                    # 'action' 键是可选的，以实现向后兼容
-                    results.append((patch["path"], patch["content"]))
-            return results
-        return []
+                if isinstance(patch, dict) and "path" in patch:
+                    # 对于delete_symbol操作，我们将其内容设置为空字符串
+                    content = patch.get("content", "")
+                    if patch.get("action") == "delete_symbol":
+                        content = ""
+                    results.append((patch["path"], content))
+        return results
 
     def _parse_legacy(self, response_text: str) -> list[tuple[str, str]]:
         """使用基于行的状态机解析旧的标签格式，提取所有类型的补丁块（symbol/block/file）。
@@ -2299,12 +2309,12 @@ class BlockPatchResponse:
             return BlockPatchResponse._extract_symbols_from_legacy(response_text)
 
 
-def parse_llm_response(response_text, symbol_names=None, use_json=False):
+def parse_llm_response(response_text, symbol_names=None, use_json_output=False):
     """
     快速解析响应内容
     返回格式: [(symbol_name, source_code), ...]
     """
-    parser = BlockPatchResponse(symbol_names=None, use_json=use_json)  # 总是解析所有符号，不使用symbol_names过滤
+    parser = BlockPatchResponse(symbol_names=None, use_json=use_json_output)  # 总是解析所有符号，不使用symbol_names过滤
     return parser.parse(response_text)
 
 
@@ -2466,9 +2476,11 @@ def _display_thought_and_summary(response_text: str):
     """
     try:
         data = json.loads(response_text)
+        # 兼容旧版格式：如果顶层是列表，则将其视为patches列表
+        if isinstance(data, list) and len(data) and data[0].get("action"):
+            data = {"patches": data}
         thought = data.get("thought")
         patches = data.get("patches")
-
         if thought:
             print(Fore.BLUE + "━━━━━━━━━━ AI's Thought Process ━━━━━━━━━━" + ColorStyle.RESET_ALL)
             # 使用textwrap填充文本，使其更易于阅读
@@ -2539,7 +2551,7 @@ def process_patch_response(
     # else:
     remaining = filtered_response
 
-    results = parse_llm_response(remaining, symbol_names=None)  # 总是解析所有符号
+    results = parse_llm_response(remaining, symbol_names=None, use_json_output=use_json_output)  # 总是解析所有符号
     if not results:
         print(Fore.YELLOW + "未从模型响应中解析出任何有效补丁。" + ColorStyle.RESET_ALL)
         return None
@@ -4074,8 +4086,11 @@ def handle_ask_mode(program_args, proxies):
     model_switch = ModelSwitch()
     model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
-    # 根据模型配置自动设置use_json_output
-    use_json_output = GLOBAL_MODEL_CONFIG.supports_json_output
+    # 先解析节点以检查是否包含patch或edit命令
+    nodes = context_processor.parse_text_into_nodes(program_args.ask.strip())
+    has_patch_or_edit = any(isinstance(node, CmdNode) and node.command in ["patch", "edit"] for node in nodes)
+    # 只有当patch或edit条件设置时，才根据模型配置设置use_json_output
+    use_json_output = has_patch_or_edit and GLOBAL_MODEL_CONFIG.supports_json_output
     text = context_processor.process_text(program_args.ask, use_json_output=use_json_output)
     print(text)
     response_data = model_switch.query(
