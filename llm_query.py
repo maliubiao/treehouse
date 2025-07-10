@@ -4092,6 +4092,23 @@ def handle_ask_mode(program_args, proxies):
     # 只有当patch或edit条件设置时，才根据模型配置设置use_json_output
     use_json_output = has_patch_or_edit and GLOBAL_MODEL_CONFIG.supports_json_output
     text = context_processor.process_text(program_args.ask, use_json_output=use_json_output)
+
+    # 检查是否有edit命令，如果有，则根据use_json_output选择对应的提示文件
+    has_edit = any(isinstance(node, CmdNode) and node.command == "edit" for node in nodes)
+    if has_edit:
+        # 根据use_json_output选择v2或v3
+        prompt_file = "edit-file-v3" if use_json_output else "edit-file-v2"
+        prompt_path = os.path.join(os.environ.get("GPT_PATH", ""), "prompts", prompt_file)
+        # 如果GPT_PATH下没有，则尝试当前目录下的prompts目录
+        if not os.path.exists(prompt_path):
+            prompt_path = os.path.join(os.path.dirname(__file__), "prompts", prompt_file)
+
+        if os.path.exists(prompt_path):
+            edit_prompt = Path(prompt_path).read_text(encoding="utf-8")
+            text = edit_prompt + "\n" + text
+        else:
+            print(f"警告: 未找到提示文件 {prompt_file}")
+
     print(text)
     response_data = model_switch.query(
         os.environ["GPT_MODEL_KEY"], text, proxies=proxies, use_json_output=use_json_output

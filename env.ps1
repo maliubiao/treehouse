@@ -297,11 +297,17 @@ function global:commitgpt {
         return
     }
 
-    $status = git status --porcelain
-    if (-not $status) {
+    if (git diff --quiet) {
         Write-Error "错误：没有需要提交的更改"
         return
     }
+
+    if (-not (git diff --cached --quiet)) {
+        Write-Error "错误：存在未暂存的更改，请先使用git add添加更改"
+        return
+    }
+
+    & (Join-Path -Path $env:GPT_PATH -ChildPath "tools\pre-commit-check.sh")
 
     New-Conversation
     & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@git-commit-message @git-stage @git-diff-summary.txt"
@@ -321,22 +327,30 @@ function global:commitgpt {
 
 # 新增 fixgpt 函数
 function global:fixgpt {
+    param([Parameter(ValueFromRemainingArguments)]$UserNote)
     $lastCommand = (Get-History -Count 1).CommandLine
     Write-Host "上一条命令：$lastCommand"
+    $userNoteString = if ($UserNote) { "$UserNote" } else { "无备注" }
     $confirm = Read-Host "确定执行该命令？(Y/n)"
     if ($confirm -eq "n" -or $confirm -eq "N") {
         Write-Host "已取消"
         return
     }
 
+    $safeCommand = $lastCommand -replace '[ /\\]', '___'
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     $logDir = Join-Path -Path $env:TEMP -ChildPath "fixgpt_logs\$timestamp"
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
     $lastCommand | Out-File -FilePath (Join-Path -Path $logDir -ChildPath "command.txt") -Encoding UTF8
-    Invoke-Expression $lastCommand *> (Join-Path -Path $logDir -ChildPath "output.log")
+    if ($UserNote) { $userNoteString | Out-File -FilePath (Join-Path -Path $logDir -ChildPath "note.txt") -Encoding UTF8 }
+    $outputLog = Join-Path -Path $logDir -ChildPath "output.log"
+    Invoke-Expression $lastCommand *> $outputLog
+    $statusCode = $LASTEXITCODE
+    $statusCode | Out-File -FilePath (Join-Path -Path $logDir -ChildPath "status.txt") -Encoding UTF8
 
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@cmd `"$lastCommand`" `"@$(Join-Path -Path $logDir -ChildPath 'output.log')`""
+    $prompt = "为什么这个命令会执行失败?`n[cmd start]`n$lastCommand`n[cmd end]`n[cmd stdout start]`n$(Get-Content $outputLog -Raw)`n[cmd stdout end]`n[cmd status start]`n$statusCode`n[cmd status end]`n[user note start]`n$userNoteString`n[user note end]"
+    naskgpt "@cmd" "$prompt"
 
     Remove-Item -Path $logDir -Recurse -Force
 }
@@ -372,9 +386,106 @@ function global:codegpt {
     $originalSession = $env:GPT_SESSION_ID
     New-Conversation
     $Question = $Question -replace '\\@', '@'
-    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@edit @edit-file $Question"
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --ask "@edit $Question"
     $env:GPT_SESSION_ID = $originalSession
     Write-Host "已恢复原会话: $originalSession"
+}
+
+# 新增 explaingpt 函数
+function global:explaingpt {
+    param(
+        [string]$File,
+        [string]$PromptFile = (Join-Path -Path $env:GPT_PROMPTS_DIR -ChildPath "source-query.txt")
+    )
+
+    if (-not (Test-Path $File)) {
+        Write-Error "Error: Source file not found: $File"
+        return
+    }
+    if (-not (Test-Path $PromptFile)) {
+        Write-Error "Error: Prompt file not found: $PromptFile"
+        return
+    }
+
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --file "$File" --prompt-file "$PromptFile"
+}
+
+# 新增 trace 函数
+function global:trace {
+    param([Parameter(ValueFromRemainingArguments)]$Args)
+    & (Get-PythonPath) (Join-Path -Path $env:GPT_PATH -ChildPath "debugger\tracer_main.py") --watch-files="*.py" --open-report $Args
+}
+
+# 新增 patchgpttrace 函数
+function global:patchgpttrace {
+    param([Parameter(ValueFromRemainingArguments)]$Args)
+    $tmpFile = [System.IO.Path]::GetTempFileName()
+    "@patch @patch-rule @symbol-path-rule-v2 $Args" | Out-File -FilePath $tmpFile -Encoding UTF8
+    & (Get-PythonPath) -m debugger.tracer_main --open-report (Join-Path -Path $env:GPT_PATH -ChildPath "llm_query.py") --file "$tmpFile"
+    Remove-Item -Path $tmpFile -Force
+}
+
+# 新增 updategpt 函数
+function global:updategpt {
+    $originalDir = Get-Location
+
+    if (-not $env:GPT_PATH) {
+        Write-Error "Error: GPT_PATH is not set"
+        return
+    }
+
+    $lastCheckFile = Join-Path -Path $env:GPT_PATH -ChildPath ".last_update_check"
+    if (Test-Path $lastCheckFile) {
+        $lastCheck = (Get-Item $lastCheckFile).LastWriteTime
+        $now = Get-Date
+        $diff = ($now - $lastCheck).TotalSeconds
+        if ($diff -lt 86400) {
+            Write-Host "Update check was performed within last 24 hours. Skipping."
+            Set-Location $originalDir
+            return
+        }
+    }
+
+    Set-Location $env:GPT_PATH
+
+    if (-not (git rev-parse --is-inside-work-tree 2>$null)) {
+        Write-Error "Error: $env:GPT_PATH is not a git repository"
+        Set-Location $originalDir
+        return
+    }
+
+    New-Item -ItemType File -Path $lastCheckFile -Force | Out-Null
+
+    Write-Host "Checking for updates in $env:GPT_PATH..."
+    git fetch
+
+    $behind = git rev-list HEAD..origin/main --count
+    if ($behind -eq 0) {
+        Write-Host "Already up to date."
+        Set-Location $originalDir
+        return
+    }
+
+    Write-Host "Found $behind new commits. Last update was:"
+    git log -1 --format="%cr (%cd)" --date=short
+
+    $answer = Read-Host "Do you want to update? [Y/n]"
+    if ($answer -match "[nN]") {
+        Write-Host "Update cancelled."
+        Set-Location $originalDir
+        return
+    }
+
+    Write-Host "Updating repository..."
+    git pull
+
+    Write-Host "`nRecent changes:"
+    git log --pretty=format:"%h - %s (%cr)" HEAD@ { 1 }..HEAD
+
+    Initialize-GptEnv
+    Initialize-Directories
+
+    Set-Location $originalDir
 }
 
 # 补全支持
