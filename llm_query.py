@@ -1695,6 +1695,68 @@ def _find_gitignore(path: str) -> str:
         current = parent
 
 
+DEFAULT_IGNORE_PATTERNS = [
+    "__pycache__/",
+    "node_modules/",
+    "venv/",
+    "dist/",
+    "build/",
+    "*.py[cod]",
+    "*.so",
+    "*.egg-info",
+    "*.jpg",
+    "*.jpeg",
+    "*.png",
+    "*.gif",
+    "*.pdf",
+    "*.zip",
+    "*-lock.yaml",
+    "*lock.json",
+    "*.tar*",
+    "*.vsix",
+    "*.log",
+    "*.sqlite",
+    "*.db",
+    "*.DS_Store",
+    "*.exe",
+    "*.dll",
+    "*.bin",
+    "*.class",
+    "*.jar",
+    "*.war",
+    "*.ear",
+    "*.o",
+    "*.a",
+    "*.lib",
+    "*.dylib",
+    "*.pdb",
+    "*.ipynb_checkpoints",
+    "*.env",
+    "*.bak",
+    "*.tmp",
+    "*.swp",
+    "*.swo",
+    "*.cache",
+    "*.idea",
+    "*.vscode",
+    "*.history",
+    "*.min.*",
+    "*.map",
+    "*.ico",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.eot",
+    "*.svg",
+    "*.mp3",
+    "*.mp4",
+    "*.avi",
+    "*.mov",
+    "*.wav",
+    "*.flac",
+]
+
+
 def _parse_gitignore(gitignore_path: str, root_dir: str) -> callable:
     """解析.gitignore文件生成过滤函数"""
     patterns = []
@@ -1708,24 +1770,7 @@ def _parse_gitignore(gitignore_path: str, root_dir: str) -> callable:
         except (IOError, UnicodeDecodeError) as e:
             logging.warning("解析.gitignore失败: %s", str(e))
 
-    default_patterns = [
-        "__pycache__/",
-        "node_modules/",
-        "venv/",
-        "dist/",
-        "build/",
-        "*.py[cod]",
-        "*.so",
-        "*.egg-info",
-        "*.jpg",
-        "*.jpeg",
-        "*.png",
-        "*.gif",
-        "*.pdf",
-        "*.zip",
-        ".*",
-    ]
-    patterns.extend(default_patterns)
+    patterns.extend(DEFAULT_IGNORE_PATTERNS)
 
     def _is_ignored(file_path: str) -> bool:
         """判断文件路径是否被忽略"""
@@ -1763,16 +1808,6 @@ def read_last_query(_):
     except FileNotFoundError:
         return ""
 
-
-# PATCH_PROMPT_HEADER = """
-# [project description start]
-# 当前目录: {current_dir}
-# [project description end]
-# {patch_rule}
-# [symbol path rule start]
-# {symbol_path_rule_content}
-# [symbol path rule end]
-# """
 
 PATCH_PROMPT_HEADER = """
 [project description start]
@@ -2059,43 +2094,70 @@ class AutoGitCommit:
 
 
 class BlockPatchResponse:
-    """大模型响应解析器，兼容JSON格式(包括markdown块)和传统的标签格式"""
+    """
+    Large Language Model response parser with support for both JSON format (including markdown blocks)
+    and traditional tag-based format.
 
-    # 为旧格式解析预编译正则表达式，提高效率
+    This class provides comprehensive parsing capabilities for LLM responses containing code patches.
+    It handles:
+    - JSON format responses (both raw and embedded in markdown code blocks)
+    - Legacy tag-based format with [overwrite ...] headers and [start]/[end] markers
+    - Nested blocks in legacy format
+    - Multiple patch types (symbol, block, file level modifications)
+
+    The parser maintains strict validation of input formats and provides detailed error handling.
+    """
+
+    # Pre-compiled regex patterns for legacy format parsing (optimization)
     _LEGACY_HEADER_RE = re.compile(r"\[overwrite whole (symbol|block|file)\]:\s*([^\n]+)")
     _MARKDOWN_HEADER_RE = re.compile(r"```([a-zA-Z0-9_]+)?:([^\n`]+)")
     _START_TAG_RE = re.compile(r"\[start(?:\.\d+)?\]")
     _END_TAG_RE = re.compile(r"\[end(?:\.\d+)?\]")
 
     def __init__(self, symbol_names=None, use_json=False):
-        self.symbol_names = symbol_names or []  # 确保symbol_names是列表
+        """
+        Initialize the parser with optional symbol filtering and format preference.
+
+        Args:
+            symbol_names: List of specific symbols to filter for (unused in current implementation)
+            use_json: Boolean flag to prefer JSON format parsing when True
+        """
+        self.symbol_names = symbol_names or []  # Ensure symbol_names is always a list
         self.use_json = use_json
 
     def _extract_json_from_markdown(self, text: str) -> str | None:
-        """从 ```json ... ``` markdown块中提取JSON内容。"""
+        """Extract JSON content from ```json ... ``` markdown code blocks."""
         match = re.search(r"```json\s*\n(.*?)\n```", text, re.DOTALL)
         return match.group(1).strip() if match else None
 
     def _parse_json(self, json_text: str) -> list[tuple[str, str]]:
-        """将JSON字符串解析为补丁列表格式。"""
+        """
+        Parse JSON string into patch list format with comprehensive validation.
+
+        Handles both old format (direct list of patches) and new format (with 'patches' key).
+        Validates each patch object structure before including in results.
+
+        Returns:
+            List of tuples (path, content) representing valid patches
+        """
         try:
             data = json.loads(json_text)
         except json.JSONDecodeError:
             return []
 
-        # 兼容旧版格式：如果顶层是列表，则将其视为patches列表
+        # Backward compatibility: if top-level is a list, treat as patches list
         if isinstance(data, list):
             data = {"patches": data}
 
         results = []
-        # 兼容新的action格式和旧的直接kv格式
+        # Handle both new action format and old direct key-value format
         if "patches" in data and isinstance(data["patches"], list):
             for patch in data["patches"]:
                 if isinstance(patch, dict) and "path" in patch:
-                    # 验证patch的完整性
+                    # Validate patch structure
                     if not self._validate_patch(patch):
                         continue
-                    # 对于delete_symbol操作，我们将其内容设置为空字符串
+                    # For delete_symbol action, set content to empty string
                     content = patch.get("content", "")
                     if patch.get("action") == "delete_symbol":
                         content = ""
@@ -2103,14 +2165,22 @@ class BlockPatchResponse:
         return results
 
     def _validate_patch(self, patch: dict) -> bool:
-        """验证单个patch对象的完整性"""
+        """
+        Validate a single patch object structure.
+
+        Args:
+            patch: Dictionary representing a single patch operation
+
+        Returns:
+            True if patch is valid, False otherwise (with warning printed)
+        """
         action = patch.get("action")
         path = patch.get("path")
-        # 检查action和path是否存在
+        # Check required fields
         if action is None or path is None:
             print(f"警告: 忽略无效的patch对象，缺少action或path: {patch}")
             return False
-        # 对于overwrite_symbol操作，必须存在content键（值可以是空字符串）
+        # For overwrite_symbol, content field is required (can be empty)
         if action == "overwrite_symbol":
             if "content" not in patch:
                 print(f"警告: 忽略无效的overwrite_symbol操作，缺少content: {patch}")
@@ -2118,9 +2188,17 @@ class BlockPatchResponse:
         return True
 
     def _parse_legacy(self, response_text: str) -> list[tuple[str, str]]:
-        """使用基于行的状态机解析旧的标签格式，提取所有类型的补丁块（symbol/block/file）。
-        支持嵌套标签，并收集 (whole_path, block_content) 对。
-        总是提取所有符号，不附加非匹配符号的内容。
+        """
+        Parse legacy tag-based format using line-oriented state machine.
+
+        Handles nested tags and collects (whole_path, block_content) pairs.
+        Always extracts all symbols regardless of filtering settings.
+
+        Args:
+            response_text: Raw LLM response text in legacy format
+
+        Returns:
+            List of tuples (path, content) representing valid patches
         """
         results = []
         lines = response_text.splitlines()
@@ -2173,7 +2251,7 @@ class BlockPatchResponse:
                 content_lines = lines[block_start_line:block_end_line]
                 block_content = "\n".join(content_lines)
 
-                # 总是提取所有符号，不附加pending_contents
+                # Always extract all symbols, don't append pending_contents
                 results.append((whole_path, block_content))
 
                 # Jump outer loop cursor past the processed block
@@ -2186,44 +2264,59 @@ class BlockPatchResponse:
 
     def parse(self, response_text: str) -> list[tuple[str, str]]:
         """
-        解析大模型返回的响应内容，优先处理JSON格式。
-        返回格式: [(identifier, source_code), ...]
+        Parse LLM response content with format autodetection.
+
+        Prioritizes JSON format when self.use_json is True.
+        Falls back to legacy tag-based parsing when JSON parsing fails or is disabled.
+
+        Args:
+            response_text: Raw LLM response text
+
+        Returns:
+            List of tuples (identifier, source_code) representing valid patches
         """
         if self.use_json:
             json_content = self._extract_json_from_markdown(response_text)
             if not json_content:
                 json_content = response_text
             if json_content is not None:
-                # 如果存在JSON块，则将其视为唯一信源
+                # If JSON block exists, treat it as the sole source
                 try:
                     return self._parse_json(json_content)
                 except (json.JSONDecodeError, TypeError):
-                    return []  # 格式错误的JSON块导致解析失败
+                    return []  # Malformed JSON block causes parse failure
             try:
-                # 尝试将整个响应作为JSON解析
+                # Attempt to parse entire response as JSON
                 return self._parse_json(response_text)
             except (json.JSONDecodeError, TypeError):
-                # 如果无法作为JSON解析，说明是无效输入，返回空列表
+                # If not parseable as JSON, treat as invalid input
                 return []
         else:
             return self._parse_legacy(response_text)
 
     @staticmethod
     def _extract_json_from_markdown_static(text: str) -> str | None:
-        """从 ```json ... ``` markdown块中提取JSON内容。"""
+        """Static version of JSON extraction from markdown blocks."""
         match = re.search(r"```json\s*\n(.*?)\n```", text, re.DOTALL)
         return match.group(1).strip() if match else None
 
     @staticmethod
     def _extract_symbols_from_json(json_text: str) -> dict[str, list[str]]:
-        """从JSON字符串中提取符号路径。"""
+        """
+        Extract symbol paths from JSON string.
+
+        Only processes 'overwrite_symbol' actions and collects their paths.
+
+        Returns:
+            Dictionary mapping file paths to lists of symbol names
+        """
         from collections import defaultdict
 
         data = json.loads(json_text)
         symbol_paths = defaultdict(list)
         if "patches" in data and isinstance(data["patches"], list):
             for patch in data["patches"]:
-                # 仅当 action 为 overwrite_symbol 时才提取符号
+                # Only extract symbols for overwrite_symbol actions
                 if isinstance(patch, dict) and patch.get("action") == "overwrite_symbol" and "path" in patch:
                     whole_path = patch["path"].strip()
                     idx = whole_path.rfind("/")
@@ -2235,14 +2328,14 @@ class BlockPatchResponse:
 
     @staticmethod
     def _extract_symbols_from_legacy(response_text: str) -> dict[str, list[str]]:
-        """使用基于行的状态机解析旧的标签格式，以正确处理嵌套标签。
-        这样实现，
-        遇到header [overwrite ...], 则启用一个stack,
-        [start.55] push
-        [end.55] pop
-        pop , stack为0 则header 完成
-        从下一个header开始， 如果stack不为0， 不忽视遇到的header
-        此处不考虑markdown 的情况
+        """
+        Parse legacy tag-based format to extract symbol paths.
+
+        Uses line-oriented state machine to properly handle nested tags.
+        Only processes 'symbol' type headers.
+
+        Returns:
+            Dictionary mapping file paths to lists of symbol names
         """
         symbol_paths = {}
         lines = response_text.splitlines()
@@ -2308,12 +2401,18 @@ class BlockPatchResponse:
     @staticmethod
     def extract_symbol_paths(response_text: str, use_json: bool = False) -> dict[str, list[str]]:
         """
-        从响应文本中提取所有符号路径，优先处理JSON格式。
-        返回格式: {"file": [symbol_path1, symbol_path2, ...]}
+        Extract all symbol paths from response text with format autodetection.
+
+        Args:
+            response_text: Raw LLM response text
+            use_json: Boolean flag to prefer JSON format parsing
+
+        Returns:
+            Dictionary mapping file paths to lists of symbol names
+            Format: {"file_path": ["symbol1", "symbol2", ...]}
         """
         if use_json:
-            # 1. 检查并解析Markdown块中的JSON
-
+            # 1. Check and parse JSON in markdown blocks
             json_content = BlockPatchResponse._extract_json_from_markdown_static(response_text)
             if not json_content:
                 json_content = response_text
@@ -2321,7 +2420,7 @@ class BlockPatchResponse:
                 try:
                     return BlockPatchResponse._extract_symbols_from_json(json_content)
                 except (json.JSONDecodeError, TypeError):
-                    # Markdown中的JSON格式错误，返回空
+                    # Malformed JSON in markdown, return empty
                     return {}
         else:
             return BlockPatchResponse._extract_symbols_from_legacy(response_text)
@@ -3214,7 +3313,7 @@ class GPTContextProcessor:
         try:
             if is_prompt_file(cmd_node.command):
                 return _handle_prompt_file(cmd_node)
-            elif is_local_file(cmd_node.command):
+            elif is_local_file(cmd_node.command) or os.path.exists(cmd_node.command):
                 return _handle_local_file(cmd_node, GPT_FLAGS.get(GPT_FLAG_LINE))
             elif is_url(cmd_node.command):
                 return _handle_url(cmd_node)
@@ -4128,7 +4227,7 @@ def handle_ask_mode(program_args, proxies):
             print(f"警告: 未找到提示文件 {prompt_file}")
         # 添加当前工作目录到提示的开头
         cwd = os.getcwd()
-        text = "# Current working directory: " + cwd + "\n\n" + text
+        text = "# 当前工作目录为: " + cwd + "\n\n" + text
 
     print(text)
     response_data = model_switch.query(

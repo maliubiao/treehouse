@@ -1,0 +1,126 @@
+{
+  "name": "ai-code-completer",
+  "displayName": "AI Code Completer",
+  "description": "Uses AI to complete or refactor selected code blocks via OpenAI-compatible APIs.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maliubiao/treehouse.git"
+  },
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:ai-code-completer.generateCode"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "vscode:prepublish": "pnpm run compile",
+    "compile": "pnpm run compile:extension && pnpm run compile:webview",
+    "compile:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "compile:webview": "node ./scripts/build-webview.js",
+    "watch": "pnpm run watch:extension & pnpm run watch:webview",
+    "watch:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
+    "watch:webview": "node ./scripts/build-webview.js --watch",
+    "lint": "tsc --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.7",
+    "@types/vscode": "^1.101.0",
+    "@vscode/vsce": "^2.32.0",
+    "esbuild": "^0.20.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "openai": "^4.104.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "ai-code-completer.generateCode",
+        "title": "AI: Generate/Refactor Code"
+      },
+      {
+        "command": "ai-code-completer.undoLastGeneration",
+        "title": "AI: Undo Last Generation"
+      },
+      {
+        "command": "ai-code-completer.openWebviewDeveloperTools",
+        "title": "AI: Open Webview Developer Tools"
+      },
+      {
+        "command": "ai-code-completer.openSettings",
+        "title": "AI: Open Settings"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ai-code-completer.generateCode",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorHasSelection",
+          "command": "ai-code-completer.generateCode",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Code Completer",
+      "properties": {
+        "aiCodeCompleter.services": {
+          "type": "array",
+          "default": [],
+          "description": "A list of AI service configurations.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "max_context_size": { "type": "number" },
+              "max_tokens": { "type": "number" },
+              "is_thinking": { "type": "boolean" },
+              "temperature": { "type": "number" },
+              "key": { "type": "string" },
+              "base_url": { "type": "string" },
+              "model_name": { "type": "string" },
+              "price_1M_input": { "type": "number" },
+              "price_1M_output": { "type": "number" },
+              "supports_json_output": { "type": "boolean" }
+            }
+          }
+        },
+        "aiCodeCompleter.activeService": {
+          "type": "string",
+          "default": "",
+          "description": "The name of the active AI service configuration."
+        },
+        "aiCodeCompleter.prompt.systemMessage": {
+          "type": "string",
+          "default": "You are an expert software architect and programmer. The user will provide context about a file (path, full content), a block of code from that file, an instruction, and an optional rule. Your task is to rewrite ONLY the provided block of code according to the instruction, using the full file content for context, and adhering to the rule. Output only the raw, modified code block. Do not include explanations, markdown, or language specifiers like ```python.",
+          "description": "The master system prompt that guides the AI's behavior."
+        },
+        "aiCodeCompleter.prompt.rule": {
+          "type": "string",
+          "default": "Follow all existing coding conventions and style from the provided file content.",
+          "description": "A custom rule or guideline to be appended to every prompt, e.g., 'All unit tests must be written using the `unittest` framework'."
+        },
+        "aiCodeCompleter.prompt.usePrefixCompletion": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable this for models that use a specific prefix-based completion format (e.g., some versions of DeepSeek Coder Instruct). If true, the prompt is sent in a special format. For most standard chat models (like GPT series), this should be false."
+        }
+      }
+    }
+  }
+}

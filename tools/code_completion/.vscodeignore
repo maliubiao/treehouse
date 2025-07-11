@@ -1,0 +1,16 @@
+.vscode
+.vscode-test
+**/*.ts
+**/*.map
+**/node_modules
+**/pnpm-lock.yaml
+**/pnpm-workspace.yaml
+**/tsconfig.json
+**/build.sh
+**/setup.sh
+**/usage.md
+**/CHANGELOG.md
+**/README.md
+!**/dist/extension.js
+!**/dist/webview.js
+!**/src/webview/index.html
