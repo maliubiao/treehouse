@@ -32,7 +32,7 @@ function buildMessages(
     instruction: string,
     context: GenerationContext
 ): ChatCompletionMessageParam[] {
-    const config = vscode.workspace.getConfiguration('aiCodeCompleter');
+    const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
     const systemMessage = config.get<string>('prompt.systemMessage', "You are an expert software architect and programmer. Your task is to rewrite the provided code block according to the instruction, using the context of the file. Output only the raw, modified code block.");
     const rule = config.get<string>('prompt.rule', '');
 
@@ -128,17 +128,19 @@ export async function generateCode(instruction: string, context: GenerationConte
     logger.log('Using AI Service for code generation:', { ...serviceToLog, key: '********' });
     logger.log('Sending prompt:', { messages });
 
+    const completionOptions = {
+        model: activeService.model_name,
+        messages: messages,
+        temperature: activeService.temperature,
+        // max_tokens: activeService.max_tokens,
+    };
+    logger.log('Sending OpenAI Chat Completion Request with options:', completionOptions);
+
     try {
         const timeoutMs = (activeService.timeout_seconds || 60) * 1000;
-        const completion = await openai.chat.completions.create({
-            model: activeService.model_name,
-            messages: messages,
-            temperature: activeService.temperature,
-            max_tokens: activeService.max_tokens,
-        }, { timeout: timeoutMs });
+        const completion = await openai.chat.completions.create(completionOptions, { timeout: timeoutMs });
 
         logger.log('Received API response:', completion);
-
         const content = completion.choices[0]?.message?.content;
         if (!content) {
             throw new Error('API returned an empty response.');
@@ -169,15 +171,18 @@ export async function playgroundChat(prompt: string, serviceConfig: AiServiceCon
     logger.log('Using AI Service for playground:', { ...serviceToLog, key: '********' });
     logger.log('Sending playground prompt:', { prompt });
     
+    const completionOptions = {
+        model: serviceConfig.model_name,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: serviceConfig.temperature,
+        //max_tokens: serviceConfig.max_tokens,
+        stream: false,
+    };
+    logger.log('Sending OpenAI Chat Completion Request from playground with options:', completionOptions);
+
     try {
         const timeoutMs = (serviceConfig.timeout_seconds || 60) * 1000;
-        const completion = await openai.chat.completions.create({
-            model: serviceConfig.model_name,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: serviceConfig.temperature,
-            max_tokens: serviceConfig.max_tokens,
-            stream: false,
-        }, { timeout: timeoutMs });
+        const completion = await openai.chat.completions.create(completionOptions, { timeout: timeoutMs });
 
         logger.log('Received playground API response:', completion);
         const content = completion.choices[0]?.message?.content;
@@ -189,12 +194,12 @@ export async function playgroundChat(prompt: string, serviceConfig: AiServiceCon
     } catch (error) {
         logger.error('Playground API Error:', error);
         if (error instanceof OpenAI.APIError) {
-            throw new Error(`API request failed with status ${error.status}: ${error.message}`);
+            return { success: false, message: `API Error: ${error.status} ${error.name}` };
         }
         if (error.constructor.name === 'TimeoutError') {
-             throw new Error(`The request timed out after ${serviceConfig.timeout_seconds} seconds.`);
+             return { success: false, message: `The request timed out after ${serviceConfig.timeout_seconds} seconds.`};
         }
-        throw new Error(`Failed to communicate with the API: ${String(error)}`);
+        return { success: false, message: `Failed to communicate with the API: ${String(error)}` };
     }
 }
 

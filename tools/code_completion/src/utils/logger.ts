@@ -5,7 +5,7 @@ class Logger {
     private readonly _outputChannel: vscode.OutputChannel;
 
     private constructor() {
-        this._outputChannel = vscode.window.createOutputChannel('AI Code Completer');
+        this._outputChannel = vscode.window.createOutputChannel('Treehouse Code Completer');
     }
 
     public static get instance(): Logger {

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-const CONFIG_SECTION = 'aiCodeCompleter';
+const CONFIG_SECTION = 'treehouseCodeCompleter';
 
 export interface AiServiceConfig {
     name: string;

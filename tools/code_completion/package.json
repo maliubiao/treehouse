@@ -1,6 +1,6 @@
 {
-  "name": "ai-code-completer",
-  "displayName": "AI Code Completer",
+  "name": "treehouse-code-completer",
+  "displayName": "Treehouse Code Completer",
   "description": "Uses AI to complete or refactor selected code blocks via OpenAI-compatible APIs.",
   "version": "0.1.0",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:ai-code-completer.generateCode"
+    "onCommand:treehouse-code-completer.generateCode"
   ],
   "main": "./dist/extension.js",
   "scripts": {
@@ -29,7 +29,7 @@
     "watch:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
     "watch:webview": "node ./scripts/build-webview.js --watch",
     "lint": "tsc --noEmit",
-    "package": "vsce package --no-dependencies"
+    "package": "pnpm exec vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.19.7",
@@ -44,25 +44,25 @@
   "contributes": {
     "commands": [
       {
-        "command": "ai-code-completer.generateCode",
-        "title": "AI: Generate/Refactor Code"
+        "command": "treehouse-code-completer.generateCode",
+        "title": "Treehouse: Generate/Refactor Code"
       },
       {
-        "command": "ai-code-completer.undoLastGeneration",
-        "title": "AI: Undo Last Generation"
+        "command": "treehouse-code-completer.undoLastGeneration",
+        "title": "Treehouse: Undo Last Generation"
       },
       {
-        "command": "ai-code-completer.openWebviewDeveloperTools",
-        "title": "AI: Open Webview Developer Tools"
+        "command": "treehouse-code-completer.openWebviewDeveloperTools",
+        "title": "Treehouse: Open Webview Developer Tools"
       },
       {
-        "command": "ai-code-completer.openSettings",
-        "title": "AI: Open Settings"
+        "command": "treehouse-code-completer.openSettings",
+        "title": "Treehouse: Open Settings"
       }
     ],
     "keybindings": [
       {
-        "command": "ai-code-completer.generateCode",
+        "command": "treehouse-code-completer.generateCode",
         "key": "ctrl+alt+i",
         "mac": "cmd+alt+i"
       }
@@ -71,18 +71,18 @@
       "editor/context": [
         {
           "when": "editorHasSelection",
-          "command": "ai-code-completer.generateCode",
+          "command": "treehouse-code-completer.generateCode",
           "group": "navigation"
         }
       ]
     },
     "configuration": {
-      "title": "AI Code Completer",
+      "title": "Treehouse Code Completer",
       "properties": {
-        "aiCodeCompleter.services": {
+        "treehouseCodeCompleter.services": {
           "type": "array",
           "default": [],
-          "description": "A list of AI service configurations.",
+          "description": "A list of AI service configurations for Treehouse Code Completer.",
           "items": {
             "type": "object",
             "properties": {
@@ -100,22 +100,22 @@
             }
           }
         },
-        "aiCodeCompleter.activeService": {
+        "treehouseCodeCompleter.activeService": {
           "type": "string",
           "default": "",
-          "description": "The name of the active AI service configuration."
+          "description": "The name of the active AI service configuration for Treehouse Code Completer."
         },
-        "aiCodeCompleter.prompt.systemMessage": {
+        "treehouseCodeCompleter.prompt.systemMessage": {
           "type": "string",
           "default": "You are an expert software architect and programmer. The user will provide context about a file (path, full content), a block of code from that file, an instruction, and an optional rule. Your task is to rewrite ONLY the provided block of code according to the instruction, using the full file content for context, and adhering to the rule. Output only the raw, modified code block. Do not include explanations, markdown, or language specifiers like ```python.",
-          "description": "The master system prompt that guides the AI's behavior."
+          "description": "The master system prompt that guides the AI's behavior for Treehouse Code Completer."
         },
-        "aiCodeCompleter.prompt.rule": {
+        "treehouseCodeCompleter.prompt.rule": {
           "type": "string",
           "default": "Follow all existing coding conventions and style from the provided file content.",
           "description": "A custom rule or guideline to be appended to every prompt, e.g., 'All unit tests must be written using the `unittest` framework'."
         },
-        "aiCodeCompleter.prompt.usePrefixCompletion": {
+        "treehouseCodeCompleter.prompt.usePrefixCompletion": {
           "type": "boolean",
           "default": false,
           "description": "Enable this for models that use a specific prefix-based completion format (e.g., some versions of DeepSeek Coder Instruct). If true, the prompt is sent in a special format. For most standard chat models (like GPT series), this should be false."

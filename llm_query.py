@@ -654,10 +654,10 @@ def _get_api_response(
 
             client = genai.Client(api_key=api_key)
 
-            # 提取系统消息作为system_instruction
-            system_instructions = "\n".join(
-                [msg["content"] for msg in history if msg.get("role") == "system" and msg.get("content")]
-            )
+            # # 提取系统消息作为system_instruction
+            # system_instructions = "\n".join(
+            #     [msg["content"] for msg in history if msg.get("role") == "system" and msg.get("content")]
+            # )
 
             # 构建Gemini兼容的消息格式
             gemini_contents = []
@@ -3742,7 +3742,6 @@ def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output
     """从内容中提取文件、执行替换并生成diff"""
     if save:
         _save_response_content(content)
-
     if use_json_output:
         try:
             data = None

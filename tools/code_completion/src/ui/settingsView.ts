@@ -14,8 +14,8 @@ import { testApiConnection, playgroundChat } from '../api/llmClient';
 
 export function showSettingsView(context: vscode.ExtensionContext): void {
     const panel = vscode.window.createWebviewPanel(
-        'aiCodeCompleterSettings',
-        'AI Service Configurations',
+        'treehouseCodeCompleterSettings',
+        'Treehouse AI Service Configurations',
         vscode.ViewColumn.One,
         {
             enableScripts: true,
@@ -32,7 +32,7 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
     panel.webview.html = htmlContent;
 
     const sendConfigsToWebview = (): void => {
-        const config = vscode.workspace.getConfiguration('aiCodeCompleter');
+        const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
         panel.webview.postMessage({
             command: 'loadConfig',
             services: getAiServiceConfigs(),
@@ -44,7 +44,7 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
 
     panel.webview.onDidReceiveMessage(
         async (message: any) => {
-            const config = vscode.workspace.getConfiguration('aiCodeCompleter');
+            const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
             switch (message.command) {
                 case 'getConfigs':
                     sendConfigsToWebview();

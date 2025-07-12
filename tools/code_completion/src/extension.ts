@@ -11,37 +11,37 @@ import { showSettingsView } from './ui/settingsView';
  * Your extension is activated the very first time the command is executed.
  */
 export function activate(context: vscode.ExtensionContext): void {
-    logger.log('AI Code Completer is now active.');
+    logger.log('Treehouse Code Completer is now active.');
 
     const undoManager = new UndoManager();
 
     // Register the main command for code generation
     const generateCode = vscode.commands.registerCommand(
-        'ai-code-completer.generateCode',
+        'treehouse-code-completer.generateCode',
         () => generateCodeCommand(context, undoManager)
     );
 
     // Register the command to undo the last generation
     const undoLastGeneration = vscode.commands.registerCommand(
-        'ai-code-completer.undoLastGeneration',
+        'treehouse-code-completer.undoLastGeneration',
         () => undoManager.undo()
     );
 
     // Register the command to open the webview developer tools
     const openWebviewDevTools = vscode.commands.registerCommand(
-        'ai-code-completer.openWebviewDeveloperTools',
+        'treehouse-code-completer.openWebviewDeveloperTools',
         () => {
             if (panelManager.getPanel()) {
                 vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
             } else {
-                vscode.window.showInformationMessage('No active AI Code Completer webview to inspect.');
+                vscode.window.showInformationMessage('No active Treehouse Code Completer webview to inspect.');
             }
         }
     );
 
     // Register the command to open settings
     const openSettings = vscode.commands.registerCommand(
-        'ai-code-completer.openSettings',
+        'treehouse-code-completer.openSettings',
         () => showSettingsView(context)
     );
 

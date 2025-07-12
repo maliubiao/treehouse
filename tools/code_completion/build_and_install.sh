@@ -26,7 +26,7 @@ echo "✅ Found 'code' at: $CODE_CMD"
 # 3. Determine the .vsix filename from package.json
 echo "\n[STEP 3/4] Identifying VSIX package file..."
 VERSION=$(node -p "require('./package.json').version")
-VSIX_FILENAME="ai-code-completer-v${VERSION}.vsix"
+VSIX_FILENAME="treehouse-code-completer-v${VERSION}.vsix"
 
 if [ ! -f "$VSIX_FILENAME" ]; then
   echo "❌ Error: VSIX package file not found: $VSIX_FILENAME"

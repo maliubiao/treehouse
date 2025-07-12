@@ -1,13 +1,13 @@
-# AI Code Completer
+# Treehouse Code Completer
 
-[![VS Code Extension Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://marketplace.visualstudio.com/items?itemName=local-dev.ai-code-completer)
+[![VS Code Extension Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://marketplace.visualstudio.com/items?itemName=local-dev.treehouse-code-completer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**AI Code Completer** 是一款功能强大且直观的 VS Code 插件，它将大型语言模型（LLM）无缝集成到您的日常编码工作流中。通过简单的自然语言指令，您就可以重构、增强或生成代码片段。
+**Treehouse Code Completer** 是一款功能强大且直观的 VS Code 插件，它将大型语言模型（LLM）无缝集成到您的日常编码工作流中。通过简单的自然语言指令，您就可以重构、增强或生成代码片段。
 
 ## 概述
 
-您是否厌倦了重复的编码任务？需要添加文档、编写测试，或将函数转换为不同的范式？AI Code Completer 是您的 AI 工程伙伴。只需选中一个代码块（或让插件智能选择上下文），提供一条指令，然后在清晰的交互式差异（Diff）视图中审查 AI 生成的建议，最后决定是否应用。
+您是否厌倦了重复的编码任务？需要添加文档、编写测试，或将函数转换为不同的范式？Treehouse Code Completer 是您的 AI 工程伙伴。只需选中一个代码块（或让插件智能选择上下文），提供一条指令，然后在清晰的交互式差异（Diff）视图中审查 AI 生成的建议，最后决定是否应用。
 
 ## 核心特性
 
@@ -15,7 +15,7 @@
 -   **智能上下文选择**：如果您未选择任何代码，插件会自动识别光标所在位置的外围函数或类作为上下文。
 -   **交互式差异视图**：AI 的建议从不盲目应用。插件会呈现一个清晰的并排差异视图，让您在接受前审查每一处更改。
 -   **图形化设置界面**：一个用户友好的 Webview 界面，用于管理多个 AI 服务配置、测试 API 连接、自定义提示词，甚至在“游乐场”中进行实验。
--   **高度可配置**：轻松配置 API 端点、密钥和模型，以适配任何与 OpenAI 兼容的服务（如 DeepSeek、Groq 等）。
+-   **高度可配置**：轻松配置 API 端点、密钥和模型，以适配任何与 OpenAI 兼容的服务（如 DeepSeek, Groq 等）。
 -   **可定制的提示词**：量身定制主系统提示词并添加自定义规则，以强制执行特定的编码风格或架构原则。
 -   **安全撤销**：提供专门的命令，可立即撤销上一次 AI 驱动的更改，确保一切尽在掌控。
 
@@ -35,10 +35,10 @@
 
 | 命令标题 | 命令 ID | 默认快捷键 |
 | --- | --- | --- |
-| AI: 生成/重构代码 | `ai-code-completer.generateCode` | `Cmd/Ctrl+Alt+I` |
-| AI: 打开设置 | `ai-code-completer.openSettings` | (无) |
-| AI: 撤销上次生成 | `ai-code-completer.undoLastGeneration` | (无) |
-| AI: 打开Webview开发者工具 | `ai-code-completer.openWebviewDeveloperTools` | (无) |
+| Treehouse: 生成/重构代码 | `treehouse-code-completer.generateCode` | `Cmd/Ctrl+Alt+I` |
+| Treehouse: 打开设置 | `treehouse-code-completer.openSettings` | (无) |
+| Treehouse: 撤销上次生成 | `treehouse-code-completer.undoLastGeneration` | (无) |
+| Treehouse: 打开Webview开发者工具 | `treehouse-code-completer.openWebviewDeveloperTools` | (无) |
 
 ## 配置指南
 
@@ -47,7 +47,7 @@
 ### 图形化设置界面 (推荐)
 
 1.  打开命令面板 (`Cmd/Ctrl+Shift+P`)。
-2.  运行命令 `AI: Open Settings`。
+2.  运行命令 `Treehouse: Open Settings`。
 3.  在此 Webview 中，您可以：
     -   **添加、编辑和删除** 多个 AI 服务配置。
     -   **设置一个活动服务** 用于代码生成。
@@ -60,9 +60,9 @@
 
 您也可以直接在您的 `settings.json` 文件中配置本插件。
 
--   **`aiCodeCompleter.services`**: 一个服务对象的数组。您可以在此存储不同 AI 提供商的凭据。
+-   **`treehouseCodeCompleter.services`**: 一个服务对象的数组。您可以在此存储不同 AI 提供商的凭据。
     ```json
-    "aiCodeCompleter.services": [
+    "treehouseCodeCompleter.services": [
         {
             "name": "OpenAI-GPT4o",
             "base_url": "https://api.openai.com/v1",
@@ -75,14 +75,14 @@
     ]
     ```
 
--   **`aiCodeCompleter.activeService`**: 要用于代码生成的服务 `name` (来自上面的列表)。
+-   **`treehouseCodeCompleter.activeService`**: 要用于代码生成的服务 `name` (来自上面的列表)。
     ```json
-    "aiCodeCompleter.activeService": "OpenAI-GPT4o"
+    "treehouseCodeCompleter.activeService": "OpenAI-GPT4o"
     ```
 
--   **`aiCodeCompleter.prompt.systemMessage`**: 指导 AI 行为的主系统提示词。
+-   **`treehouseCodeCompleter.prompt.systemMessage`**: 指导 AI 行为的主系统提示词。
 
--   **`aiCodeCompleter.prompt.rule`**: 附加到每个提示的自定义规则 (例如, "所有函数必须包含 JSDoc 块。")。
+-   **`treehouseCodeCompleter.prompt.rule`**: 附加到每个提示的自定义规则 (例如, "所有函数必须包含 JSDoc 块。")。
 
 ## 工作原理
 
@@ -99,7 +99,7 @@
 1.  **克隆仓库**:
     ```sh
     git clone <repository-url>
-    cd ai-code-completer
+    cd treehouse-code-completer
     ```
 2.  **安装依赖**:
     ```sh

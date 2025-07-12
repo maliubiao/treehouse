@@ -1,10 +1,10 @@
-# AI Code Completer - User Guide
+# Treehouse Code Completer - User Guide
 
-This document provides a comprehensive guide to using, configuring, and developing the "AI Code Completer" VS Code extension.
+This document provides a comprehensive guide to using, configuring, and developing the "Treehouse Code Completer" VS Code extension.
 
 ## Overview
 
-AI Code Completer empowers you to leverage Large Language Models (LLMs) like those from OpenAI or DeepSeek to refactor, complete, or generate code directly within your editor. It is designed to be a seamless and interactive part of your development workflow.
+Treehouse Code Completer empowers you to leverage Large Language Models (LLMs) like those from OpenAI or DeepSeek to refactor, complete, or generate code directly within your editor. It is designed to be a seamless and interactive part of your development workflow.
 
 ## Features
 
@@ -31,18 +31,18 @@ The primary workflow is simple and designed to be non-intrusive.
 
 The extension contributes the following commands to the command palette (`Cmd/Ctrl+Shift+P`):
 
-| Command Title                 | Command ID                             | Default Keybinding     |
-| ----------------------------- | -------------------------------------- | ---------------------- |
-| AI: Generate/Refactor Code    | `ai-code-completer.generateCode`       | `Cmd/Ctrl+Alt+I`       |
-| AI: Undo Last Generation      | `ai-code-completer.undoLastGeneration` | (none)                 |
+| Command Title                 | Command ID                                     | Default Keybinding     |
+| ----------------------------- | ---------------------------------------------- | ---------------------- |
+| Treehouse: Generate/Refactor Code    | `treehouse-code-completer.generateCode`        | `Cmd/Ctrl+Alt+I`       |
+| Treehouse: Undo Last Generation      | `treehouse-code-completer.undoLastGeneration`  | (none)                 |
 
 ## Configuration
 
-You can configure the extension by navigating to `Code > Settings > Settings` and searching for "AI Code Completer".
+You can configure the extension by navigating to `Code > Settings > Settings` and searching for "Treehouse Code Completer".
 
 ---
 
-#### `aiCodeCompleter.api.baseUrl`
+#### `treehouseCodeCompleter.api.baseUrl`
 
 -   **Description**: The base URL of the OpenAI-compatible API.
 -   **Type**: `string`
@@ -53,7 +53,7 @@ You can configure the extension by navigating to `Code > Settings > Settings` an
 
 ---
 
-#### `aiCodeCompleter.api.apiKey`
+#### `treehouseCodeCompleter.api.apiKey`
 
 -   **Description**: Your secret API key for the service. It is highly recommended to let VS Code handle this via its secret storage for security. You will be prompted to enter it securely the first time.
 -   **Type**: `string`
@@ -61,7 +61,7 @@ You can configure the extension by navigating to `Code > Settings > Settings` an
 
 ---
 
-#### `aiCodeCompleter.api.model`
+#### `treehouseCodeCompleter.api.model`
 
 -   **Description**: The specific model you want to use for code generation.
 -   **Type**: `string`
@@ -70,7 +70,7 @@ You can configure the extension by navigating to `Code > Settings > Settings` an
 
 ---
 
-#### `aiCodeCompleter.prompt.systemMessage`
+#### `treehouseCodeCompleter.prompt.systemMessage`
 
 -   **Description**: The master system prompt that guides the AI's behavior. You can customize this to enforce specific coding styles or architectural principles.
 -   **Type**: `string`
@@ -78,7 +78,7 @@ You can configure the extension by navigating to `Code > Settings > Settings` an
 
 ---
 
-#### `aiCodeCompleter.prompt.usePrefixCompletion`
+#### `treehouseCodeCompleter.prompt.usePrefixCompletion`
 
 -   **Description**: Enable this for models that use a specific prefix-based completion format (e.g., some versions of DeepSeek Coder Instruct). If true, the prompt is sent in a special `<｜fim begin｜>...<｜fim hole｜>...<｜fim end｜>` format, where the model is expected to fill in the "hole". For most standard chat models (like GPT series), this should be `false`.
 -   **Type**: `boolean`
@@ -91,7 +91,7 @@ If you want to contribute to the development or build the extension yourself, fo
 1.  **Clone the Repository**:
     ```sh
     git clone <repository-url>
-    cd ai-code-completer
+    cd treehouse-code-completer
     ```
 2.  **Install Dependencies**:
     ```sh

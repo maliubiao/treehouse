@@ -17,7 +17,7 @@ export function getInstruction(): Promise<string | undefined> {
  * @param message - The message to display.
  */
 export function showInfoMessage(message: string): void {
-    vscode.window.showInformationMessage(`AI Completer: ${message}`);
+    vscode.window.showInformationMessage(`Treehouse Completer: ${message}`);
 }
 
 /**
@@ -31,7 +31,7 @@ export async function showErrorMessage(message: string, onRetry?: () => void): P
     if (onRetry) {
         options.push('Retry');
     }
-    const selection = await vscode.window.showErrorMessage(`AI Completer Error: ${message}`, ...options);
+    const selection = await vscode.window.showErrorMessage(`Treehouse Completer Error: ${message}`, ...options);
     if (selection === 'Retry' && onRetry) {
         onRetry();
     }

@@ -1,6 +1,6 @@
 # Change Log
 
-All notable changes to the "ai-code-completer" extension will be documented in this file.
+All notable changes to the "treehouse-code-completer" extension will be documented in this file.
 
 ## [0.1.0] - 2023-10-27
 

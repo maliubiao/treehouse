@@ -4,7 +4,7 @@
 
 set -e # Exit immediately if a command exits with a non-zero status.
 
-echo "🚀 Starting build process for AI Code Completer..."
+echo "🚀 Starting build process for Treehouse Code Completer..."
 
 # 1. Get project version from package.json
 # Using Node.js is portable within a Node project environment.
@@ -31,7 +31,7 @@ pnpm run compile
 
 # 5. Package the extension into a .vsix file
 echo "🎁 Packaging extension into a .vsix file..."
-VSIX_FILENAME="ai-code-completer-v${VERSION}.vsix"
+VSIX_FILENAME="treehouse-code-completer-v${VERSION}.vsix"
 # Use 'pnpm exec' for robust execution of the locally installed vsce binary.
 pnpm exec vsce package --no-dependencies --out "$VSIX_FILENAME"
 echo "✅ Successfully created extension package: $VSIX_FILENAME"
@@ -42,7 +42,7 @@ echo "📦 Creating development source tarball..."
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "⚠️  Warning: Not a git repository. Skipping source tarball creation."
 else
-  TAR_FILENAME="ai-code-completer-dev-v${VERSION}.tar.gz"
+  TAR_FILENAME="treehouse-code-completer-dev-v${VERSION}.tar.gz"
   # Use git ls-files to package only the files tracked by git, ensuring a clean archive.
   # This correctly excludes .gitignore'd files, build artifacts, etc.
   git ls-files | tar -czf "$TAR_FILENAME" -T -

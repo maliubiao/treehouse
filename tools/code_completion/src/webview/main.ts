@@ -10,7 +10,7 @@ function render(services, activeServiceName, systemPrompt, promptRule) {
 
     root.innerHTML = `
         <div class="container">
-            <h1>AI Service Configurations</h1>
+            <h1>Treehouse AI Service Configurations</h1>
 
             <div class="section">
                 <h2>Services</h2>

@@ -69,7 +69,7 @@ export class TempFileManager {
     public static async cleanupAll(): Promise<void> {
         const filesToClean = Array.from(this.orphanedFiles);
         if (filesToClean.length > 0) {
-            console.log(`AI Code Completer: Cleaning up ${filesToClean.length} orphaned temp files.`);
+            console.log(`Treehouse Code Completer: Cleaning up ${filesToClean.length} orphaned temp files.`);
         }
         const cleanupPromises = filesToClean.map(async (file) => {
             try {

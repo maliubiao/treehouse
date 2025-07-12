@@ -18,7 +18,7 @@ export async function generateCodeCommand(context: vscode.ExtensionContext, undo
     const activeService = getActiveAiServiceConfig();
     if (!activeService) {
         const selection = await vscode.window.showInformationMessage(
-            'No active AI service is configured. Please set up a service to continue.',
+            'No active Treehouse AI service is configured. Please set up a service to continue.',
             'Open Settings'
         );
         if (selection === 'Open Settings') {
@@ -45,7 +45,7 @@ export async function generateCodeCommand(context: vscode.ExtensionContext, undo
         // This block handles the API call and temp file creation.
         const result = await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
-            title: 'AI is working...',
+            title: 'Treehouse AI is working...',
             cancellable: false
         }, async (progress) => {
             progress.report({ message: 'Generating code...' });
@@ -73,7 +73,7 @@ export async function generateCodeCommand(context: vscode.ExtensionContext, undo
         // Step 2: Handle user interaction (diff view and confirmation).
         const { originalUri, newUri } = result;
 
-        await showDiffView(originalUri, newUri, "AI Suggestion vs. Original");
+        await showDiffView(originalUri, newUri, "Treehouse AI Suggestion vs. Original");
         
         const userChoice = await getConfirmation();
 
@@ -87,7 +87,7 @@ export async function generateCodeCommand(context: vscode.ExtensionContext, undo
                     try {
                         await vscode.window.tabGroups.close(tab);
                     } catch (e) {
-                        console.error("AI Code Completer: Failed to close diff tab.", e);
+                        console.error("Treehouse Code Completer: Failed to close diff tab.", e);
                     }
                     return;
                 }
@@ -130,9 +130,9 @@ export async function generateCodeCommand(context: vscode.ExtensionContext, undo
         await tempFileManager.cleanup();
 
         const errorMessage = error instanceof Error ? error.message : String(error);
-        const selection = await vscode.window.showErrorMessage(`AI Completer Error: ${errorMessage}`, 'Retry');
+        const selection = await vscode.window.showErrorMessage(`Treehouse Completer Error: ${errorMessage}`, 'Retry');
         if (selection === 'Retry') {
-            vscode.commands.executeCommand('ai-code-completer.generateCode');
+            vscode.commands.executeCommand('treehouse-code-completer.generateCode');
         }
     }
 }
