@@ -3738,55 +3738,30 @@ def _apply_patch(diff_file):
         raise RuntimeError(error_msg) from e
 
 
-def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output: bool = False):
-    """从内容中提取文件、执行替换并生成diff"""
-    if save:
-        _save_response_content(content)
-    if use_json_output:
+def _parse_json_content(content: str) -> dict:
+    """尝试从内容中解析JSON数据"""
+    data = None
+    # 方案一：从markdown块中提取
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
+    if match:
+        json_str = match.group(1).strip()
         try:
-            data = None
-            # 方案一：从markdown块中提取
-            match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
-            if match:
-                json_str = match.group(1).strip()
-                try:
-                    data = json.loads(json_str)
-                except json.JSONDecodeError:
-                    pass  # 如果块内不是有效JSON，则忽略
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            pass  # 如果块内不是有效JSON，则忽略
 
-            # 方案二：如果方案一未成功，尝试解析整个内容
-            if data is None:
-                data = json.loads(content)
+    # 方案二：如果方案一未成功，尝试解析整个内容
+    if data is None:
+        data = json.loads(content)
+    return data
 
-            if isinstance(data, dict) and "thinking_process" in data:
-                display_llm_plan(data["thinking_process"])
-        except (json.JSONDecodeError, TypeError):
-            # 不是有效的JSON格式，静默处理，后续解析器会处理旧格式
-            pass
-    try:
-        instructions = LLMInstructionParser.parse(content, use_json=use_json_output)
-    except Exception as e:
-        print(f"解析LLM响应时出错: {e}", file=sys.stderr)
-        return
 
-    if not instructions:
-        return
-
-    # 1. 指令分类：将安装脚本和文件操作指令分开
-    setup_script = None
-    file_instructions = []
-    for instr in instructions:
-        if instr["type"] == "project_setup_script":
-            setup_script = instr.get("content")
-        else:
-            file_instructions.append(instr)
-
-    # 2. 路径验证和受影响路径收集
-    project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).absolute()
+def _validate_and_normalize_paths(instructions: list, project_root: Path) -> tuple:
+    """验证和规范化文件路径，返回有效的文件指令和路径映射"""
     path_mapping = {}  # original_path (Path) -> shadow_path (Path)
     valid_file_instructions = []
 
-    for instr in file_instructions:
+    for instr in instructions:
         if "path" not in instr:
             print(f"警告: 指令缺少 'path' 字段，已跳过: {instr}", file=sys.stderr)
             continue
@@ -3808,85 +3783,77 @@ def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output
         valid_file_instructions.append(instr)
         path_mapping[abs_path] = None  # 暂存，稍后填充影子路径
 
-    # 2.5. 对新文件创建进行预先审批
-    new_file_paths = [p for p in path_mapping.keys() if not p.exists()]
-    approved_new_file_paths = []
+    return valid_file_instructions, path_mapping
 
-    if new_file_paths:
-        if auto_apply:
-            approved_new_file_paths = new_file_paths
-        else:
-            print("\nLLM请求创建以下新文件：")
-            relative_new_paths = sorted([str(p.relative_to(project_root)) for p in new_file_paths])
-            new_dirs_to_create = set()
 
-            for rel_path in relative_new_paths:
-                parent_dir = (project_root / rel_path).parent
-                if not parent_dir.exists():
-                    new_dirs_to_create.add(str(parent_dir.relative_to(project_root)))
+def _approve_new_files(new_file_paths: list, project_root: Path, auto_apply: bool) -> list:
+    """处理新文件创建审批流程"""
+    if not new_file_paths:
+        return []
 
-            for i, f in enumerate(relative_new_paths):
-                print(f"  [{i + 1}] {f}")
+    if auto_apply:
+        return new_file_paths
 
-            if new_dirs_to_create:
-                print(Fore.YELLOW + "\n注意：创建这些文件将创建以下新目录：" + ColorStyle.RESET_ALL)
-                for d in sorted(list(new_dirs_to_create)):
-                    print(f"  - {d}/")
+    print("\nLLM请求创建以下新文件：")
+    relative_new_paths = sorted([str(p.relative_to(project_root)) for p in new_file_paths])
+    new_dirs_to_create = set()
 
-            print("\n请输入要创建的文件编号（如 '1,3'），或 'all' 创建全部，或按Enter键跳过创建新文件。")
-            user_input = input("> ").strip().lower()
+    for rel_path in relative_new_paths:
+        parent_dir = (project_root / rel_path).parent
+        if not parent_dir.exists():
+            new_dirs_to_create.add(str(parent_dir.relative_to(project_root)))
 
-            selected_relative_paths = []
-            if not user_input:
-                print(Fore.YELLOW + "操作已取消，将跳过创建新文件。" + ColorStyle.RESET_ALL)
-            elif user_input == "all":
-                selected_relative_paths = relative_new_paths
-            else:
-                try:
-                    indices = [int(i.strip()) - 1 for i in user_input.split(",")]
-                    selected_relative_paths = [
-                        relative_new_paths[i] for i in indices if 0 <= i < len(relative_new_paths)
-                    ]
-                except ValueError:
-                    print(Fore.RED + "无效输入，将跳过创建新文件。" + ColorStyle.RESET_ALL)
+    for i, f in enumerate(relative_new_paths):
+        print(f"  [{i + 1}] {f}")
 
-            if selected_relative_paths:
-                approved_new_file_paths = [project_root / p for p in selected_relative_paths]
-                print(Fore.GREEN + f"已批准创建 {len(approved_new_file_paths)} 个新文件。" + ColorStyle.RESET_ALL)
-            elif user_input:
-                print(Fore.YELLOW + "未选择任何新文件进行创建。" + ColorStyle.RESET_ALL)
+    if new_dirs_to_create:
+        print(Fore.YELLOW + "\n注意：创建这些文件将创建以下新目录：" + ColorStyle.RESET_ALL)
+        for d in sorted(list(new_dirs_to_create)):
+            print(f"  - {d}/")
 
-        # 在主项目中为已批准的新文件创建存根
-        if approved_new_file_paths:
-            for new_file_path in approved_new_file_paths:
-                try:
-                    # 确保父目录存在
-                    new_file_path.parent.mkdir(parents=True, exist_ok=True)
-                    # 创建一个空的存根文件
-                    new_file_path.touch()
-                except Exception as e:
-                    print(
-                        Fore.RED + f"创建文件存根时出错 {new_file_path}: {e}" + ColorStyle.RESET_ALL,
-                        file=sys.stderr,
-                    )
+    print("\n请输入要创建的文件编号（如 '1,3'），或 'all' 创建全部，或按Enter键跳过创建新文件。")
+    user_input = input("> ").strip().lower()
 
-    # 2.6. 基于审批结果过滤指令和路径
-    unapproved_new_paths = set(new_file_paths) - set(approved_new_file_paths)
-    if unapproved_new_paths:
-        path_mapping = {k: v for k, v in path_mapping.items() if k not in unapproved_new_paths}
-        valid_file_instructions = [
-            instr for instr in valid_file_instructions if Path(instr["path"]) not in unapproved_new_paths
-        ]
+    selected_relative_paths = []
+    if not user_input:
+        print(Fore.YELLOW + "操作已取消，将跳过创建新文件。" + ColorStyle.RESET_ALL)
+    elif user_input == "all":
+        selected_relative_paths = relative_new_paths
+    else:
+        try:
+            indices = [int(i.strip()) - 1 for i in user_input.split(",")]
+            selected_relative_paths = [relative_new_paths[i] for i in indices if 0 <= i < len(relative_new_paths)]
+        except ValueError:
+            print(Fore.RED + "无效输入，将跳过创建新文件。" + ColorStyle.RESET_ALL)
 
-    if not valid_file_instructions and not setup_script:
-        print(Fore.YELLOW + "没有文件被选中进行处理，且没有设置脚本。" + ColorStyle.RESET_ALL)
-        return
+    if selected_relative_paths:
+        approved_new_file_paths = [project_root / p for p in selected_relative_paths]
+        print(Fore.GREEN + f"已批准创建 {len(approved_new_file_paths)} 个新文件。" + ColorStyle.RESET_ALL)
+        return approved_new_file_paths
+    elif user_input:
+        print(Fore.YELLOW + "未选择任何新文件进行创建。" + ColorStyle.RESET_ALL)
 
-    # 3. 在沙箱中准备影子文件
-    shadow_root_path = Path(shadowroot)
-    affected_paths_for_diff = set(path_mapping.keys())
+    return []
 
-    for original_path in affected_paths_for_diff:
+
+def _create_file_stubs(approved_new_file_paths: list):
+    """为已批准的新文件创建存根"""
+    for new_file_path in approved_new_file_paths:
+        try:
+            # 确保父目录存在
+            new_file_path.parent.mkdir(parents=True, exist_ok=True)
+            # 创建一个空的存根文件
+            new_file_path.touch()
+        except Exception as e:
+            print(
+                Fore.RED + f"创建文件存根时出错 {new_file_path}: {e}" + ColorStyle.RESET_ALL,
+                file=sys.stderr,
+            )
+
+
+def _prepare_shadow_files(path_mapping: dict, project_root: Path, shadow_root_path: Path):
+    """在沙箱中准备影子文件"""
+    for original_path in path_mapping.keys():
         try:
             relative_path = original_path.relative_to(project_root)
         except ValueError:
@@ -3903,39 +3870,41 @@ def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output
             # 对于新文件或不存在的路径，创建一个空的影子文件作为起点
             shadow_path.touch()
 
-    # 4. 使用ReplaceEngine将所有文件更改应用于影子文件
-    if valid_file_instructions:
-        shadow_instructions = []
-        for instr in valid_file_instructions:
-            original_path = Path(instr["path"])
-            shadow_path = path_mapping.get(original_path)
-            if shadow_path:
-                new_instr = instr.copy()
-                new_instr["path"] = str(shadow_path)
-                shadow_instructions.append(new_instr)
 
-        if shadow_instructions:
-            engine = ReplaceEngine()
-            try:
-                engine.execute(shadow_instructions)
-            except Exception as e:
-                print(f"在沙箱中执行更改时出错: {str(e)}", file=sys.stderr)
-                traceback.print_exc()
-                return
+def _apply_changes_to_shadow_files(valid_file_instructions: list, path_mapping: dict):
+    """将更改应用到影子文件"""
+    shadow_instructions = []
+    for instr in valid_file_instructions:
+        original_path = Path(instr["path"])
+        shadow_path = path_mapping.get(original_path)
+        if shadow_path:
+            new_instr = instr.copy()
+            new_instr["path"] = str(shadow_path)
+            shadow_instructions.append(new_instr)
 
-    # 5. 处理安装脚本
-    def _process_script(script, script_name):
-        if not script:
-            return
-        script_path = shadow_root_path / script_name
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(script)
-        os.chmod(script_path, 0o755)
-        print(f"{script_name}已保存到: {script_path}")
+    if shadow_instructions:
+        engine = ReplaceEngine()
+        try:
+            engine.execute(shadow_instructions)
+        except Exception as e:
+            print(f"在沙箱中执行更改时出错: {str(e)}", file=sys.stderr)
+            traceback.print_exc()
+            raise
 
-    _process_script(setup_script, "project_setup.sh")
 
-    # 6. 生成原始文件和影子文件之间的差异
+def _process_setup_script(setup_script: str, shadow_root_path: Path):
+    """处理安装脚本"""
+    if not setup_script:
+        return
+    script_path = shadow_root_path / "project_setup.sh"
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(setup_script)
+    os.chmod(script_path, 0o755)
+    print(f"project_setup.sh已保存到: {script_path}")
+
+
+def _generate_diffs(path_mapping: dict, project_root: Path) -> dict:
+    """生成原始文件和影子文件之间的差异"""
     diffs_by_file = {}
     # 对路径排序以确保diff输出的确定性
     sorted_paths = sorted(list(path_mapping.keys()), key=lambda p: str(p))
@@ -3959,92 +3928,183 @@ def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output
         diff = _generate_unified_diff(original_path, shadow_path, original_content, shadow_content)
         diffs_by_file[relative_path] = diff
 
+    return diffs_by_file
+
+
+def _apply_multiple_file_changes(diffs_by_file: dict, project_root: Path):
+    """交互式应用多个文件的变更"""
+    combined_diff = "\n\n".join(diffs_by_file.values())
+    highlighted_diff = highlight(combined_diff, DiffLexer(), TerminalFormatter())
+    print("\n高亮显示的diff内容：")
+    print(highlighted_diff)
+
+    selected_paths = _prompt_user_for_files(diffs_by_file)
+    if not selected_paths:
+        return
+
+    applied_count = _apply_selected_patches(selected_paths, diffs_by_file, project_root)
+    print(Fore.GREEN + f"已成功应用对 {applied_count} 个文件的补丁。" + ColorStyle.RESET_ALL)
+
+
+def _prompt_user_for_files(diffs_by_file: dict) -> list[str]:
+    """提示用户选择要应用的补丁文件"""
+    print("\n检测到对多个文件的更改。请选择要应用的补丁：")
+    file_list = sorted(diffs_by_file.keys())
+    for i, f in enumerate(file_list):
+        print(f"  [{i + 1}] {f}")
+    print("请输入文件编号（如 '1,3'），或 'all' 应用全部，或按Enter键取消。")
+
+    user_input = input("> ").strip().lower()
+    if not user_input:
+        print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+        return []
+
+    if user_input == "all":
+        return file_list
+
+    try:
+        indices = [int(i.strip()) - 1 for i in user_input.split(",")]
+        selected_paths = [file_list[i] for i in indices if 0 <= i < len(file_list)]
+    except ValueError:
+        print(Fore.RED + "无效输入，操作已取消。" + ColorStyle.RESET_ALL)
+        return []
+
+    if not selected_paths:
+        print(Fore.YELLOW + "未选择任何文件。" + ColorStyle.RESET_ALL)
+    return selected_paths
+
+
+def _apply_selected_patches(selected_paths: list[str], diffs_by_file: dict, project_root: Path) -> int:
+    """应用选中的补丁到对应文件"""
+    applied_count = 0
+    for path in selected_paths:
+        if path in diffs_by_file:
+            full_path = project_root / path
+            if not full_path.exists():
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            temp_file = shadowroot / (path.replace("/", "_") + ".diff")
+            temp_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(temp_file, "w+", encoding="utf-8") as f:
+                f.write(diffs_by_file[path])
+            _apply_patch(temp_file)
+            temp_file.unlink()
+            applied_count += 1
+    return applied_count
+
+
+def _apply_single_file_change(relative_path: str, diff_content: str, project_root: Path, auto_apply: bool):
+    """应用单个文件的变更"""
+    full_path = project_root / relative_path
+    is_new_file = not full_path.exists()
+
+    if not auto_apply:
+        highlighted_diff = highlight(diff_content, DiffLexer(), TerminalFormatter())
+        print("\n高亮显示的diff内容：")
+        print(highlighted_diff)
+
+    choice = "y"
+    if not auto_apply:
+        prompt = f"\n是否应用对 {relative_path} 的变更？"
+        if is_new_file:
+            prompt = f"\n是否创建新文件 {relative_path} 并应用变更？"
+            parent_dir = full_path.parent
+            if not parent_dir.exists():
+                prompt += f"\n(这将创建新目录: {parent_dir.relative_to(project_root)})"
+
+        choice = input(f"{prompt} [Y/n]: ").lower().strip()
+
+    if choice in ("y", ""):
+        if is_new_file:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+
+        temp_file = shadowroot / (relative_path.replace("/", "_") + ".diff")
+        with open(temp_file, "w+", encoding="utf-8") as f:
+            f.write(diff_content)
+        _apply_patch(temp_file)
+        temp_file.unlink()
+        print(Fore.GREEN + f"已成功应用对 {relative_path} 的补丁。" + ColorStyle.RESET_ALL)
+    else:
+        print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+
+
+def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output: bool = False):
+    """从内容中提取文件、执行替换并生成diff"""
+    if save:
+        _save_response_content(content)
+    if use_json_output:
+        try:
+            data = _parse_json_content(content)
+            if isinstance(data, dict) and "thinking_process" in data:
+                display_llm_plan(data["thinking_process"])
+        except (json.JSONDecodeError, TypeError):
+            # 不是有效的JSON格式，静默处理，后续解析器会处理旧格式
+            pass
+
+    try:
+        instructions = LLMInstructionParser.parse(content, use_json=use_json_output)
+    except Exception as e:
+        print(f"解析LLM响应时出错: {e}", file=sys.stderr)
+        return
+
+    if not instructions:
+        return
+
+    # 1. 指令分类：将安装脚本和文件操作指令分开
+    setup_script = None
+    file_instructions = []
+    for instr in instructions:
+        if instr["type"] == "project_setup_script":
+            setup_script = instr.get("content")
+        else:
+            file_instructions.append(instr)
+
+    # 2. 路径验证和受影响路径收集
+    project_root = Path(GLOBAL_PROJECT_CONFIG.project_root_dir).absolute()
+    valid_file_instructions, path_mapping = _validate_and_normalize_paths(file_instructions, project_root)
+
+    # 2.5. 对新文件创建进行预先审批
+    new_file_paths = [p for p in path_mapping.keys() if not p.exists()]
+    approved_new_file_paths = _approve_new_files(new_file_paths, project_root, auto_apply)
+    _create_file_stubs(approved_new_file_paths)
+
+    # 2.6. 基于审批结果过滤指令和路径
+    unapproved_new_paths = set(new_file_paths) - set(approved_new_file_paths)
+    if unapproved_new_paths:
+        path_mapping = {k: v for k, v in path_mapping.items() if k not in unapproved_new_paths}
+        valid_file_instructions = [
+            instr for instr in valid_file_instructions if Path(instr["path"]) not in unapproved_new_paths
+        ]
+
+    if not valid_file_instructions and not setup_script:
+        print(Fore.YELLOW + "没有文件被选中进行处理，且没有设置脚本。" + ColorStyle.RESET_ALL)
+        return
+
+    # 3. 在沙箱中准备影子文件
+    shadow_root_path = Path(shadowroot)
+    _prepare_shadow_files(path_mapping, project_root, shadow_root_path)
+
+    # 4. 使用ReplaceEngine将所有文件更改应用于影子文件
+    if valid_file_instructions:
+        try:
+            _apply_changes_to_shadow_files(valid_file_instructions, path_mapping)
+        except Exception:
+            return
+
+    # 5. 处理安装脚本
+    _process_setup_script(setup_script, shadow_root_path)
+
+    # 6. 生成原始文件和影子文件之间的差异
+    diffs_by_file = _generate_diffs(path_mapping, project_root)
     if not diffs_by_file:
         return
 
     # 7. 应用补丁 - 根据文件数量和auto_apply标志选择不同策略
     if len(diffs_by_file) > 1 and not auto_apply:
-        # 多文件交互模式
-        combined_diff = "\n\n".join(diffs_by_file.values())
-        highlighted_diff = highlight(combined_diff, DiffLexer(), TerminalFormatter())
-        print("\n高亮显示的diff内容：")
-        print(highlighted_diff)
-
-        print("\n检测到对多个文件的更改。请选择要应用的补丁：")
-        file_list = sorted(diffs_by_file.keys())
-        for i, f in enumerate(file_list):
-            print(f"  [{i + 1}] {f}")
-        print("请输入文件编号（如 '1,3'），或 'all' 应用全部，或按Enter键取消。")
-
-        user_input = input("> ").strip().lower()
-        if not user_input:
-            print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
-            return
-
-        selected_paths = []
-        if user_input == "all":
-            selected_paths = file_list
-        else:
-            try:
-                indices = [int(i.strip()) - 1 for i in user_input.split(",")]
-                selected_paths = [file_list[i] for i in indices if 0 <= i < len(file_list)]
-            except ValueError:
-                print(Fore.RED + "无效输入，操作已取消。" + ColorStyle.RESET_ALL)
-                return
-
-        if not selected_paths:
-            print(Fore.YELLOW + "未选择任何文件。" + ColorStyle.RESET_ALL)
-            return
-
-        applied_count = 0
-        for path in selected_paths:
-            if path in diffs_by_file:
-                full_path = project_root / path
-                if not full_path.exists():
-                    full_path.parent.mkdir(parents=True, exist_ok=True)
-
-                temp_file = shadowroot / (path.replace("/", "_") + ".diff")
-                temp_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(temp_file, "w+", encoding="utf-8") as f:
-                    f.write(diffs_by_file[path])
-                _apply_patch(temp_file)
-                temp_file.unlink()
-                applied_count += 1
-        print(Fore.GREEN + f"已成功应用对 {applied_count} 个文件的补丁。" + ColorStyle.RESET_ALL)
+        _apply_multiple_file_changes(diffs_by_file, project_root)
     else:
-        # 单文件模式或自动应用模式
         for relative_path, diff_content in diffs_by_file.items():
-            full_path = project_root / relative_path
-            is_new_file = not full_path.exists()
-
-            if not auto_apply:
-                highlighted_diff = highlight(diff_content, DiffLexer(), TerminalFormatter())
-                print("\n高亮显示的diff内容：")
-                print(highlighted_diff)
-
-            choice = "y"
-            if not auto_apply:
-                prompt = f"\n是否应用对 {relative_path} 的变更？"
-                if is_new_file:
-                    prompt = f"\n是否创建新文件 {relative_path} 并应用变更？"
-                    parent_dir = full_path.parent
-                    if not parent_dir.exists():
-                        prompt += f"\n(这将创建新目录: {parent_dir.relative_to(project_root)})"
-
-                choice = input(f"{prompt} [Y/n]: ").lower().strip()
-
-            if choice in ("y", ""):
-                if is_new_file:
-                    full_path.parent.mkdir(parents=True, exist_ok=True)
-
-                temp_file = shadowroot / (relative_path.replace("/", "_") + ".diff")
-                with open(temp_file, "w+", encoding="utf-8") as f:
-                    f.write(diff_content)
-                _apply_patch(temp_file)
-                temp_file.unlink()
-                print(Fore.GREEN + f"已成功应用对 {relative_path} 的补丁。" + ColorStyle.RESET_ALL)
-            else:
-                print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+            _apply_single_file_change(relative_path, diff_content, project_root, auto_apply)
 
 
 def display_llm_plan(thinking_process: dict):
@@ -4198,41 +4258,18 @@ def print_proxy_info(proxies, proxy_sources):
 
 def handle_ask_mode(program_args, proxies):
     """处理--ask模式"""
-    program_args.ask = program_args.ask.replace("@symbol_", "@symbol:")
+    ask_text = _prepare_ask_text(program_args.ask)
     model_switch = ModelSwitch()
     model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
-    # 先解析节点以检查是否包含patch或edit命令
-    nodes = context_processor.parse_text_into_nodes(program_args.ask.strip())
-    has_patch_or_edit = any(isinstance(node, CmdNode) and node.command in ["patch", "edit"] for node in nodes)
-    # 只有当patch或edit条件设置时，才根据模型配置设置use_json_output
-    use_json_output = has_patch_or_edit and GLOBAL_MODEL_CONFIG.supports_json_output
-    text = context_processor.process_text(program_args.ask, use_json_output=use_json_output)
-
-    # 检查是否有edit命令，如果有，则根据use_json_output选择对应的提示文件
-    has_edit = any(isinstance(node, CmdNode) and node.command == "edit" for node in nodes)
-    if has_edit:
-        # 根据use_json_output选择v2或v3
-        prompt_file = "edit-file-v3" if use_json_output else "edit-file-v2"
-        prompt_path = os.path.join(os.environ.get("GPT_PATH", ""), "prompts", prompt_file)
-        # 如果GPT_PATH下没有，则尝试当前目录下的prompts目录
-        if not os.path.exists(prompt_path):
-            prompt_path = os.path.join(os.path.dirname(__file__), "prompts", prompt_file)
-
-        if os.path.exists(prompt_path):
-            edit_prompt = Path(prompt_path).read_text(encoding="utf-8")
-            text = edit_prompt + "\n" + text
-        else:
-            print(f"警告: 未找到提示文件 {prompt_file}")
-        # 添加当前工作目录到提示的开头
-        cwd = os.getcwd()
-        text = "# 当前工作目录为: " + cwd + "\n\n" + text
-
+    nodes = context_processor.parse_text_into_nodes(ask_text)
+    use_json_output = _should_use_json_output(nodes)
+    text = context_processor.process_text(ask_text, use_json_output=use_json_output)
+    text = _inject_edit_prompt_if_needed(text, nodes, use_json_output)
     print(text)
     response_data = model_switch.query(
         os.environ["GPT_MODEL_KEY"], text, proxies=proxies, use_json_output=use_json_output
     )
-
     process_response(
         text,
         response_data,
@@ -4240,8 +4277,42 @@ def handle_ask_mode(program_args, proxies):
         save=True,
         obsidian_doc=program_args.obsidian_doc,
         ask_param=program_args.ask,
-        use_json_output=use_json_output,  # 新增传递use_json_output
+        use_json_output=use_json_output,
     )
+
+
+def _prepare_ask_text(raw_ask: str) -> str:
+    return raw_ask.replace("@symbol_", "@symbol:").strip()
+
+
+def _should_use_json_output(nodes) -> bool:
+    has_patch_or_edit = any(isinstance(node, CmdNode) and node.command in ["patch", "edit"] for node in nodes)
+    return has_patch_or_edit and GLOBAL_MODEL_CONFIG.supports_json_output
+
+
+def _inject_edit_prompt_if_needed(text: str, nodes, use_json_output: bool) -> str:
+    has_edit = any(isinstance(node, CmdNode) and node.command == "edit" for node in nodes)
+    if not has_edit:
+        return text
+    prompt_file = "edit-file-v3" if use_json_output else "edit-file-v2"
+    prompt_path = _resolve_prompt_path(prompt_file)
+    if prompt_path and os.path.exists(prompt_path):
+        edit_prompt = Path(prompt_path).read_text(encoding="utf-8")
+        text = edit_prompt + "\n" + text
+    else:
+        print(f"警告: 未找到提示文件 {prompt_file}")
+    cwd = os.getcwd()
+    text = "# 当前工作目录为: " + cwd + "\n\n" + text
+    return text
+
+
+def _resolve_prompt_path(prompt_file: str) -> Optional[str]:
+    gpt_path = os.environ.get("GPT_PATH", "")
+    prompt_path = os.path.join(gpt_path, "prompts", prompt_file)
+    if os.path.exists(prompt_path):
+        return prompt_path
+    fallback_path = os.path.join(os.path.dirname(__file__), "prompts", prompt_file)
+    return fallback_path if os.path.exists(fallback_path) else None
 
 
 def prompt_words_search(words: List[str], args):

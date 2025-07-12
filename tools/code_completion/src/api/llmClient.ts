@@ -148,11 +148,11 @@ export async function generateCode(instruction: string, context: GenerationConte
         return cleanResponse(content);
     } catch (error) {
         logger.error('API Error:', error);
+        if (error.constructor.name === 'TimeoutError') {
+             throw new Error(`The request timed out after ${activeService.timeout_seconds || 60} seconds.`);
+        }
         if (error instanceof OpenAI.APIError) {
             throw new Error(`API request failed with status ${error.status}: ${error.message}`);
-        }
-        if (error.constructor.name === 'TimeoutError') {
-             throw new Error(`The request timed out after ${activeService.timeout_seconds} seconds.`);
         }
         throw new Error('Failed to communicate with the API. Check your network connection and configuration.');
     }
@@ -193,13 +193,13 @@ export async function playgroundChat(prompt: string, serviceConfig: AiServiceCon
         return content;
     } catch (error) {
         logger.error('Playground API Error:', error);
-        if (error instanceof OpenAI.APIError) {
-            return { success: false, message: `API Error: ${error.status} ${error.name}` };
-        }
         if (error.constructor.name === 'TimeoutError') {
-             return { success: false, message: `The request timed out after ${serviceConfig.timeout_seconds} seconds.`};
+             return `The request timed out after ${serviceConfig.timeout_seconds || 60} seconds.`;
         }
-        return { success: false, message: `Failed to communicate with the API: ${String(error)}` };
+        if (error instanceof OpenAI.APIError) {
+            return `API Error: ${error.status} ${error.name}`;
+        }
+        return `Failed to communicate with the API: ${String(error)}`;
     }
 }
 
@@ -209,7 +209,11 @@ export async function playgroundChat(prompt: string, serviceConfig: AiServiceCon
  * @param apiConfig - The API configuration to test.
  * @returns An object indicating success and a message.
  */
-export async function testApiConnection(apiConfig: AiServiceConfig): Promise<{ success: boolean; message: string }> {
+export async function testApiConnection(apiConfig: Partial<AiServiceConfig>): Promise<{ success: boolean; message: string }> {
+    if (!apiConfig.key || !apiConfig.base_url || !apiConfig.model_name) {
+        return { success: false, message: 'Missing required fields for test.' };
+    }
+    
     try {
         const client = new OpenAI({
             apiKey: apiConfig.key,
@@ -228,11 +232,11 @@ export async function testApiConnection(apiConfig: AiServiceConfig): Promise<{ s
             return { success: false, message: 'Received an unexpected response from the API.' };
         }
     } catch (error) {
+        if (error.constructor.name === 'TimeoutError') {
+             return { success: false, message: `Request timed out after ${apiConfig.timeout_seconds || 60}s.`};
+        }
         if (error instanceof OpenAI.APIError) {
             return { success: false, message: `API Error: ${error.status} ${error.name}` };
-        }
-        if (error.constructor.name === 'TimeoutError') {
-             return { success: false, message: `Request timed out after ${apiConfig.timeout_seconds}s.`};
         }
         return { success: false, message: String(error) };
     }

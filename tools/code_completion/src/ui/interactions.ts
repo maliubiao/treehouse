@@ -37,36 +37,3 @@ export async function showErrorMessage(message: string, onRetry?: () => void): P
     }
     return selection;
 }
-
-/**
- * Opens a diff view between two files.
- * @param originalUri - The URI of the original file.
- * @param newUri - The URI of the new (generated) file.
- * @param title - The title for the diff view tab.
- * @returns A promise that resolves when the diff view is shown.
- */
-export async function showDiffView(originalUri: vscode.Uri, newUri: vscode.Uri, title: string): Promise<void> {
-    await vscode.commands.executeCommand('vscode.diff', originalUri, newUri, title);
-}
-
-/**
- * Shows a confirmation prompt to the user.
- * This is now NON-MODAL to allow interaction with the diff view.
- * @param prompt - The main text to show in the confirmation.
- * @param acceptText - The label for the "Accept" button.
- * @param rejectText - The label for the "Reject" button.
- * @returns The user's choice, or undefined if they close the prompt.
- */
-export async function getConfirmation(
-    prompt: string = 'AI suggestion generated. Review the changes in the diff view.',
-    acceptText: string = 'Accept',
-    rejectText: string = 'Reject'
-): Promise<string | undefined> {
-    const choice = await vscode.window.showInformationMessage(
-        prompt,
-        // By removing { modal: true }, this becomes a non-modal notification.
-        acceptText,
-        rejectText
-    );
-    return choice;
-}

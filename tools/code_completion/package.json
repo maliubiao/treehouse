@@ -58,6 +58,16 @@
       {
         "command": "treehouse-code-completer.openSettings",
         "title": "Treehouse: Open Settings"
+      },
+      {
+        "command": "treehouse-code-completer.acceptChanges",
+        "title": "Treehouse: Accept AI Suggestion",
+        "icon": "$(check)"
+      },
+      {
+        "command": "treehouse-code-completer.rejectChanges",
+        "title": "Treehouse: Reject AI Suggestion",
+        "icon": "$(close)"
       }
     ],
     "keybindings": [
@@ -65,6 +75,18 @@
         "command": "treehouse-code-completer.generateCode",
         "key": "ctrl+alt+i",
         "mac": "cmd+alt+i"
+      },
+      {
+        "command": "treehouse-code-completer.acceptChanges",
+        "key": "ctrl+alt+y",
+        "mac": "cmd+alt+y",
+        "when": "treehouseCodeCompleter.diffViewActive"
+      },
+      {
+        "command": "treehouse-code-completer.rejectChanges",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n",
+        "when": "treehouseCodeCompleter.diffViewActive"
       }
     ],
     "menus": {
@@ -72,6 +94,18 @@
         {
           "when": "editorHasSelection",
           "command": "treehouse-code-completer.generateCode",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "treehouse-code-completer.acceptChanges",
+          "when": "resourceLangId == 'diff' && treehouseCodeCompleter.diffViewActive",
+          "group": "navigation"
+        },
+        {
+          "command": "treehouse-code-completer.rejectChanges",
+          "when": "resourceLangId == 'diff' && treehouseCodeCompleter.diffViewActive",
           "group": "navigation"
         }
       ]
@@ -87,13 +121,18 @@
             "type": "object",
             "properties": {
               "name": { "type": "string" },
-              "max_context_size": { "type": "number" },
-              "max_tokens": { "type": "number" },
-              "is_thinking": { "type": "boolean" },
-              "temperature": { "type": "number" },
-              "key": { "type": "string" },
               "base_url": { "type": "string" },
               "model_name": { "type": "string" },
+              "key": { "type": "string" },
+              "temperature": { "type": "number" },
+              "max_tokens": { "type": "number" },
+              "max_context_size": { "type": "number" },
+              "timeout_seconds": {
+                "type": "number",
+                "default": 60,
+                "description": "API request timeout in seconds."
+              },
+              "is_thinking": { "type": "boolean" },
               "price_1M_input": { "type": "number" },
               "price_1M_output": { "type": "number" },
               "supports_json_output": { "type": "boolean" }
@@ -121,6 +160,13 @@
           "description": "Enable this for models that use a specific prefix-based completion format (e.g., some versions of DeepSeek Coder Instruct). If true, the prompt is sent in a special format. For most standard chat models (like GPT series), this should be false."
         }
       }
-    }
+    },
+    "context": [
+      {
+        "name": "treehouseCodeCompleter.diffViewActive",
+        "description": "True when the Treehouse Code Completer diff view is active and awaiting user action.",
+        "type": "boolean"
+      }
+    ]
   }
 }

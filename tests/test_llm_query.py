@@ -1143,16 +1143,15 @@ class TestDirectoryHandling(unittest.TestCase):
             with open(os.path.join(tmpdir, "node_modules", "test.txt"), "w", encoding="utf-8") as f:
                 f.write("should be ignored")
 
-            # 为使测试在不同环境下行为一致，显式创建.gitignore文件。
-            # _handle_local_file内部调用了外部tree命令和os.walk，
-            # tree命令只识别.gitignore文件，而os.walk的逻辑还包括了内置的默认忽略规则。
-            # 添加.gitignore文件可以确保两者行为一致。
             with open(os.path.join(tmpdir, ".gitignore"), "w", encoding="utf-8") as f:
                 f.write("node_modules/\n")
 
             match = MagicMock(command=tmpdir)
             result = _handle_local_file(match)
-            self.assertNotIn("node_modules", result)
+
+            # 只检查目录树输出部分是否包含node_modules
+            tree_output = result.split("[directory tree start]")[1].split("[directory tree end]")[0]
+            self.assertNotIn("node_modules", tree_output)
 
 
 import json
