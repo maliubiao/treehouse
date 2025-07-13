@@ -146,7 +146,7 @@
         },
         "treehouseCodeCompleter.prompt.systemMessage": {
           "type": "string",
-          "default": "You are an expert software architect and programmer. The user will provide context about a file (path, full content), a block of code from that file, an instruction, and an optional rule. Your task is to rewrite ONLY the provided block of code according to the instruction, using the full file content for context, and adhering to the rule. Output only the raw, modified code block. Do not include explanations, markdown, or language specifiers like ```python.",
+          "default": "You are an expert software architect and programmer. The user will provide context about a file (path, full content), a block of code from that file, an instruction, and an optional rule. Your task is to rewrite ONLY the provided block of code according to the instruction, using the full file content for context, and adhering to the rule.\n\nIMPORTANT: Your response MUST be wrapped with these exact tags:\n<CODE_GENERATED>\n[your modified code here]\n</CODE_GENERATED>\n\nInclude ONLY the modified code block between these tags, no explanations or additional text.",
           "description": "The master system prompt that guides the AI's behavior for Treehouse Code Completer."
         },
         "treehouseCodeCompleter.prompt.rule": {

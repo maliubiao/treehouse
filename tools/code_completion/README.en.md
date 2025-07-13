@@ -14,7 +14,9 @@ Tired of repetitive coding tasks? Need to add documentation, write tests, or con
 -   **Instruction-Based Code Generation**: Select any code, press a keybinding, and tell the AI what to do (e.g., "Add error handling" or "Convert this to an async function").
 -   **Context-Aware Selection**: If you don't select any code, the extension automatically identifies the enclosing function or class at your cursor's position to use as context.
 -   **Interactive Diff View**: AI suggestions are never applied blindly. A clear side-by-side diff view is presented, allowing you to review every change before accepting.
+-   **Intuitive UI Panel**: When AI suggestions are ready, a beautiful Webview panel automatically appears alongside the diff view, providing clear accept/reject buttons and keyboard shortcut hints.
 -   **Graphical Settings UI**: A user-friendly webview interface to manage multiple AI service configurations, test API connections, customize prompts, and even experiment in a playground.
+-   **New Review UI**: Added intuitive Webview panel interface providing clear accept/reject action buttons in the diff view.
 -   **Highly Configurable**: Easily configure API endpoints, keys, and models to work with any OpenAI-compatible service (like DeepSeek, Groq, etc.).
 -   **Customizable Prompts**: Tailor the master system prompt and add custom rules to enforce specific coding styles or architectural principles.
 -   **Safe Undo**: A dedicated command to instantly revert the last AI-driven change, ensuring you're always in control.
@@ -27,9 +29,10 @@ The primary workflow is designed to be simple and non-intrusive.
 2.  **Trigger Command**: Press `Cmd+Alt+I` (macOS) or `Ctrl+Alt+I` (Windows/Linux).
 3.  **Provide Instruction**: An input box appears. Type your instruction (e.g., "Add comprehensive JSDoc comments") and press `Enter`.
 4.  **Review Diff**: The extension communicates with the AI. A new tab opens showing a diff between your original code and the AI's suggestion.
-5.  **Accept or Reject**: A notification appears with "Accept" and "Reject" buttons.
-    -   Clicking **Accept** applies the changes to your source file.
-    -   Clicking **Reject** discards the suggestion and closes the diff view.
+5.  **Accept or Reject**: An intuitive Webview panel automatically opens alongside the diff view, providing clear accept/reject buttons and keyboard shortcut hints.
+    -   Click **✓ Accept Changes** button to apply the changes to your source file.
+    -   Click **✗ Reject Changes** button to discard the suggestion and close the diff view.
+    -   You can also use keyboard shortcuts: `Cmd/Ctrl+Alt+Y` to accept, `Cmd/Ctrl+Alt+N` to reject.
 
 ## Commands and Keybindings
 
