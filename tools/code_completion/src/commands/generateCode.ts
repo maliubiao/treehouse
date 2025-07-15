@@ -101,7 +101,7 @@ export async function generateCodeCommand(
         };
 
         // Start the session, which will show the diff view and handle all subsequent user actions.
-        await sessionManager.start(sessionData, context);
+        await sessionManager.start(sessionData);
 
     } catch (error) {
         // In case of an error during the API call or file creation, ensure temp files are cleaned up.

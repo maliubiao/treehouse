@@ -54,6 +54,7 @@ dependencies = [
     "graphviz>=0.21",
     "networkx>=3.5",
     "pyright>=1.1.403",
+    "asyncstdlib>=3.13.1",
 ]
 
 [tool.black]

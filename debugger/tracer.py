@@ -12,6 +12,7 @@ import logging
 import os
 import queue
 import re
+import shutil
 import sys
 import threading
 import time
@@ -580,12 +581,13 @@ class TraceDispatcher:
         sys.settrace(self.trace_dispatch)
         self._logic.start()
 
-    def stop(self):
-        """停止跟踪"""
+    def stop(self) -> Optional[Path]:
+        """停止跟踪并返回报告路径"""
         sys.settrace(None)
-        self._logic.stop()
+        report_path = self._logic.stop()
         logging.info("⏹ DEBUG SESSION ENDED\n")
         print(color_wrap("\n⏹ 调试会话结束", TraceTypes.COLOR_RETURN))
+        return report_path
 
 
 class SysMonitoringTraceDispatcher:
@@ -853,12 +855,13 @@ class SysMonitoringTraceDispatcher:
         self._logic.start()
         self._register_tool()
 
-    def stop(self):
-        """Stop monitoring"""
+    def stop(self) -> Optional[Path]:
+        """Stop monitoring and return report path"""
         self._unregister_tool()
-        self._logic.stop()
+        report_path = self._logic.stop()
         logging.info("⏹ DEBUG SESSION ENDED\n")
         print(color_wrap("\n⏹ 调试会话结束", TraceTypes.COLOR_RETURN))
+        return report_path
 
 
 class CallTreeHtmlRender:
@@ -1141,23 +1144,50 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             comments_data=comments_json,
         )
 
-    def save_to_file(self, filename):
-        """将HTML报告保存到文件"""
-        p = Path(filename)
-        if p.is_absolute():
-            # If it's an absolute path, ensure parent directories exist
-            p.parent.mkdir(parents=True, exist_ok=True)
-            html_content = self.generate_html()
-            p.write_text(html_content, encoding="utf-8")
-            log_path = str(p)
+    def save_to_file(self, filename: str, is_multi_threaded: bool) -> Path:
+        """
+        将HTML报告保存到文件。如果为多线程，则创建自包含的目录。
+
+        Args:
+            filename: 报告的基础文件名。
+            is_multi_threaded: 是否为多线程模式。
+
+        Returns:
+            最终生成的HTML文件的路径。
+        """
+        report_dir = Path(__file__).parent / "logs"
+        report_dir.mkdir(exist_ok=True)
+        html_content = self.generate_html()
+
+        if is_multi_threaded:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            dir_name = f"{Path(filename).stem}_{timestamp}"
+            output_dir = report_dir / dir_name
+            output_dir.mkdir(exist_ok=True)
+            final_report_path = output_dir / "report.html"
+
+            # 复制资源文件
+            try:
+                asset_dir = Path(__file__).parent
+                assets = ["tracer_styles.css", "tracer_scripts.js"]
+                for asset in assets:
+                    source_asset = asset_dir / asset
+                    if source_asset.exists():
+                        shutil.copy(source_asset, output_dir / asset)
+
+                # 调整HTML中的资源路径
+                html_content = html_content.replace('href="../tracer_styles.css"', 'href="tracer_styles.css"')
+                html_content = html_content.replace('src="../tracer_scripts.js"', 'src="tracer_scripts.js"')
+            except Exception as e:
+                logging.error(f"无法复制资源文件: {e}")
+                print(color_wrap(f"无法复制资源文件: {e}", "error"))
+
         else:
-            html_content = self.generate_html()
-            log_dir = os.path.join(os.path.dirname(__file__), "logs")
-            os.makedirs(log_dir, exist_ok=True)
-            log_path = os.path.join(log_dir, filename)
-            with open(log_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-        print(f"正在生成HTML报告 {log_path} ...")
+            final_report_path = report_dir / filename
+
+        final_report_path.write_text(html_content, encoding="utf-8")
+        print(f"正在生成HTML报告 {final_report_path} ...")
+        return final_report_path
 
 
 class TraceLogExtractor:
@@ -1358,6 +1388,7 @@ class TraceLogic:
         self._stack_variables = {}
         self._message_id = 0
         self.exception_chain = []
+        self._seen_thread_ids: Set[int] = set()
         # 分组属性
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
@@ -1433,6 +1464,17 @@ class TraceLogic:
     def _console_output(self, log_data, color_type):
         """控制台输出处理"""
         message = self._format_log_message(log_data)
+        if isinstance(log_data, dict) and "data" in log_data:
+            thread_id = log_data["data"].get("thread_id")
+            # 当有多于一个线程时，才显示线程ID
+            if thread_id and len(self._seen_thread_ids) > 1:
+                # 移除消息原有的缩进，统一添加
+                message_stripped = message.lstrip()
+                indent_len = len(message) - len(message_stripped)
+                indent = " " * indent_len
+                tid_badge = f"[TID:{thread_id}]"
+                message = f"{indent}{tid_badge} {message_stripped}"
+
         colored_msg = color_wrap(message, color_type)
         print(colored_msg)
 
@@ -1474,7 +1516,10 @@ class TraceLogic:
 
     def _add_to_buffer(self, log_data, color_type):
         """将日志数据添加到队列并立即处理"""
-
+        if isinstance(log_data, dict) and "data" in log_data:
+            thread_id = log_data["data"].get("thread_id")
+            if thread_id is not None:
+                self._seen_thread_ids.add(thread_id)
         self._log_queue.put((log_data, color_type))
 
     def _flush_buffer(self):
@@ -1966,20 +2011,25 @@ class TraceLogic:
         """启动逻辑处理"""
         self._running_flag = True
 
-    def stop(self):
-        """停止逻辑处理"""
+    def stop(self) -> Optional[Path]:
+        """
+        停止逻辑处理, 返回最终报告路径
+        """
         self._running_flag = False
         if self._timer_thread:
             self._timer_thread.join(timeout=1)
-
-        # self.flush_exception()  # 确保任何剩余的异常都被记录
 
         self._flush_buffer()
         while not self._log_queue.empty():
             self._log_queue.get_nowait()
         self.disable_output("file")
+
+        report_path = None
         if "html" in self._output._active_outputs:
-            self._html_render.save_to_file(self.config.report_name)
+            is_multi_threaded = len(self._seen_thread_ids) > 1
+            report_path = self._html_render.save_to_file(self.config.report_name, is_multi_threaded)
+
+        return report_path
 
 
 def get_tracer(module_path, config: TraceConfig):
@@ -2040,6 +2090,9 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
             tracer = SysMonitoringTraceDispatcher(str(module_path), config)
         else:
             tracer = TraceDispatcher(str(module_path), config)
+            # 为旧版Python设置线程跟踪
+            threading.settrace(tracer.trace_dispatch)
+
     caller_frame = sys._getframe().f_back
     tracer.add_target_frame(caller_frame)
     try:
@@ -2124,18 +2177,24 @@ def trace(
             finally:
                 if t:
                     print(color_wrap("[stop tracer]", TraceTypes.COLOR_RETURN))
-                    t.stop()
+                    stop_trace(t)
 
         return wrapper
 
     return decorator
 
 
-def stop_trace(tracer: TraceDispatcher = None):
+def stop_trace(tracer: Union[TraceDispatcher, SysMonitoringTraceDispatcher] = None):
     """停止调试跟踪并清理资源
 
     Args:
         tracer: 可选的跟踪器实例
     """
+    report_path = None
     if tracer:
-        tracer.stop()
+        report_path = tracer.stop()
+
+    if sys.version_info < (3, 12):
+        threading.settrace(None)
+
+    return report_path

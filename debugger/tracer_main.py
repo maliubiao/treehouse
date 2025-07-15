@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import importlib.util
 import logging
 import os
+import runpy
 import sys
 import traceback
 import webbrowser
@@ -12,48 +14,55 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from debugger.tracer import TraceConfig, color_wrap, start_trace
+from debugger.tracer import TraceConfig, color_wrap, start_trace, stop_trace
 
 
-def execute_script(target: Path, args: List[str]) -> None:
-    """执行目标脚本并保持正确的模块上下文"""
-    sys.argv = [str(target)] + args
-    code = target.read_text(encoding="utf-8")
+def execute_target(target_script: Optional[Path], target_module: Optional[str], args: List[str]) -> None:
+    """
+    使用runpy执行目标脚本或模块，以确保正确的执行上下文。
 
-    # 创建模拟的__main__模块
-    main_module = ModuleType("__main__")
-    main_module.__file__ = str(target)
-    main_module.__name__ = "__main__"
-    main_module.__package__ = None
-    sys.modules["__main__"] = main_module
-
-    # 准备执行环境
-    globals_dict = main_module.__dict__
-    globals_dict.update({"__name__": "__main__", "__file__": str(target), "__package__": None})
-    # 将目标脚本所在目录添加到 sys.path
-    sys.path.insert(0, os.path.dirname(str(target)))
+    Args:
+        target_script: 要执行的脚本的路径。
+        target_module: 要执行的模块的名称。
+        args: 传递给目标脚本或模块的参数列表。
+    """
     try:
-        compiled_code = compile(code, str(target), "exec")
-        # 使用更安全的执行方式
-        exec(compiled_code, globals_dict)  # pylint: disable=exec-used
+        if target_script:
+            # 对于run_path，我们必须手动设置sys.argv
+            sys.argv = [str(target_script)] + args
+            runpy.run_path(str(target_script), run_name="__main__")
+        elif target_module:
+            # run_module如果alter_sys为True，则会处理sys.argv，
+            # 但为了一致性，我们提前设置它。程序的'name' (argv[0])是模块文件的路径。
+            spec = importlib.util.find_spec(target_module)
+            if spec is None or spec.origin is None:
+                raise ImportError(f"无法找到模块: {target_module}")
+            sys.argv = [spec.origin] + args
+            # alter_sys=True 还会处理 sys.modules['__main__']
+            runpy.run_module(target_module, run_name="__main__", alter_sys=True)
+        else:
+            # 从debug_main的逻辑来看，不应到达此分支
+            raise ValueError("未提供执行目标（脚本或模块）")
+
     except SystemExit as sys_exit:
-        if sys_exit.code != 0:
-            print(color_wrap(f"⚠ 脚本以退出码 {sys_exit.code} 终止", "error"))
-    except Exception:
+        if sys_exit.code is not None and sys_exit.code != 0:
+            print(color_wrap(f"⚠ 目标以退出码 {sys_exit.code} 终止", "error"))
+    except (Exception, ImportError):
         traceback.print_exc()
         raise
-    finally:
-        # 恢复 sys.path
-        if sys.path[0] == os.path.dirname(str(target)):
-            sys.path.pop(0)
 
 
 def create_parser() -> ArgumentParser:
     """创建命令行参数解析器"""
     epilog = (
         "示例:\n"
-        "  python -m debugger.tracer_main script.py\n"
-        "  python -m debugger.tracer_main --config my_config.yaml script.py\n"
+        "  # 跟踪脚本\n"
+        "  python -m debugger.tracer_main script.py arg1\n\n"
+        "  # 跟踪模块 (注意用 -- 分隔模块参数)\n"
+        "  python -m debugger.tracer_main -m my_package.main -- --user=test\n\n"
+        "  # 使用配置文件\n"
+        "  python -m debugger.tracer_main --config my_config.yaml script.py\n\n"
+        "  # 其他常用选项\n"
         "  python -m debugger.tracer_main --watch-files='src/*.py' script.py\n"
         "  python -m debugger.tracer_main --capture-vars='x' --capture-vars='y.z' script.py\n"
         "  python -m debugger.tracer_main --line-ranges='test.py:10-20' script.py\n"
@@ -61,14 +70,20 @@ def create_parser() -> ArgumentParser:
         "  python -m debugger.tracer_main --include-stdlibs=json --include-stdlibs=re script.py"
     )
     parser = ArgumentParser(
-        description="Python脚本调试跟踪工具",
-        usage="python -m debugger.tracer_main [选项] <脚本> [脚本参数]",
+        description="Python脚本/模块调试跟踪工具",
+        usage="python -m debugger.tracer_main [选项] (<脚本> | -m <模块>) [参数]",
         formatter_class=RawDescriptionHelpFormatter,
         epilog=epilog,
         add_help=False,  # We add our own help argument for custom text
     )
     # Redefine help argument to provide custom help text in Chinese
     parser.add_argument("-h", "--help", action="help", help="显示此帮助信息并退出")
+    parser.add_argument(
+        "-m",
+        "--module",
+        type=str,
+        help="以模块方式执行和跟踪 (例如: my_package.main)",
+    )
     parser.add_argument(
         "--config",
         type=Path,
@@ -149,12 +164,12 @@ def create_parser() -> ArgumentParser:
 
 def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
     """
-    解析命令行参数，支持配置文件，并稳健地分离目标脚本及其参数。
+    解析命令行参数，支持配置文件，并稳健地分离目标及其参数。
 
     处理顺序:
     1. 查找 --config 参数并加载配置文件作为默认值。
     2. 解析调试器自身的参数。
-    3. 将剩余的参数视为目标脚本及其参数。
+    3. 将剩余的参数视为目标（脚本或模块）及其参数。
     """
     parser = create_parser()
 
@@ -174,19 +189,24 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
             except yaml.YAMLError as e:
                 raise ValueError(f"配置文件解析失败: {e}") from e
 
-    # 将配置文件中的值设置为默认值
-    # 命令行参数将覆盖配置文件中的值
     parser.set_defaults(**config_from_file)
 
     # 解析剩余的参数
-    # parse_known_args will exit if -h or --help is present
-    args, script_argv = parser.parse_known_args(remaining_argv)
+    # parse_known_args 如果存在 -h 或 --help，将会退出
+    args, target_argv = parser.parse_known_args(remaining_argv)
 
-    if not script_argv:
-        raise ValueError("未指定目标Python脚本。请在选项后提供脚本路径。")
+    target_script: Optional[Path] = None
+    target_module: Optional[str] = None
+    script_args: List[str] = []
 
-    target_script = Path(script_argv[0])
-    script_args = script_argv[1:]
+    if args.module:
+        target_module = args.module
+        script_args = target_argv
+    else:
+        if not target_argv:
+            raise ValueError("未指定目标。请提供脚本路径或使用 -m <模块>。")
+        target_script = Path(target_argv[0])
+        script_args = target_argv[1:]
 
     # 解析行号范围
     line_ranges = {}
@@ -205,7 +225,9 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         start_function = (filename, int(lineno))
 
     return {
-        "target": target_script,
+        "target_script": target_script,
+        "target_module": target_module,
+        "script_args": script_args,
         "watch_files": args.watch_files or [],
         "open_report": args.open_report,
         "verbose": args.verbose,
@@ -219,7 +241,6 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "ignore_self": not args.trace_self,
         "start_function": start_function,
         "source_base_dir": args.source_base_dir,
-        "script_args": script_args,
         "include_stdlibs": args.include_stdlibs or [],
     }
 
@@ -243,24 +264,63 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         argv = sys.argv[1:]
 
     # 如果没有提供任何参数，则显示帮助信息并退出。
-    # argparse将在解析时自动处理 -h/--help。
     if not argv:
         create_parser().print_help()
         return 0
 
     try:
-        # parse_cli_args 会在内部调用 create_parser()
-        # 如果用户提供了 -h 或 --help，argparse 会自动处理并退出，不会执行到这里。
         args = parse_cli_args(argv)
-        target = args["target"].resolve()
-        if not target.exists():
-            print(color_wrap(f"❌ 目标文件 {target} 不存在", "error"))
-            return 2
-        if target.suffix != ".py":
-            print(color_wrap(f"❌ 目标文件 {target} 不是Python脚本(.py)", "error"))
-            return 2
+        target_script = args["target_script"]
+        target_module = args["target_module"]
+        target_path_for_config: Path
 
-        print(color_wrap(f"\n🔍 启动调试会话 - 目标: {target}", "call"))
+        if target_script:
+            target_path_for_config = target_script.resolve()
+            if not target_path_for_config.exists():
+                print(color_wrap(f"❌ 目标文件 {target_path_for_config} 不存在", "error"))
+                return 2
+            if target_path_for_config.suffix != ".py":
+                print(color_wrap(f"❌ 目标文件 {target_path_for_config} 不是Python脚本(.py)", "error"))
+                return 2
+            print(color_wrap(f"\n🔍 启动调试会话 - 目标脚本: {target_path_for_config}", "call"))
+
+        elif target_module:
+            try:
+                spec = importlib.util.find_spec(target_module)
+                if spec is None:
+                    raise ImportError(f"无法找到模块 '{target_module}' 的规范。")
+                if spec.origin is None or spec.origin == "built-in":
+                    raise ImportError(f"不支持跟踪内置或命名空间模块: {target_module}")
+
+                # 如果是包，入口点是 `__main__.py`
+                if spec.submodule_search_locations:
+                    main_py_path = Path(spec.origin).parent / "__main__.py"
+                    if main_py_path.exists():
+                        target_path_for_config = main_py_path
+                    else:
+                        msg = f"⚠ 模块 '{target_module}' 是一个包但缺少 '__main__.py'。执行可能会因缺少入口点而失败。"
+                        print(color_wrap(msg, "error"))
+                        # 跟踪将从 __init__.py 开始
+                        target_path_for_config = Path(spec.origin)
+                else:
+                    target_path_for_config = Path(spec.origin)
+
+                target_path_for_config = target_path_for_config.resolve()
+                print(
+                    color_wrap(
+                        f"\n🔍 启动调试会话 - 目标模块: {target_module} ({target_path_for_config})",
+                        "call",
+                    )
+                )
+
+            except ImportError as e:
+                print(color_wrap(f"❌ 无法定位模块: {e}", "error"))
+                return 2
+        else:
+            # 此分支不应被 parse_cli_args 的逻辑命中
+            create_parser().print_help()
+            return 1
+
         if args["watch_files"]:
             print(color_wrap(f"📝 监控文件模式: {', '.join(args['watch_files'])}", "var"))
         if args["capture_vars"]:
@@ -278,7 +338,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
 
         # 创建 TraceConfig 实例
         config = TraceConfig(
-            target_files=args["watch_files"] + [f"*{target.stem}.py"],
+            target_files=args["watch_files"] + [f"*{target_path_for_config.stem}.py"],
             capture_vars=args["capture_vars"],
             line_ranges=args["line_ranges"],
             exclude_functions=args["exclude_functions"],
@@ -293,7 +353,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         )
 
         log_dir = Path(__file__).parent / "logs"
-        report_path = log_dir / config.report_name
+        # 报告路径将在 `tracer.stop()` 后确定
+        # report_path = log_dir / config.report_name
 
         print(color_wrap("\n📝 调试功能:", "line"))
         print(color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
@@ -302,16 +363,18 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         if config.enable_var_trace:
             print(color_wrap("  ✓ 变量变化检测", "var"))
         print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
+        print(color_wrap("  ✓ 多线程跟踪支持", "return"))
         print(color_wrap(f"\n📂 调试日志路径: {log_dir / 'debug.log'}", "line"))
-        print(color_wrap(f"📂 报告文件路径: {report_path}\n", "line"))
+        # print(color_wrap(f"📂 报告文件路径: {report_path}\n", "line"))
 
         original_argv = sys.argv.copy()
         exit_code = 0
         tracer = None
+        report_path = None
 
         try:
-            tracer = start_trace(target, config=config)
-            execute_script(target, args["script_args"])
+            tracer = start_trace(target_path_for_config, config=config)
+            execute_target(target_script, target_module, args["script_args"])
         except KeyboardInterrupt:
             print(color_wrap("\n🛑 用户中断调试过程", "error"))
             exit_code = 130
@@ -321,17 +384,18 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             exit_code = 3
         finally:
             if tracer:
-                tracer.stop()
+                report_path = stop_trace(tracer)
             sys.argv = original_argv
-            print_debug_summary(report_path)
-            if args["open_report"] and not config.disable_html:
-                open_trace_report(report_path)
+            if report_path:
+                print_debug_summary(report_path)
+                if args["open_report"] and not config.disable_html:
+                    open_trace_report(report_path)
 
         return exit_code
     except (ValueError, FileNotFoundError) as e:
         print(color_wrap(f"❌ 参数错误: {str(e)}", "error"))
-        # Show help for value errors like missing script
-        if "未指定目标Python脚本" in str(e):
+        # Show help for value errors like missing script/module
+        if "未指定目标" in str(e):
             print("-" * 20)
             create_parser().print_help()
         return 1

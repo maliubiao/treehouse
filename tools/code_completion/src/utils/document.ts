@@ -59,7 +59,8 @@ function findSymbolNeighbors(
 /**
  * Gathers all necessary context for an AI code generation task.
  * It determines whether to use the full file content or a "smart" context
- * (surrounding symbols) based on the file size.
+ * (surrounding symbols or lines) based on the file size.
+ * It now supports falling back to the current line if no enclosing symbol is found.
  */
 export async function getGenerationContext(): Promise<GenerationContext | null> {
     const editor = vscode.window.activeTextEditor;
@@ -79,13 +80,27 @@ export async function getGenerationContext(): Promise<GenerationContext | null> 
     );
 
     if (editor.selection.isEmpty) {
-        if (!symbols || symbols.length === 0) { return null; }
-        enclosingSymbol = findEnclosingSymbol(symbols, editor.selection.active);
-        if (!enclosingSymbol) { return null; }
-        selection = enclosingSymbol.range;
+        // First, try to find an enclosing symbol, as it provides better context.
+        if (symbols && symbols.length > 0) {
+            enclosingSymbol = findEnclosingSymbol(symbols, editor.selection.active);
+        }
+        
+        if (enclosingSymbol) {
+            selection = enclosingSymbol.range;
+        } else {
+            // Fallback: If no symbol is found, use the current line.
+            const currentLine = document.lineAt(editor.selection.active.line);
+            if (currentLine.isEmptyOrWhitespace) {
+                // Don't generate from an empty line.
+                return null;
+            }
+            selection = currentLine.range;
+        }
     } else {
+        // User has an active selection.
         selection = editor.selection;
         if (symbols && symbols.length > 0) {
+            // Still try to find an enclosing symbol for smart context purposes.
             enclosingSymbol = findEnclosingSymbol(symbols, selection.start);
         }
     }
@@ -97,13 +112,24 @@ export async function getGenerationContext(): Promise<GenerationContext | null> 
     if (fullFileContent.length > MAX_FILE_SIZE_FOR_FULL_CONTEXT) {
         finalFullFileContent = null; 
         if (enclosingSymbol && symbols) {
+            // If we have a symbol, use its siblings for smart context.
             const { previous, next } = findSymbolNeighbors(enclosingSymbol, symbols);
             smartContext = {
                 previousSiblingText: previous ? document.getText(previous.range) : null,
                 nextSiblingText: next ? document.getText(next.range) : null,
             };
         } else {
-            smartContext = { previousSiblingText: null, nextSiblingText: null };
+            // Fallback for smart context: use adjacent lines if no symbol is available.
+            const startLineNum = selection.start.line;
+            const endLineNum = selection.end.line;
+
+            const prevLineText = startLineNum > 0 ? document.lineAt(startLineNum - 1).text : null;
+            const nextLineText = endLineNum < document.lineCount - 1 ? document.lineAt(endLineNum + 1).text : null;
+            
+            smartContext = {
+                previousSiblingText: prevLineText,
+                nextSiblingText: nextLineText,
+            };
         }
     }
 

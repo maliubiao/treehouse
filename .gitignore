@@ -63,3 +63,6 @@ obsidian
 __pycache__
 obsidian
 *__pycache__
+
+tools/claude_code_proxy/*.env
+tools/claude_code_proxy/config.yml
