@@ -11,8 +11,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, List, Optional
 
-import yaml
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from debugger.tracer import TraceConfig, color_wrap, start_trace, stop_trace
 
@@ -184,6 +182,8 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         if not config_args.config.exists():
             raise FileNotFoundError(f"配置文件不存在: {config_args.config}")
         with open(config_args.config, "r", encoding="utf-8") as f:
+            import yaml
+
             try:
                 config_from_file = yaml.safe_load(f) or {}
             except yaml.YAMLError as e:
@@ -354,7 +354,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
 
         log_dir = Path(__file__).parent / "logs"
         # 报告路径将在 `tracer.stop()` 后确定
-        # report_path = log_dir / config.report_name
+        report_path = log_dir / config.report_name
 
         print(color_wrap("\n📝 调试功能:", "line"))
         print(color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
@@ -365,7 +365,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
         print(color_wrap("  ✓ 多线程跟踪支持", "return"))
         print(color_wrap(f"\n📂 调试日志路径: {log_dir / 'debug.log'}", "line"))
-        # print(color_wrap(f"📂 报告文件路径: {report_path}\n", "line"))
+        print(color_wrap(f"📂 报告文件路径: {report_path.parent / Path(report_path.stem + '.log')}\n", "line"))
 
         original_argv = sys.argv.copy()
         exit_code = 0
@@ -374,6 +374,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
 
         try:
             tracer = start_trace(target_path_for_config, config=config)
+
             execute_target(target_script, target_module, args["script_args"])
         except KeyboardInterrupt:
             print(color_wrap("\n🛑 用户中断调试过程", "error"))

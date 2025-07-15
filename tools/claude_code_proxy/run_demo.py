@@ -31,7 +31,7 @@ MODEL = "claude-3-5-sonnet-20240620"  # A generic model name to be mapped by the
 # -----------------------------------------------------------------------------
 # Test functions
 # -----------------------------------------------------------------------------
-def test_non_streaming_simple_message(client: anthropic.Anthantic) -> None:
+def test_non_streaming_simple_message(client: anthropic.Anthropic) -> None:
     """Test a simple non-streaming chat completion."""
     logger.info("=== Testing Non-Streaming Simple Message ===")
     try:
