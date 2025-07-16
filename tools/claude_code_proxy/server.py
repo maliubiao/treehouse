@@ -13,10 +13,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from . import response_translator_v2 as response_translator
-from .batch_translator import (
-    translate_anthropic_batch_to_openai,
-    translate_openai_batch_to_anthropic,
-)
+
+# from .batch_translator import (
+#     # translate_anthropic_batch_to_openai, # W0611: Unused import
+#     # translate_openai_batch_to_anthropic, # W0611: Unused import
+# )
 from .config_manager import ProviderConfig, config_manager
 from .logger import RequestLogger, SSEDebugLogger, get_logger, setup_logging
 from .models_anthropic import (
@@ -161,8 +162,10 @@ from debugger.tracer import TraceConfig, TraceContext
 
 @app.post("/v1/messages")
 async def messages_proxy(request: Request) -> Response:
-    with TraceContext(TraceConfig(enable_var_trace=True, target_files=["*.py"], report_name="messages.html")):
-        request_id = str(uuid.uuid4())
+    request_id = str(uuid.uuid4())
+    with TraceContext(
+        TraceConfig(enable_var_trace=True, target_files=["*.py"], report_name=f"messages-{request_id}.html")
+    ):
         try:
             body = await request.json()
             request_logger.log_request_received(request_id, request, body)

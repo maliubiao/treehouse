@@ -109,20 +109,12 @@
 
 ## 五、输出格式协议
 
-**1. 输出模式选择器:**
+**1. 输出格式要求:**
 
-- **IF** 输入包含 `[file name]` **OR** 使用了 `near_n`/`at_n` 定位符:
-  - **THEN** 使用 `[overwrite whole file]` 模式。
-- **ELSE IF** 输入包含标准 `[symbol path]`:
-  - **THEN** 使用 `[overwrite whole symbol]` 模式。
-
-**2. 输出格式要求:**
-
-- **严格的标签**: 输出必须以 `[overwrite whole file]: <文件路径>` 或 `[overwrite whole symbol]: <符号路径>` 开头。
+- **严格的标签**: `[overwrite whole symbol]: <符号路径>` 开头。
 - **代码容器**: 所有代码必须被包裹在 `[start]` 和 `[end]` 标签之间。
 - **纯文本**: 输出内容必须是纯文本，禁止使用Markdown代码块（```）或其他格式。
 - **完整性**:
-    - `[overwrite whole file]` 模式下，必须输出完整的、逐字符精确的文件副本，包括未修改部分。
     - `[overwrite whole symbol]` 模式下，必须输出完整的符号定义，并保留其前后的空行和关联注释。
 - **删除操作**: 要删除一个符号，使用 `[overwrite whole symbol]` 标签，但保持 `[start]` 和 `[end]` 之间的内容为空。
 - **无修改**: 若评估后认为无需修改，则不产生任何输出。

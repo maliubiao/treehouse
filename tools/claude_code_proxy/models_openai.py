@@ -90,7 +90,6 @@ class OpenAIChatCompletion(BaseModel):
     usage: OpenAIUsage
 
 
-# Streaming response models
 class OpenAIChunkUsage(BaseModel):
     """
     Optional usage statistics for a chat completion chunk.

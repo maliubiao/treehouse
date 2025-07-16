@@ -15,7 +15,6 @@ from .models_anthropic import (
     MessageStartEvent,
     MessageStopEvent,
     SignatureDelta,
-    TextDelta,
     ThinkingDelta,
 )
 from .models_openai import (
@@ -40,12 +39,14 @@ def_choice = OpenAIChoiceDelta(index=0, delta=OpenAIChatMessageDelta(), finish_r
 
 def assert_event_types(events: List[BaseModel], expected_types: List[type]):
     """Asserts that the produced events have the expected types in order."""
-    assert len(events) == len(expected_types), f"Expected {len(expected_types)} events, but got {len(events)}"
+    assert len(events) == len(expected_types), (
+        f"Expected {len(expected_types)} events, but got {len(events)}: {[type(e) for e in events]}"
+    )
     for i, (event, expected_type) in enumerate(zip(events, expected_types)):
         assert isinstance(event, expected_type), f"Event {i} was {type(event)}, expected {expected_type}"
 
 
-def test_start_stream(translator: OpenAIToAnthropicStreamTranslator):
+def test_start_stream(translator: OpenAIToAnthropicStreamTranslator):  # pylint: disable=redefined-outer-name
     """Test the initial message_start event."""
     events = translator.start()
     assert_event_types(events, [MessageStartEvent])
@@ -225,7 +226,7 @@ def test_thinking_generation(translator: OpenAIToAnthropicStreamTranslator):
 
 
 def test_interleaved_content(translator: OpenAIToAnthropicStreamTranslator):
-    """Test a stream with text followed by a tool call."""
+    """Test a stream with text followed by a standard tool call."""
     # Text part
     text_chunk = OpenAIChatCompletionChunk(
         id="c1",
@@ -262,6 +263,86 @@ def test_interleaved_content(translator: OpenAIToAnthropicStreamTranslator):
     assert tool_events[1].content_block.type == "tool_use"
     assert translator._active_block_type == "tool_use"
     assert translator._active_block_index == 1  # Block index should have incremented
+
+
+def test_custom_tool_call_in_text_stream(translator: OpenAIToAnthropicStreamTranslator):
+    """Tests parsing of custom tool call format embedded in text."""
+    # Chunk 1: Text before and start of custom tool call
+    chunk1_content = 'Here is the tool: |tool_call_begin|>functions.MyTool:1<|tool_call_argument_begin|>{"arg":'
+    chunk1 = OpenAIChatCompletionChunk(
+        id="c1",
+        created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[OpenAIChoiceDelta(index=0, delta=OpenAIChatMessageDelta(content=chunk1_content), finish_reason=None)],
+    )
+    events1 = translator.process_chunk(chunk1)
+    # Emits text part immediately, buffers the partial tool call
+    assert_event_types(events1, [ContentBlockStartEvent, ContentBlockDeltaEvent])
+    assert events1[1].delta.text == "Here is the tool: "
+    assert translator._text_buffer == '|tool_call_begin|>functions.MyTool:1<|tool_call_argument_begin|>{"arg":'
+
+    # Chunk 2: End of custom tool call and more text
+    chunk2_content = ' "value"}<|tool_call_end|>And here is more text.'
+    chunk2 = OpenAIChatCompletionChunk(
+        id="c2",
+        created=2,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[OpenAIChoiceDelta(index=0, delta=OpenAIChatMessageDelta(content=chunk2_content), finish_reason=None)],
+    )
+    events2 = translator.process_chunk(chunk2)
+    # Text block stop, tool start, tool delta, tool stop, text start, text delta
+    assert_event_types(
+        events2,
+        [
+            ContentBlockStopEvent,
+            ContentBlockStartEvent,
+            ContentBlockDeltaEvent,
+            ContentBlockStopEvent,
+            ContentBlockStartEvent,
+            ContentBlockDeltaEvent,
+        ],
+    )
+    # Tool block events
+    assert events2[1].content_block.type == "tool_use"
+    assert events2[1].content_block.id == "custom_tool_1"
+    assert events2[1].content_block.name == "MyTool"
+    assert isinstance(events2[2].delta, InputJsonDelta)
+    assert events2[2].delta.partial_json == '{"arg": "value"}'
+    # Final text block events
+    assert events2[4].content_block.type == "text"
+    assert events2[5].delta.text == "And here is more text."
+    assert translator._text_buffer == ""
+
+
+def test_finalize_with_incomplete_custom_tool_call(translator: OpenAIToAnthropicStreamTranslator):
+    """Tests that an incomplete custom tool tag is flushed as text on finalization."""
+    chunk = OpenAIChatCompletionChunk(
+        id="c1",
+        created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(content="|tool_call_begin|>incomplete..."),
+                finish_reason=None,
+            )
+        ],
+    )
+    # process_chunk will buffer this, as it looks like a partial tag
+    translator.process_chunk(chunk)
+    assert translator._text_buffer == "|tool_call_begin|>incomplete..."
+
+    final_events = translator.finalize()
+    # Expect: new text block, text delta, stop block, message delta, message stop
+    assert_event_types(
+        final_events,
+        [ContentBlockStartEvent, ContentBlockDeltaEvent, ContentBlockStopEvent, MessageDeltaEvent, MessageStopEvent],
+    )
+    assert final_events[0].content_block.type == "text"
+    assert final_events[1].delta.text == "|tool_call_begin|>incomplete..."
 
 
 def test_usage_reporting(translator: OpenAIToAnthropicStreamTranslator):

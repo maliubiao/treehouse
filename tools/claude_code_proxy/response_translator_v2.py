@@ -77,6 +77,7 @@ class OpenAIToAnthropicStreamTranslator:
         self._active_block_index: Optional[int] = None
         self._active_block_content: str = ""
         self._active_tool_info: Dict[int, Dict[str, Any]] = {}
+        self._text_buffer: str = ""
 
     def start(self) -> List[BaseModel]:
         """Generates the initial message_start event."""
@@ -150,16 +151,124 @@ class OpenAIToAnthropicStreamTranslator:
         )
         return events
 
+    def _process_text_buffer(self) -> List[BaseModel]:
+        """
+        Processes the internal text buffer, handling plain text and custom
+        embedded tool calls.
+        """
+        events: List[BaseModel] = []
+        start_tags = ["|tool_call_begin|>", "|tool_calls_section_begin|>"]
+        end_tag = "<|tool_call_end|>"
+        arg_split_tag = "<|tool_call_argument_begin|>"
+
+        while True:
+            # Find the earliest occurrence of any start tag
+            first_start_index = -1
+            found_start_tag = None
+            for tag in start_tags:
+                index = self._text_buffer.find(tag)
+                if index != -1 and (first_start_index == -1 or index < first_start_index):
+                    first_start_index = index
+                    found_start_tag = tag
+
+            if first_start_index == -1:
+                # No more custom tool calls found, process remaining buffer as plain text.
+                if self._text_buffer:
+                    if self._active_block_type != "text":
+                        events.extend(self._start_new_block("text"))
+                    self._active_block_content += self._text_buffer
+                    if self._active_block_index is not None:
+                        events.append(
+                            ContentBlockDeltaEvent(
+                                type="content_block_delta",
+                                index=self._active_block_index,
+                                delta=TextDelta(type="text_delta", text=self._text_buffer),
+                            )
+                        )
+                    self._text_buffer = ""
+                break  # Exit loop
+
+            # Process text before the custom tool call tag.
+            text_before = self._text_buffer[:first_start_index]
+            if text_before:
+                if self._active_block_type != "text":
+                    events.extend(self._start_new_block("text"))
+                self._active_block_content += text_before
+                if self._active_block_index is not None:
+                    events.append(
+                        ContentBlockDeltaEvent(
+                            type="content_block_delta",
+                            index=self._active_block_index,
+                            delta=TextDelta(type="text_delta", text=text_before),
+                        )
+                    )
+
+            # Check for a complete custom tool call tag.
+            end_index = self._text_buffer.find(end_tag, first_start_index)
+            if end_index == -1:
+                # Incomplete tag, leave it in the buffer and wait for more data.
+                self._text_buffer = self._text_buffer[first_start_index:]
+                break
+
+            # A complete tag is found.
+            assert found_start_tag is not None
+            full_tag_string = self._text_buffer[first_start_index : end_index + len(end_tag)]
+            inner_content = self._text_buffer[first_start_index + len(found_start_tag) : end_index]
+
+            tool_call_parsed = False
+            try:
+                arg_split_index = inner_content.find(arg_split_tag)
+                if arg_split_index != -1:
+                    header = inner_content[:arg_split_index]
+                    args_json = inner_content[arg_split_index + len(arg_split_tag) :]
+
+                    func_name_part, tool_id_str = header.rsplit(":", 1)
+                    func_name = func_name_part.split(".")[-1] if "." in func_name_part else func_name_part
+                    tool_id = f"custom_tool_{tool_id_str}"
+
+                    # Close active text block, then create the full tool block
+                    events.extend(self._close_active_block())
+                    tool_info = {"id": tool_id, "name": func_name}
+                    events.extend(self._start_new_block("tool_use", tool_info=tool_info))
+
+                    if self._active_block_index is not None:
+                        # self._active_tool_info is for standard tool calls, but let's be safe
+                        self._active_tool_info[self._active_block_index] = tool_info
+                        events.append(
+                            ContentBlockDeltaEvent(
+                                type="content_block_delta",
+                                index=self._active_block_index,
+                                delta=InputJsonDelta(type="input_json_delta", partial_json=args_json),
+                            )
+                        )
+                    events.extend(self._close_active_block())
+                    tool_call_parsed = True
+            except Exception as e:
+                logger.warning(f"Could not parse custom tool call: '{inner_content}'. Error: {e}. Treating as text.")
+
+            if not tool_call_parsed:
+                if self._active_block_type != "text":
+                    events.extend(self._start_new_block("text"))
+                self._active_block_content += full_tag_string
+                if self._active_block_index is not None:
+                    events.append(
+                        ContentBlockDeltaEvent(
+                            type="content_block_delta",
+                            index=self._active_block_index,
+                            delta=TextDelta(type="text_delta", text=full_tag_string),
+                        )
+                    )
+
+            self._text_buffer = self._text_buffer[end_index + len(end_tag) :]
+        return events
+
     def process_chunk(self, chunk: OpenAIChatCompletionChunk) -> List[BaseModel]:
         """Processes a single OpenAI chunk and returns a list of Anthropic events."""
         events: List[BaseModel] = []
 
-        # First, handle usage data if present in the chunk.
-        # This usually appears in the last or second-to-last chunk.
         if chunk.usage and not self.usage_handled:
             self.output_tokens = chunk.usage.completion_tokens or 0
             self.input_tokens = chunk.usage.prompt_tokens or 0
-            # This is a simplification; a more robust solution might handle detailed token counts
             self.usage_handled = True
 
         if not chunk.choices:
@@ -178,68 +287,92 @@ class OpenAIToAnthropicStreamTranslator:
             if self._active_block_type != "thinking":
                 events.extend(self._start_new_block("thinking"))
             self._active_block_content += delta.reasoning_content
-            events.append(
-                ContentBlockDeltaEvent(
-                    type="content_block_delta",
-                    index=self._active_block_index,
-                    delta=ThinkingDelta(type="thinking_delta", thinking=delta.reasoning_content),
+            if self._active_block_index is not None:
+                events.append(
+                    ContentBlockDeltaEvent(
+                        type="content_block_delta",
+                        index=self._active_block_index,
+                        delta=ThinkingDelta(type="thinking_delta", thinking=delta.reasoning_content),
+                    )
                 )
-            )
 
-        # Handle Text Content
-        if delta.content:
-            if self._active_block_type != "text":
-                events.extend(self._start_new_block("text"))
-            self._active_block_content += delta.content
-            events.append(
-                ContentBlockDeltaEvent(
-                    type="content_block_delta",
-                    index=self._active_block_index,
-                    delta=TextDelta(type="text_delta", text=delta.content),
-                )
-            )
-
-        # Handle Tool Calls
+        # Handle Standard Tool Calls
         if delta.tool_calls:
+            # A standard tool call implies any previous block should be closed.
+            if self._active_block_type is not None and self._active_block_type != "tool_use":
+                events.extend(self._close_active_block())
+
             for tc_chunk in delta.tool_calls:
                 tool_index = tc_chunk.index
-                # If this is the start of a new tool call
+                # Is this the start of a new tool call?
                 if self._active_tool_info.get(tool_index) is None:
-                    # A new tool call must have id and name
                     if tc_chunk.id and tc_chunk.function and tc_chunk.function.name:
                         tool_info = {"id": tc_chunk.id, "name": tc_chunk.function.name}
                         self._active_tool_info[tool_index] = tool_info
                         events.extend(self._start_new_block("tool_use", tool_info=tool_info))
 
-                # Append arguments to the active tool call
                 if tc_chunk.function and tc_chunk.function.arguments:
                     if self._active_block_type != "tool_use":
-                        logger.warning(
-                            "Received tool arguments for non-active tool block. State might be inconsistent."
-                        )
+                        # This can happen if a new tool call arrives but we are in text/thinking.
+                        # The block was already closed above, so we might need to find the right one.
+                        # For now, we assume sequential, non-interleaved standard tool calls.
+                        logger.warning("Received tool arguments for non-active tool block.")
                         continue
-                    events.append(
-                        ContentBlockDeltaEvent(
-                            type="content_block_delta",
-                            index=self._active_block_index,
-                            delta=InputJsonDelta(
-                                type="input_json_delta",
-                                partial_json=tc_chunk.function.arguments,
-                            ),
+                    if self._active_block_index is not None:
+                        events.append(
+                            ContentBlockDeltaEvent(
+                                type="content_block_delta",
+                                index=self._active_block_index,
+                                delta=InputJsonDelta(
+                                    type="input_json_delta",
+                                    partial_json=tc_chunk.function.arguments,
+                                ),
+                            )
                         )
-                    )
+
+        # Handle Text Content (including custom embedded tool calls)
+        if delta.content:
+            # If we receive text content, it must close any open tool calls
+            if self._active_block_type == "tool_use":
+                events.extend(self._close_active_block())
+            self._text_buffer += delta.content
+            events.extend(self._process_text_buffer())
 
         return events
 
     def finalize(self) -> List[BaseModel]:
         """Generates the final events to properly close the stream."""
-        events = self._close_active_block()
+        events: List[BaseModel] = []
+        # If stream ends with data in buffer (e.g., incomplete custom tag), flush as text.
+        if self._text_buffer:
+            logger.warning(f"Flushing text buffer with unprocessed content at end of stream: '{self._text_buffer}'")
+            if self._active_block_type != "text":
+                events.extend(self._start_new_block("text"))
+            if self._active_block_index is not None:
+                events.append(
+                    ContentBlockDeltaEvent(
+                        type="content_block_delta",
+                        index=self._active_block_index,
+                        delta=TextDelta(type="text_delta", text=self._text_buffer),
+                    )
+                )
+            self._active_block_content += self._text_buffer
+            self._text_buffer = ""
+
+        events.extend(self._close_active_block())
 
         stop_reason_map = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool_use"}
         final_reason = stop_reason_map.get(self.finish_reason or "", "end_turn")
 
-        # If tool calls were made, the reason should be tool_use unless it was cut off by length
-        if self._active_tool_info and final_reason != "max_tokens":
+        # Anthropic's "tool_use" is for when the model's turn ends with one or more tool_use blocks.
+        if self._next_block_index > 0:  # if any blocks were created
+            last_block_was_tool = any(
+                isinstance(e, ContentBlockStartEvent) and e.content_block.type == "tool_use" for e in reversed(events)
+            )
+            if last_block_was_tool and final_reason != "max_tokens":
+                final_reason = "tool_use"
+
+        if self.finish_reason == "tool_calls":
             final_reason = "tool_use"
 
         events.append(
@@ -320,7 +453,55 @@ def translate_openai_to_anthropic_non_stream(
         content.append(AnthropicThinkingContent(type="thinking", thinking=message.reasoning_content))
 
     if message.content:
-        content.append(AnthropicTextContent(type="text", text=message.content))
+        # Here we must also parse for custom tool calls, even in non-streaming mode.
+        text_buffer = message.content
+        start_tags = ["|tool_call_begin|>", "|tool_calls_section_begin|>"]
+        end_tag = "<|tool_call_end|>"
+        arg_split_tag = "<|tool_call_argument_begin|>"
+
+        while text_buffer:
+            first_start_index = -1
+            found_start_tag = None
+            for tag in start_tags:
+                index = text_buffer.find(tag)
+                if index != -1 and (first_start_index == -1 or index < first_start_index):
+                    first_start_index = index
+                    found_start_tag = tag
+
+            if first_start_index == -1:
+                if text_buffer:
+                    content.append(AnthropicTextContent(type="text", text=text_buffer))
+                break
+
+            text_before = text_buffer[:first_start_index]
+            if text_before:
+                content.append(AnthropicTextContent(type="text", text=text_before))
+
+            end_index = text_buffer.find(end_tag, first_start_index)
+            if end_index == -1:
+                # Incomplete tag, treat as text
+                content.append(AnthropicTextContent(type="text", text=text_buffer[first_start_index:]))
+                break
+
+            assert found_start_tag is not None
+            inner_content = text_buffer[first_start_index + len(found_start_tag) : end_index]
+
+            try:
+                arg_split_index = inner_content.find(arg_split_tag)
+                header = inner_content[:arg_split_index]
+                args_json = inner_content[arg_split_index + len(arg_split_tag) :]
+                args = json.loads(args_json)
+                func_name_part, tool_id_str = header.rsplit(":", 1)
+                func_name = func_name_part.split(".")[-1] if "." in func_name_part else func_name_part
+                tool_id = f"custom_tool_{tool_id_str}"
+                content.append(AnthropicToolUseContent(type="tool_use", id=tool_id, name=func_name, input=args))
+            except Exception:
+                # Fallback to text if parsing fails
+                content.append(
+                    AnthropicTextContent(type="text", text=text_buffer[first_start_index : end_index + len(end_tag)])
+                )
+
+            text_buffer = text_buffer[end_index + len(end_tag) :]
 
     if message.tool_calls:
         for tool_call in message.tool_calls:
@@ -346,7 +527,7 @@ def translate_openai_to_anthropic_non_stream(
         type="message",
         role="assistant",
         model=openai_response.model,
-        content=content,
+        content=content,  # type: ignore
         stop_reason=stop_reason,
         usage=usage,
     )

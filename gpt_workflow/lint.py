@@ -15,11 +15,13 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
 
-import llm_query
 from llm_query import (
-    CmdNode,
+    GPT_FLAG_PATCH,
+    GPT_FLAGS,
+    GPT_SYMBOL_PATCH,
+    GPT_VALUE_STORAGE,
     ModelSwitch,
-    generate_patch_prompt,
+    PatchPromptBuilder,
     process_patch_response,
 )
 from tree_libs.app import (
@@ -128,33 +130,48 @@ class LintParser:
 class LintReportFix:
     """根据Lint检查结果自动生成修复补丁"""
 
-    _MAX_CONTEXT_SPAN = 100  # 最大上下文跨度行数
-
     def __init__(self, model_switch: Optional[ModelSwitch] = None) -> None:
         self.model_switch = model_switch or ModelSwitch()
 
-    def _build_prompt(self, symbol: Dict, symbol_map: Dict) -> str:
-        """构建合并后的提示词模板"""
-        group: list[LintResult] = symbol.get("own_errors", [])
-        errors_desc = "\n\n".join(
-            f"错误代码: {res.code}\n描述: {res.message}\n原代码行: {res.original_line}" for res in group
-        )
-        base_prompt = generate_patch_prompt(
-            CmdNode(command="symbol", args=[symbol["name"]]),
-            symbol_map,
-            patch_require=True,
-        )
-
-        return f"{base_prompt}\n{errors_desc}\n不破坏编程接口，避免无法通过测试\n"
-
     def fix_symbol(self, symbol: Dict, symbol_map: Dict) -> None:
-        """生成批量修复建议"""
-        prompt = self._build_prompt(symbol, symbol_map)
-        print(prompt)
-        response = self.model_switch.query("coder", prompt)
+        """使用PatchPromptBuilder生成并应用修复建议"""
+        # 1. 从lint错误为AI准备用户需求
+        group: list[LintResult] = symbol.get("own_errors", [])
+        errors_desc = "\n".join(
+            f"- (代码: {res.code}): {res.message}\n  在行: {res.original_line.strip()}" for res in group
+        )
+
+        user_requirement = (
+            f"请根据以下pylint错误信息，修复符号 '{symbol['name']}'。\n\n"
+            f"待修复的错误：\n"
+            f"-------------------\n"
+            f"{errors_desc}\n"
+            f"-------------------\n\n"
+            "修复要求：\n"
+            f"1. 必须只修改目标符号 `{symbol['name']}` 的代码。\n"
+            "2. 必须保持函数/方法的签名不变，以确保API兼容性。\n"
+            "3. 修复代码以解决上述所有lint问题。\n"
+        )
+
+        # 2. 设置并使用PatchPromptBuilder
+        GPT_FLAGS[GPT_FLAG_PATCH] = True
+        max_tokens = (
+            self.model_switch.current_config.max_context_size * 3 if self.model_switch.current_config else 8000 * 3
+        )
+
+        builder = PatchPromptBuilder(use_patch=True, symbols=[], tokens_left=max_tokens)
+        builder.process_search_results(symbol_map)
+
+        # 3. 构建提示并查询模型
+        prompt = builder.build(user_requirement=user_requirement)
+        print(prompt)  # 用于调试，可观察最终提示
+
+        response = self.model_switch.query("coder", prompt, stream=True)
+
+        # 4. 处理响应并应用补丁
         process_patch_response(
             response,
-            symbol_map,
+            GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH],
             auto_commit=False,
             auto_lint=False,
         )
@@ -169,6 +186,7 @@ class PylintFixer:
         auto_apply: bool = False,
         root_dir: Optional[Path] = None,
         git_hint: str = "",
+        max_file_fix_iterations: int = 5,  # Add max iterations to prevent infinite loops
     ):
         self.log_path = Path(linter_log_path) if linter_log_path else None
         self.results: list[LintResult] = []
@@ -177,6 +195,7 @@ class PylintFixer:
         self.auto_apply = auto_apply
         self.root_dir = root_dir if root_dir is not None else Path.cwd().resolve()
         self.git_hint = git_hint
+        self.max_file_fix_iterations = max_file_fix_iterations
 
     def _get_pylint_args(self) -> List[str]:
         """获取pylint的配置参数"""
@@ -211,16 +230,14 @@ class PylintFixer:
                         check=True,
                     )
 
-                # 准备pylint参数
                 pylint_args = self._get_pylint_args()
-
-                # 一次性对所有文件执行pylint
-                pylint_files = files_result.stdout.splitlines() if files_result else []
-                if not pylint_files:
+                pylint_files_relative = list(dict.fromkeys(files_result.stdout.splitlines())) if files_result else []
+                if not pylint_files_relative:
                     log_content = ""
                 else:
+                    pylint_files_absolute = [str(self.root_dir / f) for f in pylint_files_relative]
                     result = subprocess.run(
-                        ["pylint", *pylint_args, *pylint_files],
+                        ["pylint", *pylint_args, *pylint_files_absolute],
                         capture_output=True,
                         text=True,
                         cwd=self.root_dir,
@@ -242,6 +259,10 @@ class PylintFixer:
                 with open(self.log_path, "r", encoding="utf-8") as f:
                     log_content = f.read()
                 self.results = LintParser.parse(log_content)
+                # Ensure all paths are absolute, resolving against root_dir
+                for r in self.results:
+                    if not Path(r.file_path).is_absolute():
+                        r.file_path = str((self.root_dir / r.file_path).resolve())
             except OSError as e:
                 raise RuntimeError(f"读取日志文件失败: {e}") from e
 
@@ -376,7 +397,10 @@ class PylintFixer:
             self.results = [r for r in self.results if r.file_path != file_path] + new_results
 
             # 更新file_groups
-            self.file_groups[file_path] = new_results
+            if new_results:
+                self.file_groups[file_path] = new_results
+            elif file_path in self.file_groups:
+                del self.file_groups[file_path]
 
         except Exception as e:
             print(f"重新运行pylint失败 for {file_path}: {str(e)}")
@@ -384,10 +408,23 @@ class PylintFixer:
 
     def _process_symbols_for_file(self, file_path: str) -> None:
         """处理单个文件的所有符号，使用迭代修复循环"""
+        iteration_count = 0
         while self.file_groups.get(file_path):
+            iteration_count += 1
+            print(f"\n--- Processing {file_path} (Iteration {iteration_count}/{self.max_file_fix_iterations}) ---")
+
+            if iteration_count > self.max_file_fix_iterations:
+                print(
+                    f"警告: 已达到对文件 {file_path} 的最大修复尝试次数 ({self.max_file_fix_iterations})，跳过剩余错误。"
+                )
+                break
+
             parser_util, code_map = self.update_symbol_map(file_path)
             locations = self._get_symbol_locations(file_path)
             if not locations:
+                # No lint errors found in this iteration for this file, break.
+                # This should ideally be caught by `while self.file_groups.get(file_path)`
+                # but adding for robustness.
                 break
 
             symbol_map = self._associate_errors_with_symbols(file_path, parser_util, code_map, locations)
@@ -395,18 +432,26 @@ class PylintFixer:
             # 获取有错误的symbols，按起始行排序（从上到下修复）
             symbols_with_errors = [s for s in symbol_map.values() if s.get("own_errors")]
             if not symbols_with_errors:
+                # All errors seem to be resolved for this file based on current analysis.
+                print(f"文件 {file_path} 在本轮未发现需要修复的符号级错误。")
                 break
 
-            symbols_with_errors.sort(key=lambda s: min(l[0] for l in s["locations"]))
-
             # 处理第一个有错误的symbol
-            symbol = symbols_with_errors[0]
-            self._process_symbol_group(symbol, symbol_map)
+            symbol_to_fix = symbols_with_errors[0]
+            print(f"尝试修复符号: {symbol_to_fix['name']}")
+            self._process_symbol_group(symbol_to_fix, symbol_map)
 
             # 修复后重新运行pylint更新错误列表
+            print(f"\n验证 {file_path} 的修复结果，重新运行pylint...")
             self._rerun_pylint_for_file(file_path)
 
-        print(f"Finished processing {file_path}")
+        if not self.file_groups.get(file_path):
+            print(f"\n文件 {file_path} 的所有Lint错误已解决。")
+        else:
+            print(f"\n文件 {file_path} 仍存在未解决的Lint错误，请手动检查。")
+            current_errors = self.file_groups.get(file_path, [])
+            for err in current_errors:
+                print(f"  - L{err.line}: {err.code}: {err.message}")
 
     def execute(self) -> None:
         """执行完整的修复流程"""
@@ -425,7 +470,10 @@ class PylintFixer:
 
         for file_path in selected_files:
             if file_path in self.file_groups:
+                print(f"\n--- 开始处理文件: {file_path} ---")
                 self._process_symbols_for_file(file_path)
+            else:
+                print(f"\n文件 {file_path} 在选中后没有发现Pylint错误，跳过处理。")
 
         print("\n修复流程完成")
 
