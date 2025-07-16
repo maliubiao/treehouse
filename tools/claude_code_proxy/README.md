@@ -110,6 +110,7 @@ providers:
 - **Python 执行追踪**：Python 脚本和模块执行的详细分析
 - **导入路径查找器**：模块结构和导入路径的自动发现
 - **实时调试**：代理操作和 API 转换的实时监控
+- **增强响应转换调试**：支持推理内容和自定义工具调用格式追踪
 
 ### 可用诊断命令
 
@@ -123,6 +124,9 @@ python -m claude_code_proxy.main --config my_config.yml
 
 # 用于性能分析的追踪
 python -m claude_code_proxy.src.tracer_mcp_server
+
+# 测试响应转换器（新的v2版本）
+python -m tests.claude_code_proxy_tests.test_response_translator_v2 -v
 ```
 
 ### 配置验证
@@ -318,3 +322,74 @@ MIT 许可证 - 有关详情，请参阅 LICENSE 文件
 - 错误率监控
 
 在调试模式下运行时通过调试端点访问指标。
+
+## 🔬 增强响应转换（V2版）
+
+代理现在包括一个完全重写的响应转换系统，支持高级功能：
+
+### 🧠 推理内容处理
+自动将提供商的推理/思维内容转换为Anthropic格式：
+- 支持OpenAI风格的`reasoning_content`字段
+- 自动转换为`thinking_delta`和`thinking`内容块
+- 为每个思考块生成SHA-256签名校验
+- 保持流传输的实时解析
+
+```json
+// 输入（OpenAI格式）
+{
+  "delta": {
+    "content": "",
+    "reasoning_content": "让我逐步思考这个问题..."
+  }
+}
+
+// 输出（Anthropic格式）
+{
+  "type": "content_block_start",
+  "index": 0,
+  "content_block": {
+    "type": "thinking",
+    "thinking": ""
+  }
+}
+```
+
+### 🔧 自定义工具调用解析
+支持新的自定义工具调用格式，即使提供商不直接支持标准工具调用：
+
+```
+|tool_call_begin|>工具名称:唯一ID参数|<{tool_argument_begin}>JSON参数字符串<|tool_call_end|>
+```
+
+示例：
+```
+|tool_call_begin|>functions.calculate:123<|tool_call_argument_begin>{"expression": "2+2"}<|tool_call_end|>
+```
+
+### 📊 内容块管理
+- **动态类型转换**：文本、思考内容、工具调用之间的无缝转换
+- **缓冲处理**：正确处理部分和不完整的工具调用标签
+- **错误恢复**：格式错误的工具调用会优雅地降级为文本内容
+- **并行支持**：并发处理多个工具调用
+
+### 🧪 测试能力
+代理包括增强的测试功能：
+
+```bash
+# 运行全面的响应转换测试
+python -m unittest tests.claude_code_proxy_tests.test_response_translator_v2 -v
+
+# 运行带实时跟踪的调试测试
+python -c "
+from unittest import main
+from tests.claude_code_proxy_tests.test_response_translator_v2 import *
+main(module='__main__')
+"
+```
+
+### 📈 性能特征
+新的V2转换器：
+- **状态管理**：每请求独立状态隔离
+- **内存效率**：流式处理，无缓冲累积
+- **时间复杂度**：O(n)，其中n是输出令牌数量
+- **空间复杂度**：O(1)，恒定内存使用
