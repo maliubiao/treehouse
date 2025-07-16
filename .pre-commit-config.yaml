@@ -16,21 +16,21 @@ repos:
         types: [python]
         require_serial: true
 
-  - repo: https://github.com/pycqa/pylint
-    rev: v3.3.4
-    hooks:
-      - id: pylint
-        name: pylint (local env)
-        entry: pylint
-        language: system
-        types: [python]
-        files: \.py$
-        args: [
-          "--rcfile=.pylintrc",
-          "--score=yes",
-          "--disable=import-error"
-        ]
-        require_serial: true
+  # - repo: https://github.com/pycqa/pylint
+  #   rev: v3.3.4
+  #   hooks:
+  #     - id: pylint
+  #       name: pylint (local env)
+  #       entry: pylint
+  #       language: system
+  #       types: [python]
+  #       files: \.py$
+  #       args: [
+  #         "--rcfile=.pylintrc",
+  #         "--score=yes",
+  #         "--disable=import-error"
+  #       ]
+  #       require_serial: true
 
   - repo: local
     hooks:

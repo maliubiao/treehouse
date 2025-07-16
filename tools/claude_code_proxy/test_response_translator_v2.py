@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import List
 
 import pytest
@@ -168,6 +169,92 @@ def test_tool_call_generation(translator: OpenAIToAnthropicStreamTranslator):
     assert final_events[1].delta.stop_reason == "tool_use"
 
 
+def test_escaped_json_string_tool_call(translator: OpenAIToAnthropicStreamTranslator):
+    """Test a tool call stream where arguments are an escaped JSON string."""
+    # Chunk 1: Start of tool call
+    chunk1 = OpenAIChatCompletionChunk(
+        id="c1",
+        created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(
+                    tool_calls=[
+                        OpenAIToolCallDelta(index=0, id="tool_esc", function=OpenAIFunctionCallDelta(name="search"))
+                    ]
+                ),
+            )
+        ],
+    )
+    events1 = translator.process_chunk(chunk1)
+    assert_event_types(events1, [ContentBlockStartEvent])
+    assert events1[0].content_block.type == "tool_use"
+    assert events1[0].content_block.id == "tool_esc"
+
+    whole = json.dumps(json.dumps({"query": ""}))
+    # Chunk 2: First part of escaped arguments. This should trigger the detection.
+    chunk2 = OpenAIChatCompletionChunk(
+        id="c2",
+        created=2,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(
+                    tool_calls=[
+                        OpenAIToolCallDelta(index=0, function=OpenAIFunctionCallDelta(arguments=whole[:2])),
+                    ]
+                ),
+            )
+        ],
+    )
+    events2 = translator.process_chunk(chunk2)
+    # No events should be emitted, as arguments are being buffered.
+    assert_event_types(events2, [])
+    assert translator._active_tool_info[0]["is_escaped_json_string"] is True
+    assert translator._active_tool_info[0]["argument_buffer"] == whole[:2]
+
+    # Chunk 3: Second part of escaped arguments.
+    chunk3 = OpenAIChatCompletionChunk(
+        id="c3",
+        created=3,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(
+                    tool_calls=[
+                        OpenAIToolCallDelta(index=0, function=OpenAIFunctionCallDelta(arguments=whole[2:])),
+                    ]
+                ),
+            )
+        ],
+    )
+    events3 = translator.process_chunk(chunk3)
+    assert_event_types(events3, [])
+    assert translator._active_tool_info[0]["argument_buffer"] == whole
+
+    # Finalize the stream. This should trigger _close_active_block and flush the buffer.
+    translator.finish_reason = "tool_calls"
+    final_events = translator.finalize()
+
+    # Expect [ContentBlockDelta, ContentBlockStop, MessageDelta, MessageStop]
+    assert_event_types(
+        final_events, [ContentBlockDeltaEvent, ContentBlockStopEvent, MessageDeltaEvent, MessageStopEvent]
+    )
+
+    # Check the flushed delta event
+    delta_event = final_events[0]
+    assert isinstance(delta_event, ContentBlockDeltaEvent)
+    assert delta_event.index == 0
+    assert isinstance(delta_event.delta, InputJsonDelta)
+    assert delta_event.delta.partial_json == json.dumps({"query": ""})
+
+
 def test_thinking_generation(translator: OpenAIToAnthropicStreamTranslator):
     """Test a stream generating thinking content, including the signature."""
     # Chunk 1: Thinking part 1
@@ -226,7 +313,7 @@ def test_thinking_generation(translator: OpenAIToAnthropicStreamTranslator):
 
 
 def test_interleaved_content(translator: OpenAIToAnthropicStreamTranslator):
-    """Test a stream with text followed by a standard tool call."""
+    """Test a stream with text followed by a standard tool call, including arguments."""
     # Text part
     text_chunk = OpenAIChatCompletionChunk(
         id="c1",
@@ -239,8 +326,9 @@ def test_interleaved_content(translator: OpenAIToAnthropicStreamTranslator):
     assert_event_types(text_events, [ContentBlockStartEvent, ContentBlockDeltaEvent])
     assert text_events[0].content_block.type == "text"
     assert translator._active_block_type == "text"
+    assert translator._active_block_index == 0
 
-    # Tool call part
+    # Tool call part - name and id
     tool_chunk = OpenAIChatCompletionChunk(
         id="c2",
         created=2,
@@ -258,11 +346,38 @@ def test_interleaved_content(translator: OpenAIToAnthropicStreamTranslator):
         ],
     )
     tool_events = translator.process_chunk(tool_chunk)
-    # Should close the text block and start a tool_use block
+    # Should close the text block (index 0) and start a tool_use block (index 1)
     assert_event_types(tool_events, [ContentBlockStopEvent, ContentBlockStartEvent])
+    assert tool_events[0].index == 0
+    assert tool_events[1].index == 1
     assert tool_events[1].content_block.type == "tool_use"
     assert translator._active_block_type == "tool_use"
-    assert translator._active_block_index == 1  # Block index should have incremented
+    assert translator._active_block_index == 1
+
+    # Tool call part - arguments
+    args_chunk = OpenAIChatCompletionChunk(
+        id="c3",
+        created=3,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(
+                    tool_calls=[
+                        OpenAIToolCallDelta(index=0, function=OpenAIFunctionCallDelta(arguments='{"file": "a.py"}'))
+                    ]
+                ),
+            )
+        ],
+    )
+    args_events = translator.process_chunk(args_chunk)
+    # This should succeed and produce a delta for block 1
+    assert_event_types(args_events, [ContentBlockDeltaEvent])
+    delta_event = args_events[0]
+    assert delta_event.index == 1  # Check it's for the correct (tool) block
+    assert isinstance(delta_event.delta, InputJsonDelta)
+    assert delta_event.delta.partial_json == '{"file": "a.py"}'
 
 
 def test_custom_tool_call_in_text_stream(translator: OpenAIToAnthropicStreamTranslator):
