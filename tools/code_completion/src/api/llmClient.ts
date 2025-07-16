@@ -117,7 +117,7 @@ ${instruction}
  * Includes comprehensive error handling for unbalanced tags and edge cases.
  */
 function cleanResponse(responseText: string): string {
-    let cleanedText = responseText.trim();
+    let cleanedText = responseText
     
     if (!cleanedText) {
         return '';

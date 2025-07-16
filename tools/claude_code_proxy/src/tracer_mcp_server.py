@@ -46,7 +46,7 @@ class TracerMCPServer:
                     "properties": {
                         "target": {
                             "type": "string",
-                            "description": "目标脚本路径或模块名称。例如：'src/main.py' 或 'my_package.module'",
+                            "description": "目标脚本路径或模块名称。例如：'/absolute/path/src/main.py' 或 'my_package.module'",
                         },
                         "target_type": {
                             "type": "string",
@@ -297,6 +297,45 @@ class TracerMCPServer:
             return {}
 
         result = {"path": str(directory), "files": [], "subdirectories": {}}
+
+        # 默认排除隐藏文件/目录及常见开发产物
+        default_excludes = [
+            ".*",  # 隐藏文件/目录
+            "__pycache__",
+            "__pycache__/*",
+            "node_modules",
+            "node_modules/*",
+            "*.pyc",
+            "*.pyo",
+            "*.pyd",
+            ".git",
+            ".git/*",
+            ".pytest_cache",
+            ".pytest_cache/*",
+            ".mypy_cache",
+            ".mypy_cache/*",
+            ".DS_Store",
+            "*.egg-info",
+            "*.egg-info/*",
+            "dist",
+            "dist/*",
+            "build",
+            "build/*",
+            "*.egg",
+            "*.whl",
+            ".tox",
+            ".tox/*",
+            ".coverage",
+            "htmlcov",
+            "htmlcov/*",
+            ".venv",
+            ".venv/*",
+            "venv",
+            "venv/*",
+            ".env",
+            ".env.*",
+        ]
+        exclude_patterns = list(set(exclude_patterns + default_excludes))
 
         try:
             for item in directory.iterdir():

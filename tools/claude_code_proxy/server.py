@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
-from . import response_translator
+from . import response_translator_v2 as response_translator
 from .batch_translator import (
     translate_anthropic_batch_to_openai,
     translate_openai_batch_to_anthropic,
@@ -32,7 +32,6 @@ from .request_translator import get_openai_request_with_reasoning
 setup_logging()
 logger = get_logger("server")
 request_logger = RequestLogger(logger)
-sse_debugger = None
 
 # In-memory storage for batch jobs (in production, use Redis or a database)
 batch_jobs: Dict[str, AnthropicBatchResponse] = {}
@@ -52,13 +51,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     effective_log_level = config.logging.level.upper()
     logging.getLogger("anthropic_proxy").setLevel(effective_log_level)
     logger.info(f"Log level set to {effective_log_level}.")
-
-    # Initialize SSE debugger from config
-    global sse_debugger
-    sse_debugger = SSEDebugLogger(
-        debug_dir=config.logging.sse_debug_dir, enabled=bool(getattr(config.logging, "sse_debug", True))
-    )
-    logger.info(f"SSE debugger initialized: enabled={sse_debugger.enabled}, dir={sse_debugger.debug_dir}")
 
     yield
 
@@ -119,6 +111,8 @@ async def _stream_and_translate_response(
 ) -> AsyncGenerator[str, None]:
     """Handles the full lifecycle of streaming and translating a response."""
     openai_stream_generator = openai_stream_response.aiter_bytes()
+    response_id = f"msg_{uuid.uuid4().hex}"  # Default, may be overwritten by first chunk
+
     try:
         # We need the first chunk to determine the response ID for Anthropic's format.
         first_chunk_bytes = await asyncstdlib.anext(openai_stream_generator, None)
@@ -126,7 +120,6 @@ async def _stream_and_translate_response(
             logger.warning(f"Request {request_id}: Downstream stream was empty.")
             return
 
-        response_id = f"msg_{uuid.uuid4().hex}"  # Default ID
         chunk_str = first_chunk_bytes.decode("utf-8")
         for line in chunk_str.splitlines():
             if line.startswith("data: "):
@@ -145,28 +138,17 @@ async def _stream_and_translate_response(
             async for chunk in openai_stream_generator:
                 yield chunk
 
-        # Translate the complete stream with SSE debugging.
+        # Translate the complete stream.
         async for translated_chunk in response_translator.translate_openai_to_anthropic_stream(
             full_stream(),
             anthropic_request,
             response_id,
-            input_tokens=0,  # Note: Precise input tokens require pre-tokenization.
-            sse_debugger=sse_debugger,
         ):
             yield translated_chunk
-
-        # Ensure we close the stream properly
-        if sse_debugger.enabled:
-            # This would naturally happen in finalize(), but ensure it
-            pass
 
     except Exception as e:
         logger.error(f"Streaming translation error: {e}", extra={"request_id": request_id})
         yield f"data: {json.dumps({'type': 'error', 'error': {'type': 'server_error', 'message': str(e)}})}\n\n"
-
-        # Add error to SSE debug
-        if sse_debugger.enabled:
-            sse_debugger.finish_batch(response_id, {"error": str(e), "status": "error"})
         return
 
     finally:
@@ -174,103 +156,107 @@ async def _stream_and_translate_response(
         logger.info(f"Stream closed for request {request_id}")
 
 
+from debugger.tracer import TraceConfig, TraceContext
+
+
 @app.post("/v1/messages")
 async def messages_proxy(request: Request) -> Response:
-    request_id = str(uuid.uuid4())
-    try:
-        body = await request.json()
-        request_logger.log_request_received(request_id, request, body)
-        anthropic_request = AnthropicRequest.model_validate(body)
-    except (json.JSONDecodeError, ValidationError) as e:
-        request_logger.log_error(request_id, e, {"context": "request_validation"})
-        return _create_error_response(f"Invalid request body: {e}")
+    with TraceContext(TraceConfig(enable_var_trace=True, target_files=["*.py"], report_name="messages.html")):
+        request_id = str(uuid.uuid4())
+        try:
+            body = await request.json()
+            request_logger.log_request_received(request_id, request, body)
+            anthropic_request = AnthropicRequest.model_validate(body)
+        except (json.JSONDecodeError, ValidationError) as e:
+            request_logger.log_error(request_id, e, {"context": "request_validation"})
+            return _create_error_response(f"Invalid request body: {e}")
 
-    # --- Routing Logic ---
-    provider_key = provider_router.route_request(anthropic_request)
-    if not provider_key:
-        msg = f"No provider could be determined for model '{anthropic_request.model}' based on routing rules."
-        request_logger.log_error(request_id, ValueError(msg), {"context": "provider_selection"})
-        return _create_error_response(msg, status_code=404)
+        # --- Routing Logic ---
+        provider_key = provider_router.route_request(anthropic_request)
+        if not provider_key:
+            msg = f"No provider could be determined for model '{anthropic_request.model}' based on routing rules."
+            request_logger.log_error(request_id, ValueError(msg), {"context": "provider_selection"})
+            return _create_error_response(msg, status_code=404)
 
-    provider = provider_router.get_provider_by_key(provider_key)
-    if not provider:
-        msg = f"Provider key '{provider_key}' not found in configuration."
-        request_logger.log_error(request_id, ValueError(msg), {"context": "provider_lookup"})
-        return _create_error_response(msg, status_code=500)
+        provider = provider_router.get_provider_by_key(provider_key)
+        if not provider:
+            msg = f"Provider key '{provider_key}' not found in configuration."
+            request_logger.log_error(request_id, ValueError(msg), {"context": "provider_lookup"})
+            return _create_error_response(msg, status_code=500)
 
-    # --- Model Mapping and Logging ---
-    target_model = provider_router.get_target_model(anthropic_request.model, provider_key)
-    if "INVALID_" in target_model:  # Covers both mapping and config errors
-        return _create_error_response(
-            f"Invalid model mapping for '{anthropic_request.model}' on provider '{provider.name}'. Check logs for details.",
-            status_code=400,
-        )
-
-    logger.info(
-        f"Request {request_id} routed.",
-        extra={
-            "request_id": request_id,
-            "anthropic_model": anthropic_request.model,
-            "provider_key": provider_key,
-            "provider_name": provider.name,
-            "target_model": target_model,
-            "is_stream": anthropic_request.stream,
-            "is_thinking": anthropic_request.thinking and anthropic_request.thinking.type == "enabled",
-        },
-    )
-
-    http_client = provider_router.get_client(provider_key)
-    if not http_client:
-        msg = f"Internal Server Error: HTTP client for provider key '{provider_key}' not found."
-        request_logger.log_error(request_id, RuntimeError(msg), {"context": "client_initialization"})
-        return _create_error_response(msg, error_type="api_error", status_code=500)
-
-    # --- Request Translation ---
-    try:
-        openai_request, extra_body = get_openai_request_with_reasoning(
-            anthropic_request, target_model, provider.model_dump()
-        )
-        request_payload = openai_request.model_dump(exclude_none=True)
-        request_payload.update(extra_body)
-
-        request_logger.log_request_translated(
-            request_id,
-            f"'{anthropic_request.model}' -> '{target_model}' via provider '{provider.name}'",
-            request_payload,
-        )
-    except Exception as e:
-        request_logger.log_error(request_id, e, {"context": "request_translation"})
-        return _create_error_response(f"Error during request translation: {e}", "api_error", 500)
-
-    # --- Execution ---
-    try:
-        if anthropic_request.stream:
-            stream_request = http_client.build_request(
-                "POST", "/chat/completions", json=request_payload, timeout=provider.timeout
+        # --- Model Mapping and Logging ---
+        target_model = provider_router.get_target_model(anthropic_request.model, provider_key)
+        if "INVALID_" in target_model:  # Covers both mapping and config errors
+            return _create_error_response(
+                f"Invalid model mapping for '{anthropic_request.model}' on provider '{provider.name}'. Check logs for details.",
+                status_code=400,
             )
-            openai_stream_response = await http_client.send(stream_request, stream=True)
-            openai_stream_response.raise_for_status()
 
-            logger.info(f"Initiated stream with provider '{provider.name}'", extra={"request_id": request_id})
-            return StreamingResponse(
-                _stream_and_translate_response(openai_stream_response, anthropic_request, request_id),
-                media_type="text/event-stream",
+        logger.info(
+            f"Request {request_id} routed.",
+            extra={
+                "request_id": request_id,
+                "anthropic_model": anthropic_request.model,
+                "provider_key": provider_key,
+                "provider_name": provider.name,
+                "target_model": target_model,
+                "is_stream": anthropic_request.stream,
+                "is_thinking": anthropic_request.thinking and anthropic_request.thinking.type == "enabled",
+            },
+        )
+
+        http_client = provider_router.get_client(provider_key)
+        if not http_client:
+            msg = f"Internal Server Error: HTTP client for provider key '{provider_key}' not found."
+            request_logger.log_error(request_id, RuntimeError(msg), {"context": "client_initialization"})
+            return _create_error_response(msg, error_type="api_error", status_code=500)
+
+        # --- Request Translation ---
+        try:
+            openai_request, extra_body = get_openai_request_with_reasoning(
+                anthropic_request, target_model, provider.model_dump()
             )
-        else:
-            response = await http_client.post("/chat/completions", json=request_payload, timeout=provider.timeout)
-            response.raise_for_status()
-            openai_response = OpenAIChatCompletion.model_validate(response.json())
-            request_logger.log_response_received(request_id, provider.name, openai_response.model_dump())
+            request_payload = openai_request.model_dump(exclude_none=True)
+            request_payload.update(extra_body)
 
-            anthropic_response = response_translator.translate_openai_to_anthropic_non_stream(openai_response)
-            request_logger.log_response_translated(request_id, anthropic_response.model_dump())
+            request_logger.log_request_translated(
+                request_id,
+                f"'{anthropic_request.model}' -> '{target_model}' via provider '{provider.name}'",
+                request_payload,
+            )
+        except Exception as e:
+            request_logger.log_error(request_id, e, {"context": "request_translation"})
+            return _create_error_response(f"Error during request translation: {e}", "api_error", 500)
 
-            return JSONResponse(content=json.loads(anthropic_response.model_dump_json(exclude_none=True)))
-    except httpx.HTTPStatusError as e:
-        return _handle_downstream_error(e, request_id, provider.name)
-    except Exception as e:
-        request_logger.log_error(request_id, e, {"context": "downstream_request"})
-        return _create_error_response(f"An unexpected error occurred: {e}", "api_error", 500)
+        # --- Execution ---
+        try:
+            if anthropic_request.stream:
+                stream_request = http_client.build_request(
+                    "POST", "/chat/completions", json=request_payload, timeout=provider.timeout
+                )
+                openai_stream_response = await http_client.send(stream_request, stream=True)
+                openai_stream_response.raise_for_status()
+
+                logger.info(f"Initiated stream with provider '{provider.name}'", extra={"request_id": request_id})
+                return StreamingResponse(
+                    _stream_and_translate_response(openai_stream_response, anthropic_request, request_id),
+                    media_type="text/event-stream",
+                )
+            else:
+                response = await http_client.post("/chat/completions", json=request_payload, timeout=provider.timeout)
+                response.raise_for_status()
+                openai_response = OpenAIChatCompletion.model_validate(response.json())
+                request_logger.log_response_received(request_id, provider.name, openai_response.model_dump())
+
+                anthropic_response = response_translator.translate_openai_to_anthropic_non_stream(openai_response)
+                request_logger.log_response_translated(request_id, anthropic_response.model_dump())
+
+                return JSONResponse(content=json.loads(anthropic_response.model_dump_json(exclude_none=True)))
+        except httpx.HTTPStatusError as e:
+            return _handle_downstream_error(e, request_id, provider.name)
+        except Exception as e:
+            request_logger.log_error(request_id, e, {"context": "downstream_request"})
+            return _create_error_response(f"An unexpected error occurred: {e}", "api_error", 500)
 
 
 @app.post("/v1/messages/batches")

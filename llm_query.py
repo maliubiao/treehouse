@@ -2624,16 +2624,6 @@ def _display_thought_and_summary(response_text: str):
 
 
 @staticmethod
-@trace(
-    target_files=["*.py"],
-    enable_var_trace=True,
-    report_name="process_patch_response.html",
-    ignore_self=False,
-    ignore_system_paths=True,
-    disable_html=False,
-    source_base_dir=Path(__file__).parent.parent,
-    exclude_functions=["symbol_at_line", "get_symbol_paths", "traverse", "search_exact", "__init__", "insert"],
-)
 def process_patch_response(
     response_text,
     symbol_detail,

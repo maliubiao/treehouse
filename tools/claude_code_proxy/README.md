@@ -1,80 +1,92 @@
-# Anthropic to OpenAI API Proxy
+# 🔄 Anthropic 转 OpenAI API 代理服务器
 
-This project provides a highly flexible and robust proxy server that translates API requests from Anthropic's Messages API format to any OpenAI-compatible Chat Completions API. It's designed for production environments with a focus on configuration-driven routing, multi-provider support, and detailed logging.
+这是一个高度灵活且健壮的代理服务器，将 Anthropic 消息 API 格式的请求转换为任意兼容 OpenAI 的聊天补全 API。专为生产环境设计，专注于配置驱动的路由、多提供商支持和详细日志记录。
 
-## ✨ Key Features
+## ✨ 核心特性
 
--   **Seamless Translation:** Accurately translates Anthropic requests (including streaming, tool use, and batching) to the OpenAI format, and translates responses back.
--   **Full Client Compatibility:** Works out-of-the-box with the official `anthropic` Python client.
--   **Configuration-Driven Routing:** Use a single `config.yml` file to manage all behavior. No code changes needed to add new providers or change routing rules.
--   **Multi-Provider Support:** Route requests to various backends like OpenAI, OpenRouter, SiliconFlow, or local models (like Ollama) simultaneously.
--   **Reasoning-Aware Routing:** Intelligently routes requests with Anthropic's `thinking` parameter to providers that explicitly support reasoning/thinking features. The proxy correctly translates streaming `reasoning_content` into Anthropic `thinking_delta` events.
--   **Dynamic Model Mapping:** Map a single Anthropic model alias (e.g., `claude-3-5-sonnet`) to different target models on different providers (e.g., `openai/gpt-4o` on one, `deepseek/deepseek-r1` on another).
--   **Robustness Features:** Includes a `max_tokens_override` setting to prevent requests from failing on providers with strict token limits.
--   **Structured Logging:** Generates detailed JSON logs for the entire request lifecycle, making it easy to debug routing decisions and provider errors.
+- **无缝转换**：精确转换 Anthropic 请求（包括流式传输、工具使用和批处理）为 OpenAI 格式，并将响应转换回来
+- **完整客户端兼容**：可与官方 `anthropic` Python 客户端开箱即用
+- **配置驱动路由**：使用单个 `config.yml` 文件管理所有行为。无需更改代码即可添加新提供商或更改路由规则
+- **多提供商支持**：同时将请求路由到不同的后端，如 OpenAI、OpenRouter、SiliconFlow 或本地模型（如 Ollama）
+- **推理感知路由**：智能地将带有 Anthropic `thinking` 参数的请求路由到明确支持推理/思维功能的提供商。代理正确地将流式 `reasoning_content` 转换为 Anthropic `thinking_delta` 事件
+- **动态模型映射**：将单个 Anthropic 模型别名（如 `claude-3-5-sonnet`）映射到不同提供商上的不同目标模型（如一个在 `openai/gpt-4o` 上，另一个在 `deepseek/deepseek-r1` 上）
+- **健壮性特性**：包含 `max_tokens_override` 设置，防止在有严格令牌限制的提供商上出现请求失败
+- **结构化日志**：为整个请求生命周期生成详细的 JSON 日志，便于调试路由决策和提供商错误
 
-## 🧠 How It Works: The Routing Logic
 
-The proxy's core strength is its routing engine. When a request for a model (e.g., `claude-3-5-sonnet-20241022`) arrives, the router follows these steps:
+### 高级调试与追踪
+- **Python 代码追踪**：内置 MCP 服务器，支持详细的 Python 代码分析
+- **导入路径分析**：自动发现模块结构和导入语句
+- **执行流跟踪**：API 转换过程的完全可见性
+- **请求/响应调试**：路由决策和提供商交互的实时监控
 
-1.  **Check for Reasoning:** The router first checks if the incoming request has `thinking={"type": "enabled"}`.
-2.  **Reasoning-First Routing:** If `thinking` is requested, the router will *only* consider providers with `supports_reasoning: true` in their configuration. It checks in this order:
-    a. A specific provider defined in `anthropic.model_providers` for the requested model.
-    b. The `anthropic.default_provider`.
-    If no reasoning-capable provider is found, it logs a warning and proceeds to standard routing.
-3.  **Standard Routing:** If `thinking` is not requested (or if no reasoning provider was found), it selects a provider in this order:
-    a.  **Specific Model Mapping:** An entry for the model in `anthropic.model_providers`.
-    b.  **Default Provider:** The `anthropic.default_provider`.
-4.  **Translate and Forward:** The request is translated to the OpenAI format, using the target model name defined in the selected provider's `default_models` map, and sent to the provider's `base_url`.
+### 增强型提供商支持
+- **推理提供商处理**：增强对启用推理功能的提供商（如 DeepSeek R1）支持
+- **流式响应转换**：实时转换推理内容和流式响应
+- **批处理支持**：对 Anthropic 批处理 API 请求的翻译支持
 
-This entire process is logged with a unique request ID, so you can trace exactly why a certain provider was chosen.
+## 🧠 工作原理：路由逻辑
 
-## ⚙️ Configuration (`config.yml`)
+代理的核心优势在于其路由引擎。当对某模型（如 `claude-3-5-sonnet-20241022`）的请求到达时，路由器按以下步骤执行：
 
-All proxy behavior is controlled by a single YAML file. Here is an annotated example based on the project's default `config.yml`:
+1. **检查推理**：路由器首先检查传入请求是否包含 `thinking={"type": "enabled"}`
+2. **优先推理路由**：如果请求了推理功能，路由器将**仅**考虑配置中 `supports_reasoning: true` 的提供商。按以下顺序检查：
+   a. 为请求模型定义的具体提供商（在 `anthropic.model_providers` 中）
+   b. 默认提供商 `anthropic.default_provider`
+   如果未找到支持推理的提供商，将记录警告并继续标准路由
+3. **标准路由**：如果未请求推理功能（或未找到推理提供商），按以下顺序选择提供商：
+   a. **特定模型映射**：`anthropic.model_providers` 中的模型条目
+   b. **默认提供商**：`anthropic.default_provider`
+4. **转换并转发**：使用所选提供商的 `default_models` 映射中定义的目标模型名将请求转换为 OpenAI 格式，并发送到提供商的 `base_url`
+
+整个过程通过唯一请求 ID 记录，因此您可以准确追踪为什么选择特定提供商
+
+## ⚙️ 配置 (`config.yml`)
+
+所有代理行为都由单个 YAML 文件控制。以下是基于项目默认 `config.yml` 的注释示例：
 
 ```yaml
-# Server host and port settings
+# 服务器主机和端口设置
 server:
   host: "127.0.0.1"
   port: 8083
 
-# Logging settings
+# 日志设置
 logging:
-  level: "INFO" # Can be DEBUG, INFO, WARNING, ERROR
+  level: "INFO"  # 可为 DEBUG, INFO, WARNING, ERROR
   dir: "logs"
 
-# Main provider configuration block
+# 主提供商配置模块
 providers:
-  # This section defines the routing rules for incoming Anthropic requests
+  # 此部分定义传入 Anthropic 请求的路由规则
   anthropic:
     name: "Anthropic"
-    # The key of the provider to use if no specific model rule matches below.
+    # 如果没有匹配以下特定模型规则，使用的提供商密钥
     default_provider: "openai_provider1"
-    # Maps specific Anthropic model names to a provider key from openai_providers.
-    # This has higher priority than the default_provider.
+    # 将特定 Anthropic 模型名称映射到 openai_providers 中的提供商密钥
+    # 此优先级高于 default_provider
     model_providers:
-      # Example: "claude-sonnet-4-20250514": "openai_provider3"
+      # 示例: "claude-sonnet-4-20250514": "openai_provider3"
 
-  # This section defines all available downstream OpenAI-compatible providers
+  # 此部分定义所有可用的下游 OpenAI 兼容提供商
   openai_providers:
-    # Key used for reference in the 'anthropic' section above
+    # 以上 anthropic 部分中引用的密钥
     openai_provider1:
-      name: "OpenRouter" # Human-readable name for logs
+      name: "OpenRouter"  # 日志中的人类可读名称
       type: "openai"
       base_url: "https://openrouter.ai/api/v1"
-      api_key: "sk-or-v1-..." # Your provider API key
+      api_key: "sk-or-v1-..."  # 您的提供商 API 密钥
       timeout: 600.0
-      # Maps the incoming Anthropic model name to the actual model on this provider
+      # 将传入的 Anthropic 模型名称映射到该提供商上的实际模型
       default_models:
         "claude-sonnet-4-20250514": "moonshotai/kimi-k2"
-      # Does this provider support a reasoning/thinking feature?
+      # 该提供商是否支持推理/思维功能？
       supports_reasoning: false
-      # If the user requests more tokens than this, the value will be capped.
-      # This prevents errors from providers with hard limits.
+      # 如果用户请求的令牌多于上述值，则值将被限制
+      # 这可防止具有严格限制的提供商出现错误
       max_tokens_override: 4096
 
-    # A second provider, this one supporting reasoning
+    # 第二个提供商，支持推理
     openai_provider3:
       name: "siliconflow-r1"
       type: "openai"
@@ -83,110 +95,226 @@ providers:
       supports_reasoning: true
       default_models:
         "claude-sonnet-4-20250514": "Pro/deepseek-ai/DeepSeek-R1"
-      # Provider-specific config for enabling reasoning
+      # 启用推理的提供商特定配置
       reasoning_config:
         thinking_budget_param: "thinking_budget"
         include_reasoning: true
       max_tokens_override: 8192
 ```
 
-## 🚀 Getting Started
+## 🔍 追踪与调试功能
 
-1.  **Install Dependencies:**
-    From the project root (`terminal-llm/`), install the required packages.
-    ```bash
-    pip install -r tools/claude_code_proxy/requirements.txt
-    ```
+### 内置追踪工具
+代理包括用于 Python 追踪的原生 MCP（模型上下文协议）服务器：
 
-2.  **Create Configuration File:**
-    The project includes `config.yml` as a template. It is recommended to copy it and modify it for your needs.
-    ```bash
-    cp tools/claude_code_proxy/config.yml my_config.yml
-    ```
-    Now, edit `my_config.yml` to:
-    -   Add your provider `api_key` values.
-    -   Adjust `base_url`s and `default_models` mappings.
-    -   Set up your `anthropic` routing rules.
-    -   Add `max_tokens_override` for providers that need token limits.
+- **Python 执行追踪**：Python 脚本和模块执行的详细分析
+- **导入路径查找器**：模块结构和导入路径的自动发现
+- **实时调试**：代理操作和 API 转换的实时监控
 
-3.  **Run the Server:**
-    From the project root, run the `main` module, pointing it to your configuration file.
-    ```bash
-    python -m tools.claude_code_proxy.main --config my_config.yml
-    ```
-    The server will start and print a summary of the loaded providers and routing rules.
+### 可用诊断命令
 
-## 👨‍💻 Usage with the Anthropic Client
+```bash
+# 以最详细级别运行调试日志记录
+python -m claude_code_proxy.main --config my_config.yml --log-level DEBUG
 
-Point the official `anthropic` Python client to your running proxy server.
+# 启用请求/响应追踪
+export TRACE_REQUESTS=true
+python -m claude_code_proxy.main --config my_config.yml
 
-1.  **Install the client:**
-    ```bash
-    pip install anthropic
-    ```
+# 用于性能分析的追踪
+python -m claude_code_proxy.src.tracer_mcp_server
+```
 
-2.  **Configure Environment:**
-    Set the base URL to point to your proxy. The API key can be a dummy value as the proxy uses the keys from your `config.yml`.
-    ```bash
-    export ANTHROPIC_BASE_URL="http://127.0.0.1:8083/v1"
-    export ANTHROPIC_API_KEY="dummy_key"
-    ```
+### 配置验证
+- **自动验证**：启动时的 YAML 配置验证
+- **提供商健康检查**：配置时的提供商连接测试
+- **模型映射检查**：模型名称转换验证
 
-3.  **Example Python Script:**
+## 🚀 快速开始
 
-    ```python
-    import anthropic
+1. **安装依赖**：
+   从项目根目录（`treehouse/`），安装所需包。
+   ```bash
+   pip install -r tools/claude_code_proxy/requirements.txt
+   ```
 
-    # The client automatically uses the environment variables
-    client = anthropic.Anthropic()
+2. **创建配置文件**：
+   项目包含 `config.yml` 作为模板。建议复制并根据需要进行修改。
+   ```bash
+   cd tools/claude_code_proxy
+   cp config.yml my_config.yml
+   ```
+   现在，编辑 `my_config.yml`：
+   - 添加您的提供商 `api_key` 值
+   - 调整 `base_url` 和 `default_models` 映射
+   - 设置 `anthropic` 路由规则
+   - 为需要令牌限制的提供商添加 `max_tokens_override`
 
-    # --- Test 1: Standard request ---
-    # This will use the routing rules in your config for this model.
-    print("--- Testing Standard Request ---")
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514", # Use a model name from your config
-        max_tokens=100,
-        messages=[{"role": "user", "content": "Hello, world!"}],
-    )
-    print(f"Response from model: {message.model}")
-    print(message.content[0].text)
+3. **运行服务器**：
+   从项目根目录运行 `main` 模块，指向您的配置文件。
+   ```bash
+   python -m claude_code_proxy.main --config my_config.yml
+   ```
+   服务器将启动并打印已加载提供商和路由规则的摘要。
 
-    # --- Test 2: Request with "thinking" ---
-    # The proxy will prioritize a provider with `supports_reasoning: true`.
-    # You will see 'thinking_delta' events in the stream if your provider yields them.
-    print("\n--- Testing Reasoning Request ---")
-    try:
-        with client.messages.stream(
-            model="claude-sonnet-4-20250514", # This model must be mapped to a reasoning provider
-            max_tokens=1024,
-            messages=[{"role": "user", "content": "Explain black holes step-by-step."}],
-            thinking={"type": "enabled"},
-        ) as stream:
-            for event in stream:
-                if event.type == "content_block_delta" and event.delta.type == "thinking_delta":
-                    print(f"[THINKING]: {event.delta.thinking}", end="", flush=True)
-                elif event.type == "content_block_delta" and event.delta.type == "text_delta":
-                    print(event.delta.text, end="", flush=True)
-        print()
-    except Exception as e:
-        print(f"\nAn error occurred: {e}")
+4. **高级调试（可选）**：
+   用于开发和调试：
+   ```bash
+   # 开发期间运行自动重载
+   python -m claude_code_proxy.main --config my_config.yml --reload
+   
+   # 启用综合追踪
+   export TRACE_PYTHON=true
+   python -m claude_code_proxy.main --config my_config.yml
+   ```
 
-    ```
+## 👨‍💻 与 Anthropic 客户端一起使用
 
-## ✅ Testing
+将官方 `anthropic` Python 客户端指向您的运行代理服务器。
 
-The project includes a comprehensive test suite.
+1. **安装客户端**：
+   ```bash
+   pip install anthropic
+   ```
 
-1.  **Set `PYTHONPATH`:**
-    To ensure tests can import the application modules, set your `PYTHONPATH` from the project root.
-    ```bash
-    # From terminal-llm/
-    export PYTHONPATH=.
-    ```
+2. **配置环境**：
+   设置基本 URL 指向您的代理。API 密钥可以是虚拟值，因为代理使用 `config.yml` 中的密钥。
+   ```bash
+   export ANTHROPIC_BASE_URL="http://127.0.0.1:8083/v1"
+   export ANTHROPIC_API_KEY="dummy_key"
+   ```
 
-2.  **Run Tests:**
-    From the project root, use `unittest` to discover and run all tests.
-    ```bash
-    # From terminal-llm/
-    python -m unittest discover tests/claude_code_proxy_tests/ -v
-    ```
+3. **示例 Python 脚本**：
+
+```python
+import anthropic
+
+# 客户端自动使用环境变量
+client = anthropic.Anthropic()
+
+# --- 测试 1：标准请求 ---
+# 这将为您的配置中的该模型使用路由规则。
+print("--- 测试标准请求 ---")
+message = client.messages.create(
+    model="claude-sonnet-4-20250514",  # 使用配置中的模型名称
+    max_tokens=100,
+    messages=[{"role": "user", "content": "你好，世界！"}],
+)
+print(f"来自模型的响应：{message.model}")
+print(message.content[0].text)
+
+# --- 测试 2：带"推理"的请求 ---
+# 代理将优先考虑 `supports_reasoning: true` 的提供商。
+# 如果您的提供商产生它们，您将在流中看到 'thinking_delta' 事件。
+print("\n--- 测试推理请求 ---")
+try:
+    with client.messages.stream(
+        model="claude-sonnet-4-20250514",  # 此模型必须映射到可推理提供商
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "请逐步解释黑洞"}],
+        thinking={"type": "enabled"},
+    ) as stream:
+        for event in stream:
+            if event.type == "content_block_delta" and event.delta.type == "thinking_delta":
+                print(f"[推理中]：{event.delta.thinking}", end="", flush=True)
+            elif event.type == "content_block_delta" and event.delta.type == "text_delta":
+                print(event.delta.text, end="", flush=True)
+    print()
+except Exception as e:
+    print(f"\n发生错误：{e}")
+```
+
+## ✅ 测试
+
+项目包括具有追踪功能的综合测试套件。
+
+1. **设置 `PYTHONPATH`**：
+   为确保测试可导入应用程序模块，从项目根目录设置您的 `PYTHONPATH`。
+   ```bash
+   # 来自 treehouse/
+   export PYTHONPATH=.
+   ```
+
+2. **运行测试**：
+   从项目根目录使用 `unittest` 发现并运行所有测试。
+   ```bash
+   # 来自 treehouse/
+   python -m unittest discover tests/claude_code_proxy_tests/ -v
+   ```
+
+3. **高级测试**：
+   ```bash
+   # 使用追踪分析运行
+   python -c "
+   import claude_code_proxy.main as main_module
+   print('测试导入结构...')
+   print('可用模块：', main_module)
+   "
+   ```
+
+## 📊 架构概览
+
+```
+客户端 (Anthropic 格式) → 代理 → 提供商 A (OpenAI 格式)
+                                      ↗
+                                   提供商 B
+                                      ↘
+                                   提供商 C
+```
+
+### 核心组件
+- **提供商路由器**：基于模型和推理要求智能路由
+- **请求转换器**：Anthropic → OpenAI 格式转换
+- **响应转换器**：OpenAI → Anthropic 格式转换
+- **身份验证管理器**：多个提供商 API 密钥管理
+- **速率限制**：每个提供商的可配置节流
+- **日志系统**：用于调试和审计的结构化日志
+
+## 🔧 开发与调试
+
+### 热重载开发
+```bash
+# 运行自动重载以供主动开发
+python -m claude_code_proxy.main --config my_config.yml --reload
+```
+
+### 调试模式
+```bash
+# 启用全面调试功能
+export DEBUG_PROXY=true
+python -m claude_code_proxy.main --config my_config.yml --log-level DEBUG
+```
+
+### 自定义提供商集成
+通过扩展基础配置添加新提供商：
+
+```yaml
+providers:
+  openai_providers:
+    new_provider:
+      name: "CustomProvider"
+      type: "openai"
+      base_url: "https://api.custom-provider.com/v1"
+      api_key: "sk-..."
+      supports_reasoning: true
+      default_models:
+        "claude-sonnet-4-20250514": "gpt-4o"
+```
+
+## 📄 许可证
+
+MIT 许可证 - 有关详情，请参阅 LICENSE 文件
+
+## 🤝 贡献
+
+欢迎贡献！请阅读贡献指南并确保在提交 PR 之前通过所有测试。
+
+## 📈 性能监控
+
+代理包括内置性能示例：
+- 请求延迟跟踪
+- 提供商响应时间
+- 令牌使用统计
+- 错误率监控
+
+在调试模式下运行时通过调试端点访问指标。

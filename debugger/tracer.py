@@ -22,8 +22,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from unittest.mock import Mock
 
-import yaml
-from colorama import Fore, Style, just_fix_windows_console
+try:
+    from colorama import Fore, Style, just_fix_windows_console
+except ImportError:
+
+    class _Dummy:
+        def __getattr__(self, _):
+            return ""
+
+    Fore = Style = _Dummy()
+
+    def just_fix_windows_console():
+        pass
+
 
 from .source_cache import get_statement_info
 
@@ -247,6 +258,7 @@ class TraceConfig:
         config_path = Path(config_path)
         if not config_path.exists():
             raise FileNotFoundError(f"配置文件不存在: {config_path}")
+        import yaml
 
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -2112,6 +2124,36 @@ def start_trace(module_path=None, config: TraceConfig = None, **kwargs):
         raise
 
 
+class TraceContext:
+    """
+    一个用于代码块的跟踪上下文管理器。
+
+    使用 'with' 语句来包裹需要跟踪的代码块。
+
+    用法:
+        config = TraceConfig(...)
+        with TraceContext(config):
+            # 这里的代码将被跟踪
+            my_function()
+    """
+
+    def __init__(self, config: TraceConfig):
+        self.config = config
+        self.tracer = None
+
+    def __enter__(self):
+        print(color_wrap("[tracer] 进入跟踪上下文...", TraceTypes.COLOR_CALL))
+        self.tracer = start_trace(config=self.config)
+        return self.tracer
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.tracer:
+            print(color_wrap("[tracer] ...退出跟踪上下文", TraceTypes.COLOR_RETURN))
+            stop_trace(self.tracer)
+        # 如果有异常，不抑制它，让它正常传播
+        return False
+
+
 def trace(
     target_files: Optional[List[str]] = None,
     line_ranges: Optional[Dict[str, List[Tuple[int, int]]]] = None,
@@ -2151,35 +2193,78 @@ def trace(
             target_files = []
 
     def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            final_target_files = target_files or [func.__code__.co_filename]
-            print(color_wrap("[start tracer]", TraceTypes.COLOR_CALL))
-            config = TraceConfig(
-                target_files=final_target_files,
-                line_ranges=line_ranges,
-                capture_vars=capture_vars,
-                callback=callback,
-                report_name=report_name,
-                exclude_functions=exclude_functions,
-                enable_var_trace=enable_var_trace,
-                ignore_self=ignore_self,
-                ignore_system_paths=ignore_system_paths,
-                start_function=start_function,
-                source_base_dir=source_base_dir,
-                disable_html=disable_html,
-                include_stdlibs=include_stdlibs,
-            )
-            t = start_trace(config=config)
-            try:
-                result = func(*args, **kwargs)
-                return result
-            finally:
-                if t:
-                    print(color_wrap("[stop tracer]", TraceTypes.COLOR_RETURN))
-                    stop_trace(t)
+        # 创建通用的配置
+        config = TraceConfig(
+            target_files=target_files or [func.__code__.co_filename],
+            line_ranges=line_ranges,
+            capture_vars=capture_vars,
+            callback=callback,
+            report_name=report_name,
+            exclude_functions=exclude_functions,
+            enable_var_trace=enable_var_trace,
+            ignore_self=ignore_self,
+            ignore_system_paths=ignore_system_paths,
+            start_function=start_function,
+            source_base_dir=source_base_dir,
+            disable_html=disable_html,
+            include_stdlibs=include_stdlibs,
+        )
+        # 您在文件中添加的 pdb.set_trace()，保留它以便您调试，生产时可移除
 
-        return wrapper
+        # 检查是否为异步函数
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                print(color_wrap("[start async tracer]", TraceTypes.COLOR_CALL))
+                t = start_trace(config=config)
+                try:
+                    # 使用 await 来正确执行协程，确保在协程执行期间跟踪是活动的
+                    result = await func(*args, **kwargs)
+                    return result
+                finally:
+                    # 协程执行完毕后，再停止跟踪
+                    if t:
+                        print(color_wrap("[stop async tracer]", TraceTypes.COLOR_RETURN))
+                        stop_trace(t)
+
+            return async_wrapper
+
+        # 检查是否为生成器函数
+        elif inspect.isgeneratorfunction(func):
+
+            @functools.wraps(func)
+            def generator_wrapper(*args, **kwargs):
+                print(color_wrap("[start generator tracer]", TraceTypes.COLOR_CALL))
+                t = start_trace(config=config)
+                try:
+                    # 使用 yield from 来代理生成器的产出
+                    # 这会使 try...finally 的生命周期覆盖整个生成器的迭代过程
+                    yield from func(*args, **kwargs)
+                finally:
+                    # 生成器迭代结束后，再停止跟踪
+                    if t:
+                        print(color_wrap("[stop generator tracer]", TraceTypes.COLOR_RETURN))
+                        stop_trace(t)
+
+            return generator_wrapper
+
+        # 默认是普通的同步函数
+        else:
+
+            @functools.wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                print(color_wrap("[start sync tracer]", TraceTypes.COLOR_CALL))
+                t = start_trace(config=config)
+                try:
+                    result = func(*args, **kwargs)
+                    return result
+                finally:
+                    if t:
+                        print(color_wrap("[stop sync tracer]", TraceTypes.COLOR_RETURN))
+                        stop_trace(t)
+
+            return sync_wrapper
 
     return decorator
 
