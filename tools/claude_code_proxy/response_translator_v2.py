@@ -70,7 +70,6 @@ class OpenAIToAnthropicStreamTranslator:
         self.cache_creation_input_tokens: Optional[int] = None
         self.cache_read_input_tokens: Optional[int] = None
         self.finish_reason: Optional[str] = None
-        self.usage_handled: bool = False
 
         self._next_block_index: int = 0
         self._active_block_type: Optional[Literal["text", "thinking", "tool_use"]] = None
@@ -266,10 +265,12 @@ class OpenAIToAnthropicStreamTranslator:
         """Processes a single OpenAI chunk and returns a list of Anthropic events."""
         events: List[BaseModel] = []
 
-        if chunk.usage and not self.usage_handled:
-            self.output_tokens = chunk.usage.completion_tokens or 0
-            self.input_tokens = chunk.usage.prompt_tokens or 0
-            self.usage_handled = True
+        # Always update token counts if usage is present, as it's often cumulative.
+        if chunk.usage:
+            if chunk.usage.prompt_tokens is not None:
+                self.input_tokens = chunk.usage.prompt_tokens
+            if chunk.usage.completion_tokens is not None:
+                self.output_tokens = chunk.usage.completion_tokens
 
         if not chunk.choices:
             return []
@@ -433,13 +434,18 @@ async def translate_openai_to_anthropic_stream(
 
     # 2. Process the stream chunk by chunk
     async for openai_chunk in _parse_openai_sse_stream(openai_stream):
+        # print(f"DEBUG: Original chunk: {openai_chunk}")
         anthropic_events = translator.process_chunk(openai_chunk)
         for event_model in anthropic_events:
-            yield _format_sse(event_model)
+            event = _format_sse(event_model)
+            # print("event", event)
+            yield event
 
     # 3. Yield finalization events
     for event_model in translator.finalize():
-        yield _format_sse(event_model)
+        event = _format_sse(event_model)
+        # print("event", event)
+        yield event
 
 
 def translate_openai_to_anthropic_non_stream(

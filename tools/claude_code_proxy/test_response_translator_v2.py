@@ -346,18 +346,30 @@ def test_finalize_with_incomplete_custom_tool_call(translator: OpenAIToAnthropic
 
 
 def test_usage_reporting(translator: OpenAIToAnthropicStreamTranslator):
-    """Test that usage information is correctly captured and reported."""
-    usage_chunk = OpenAIChatCompletionChunk(
-        id="c_usage",
+    """Test that usage information is correctly captured and reported, handling cumulative updates."""
+    # First chunk with initial usage, potentially zero completion tokens
+    usage_chunk1 = OpenAIChatCompletionChunk(
+        id="c_usage1",
         created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[def_choice],
+        usage=OpenAIChunkUsage(prompt_tokens=50, completion_tokens=0, total_tokens=50),
+    )
+    translator.process_chunk(usage_chunk1)
+    assert translator.input_tokens == 50
+    assert translator.output_tokens == 0
+
+    # Second chunk with updated usage
+    usage_chunk2 = OpenAIChatCompletionChunk(
+        id="c_usage2",
+        created=2,
         model="m",
         object="chat.completion.chunk",
         choices=[def_choice],
         usage=OpenAIChunkUsage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
     )
-
-    translator.process_chunk(usage_chunk)
-    assert translator.usage_handled is True
+    translator.process_chunk(usage_chunk2)
     assert translator.input_tokens == 50
     assert translator.output_tokens == 100
 
@@ -366,11 +378,7 @@ def test_usage_reporting(translator: OpenAIToAnthropicStreamTranslator):
 
     # The translator might produce a ContentBlockStopEvent first if a block was open.
     # We need to find the MessageDeltaEvent.
-    message_delta_event = None
-    for event in final_events:
-        if isinstance(event, MessageDeltaEvent):
-            message_delta_event = event
-            break
+    message_delta_event = next((e for e in final_events if isinstance(e, MessageDeltaEvent)), None)
 
     assert message_delta_event is not None, "MessageDeltaEvent not found in final events"
     assert message_delta_event.usage.input_tokens == 50

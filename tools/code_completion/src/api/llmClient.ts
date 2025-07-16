@@ -86,6 +86,10 @@ ${smartContextParts.join('\n\n')}
         }
     }
     
+    const codeBlockPrompt = context.selectedText 
+        ? `Code Block to Modify:\n\`\`\`${context.fileExtension.slice(1) || 'text'}\n${context.selectedText}\n\`\`\``
+        : `User has not selected any code. You are generating new code to be inserted at the user's cursor position within the file context provided.`;
+
     const userPrompt = `
 File Path: ${context.filePath}
 
@@ -95,10 +99,7 @@ ${rule}
 ---
 ${contextBlock}
 ---
-Code Block to Modify:
-\`\`\`${context.fileExtension.slice(1)}
-${context.selectedText}
-\`\`\`
+${codeBlockPrompt}
 ---
 User Instruction:
 ${instruction}
@@ -362,6 +363,8 @@ export async function generateCode(
             throw streamError;
         }
 
+        logger.log('Raw accumulated content from stream:', { content: accumulatedContent });
+
         // For streaming, we estimate usage since OpenAI doesn't provide usage in streaming
         const estimatedPromptTokens = Math.ceil(messages.reduce((total, msg) => total + (msg.content?.toString().length || 0), 0) / 4);
         const estimatedCompletionTokens = Math.ceil(accumulatedContent.length / 4);
@@ -463,6 +466,8 @@ export async function playgroundChat(
             logger.error('Playground streaming error:', streamError);
             throw streamError;
         }
+
+        logger.log('Raw accumulated content from playground stream:', { content: accumulatedContent });
 
         // Estimate usage for streaming
         const estimatedPromptTokens = Math.ceil(prompt.length / 4);

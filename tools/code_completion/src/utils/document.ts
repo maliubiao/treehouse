@@ -58,9 +58,9 @@ function findSymbolNeighbors(
 
 /**
  * Gathers all necessary context for an AI code generation task.
- * It determines whether to use the full file content or a "smart" context
- * (surrounding symbols or lines) based on the file size.
- * It now supports falling back to the current line if no enclosing symbol is found.
+ * It now clearly distinguishes between replacement (user has a selection) and
+ * insertion (user has a cursor but no selection).
+ * It always attempts to find an enclosing symbol for smart context, regardless of selection.
  */
 export async function getGenerationContext(): Promise<GenerationContext | null> {
     const editor = vscode.window.activeTextEditor;
@@ -72,40 +72,27 @@ export async function getGenerationContext(): Promise<GenerationContext | null> 
     const fullFileContent = document.getText();
     let selection: vscode.Selection;
     let selectedText: string;
-    let enclosingSymbol: vscode.DocumentSymbol | undefined;
 
     const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
         'vscode.executeDocumentSymbolProvider',
         document.uri
     );
 
-    if (editor.selection.isEmpty) {
-        // First, try to find an enclosing symbol, as it provides better context.
-        if (symbols && symbols.length > 0) {
-            enclosingSymbol = findEnclosingSymbol(symbols, editor.selection.active);
-        }
-        
-        if (enclosingSymbol) {
-            selection = enclosingSymbol.range;
-        } else {
-            // Fallback: If no symbol is found, use the current line.
-            const currentLine = document.lineAt(editor.selection.active.line);
-            if (currentLine.isEmptyOrWhitespace) {
-                // Don't generate from an empty line.
-                return null;
-            }
-            selection = currentLine.range;
-        }
-    } else {
-        // User has an active selection.
-        selection = editor.selection;
-        if (symbols && symbols.length > 0) {
-            // Still try to find an enclosing symbol for smart context purposes.
-            enclosingSymbol = findEnclosingSymbol(symbols, selection.start);
-        }
-    }
-    selectedText = document.getText(selection);
+    // Always try to find an enclosing symbol for context, regardless of selection.
+    const enclosingSymbol = (symbols && symbols.length > 0) 
+        ? findEnclosingSymbol(symbols, editor.selection.active) 
+        : undefined;
 
+    if (editor.selection.isEmpty) {
+        // No text selected by user. Treat as an insertion at the cursor.
+        selection = editor.selection; // A zero-length range at the cursor
+        selectedText = '';
+    } else {
+        // User has selected text. Treat as replacement.
+        selection = editor.selection;
+        selectedText = document.getText(selection);
+    }
+    
     let smartContext: SmartContext | null = null;
     let finalFullFileContent: string | null = fullFileContent;
 

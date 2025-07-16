@@ -34,7 +34,7 @@ export async function generateCodeCommand(
 
     const generationContext = await getGenerationContext();
     if (!generationContext) {
-        showInfoMessage('Please select a block of code, or place your cursor inside a function/class to refactor.');
+        showInfoMessage('Place your cursor or select code in a file to generate code.');
         return;
     }
 
@@ -46,7 +46,7 @@ export async function generateCodeCommand(
     const tempFileManager = new TempFileManager();
 
     try {
-        const { editor, selection, selectedText, fileExtension } = generationContext;
+        const { editor, selection, fileExtension } = generationContext;
         
         let result: { code: string; usage: TokenUsage };
         let progressMessage = '';
@@ -68,14 +68,9 @@ export async function generateCodeCommand(
         
         const { code: generatedCode, usage } = result!;
         
-        // Show final completion message with actual token usage and cost
         const costDisplay = usage.cost ? ` ($${usage.cost.toFixed(4)})` : '';
-        vscode.window.showInformationMessage(
-            `✅ Code generation completed | ${usage.totalTokens} tokens${costDisplay}`,
-            { timeout: 5000 }
-        );
+        showInfoMessage(`✅ Code generation completed | ${usage.totalTokens} tokens${costDisplay}`);
         
-        // Also log detailed usage
         logger.log('Token usage details:', {
             model: usage.model,
             promptTokens: usage.promptTokens,
@@ -84,11 +79,23 @@ export async function generateCodeCommand(
             cost: usage.cost
         });
         
-        undoManager.remember(editor.document.uri, selection, selectedText);
+        const originalFullContent = editor.document.getText();
+        
+        // Use offsets for accurate string manipulation, works for both replacement and insertion.
+        const offsetStart = editor.document.offsetAt(selection.start);
+        const offsetEnd = editor.document.offsetAt(selection.end);
+        const newFullContent = originalFullContent.slice(0, offsetStart) + generatedCode + originalFullContent.slice(offsetEnd);
+
+        // For undo, remember the state of the entire file.
+        const fullRange = new vscode.Range(
+            editor.document.positionAt(0),
+            editor.document.positionAt(originalFullContent.length)
+        );
+        undoManager.remember(editor.document.uri, fullRange, originalFullContent);
         
         const { originalUri, newUri } = await tempFileManager.createTempFilesForDiff(
-            selectedText,
-            generatedCode,
+            originalFullContent,
+            newFullContent,
             fileExtension
         );
 
@@ -96,7 +103,7 @@ export async function generateCodeCommand(
             originalUri,
             newUri,
             targetEditorUri: editor.document.uri,
-            targetSelection: selection,
+            targetSelection: selection, // Pass original selection for cursor positioning on accept
             tempFileManager
         };
 
@@ -114,19 +121,13 @@ export async function generateCodeCommand(
         };
 
         const errorMessage = error instanceof Error ? error.message : String(error);
-        const fullError = `Treehouse Completer Error: ${errorMessage}
-
-Stack Trace:
-${errorDetails.stack}`;
-
-        // Show full error with stack trace in output panel
+        
         logger.error('Command Execution Error:', {
             error: errorDetails,
             context: 'generateCodeCommand',
             timestamp: new Date().toISOString()
         });
 
-        // Show user-friendly error with option to see details
         const selection = await vscode.window.showErrorMessage(
             `Treehouse Completer Error: ${errorMessage}`, 
             'Show Details', 
@@ -134,17 +135,7 @@ ${errorDetails.stack}`;
         );
         
         if (selection === 'Show Details') {
-            // Open the output panel to show full error details
-            const outputChannel = vscode.window.createOutputChannel('Treehouse Code Completer');
-            outputChannel.clear();
-            outputChannel.appendLine('=== Treehouse Code Completer Error Details ===');
-            outputChannel.appendLine(`Time: ${new Date().toISOString()}`);
-            outputChannel.appendLine(`Type: ${errorDetails.type}`);
-            outputChannel.appendLine(`Message: ${errorDetails.message}`);
-            outputChannel.appendLine('');
-            outputChannel.appendLine('Stack Trace:');
-            outputChannel.appendLine(errorDetails.stack || 'No stack trace available');
-            outputChannel.show();
+            logger.show();
         } else if (selection === 'Retry') {
             vscode.commands.executeCommand('treehouse-code-completer.generateCode');
         }
