@@ -10,6 +10,7 @@ import * as path from 'path';
 export class TempFileManager {
     private tempFiles: string[] = [];
     private static orphanedFiles: Set<string> = new Set();
+    private static activeFiles: Set<string> = new Set();
 
     /**
      * Creates a pair of temporary files to be used in a diff view.
@@ -35,6 +36,8 @@ export class TempFileManager {
         this.tempFiles.push(originalFile, newFile);
         TempFileManager.orphanedFiles.add(originalFile);
         TempFileManager.orphanedFiles.add(newFile);
+        TempFileManager.activeFiles.add(originalFile);
+        TempFileManager.activeFiles.add(newFile);
 
         return {
             originalUri: vscode.Uri.file(originalFile),
@@ -50,6 +53,7 @@ export class TempFileManager {
             try {
                 await fs.unlink(file);
                 TempFileManager.orphanedFiles.delete(file);
+                TempFileManager.activeFiles.delete(file);
             } catch (error) {
                 // Ignore errors if file doesn't exist (already cleaned up)
                 if (error instanceof Error && 'code' in error && error.code !== 'ENOENT') {
@@ -67,7 +71,7 @@ export class TempFileManager {
      * Typically called on extension deactivation.
      */
     public static async cleanupAll(): Promise<void> {
-        const filesToClean = Array.from(this.orphanedFiles);
+        const filesToClean = Array.from(this.orphanedFiles).filter(file => !this.activeFiles.has(file));
         if (filesToClean.length > 0) {
             console.log(`Treehouse Code Completer: Cleaning up ${filesToClean.length} orphaned temp files.`);
         }
@@ -75,6 +79,7 @@ export class TempFileManager {
             try {
                 await fs.unlink(file);
                 this.orphanedFiles.delete(file);
+                this.activeFiles.delete(file);
             } catch (error) {
                  if (error instanceof Error && 'code' in error && error.code !== 'ENOENT') {
                     console.error(`Failed to delete orphaned temp file ${file}:`, error);

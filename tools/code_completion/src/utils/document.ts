@@ -64,7 +64,7 @@ function findSymbolNeighbors(
  */
 export async function getGenerationContext(): Promise<GenerationContext | null> {
     const editor = vscode.window.activeTextEditor;
-    if (!editor) {
+    if (!editor || !editor.document) {
         return null;
     }
 
@@ -110,8 +110,13 @@ export async function getGenerationContext(): Promise<GenerationContext | null> 
             const startLineNum = selection.start.line;
             const endLineNum = selection.end.line;
 
-            const prevLineText = startLineNum > 0 ? document.lineAt(startLineNum - 1).text : null;
-            const nextLineText = endLineNum < document.lineCount - 1 ? document.lineAt(endLineNum + 1).text : null;
+            // Check bounds before accessing lines
+            const prevLineText = (startLineNum > 0 && startLineNum - 1 < document.lineCount) 
+                ? document.lineAt(startLineNum - 1).text 
+                : null;
+            const nextLineText = (endLineNum + 1 < document.lineCount) 
+                ? document.lineAt(endLineNum + 1).text 
+                : null;
             
             smartContext = {
                 previousSiblingText: prevLineText,
@@ -138,7 +143,26 @@ export async function getGenerationContext(): Promise<GenerationContext | null> 
  * @param newText - The new text to insert.
  */
 export async function applyChanges(editor: vscode.TextEditor, range: vscode.Range, newText: string): Promise<void> {
-    await editor.edit(editBuilder => {
+    // Validate editor and document before attempting edit
+    if (!editor || !editor.document) {
+        throw new Error('Invalid editor or document state');
+    }
+
+    // Ensure the document is still open and valid
+    if (editor.document.isClosed) {
+        throw new Error('Document has been closed');
+    }
+
+    // Validate range
+    if (!range || range.isEmpty) {
+        throw new Error('Invalid range provided');
+    }
+
+    const editSuccess = await editor.edit(editBuilder => {
         editBuilder.replace(range, newText);
     });
+
+    if (!editSuccess) {
+        throw new Error('Failed to apply changes to the document');
+    }
 }

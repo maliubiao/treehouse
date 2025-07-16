@@ -6,7 +6,7 @@ import { UndoManager } from '../state/undoManager';
 import { TempFileManager } from '../utils/tempFileManager';
 import { getActiveAiServiceConfig } from '../config/configuration';
 import { showSettingsView } from '../ui/settingsView';
-import { SessionManager } from '../state/sessionManager';
+// import { SessionManager } from '../state/sessionManager';
 import { logger } from '../utils/logger';
 /**
  * The main command logic for generating code.
@@ -15,10 +15,41 @@ import { logger } from '../utils/logger';
  * @param undoManager - The manager for handling undo operations.
  * @param sessionManager - The manager for the active generation session.
  */
+async function callLLMWithTimeout(
+    instruction: string,
+    generationContext: GenerationContext,
+    onProgress: (tokenCount: number, currentText: string) => void
+): Promise<{ code: string; usage: TokenUsage }> {
+    const timeoutMs = 120000; // 2 minutes timeout
+    
+    let rejectTimeout: NodeJS.Timeout | undefined;
+    
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        rejectTimeout = setTimeout(() => {
+            reject(new Error('AI generation request timed out after 2 minutes'));
+        }, timeoutMs);
+    });
+    
+    const apiPromise = callLLMApi(instruction, generationContext, onProgress);
+    
+    // Race the API call against our timeout
+    const result = await Promise.race([
+        apiPromise.then(result => {
+            if (rejectTimeout) clearTimeout(rejectTimeout);
+            return result;
+        }),
+        timeoutPromise
+    ]);
+    
+    return result;
+}
+
+import { GenerationContext } from '../types';
+
 export async function generateCodeCommand(
     context: vscode.ExtensionContext, 
     undoManager: UndoManager,
-    sessionManager: SessionManager
+    sessionManager: any
 ): Promise<void> {
     const activeService = getActiveAiServiceConfig();
     if (!activeService) {
@@ -54,14 +85,18 @@ export async function generateCodeCommand(
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: 'Treehouse AI is working...',
-            cancellable: false
-        }, async (progress) => {
+            cancellable: true
+        }, async (progress, token) => {
             progress.report({ message: 'Initializing...' });
             
-            result = await callLLMApi(instruction, generationContext, (tokenCount, currentText) => {
-                progressMessage = `Generated ${tokenCount} tokens...`;
-                progress.report({ message: progressMessage });
-            });
+            result = await callLLMWithTimeout(
+                instruction, 
+                generationContext, 
+                (tokenCount: number, currentText: string) => {
+                    progressMessage = `Generated ${tokenCount} tokens...`;
+                    progress.report({ message: progressMessage });
+                }
+            );
             
             progress.report({ message: 'Finalizing response...' });
         });

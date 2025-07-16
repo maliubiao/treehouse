@@ -465,6 +465,7 @@ async def _parse_openai_sse_stream(
                 continue
             if data_str == "[DONE]":
                 return
+            # print(data_str)
             try:
                 yield OpenAIChatCompletionChunk.model_validate_json(data_str)
             except (json.JSONDecodeError, ValueError) as e:
@@ -488,14 +489,17 @@ async def translate_openai_to_anthropic_stream(
 
     # 2. Process the stream chunk by chunk
     async for openai_chunk in _parse_openai_sse_stream(openai_stream):
+        # print(openai_chunk)
         anthropic_events = translator.process_chunk(openai_chunk)
         for event_model in anthropic_events:
             event = _format_sse(event_model)
+            # print(event)
             yield event
 
     # 3. Yield finalization events
     for event_model in translator.finalize():
         event = _format_sse(event_model)
+        # print(event)
         yield event
 
 
