@@ -258,223 +258,177 @@ class StreamingState:
         return events
 
 
-from debugger import tracer
-
-
 async def translate_openai_to_anthropic_stream(
     openai_stream: AsyncGenerator[bytes, None],
     anthropic_request: AnthropicRequest,
     response_id: str,
     input_tokens: int,
-    sse_debugger: SSEDebugLogger = None,
+    sse_debugger: Optional[SSEDebugLogger] = None,
 ) -> AsyncGenerator[str, None]:
     """Translates OpenAI streaming response to compliant Anthropic SSE with debug logging."""
-    t = tracer.start_trace(config=tracer.TraceConfig(target_files=["*.py"], enable_var_trace=True))
+    state = StreamingState()
+    conversation_id = anthropic_request.conversation_id
+    logger.info("Starting streaming response translation", extra={"response_id": response_id})
+
+    # --- Accumulators for final content logging ---
+    full_text_content = ""
+    full_thinking_content = ""
+    full_tool_parts: Dict[int, str] = {}  # {tool_index: partial_json_string}
+
+    # Initialize SSE debugging at the beginning
+    if sse_debugger:
+        sse_debugger.start_batch(
+            response_id, conversation_id, {"type": "translation", "model": anthropic_request.model}
+        )
+        sse_debugger.save_prompt(response_id, conversation_id, anthropic_request)
+
     try:
-        state = StreamingState()
-        logger.info("Starting streaming response translation", extra={"response_id": response_id})
-
-        # Initialize SSE debugging
+        # 1. Send message_start event
+        message_start_event = _format_sse(
+            MessageStartEvent(
+                type="message_start",
+                message=AnthropicMessageResponse(
+                    id=response_id,
+                    type="message",
+                    role="assistant",
+                    model=anthropic_request.model,
+                    content=[],
+                    usage=Usage(input_tokens=input_tokens, output_tokens=0),
+                ),
+            )
+        )
+        yield message_start_event
         if sse_debugger:
-            sse_debugger.start_batch(
-                response_id, {"type": "translation", "model": anthropic_request.model, "input_tokens": input_tokens}
+            sse_debugger.log_translated_sse(
+                response_id, conversation_id, "message_start", json.loads(message_start_event.split("\n")[1][6:])
             )
 
-            # 1. Send message_start event
-            message_start_event = _format_sse(
-                MessageStartEvent(
-                    type="message_start",
-                    message=AnthropicMessageResponse(
-                        id=response_id,
-                        type="message",
-                        role="assistant",
-                        model=anthropic_request.model,
-                        content=[],
-                        usage=Usage(
-                            input_tokens=input_tokens,
-                            output_tokens=0,
-                            cache_creation_input_tokens=None,
-                            cache_read_input_tokens=None,
-                        ),
-                    ),
-                )
-            )
-            yield message_start_event
+        # 2. Process stream
+        async for data_str in _sse_parser(openai_stream):
+            if data_str == "[DONE]":
+                break
+
             if sse_debugger:
-                sse_debugger.log_translated_sse(response_id, "message_start", message_start_event.strip())
+                sse_debugger.log_raw_sse(response_id, conversation_id, "data", data_str)
 
-            # 2. Process stream
-            async for data_str in _sse_parser(openai_stream):
-                if data_str == "[DONE]":
-                    break
+            try:
+                chunk = OpenAIChatCompletionChunk.model_validate_json(data_str)
+                if chunk.usage:
+                    state.output_tokens = chunk.usage.completion_tokens or state.output_tokens
+                    state.input_tokens = chunk.usage.prompt_tokens or state.input_tokens
+                if not chunk.choices:
+                    continue
 
-                # Log raw SSE event
-                event_type = "data" if data_str.startswith("{") else "keepalive"
-                if sse_debugger:
-                    sse_debugger.log_raw_sse(response_id, event_type, data_str)
+                choice = chunk.choices[0]
+                if choice.finish_reason:
+                    state.finish_reason = choice.finish_reason
+                delta = choice.delta
 
-                try:
-                    chunk = OpenAIChatCompletionChunk.model_validate_json(data_str)
-
-                    # Handle final usage chunks - collect complete OpenAI usage data
-                    if chunk.usage and not state.usage_handled:
-                        # Map OpenAI usage fields to state
-                        state.output_tokens = getattr(
-                            chunk.usage, "output_tokens", getattr(chunk.usage, "completion_tokens", 0)
+                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                    if not state.active_block or state.active_block.block_type != "thinking":
+                        for event_str in state.start_new_block("thinking"):
+                            yield event_str
+                    state.active_block.update(delta.reasoning_content)
+                    full_thinking_content += delta.reasoning_content
+                    event_str = _format_sse(
+                        ContentBlockDeltaEvent(
+                            type="content_block_delta",
+                            index=state.active_block.index,
+                            delta=ThinkingDelta(type="thinking_delta", thinking=delta.reasoning_content),
                         )
-                        state.input_tokens = getattr(
-                            chunk.usage, "input_tokens", getattr(chunk.usage, "prompt_tokens", 0)
+                    )
+                    yield event_str
+
+                if delta.content:
+                    if not state.active_block or state.active_block.block_type != "text":
+                        for event_str in state.start_new_block("text"):
+                            yield event_str
+                    state.active_block.update(delta.content)
+                    full_text_content += delta.content
+                    event_str = _format_sse(
+                        ContentBlockDeltaEvent(
+                            type="content_block_delta",
+                            index=state.active_block.index,
+                            delta=TextDelta(type="text_delta", text=delta.content),
                         )
+                    )
+                    yield event_str
 
-                        # Handle cached tokens from detailed usage
-                        if hasattr(chunk.usage, "input_tokens_details") and chunk.usage.input_tokens_details:
-                            details = chunk.usage.input_tokens_details
-                            state.cache_read_input_tokens = getattr(details, "cached_tokens", 0)
-                        elif hasattr(chunk.usage, "cached_tokens"):
-                            state.cache_read_input_tokens = chunk.usage.cached_tokens
+                if delta.tool_calls:
+                    for tc_chunk in delta.tool_calls:
+                        openai_tool_index = tc_chunk.index
+                        if not (
+                            state.active_block
+                            and state.active_block.block_type == "tool_use"
+                            and state.active_block.openai_tool_index == openai_tool_index
+                        ):
+                            if tc_chunk.id and tc_chunk.function and tc_chunk.function.name:
+                                tool_info = {
+                                    "id": tc_chunk.id,
+                                    "name": tc_chunk.function.name,
+                                    "openai_tool_index": openai_tool_index,
+                                }
+                                state.tool_calls[openai_tool_index] = tool_info
+                                for event_str in state.start_new_block("tool_use", tool_info=tool_info):
+                                    yield event_str
+                            else:
+                                continue
 
-                        # Mark usage as handled to prevent duplication
-                        state.usage_handled = True
-
-                        # Don't yield anything for usage-only chunks, just capture data
-                        if not chunk.choices:
-                            continue
-
-                    if not chunk.choices:
-                        continue
-
-                    # Update state from chunk
-                    choice = chunk.choices[0]
-                    if choice.finish_reason:
-                        state.finish_reason = choice.finish_reason
-
-                    delta = choice.delta
-
-                    # --- Handle Reasoning Content (thinking block) ---
-                    if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                        if not state.active_block or state.active_block.block_type != "thinking":
-                            for event_str in state.start_new_block("thinking"):
-                                yield event_str
-                                if sse_debugger:
-                                    sse_debugger.log_translated_sse(
-                                        response_id, "content_block_start", json.loads(event_str.split("\n")[1][6:])
-                                    )
-
-                        state.active_block.update(delta.reasoning_content)
-                        event_str = _format_sse(
-                            ContentBlockDeltaEvent(
-                                type="content_block_delta",
-                                index=state.active_block.index,
-                                delta=ThinkingDelta(type="thinking_delta", thinking=delta.reasoning_content),
-                            )
-                        )
-                        yield event_str
-                        if sse_debugger:
-                            sse_debugger.log_translated_sse(
-                                response_id, "content_block_delta", json.loads(event_str.split("\n")[1][6:])
-                            )
-
-                    # --- Handle Text Content ---
-                    if delta.content:
-                        if not state.active_block or state.active_block.block_type != "text":
-                            for event_str in state.start_new_block("text"):
-                                yield event_str
-                                if sse_debugger:
-                                    sse_debugger.log_translated_sse(
-                                        response_id, "content_block_start", json.loads(event_str.split("\n")[1][6:])
-                                    )
-
-                        state.active_block.update(delta.content)
-                        event_str = _format_sse(
-                            ContentBlockDeltaEvent(
-                                type="content_block_delta",
-                                index=state.active_block.index,
-                                delta=TextDelta(type="text_delta", text=delta.content),
-                            )
-                        )
-                        yield event_str
-                        if sse_debugger:
-                            sse_debugger.log_translated_sse(
-                                response_id, "content_block_delta", json.loads(event_str.split("\n")[1][6:])
-                            )
-
-                    # --- Handle Tool Calls ---
-                    if delta.tool_calls:
-                        for tc_chunk in delta.tool_calls:
-                            openai_tool_index = tc_chunk.index
-
-                            if not (
-                                state.active_block
-                                and state.active_block.block_type == "tool_use"
-                                and state.active_block.openai_tool_index == openai_tool_index
-                            ):
-                                if tc_chunk.id and tc_chunk.function and tc_chunk.function.name:
-                                    tool_info = {
-                                        "id": tc_chunk.id,
-                                        "name": tc_chunk.function.name,
-                                        "openai_tool_index": openai_tool_index,
-                                    }
-                                    state.tool_calls[openai_tool_index] = tool_info
-                                    for event_str in state.start_new_block("tool_use", tool_info=tool_info):
-                                        yield event_str
-                                        if sse_debugger:
-                                            sse_debugger.log_translated_sse(
-                                                response_id,
-                                                "content_block_start",
-                                                json.loads(event_str.split("\n")[1][6:]),
-                                            )
-                                else:
-                                    logger.warning(
-                                        f"Received arguments for non-active tool index {openai_tool_index}. Skipping."
-                                    )
-                                    continue
-
-                            if tc_chunk.function and tc_chunk.function.arguments:
-                                event_str = _format_sse(
-                                    ContentBlockDeltaEvent(
-                                        type="content_block_delta",
-                                        index=state.active_block.index,
-                                        delta=InputJsonDelta(
-                                            type="input_json_delta",
-                                            partial_json=tc_chunk.function.arguments,
-                                        ),
-                                    )
+                        if tc_chunk.function and tc_chunk.function.arguments:
+                            full_tool_parts.setdefault(openai_tool_index, "")
+                            full_tool_parts[openai_tool_index] += tc_chunk.function.arguments
+                            event_str = _format_sse(
+                                ContentBlockDeltaEvent(
+                                    type="content_block_delta",
+                                    index=state.active_block.index,
+                                    delta=InputJsonDelta(
+                                        type="input_json_delta", partial_json=tc_chunk.function.arguments
+                                    ),
                                 )
-                                yield event_str
-                                if sse_debugger:
-                                    sse_debugger.log_translated_sse(
-                                        response_id, "content_block_delta", json.loads(event_str.split("\n")[1][6:])
-                                    )
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.warning(f"Stream chunk parse error: {e}", extra={"chunk": data_str})
+                            )
+                            yield event_str
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Stream chunk parse error: {e}", extra={"chunk": data_str})
 
-            # 3. Finalize stream with complete usage data
-            for event_str in state.finalize(
-                input_tokens=state.input_tokens or input_tokens,
-                output_tokens=state.output_tokens,
-                cache_creation_input_tokens=state.cache_creation_input_tokens,
-                cache_read_input_tokens=state.cache_read_input_tokens,
-            ):
-                yield event_str
-                if sse_debugger:
-                    event_name = event_str.split("\n")[0].split(": ")[1]
-                    event_data = json.loads(event_str.split("\n")[1][6:])
-                    sse_debugger.log_translated_sse(response_id, event_name, event_data)
-
-            logger.info("Streaming translation completed", extra={"response_id": response_id})
-
-            # Final summary
+        # 3. Finalize stream
+        for event_str in state.finalize(input_tokens=input_tokens, output_tokens=state.output_tokens):
+            yield event_str
             if sse_debugger:
-                sse_debugger.finish_batch(
-                    response_id,
-                    {
-                        "output_tokens": state.output_tokens,
-                        "input_tokens": state.input_tokens,
-                        "cache_read_input_tokens": state.cache_read_input_tokens,
-                        "finish_reason": state.finish_reason,
-                        "blocks_processed": state.next_block_index,
-                        "final_usage_handled": True,
-                    },
-                )
+                event_name = event_str.split("\n")[0].split(": ")[1]
+                event_data = json.loads(event_str.split("\n")[1][6:])
+                sse_debugger.log_translated_sse(response_id, conversation_id, event_name, event_data)
+
+        logger.info("Streaming translation completed", extra={"response_id": response_id})
+
     finally:
-        tracer.stop_trace(t)
+        # This block executes regardless of success or failure of the stream
+        if sse_debugger:
+            # Assemble final tool call content from parts
+            final_tool_calls = []
+            for index, tool_info in state.tool_calls.items():
+                raw_json = full_tool_parts.get(index, "")
+                try:
+                    tool_input = json.loads(raw_json) if raw_json else {}
+                except json.JSONDecodeError:
+                    tool_input = {"error": "Failed to parse partial JSON", "raw_content": raw_json}
+                final_tool_calls.append({"id": tool_info["id"], "name": tool_info["name"], "input": tool_input})
+
+            # Save all accumulated content
+            final_content = {
+                "text": full_text_content,
+                "thinking": full_thinking_content,
+                "tool_calls": final_tool_calls,
+            }
+            sse_debugger.save_final_content(response_id, conversation_id, final_content)
+
+            # Update final metadata summary
+            summary = {
+                "output_tokens": state.output_tokens,
+                "input_tokens": state.input_tokens,
+                "finish_reason": state.finish_reason,
+                "blocks_processed": state.next_block_index,
+                "has_text_content": bool(full_text_content),
+                "has_thinking_content": bool(full_thinking_content),
+                "tool_calls_generated": len(final_tool_calls),
+            }
+            sse_debugger.finish_batch(response_id, conversation_id, summary)

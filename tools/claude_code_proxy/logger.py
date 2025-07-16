@@ -7,9 +7,12 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, BinaryIO, Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import Request
+
+if TYPE_CHECKING:
+    from .models_anthropic import AnthropicRequest
 
 
 class JSONFormatter(logging.Formatter):
@@ -168,56 +171,111 @@ class SSEDebugLogger:
         if self.enabled:
             self.debug_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_request_dir(self, request_id: str) -> Path:
-        """Get the directory for a specific request."""
+    def _get_request_dir(self, request_id: str, conversation_id: Optional[str] = None) -> Path:
+        """
+        Get the directory for a specific request.
+        Groups requests by conversation ID under a date-stamped directory.
+        Path: {debug_dir}/{YYYY-MM-DD}/{conversation_id_or_no_conv}/{request_id}
+        """
         date_dir = datetime.now().strftime("%Y-%m-%d")
-        request_dir = self.debug_dir / date_dir / request_id
+        conv_dir_name = conversation_id if conversation_id else "no_conversation"
+        request_dir = self.debug_dir / date_dir / conv_dir_name / request_id
         if self.enabled:
             request_dir.mkdir(parents=True, exist_ok=True)
         return request_dir
 
-    def log_raw_sse(self, request_id: str, event_type: str, data: str):
+    def save_prompt(
+        self, request_id: str, conversation_id: Optional[str], anthropic_request: "AnthropicRequest"
+    ) -> None:
+        """Save the initial request prompt to a file."""
+        if not self.enabled:
+            return
+        request_dir = self._get_request_dir(request_id, conversation_id)
+        prompt_file = request_dir / "prompt.json"
+        prompt_data = anthropic_request.model_dump(exclude_none=True)
+        try:
+            with open(prompt_file, "w", encoding="utf-8") as f:
+                json.dump(prompt_data, f, indent=2, ensure_ascii=False)
+        except (IOError, TypeError) as e:
+            get_logger("sse_debugger").error(f"Failed to save prompt for request {request_id}: {e}", exc_info=True)
+
+    def save_final_content(
+        self, request_id: str, conversation_id: Optional[str], final_content: Dict[str, Any]
+    ) -> None:
+        """Save the final, accumulated content from a stream to files."""
+        if not self.enabled:
+            return
+
+        request_dir = self._get_request_dir(request_id, conversation_id)
+        saved_files = []
+        try:
+            if "text" in final_content and final_content["text"]:
+                text_file = request_dir / "final_text.txt"
+                with open(text_file, "w", encoding="utf-8") as f:
+                    f.write(final_content["text"])
+                saved_files.append(str(text_file.resolve()))
+
+            if "thinking" in final_content and final_content["thinking"]:
+                thinking_file = request_dir / "final_thinking.txt"
+                with open(thinking_file, "w", encoding="utf-8") as f:
+                    f.write(final_content["thinking"])
+                saved_files.append(str(thinking_file.resolve()))
+
+            if "tool_calls" in final_content and final_content["tool_calls"]:
+                tool_calls_file = request_dir / "final_tool_calls.json"
+                with open(tool_calls_file, "w", encoding="utf-8") as f:
+                    json.dump(final_content["tool_calls"], f, indent=2, ensure_ascii=False)
+                saved_files.append(str(tool_calls_file.resolve()))
+
+            if saved_files:
+                get_logger("sse_debugger").info(f"Request {request_id} final content saved: {', '.join(saved_files)}")
+        except (IOError, TypeError) as e:
+            get_logger("sse_debugger").error(
+                f"Failed to save final content for request {request_id}: {e}", exc_info=True
+            )
+
+    def log_raw_sse(self, request_id: str, conversation_id: Optional[str], event_type: str, data: str) -> None:
         """Log raw SSE events from provider."""
         if not self.enabled:
             return
 
-        request_dir = self._get_request_dir(request_id)
+        request_dir = self._get_request_dir(request_id, conversation_id)
         raw_file = request_dir / "raw_events.log"
 
         with open(raw_file, "a", encoding="utf-8") as f:
             entry = {"timestamp": datetime.utcnow().isoformat(), "event_type": event_type, "data": data}
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    def log_translated_sse(self, request_id: str, event_type: str, data: dict):
+    def log_translated_sse(self, request_id: str, conversation_id: Optional[str], event_type: str, data: dict) -> None:
         """Log translated SSE events (anthropic format)."""
         if not self.enabled:
             return
 
-        request_dir = self._get_request_dir(request_id)
+        request_dir = self._get_request_dir(request_id, conversation_id)
         translated_file = request_dir / "translated_events.log"
 
         with open(translated_file, "a", encoding="utf-8") as f:
             entry = {"timestamp": datetime.utcnow().isoformat(), "event_type": event_type, "data": data}
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    def start_batch(self, request_id: str, metadata: dict):
+    def start_batch(self, request_id: str, conversation_id: Optional[str], metadata: dict) -> None:
         """Start recording a new SSE batch with metadata."""
         if not self.enabled:
             return
 
-        request_dir = self._get_request_dir(request_id)
+        request_dir = self._get_request_dir(request_id, conversation_id)
         metadata_file = request_dir / "metadata.json"
 
         with open(metadata_file, "w", encoding="utf-8") as f:
             metadata.update({"request_id": request_id, "started_at": datetime.utcnow().isoformat(), "status": "active"})
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-    def finish_batch(self, request_id: str, summary: dict):
+    def finish_batch(self, request_id: str, conversation_id: Optional[str], summary: dict) -> None:
         """Mark batch as complete with summary."""
         if not self.enabled:
             return
 
-        request_dir = self._get_request_dir(request_id)
+        request_dir = self._get_request_dir(request_id, conversation_id)
         metadata_file = request_dir / "metadata.json"
 
         if metadata_file.exists():

@@ -84,6 +84,7 @@ class AnthropicRequest(BaseModel):
     temperature: Optional[float] = Field(default=None)
     tools: Optional[List[AnthropicTool]] = Field(default=None)
     thinking: Optional[AnthropicThinkingConfig] = Field(default=None)
+    conversation_id: Optional[str] = Field(default=None)
 
 
 # --- Response Models ---

@@ -94,7 +94,30 @@ class TracerMCPServer:
                     },
                     "required": ["target", "target_type"],
                 },
-            }
+            },
+            {
+                "name": "import_path_finder",
+                "description": "分析当前目录和父目录的文件结构，帮助确定Python import语句的写法",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "include_patterns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "要包含的文件模式列表，支持通配符。例如：['*.py', '*.pyi']，默认包含所有Python文件",
+                            "default": ["*.py", "*.pyi"],
+                        },
+                        "exclude_patterns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "要排除的文件模式列表，支持通配符。例如：['__pycache__/*', '*.pyc']",
+                            "default": ["__pycache__/*", "*.pyc", "*.pyo", ".git/*", ".pytest_cache/*"],
+                        },
+                        "max_depth": {"type": "number", "description": "扫描的最大目录深度，默认为3层", "default": 3},
+                    },
+                    "required": [],
+                },
+            },
         ]
 
     def handle_initialize(self, _params: Dict[str, Any]) -> Dict[str, Any]:
@@ -114,6 +137,8 @@ class TracerMCPServer:
 
         if tool_name == "trace_python":
             return self._handle_trace_python(tool_params)
+        elif tool_name == "import_path_finder":
+            return self._handle_import_path_finder(tool_params)
 
         raise ValueError(f"Unknown tool: {tool_name}")
 
@@ -258,6 +283,136 @@ class TracerMCPServer:
         if trace_log_content:
             result_text += f"TRACE LOG:\n{trace_log_content}\n"
         return result_text
+
+    def _scan_directory(
+        self,
+        directory: Path,
+        include_patterns: List[str],
+        exclude_patterns: List[str],
+        max_depth: int,
+        current_depth: int = 0,
+    ) -> Dict[str, Any]:
+        """扫描目录并返回文件结构"""
+        if current_depth >= max_depth:
+            return {}
+
+        result = {"path": str(directory), "files": [], "subdirectories": {}}
+
+        try:
+            for item in directory.iterdir():
+                if item.is_file():
+                    # 检查是否匹配包含模式
+                    include_file = False
+                    for pattern in include_patterns:
+                        if item.match(pattern):
+                            include_file = True
+                            break
+
+                    # 检查是否匹配排除模式
+                    exclude_file = False
+                    for pattern in exclude_patterns:
+                        if item.match(pattern):
+                            exclude_file = True
+                            break
+
+                    if include_file and not exclude_file:
+                        result["files"].append(
+                            {
+                                "name": item.name,
+                                "path": str(item.relative_to(directory)),
+                                "full_path": str(item.absolute()),
+                            }
+                        )
+
+                elif item.is_dir() and not any(item.match(pattern) for pattern in exclude_patterns):
+                    subdir_result = self._scan_directory(
+                        item, include_patterns, exclude_patterns, max_depth, current_depth + 1
+                    )
+                    if subdir_result:
+                        result["subdirectories"][item.name] = subdir_result
+
+        except PermissionError:
+            logger.warning(f"Permission denied accessing directory: {directory}")
+
+        return result
+
+    def _handle_import_path_finder(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """处理import_path_finder工具调用"""
+        try:
+            # 获取参数
+            include_patterns = params.get("include_patterns", ["*.py", "*.pyi"])
+            exclude_patterns = params.get(
+                "exclude_patterns", ["__pycache__/*", "*.pyc", "*.pyo", ".git/*", ".pytest_cache/*"]
+            )
+            max_depth = params.get("max_depth", 3)
+
+            # 获取当前目录和父目录
+            current_dir = Path.cwd()
+            parent_dir = current_dir.parent
+
+            # 扫描当前目录
+            current_structure = self._scan_directory(current_dir, include_patterns, exclude_patterns, max_depth)
+
+            # 扫描父目录
+            parent_structure = self._scan_directory(parent_dir, include_patterns, exclude_patterns, max_depth)
+
+            # 构建结果
+            result = {
+                "current_directory": {
+                    "path": str(current_dir),
+                    "name": current_dir.name,
+                    "structure": current_structure,
+                },
+                "parent_directory": {"path": str(parent_dir), "name": parent_dir.name, "structure": parent_structure},
+                "import_suggestions": self._generate_import_suggestions(
+                    current_dir, parent_dir, current_structure, parent_structure
+                ),
+            }
+
+            return {"content": [{"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}]}
+
+        except Exception as e:
+            logger.error("Error in import_path_finder: %s", e)
+            return {"content": [{"type": "text", "text": f"Error analyzing directory structure: {str(e)}"}]}
+
+    def _generate_import_suggestions(
+        self, current_dir: Path, parent_dir: Path, current_structure: Dict, parent_structure: Dict
+    ) -> List[str]:
+        """生成import语句建议"""
+        suggestions = []
+
+        # 检查当前目录下的Python文件
+        has_init = any(f["name"] == "__init__.py" for f in current_structure.get("files", []))
+        if current_structure.get("files"):
+            for file_info in current_structure["files"]:
+                if file_info["name"].endswith(".py") and file_info["name"] != "__init__.py":
+                    module_name = file_info["name"][:-3]  # 去掉.py
+                    if not has_init:
+                        suggestions.append(f"import {module_name}")
+
+        # 检查父目录下的Python包
+        if parent_structure.get("subdirectories"):
+            for dir_name, dir_info in parent_structure["subdirectories"].items():
+                if dir_info.get("files"):
+                    # 检查是否有__init__.py来判断是否是Python包
+                    has_init = any(f["name"] == "__init__.py" for f in dir_info.get("files", []))
+                    if has_init:
+                        suggestions.append(f"import {dir_name}")
+                        # 检查包内的模块
+                        for file_info in dir_info.get("files", []):
+                            if file_info["name"].endswith(".py") and file_info["name"] != "__init__.py":
+                                module_name = file_info["name"][:-3]
+                                suggestions.append(f"from {dir_name} import {module_name}")
+
+        # 去重并保持顺序
+        seen = set()
+        unique_suggestions = []
+        for suggestion in suggestions:
+            if suggestion not in seen:
+                seen.add(suggestion)
+                unique_suggestions.append(suggestion)
+
+        return unique_suggestions
 
     def _handle_trace_python(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle trace_python tool synchronously."""

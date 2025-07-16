@@ -93,7 +93,7 @@ File Path: ${context.filePath}
 Custom Rule:
 ${rule}
 ---
-${contextBlock.trim()}
+${contextBlock}
 ---
 Code Block to Modify:
 \`\`\`${context.fileExtension.slice(1)}
@@ -102,7 +102,7 @@ ${context.selectedText}
 ---
 User Instruction:
 ${instruction}
-`.trim();
+`;
 
     return [
         { role: 'system', content: systemMessage },
