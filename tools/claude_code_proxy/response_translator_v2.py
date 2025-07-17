@@ -111,21 +111,23 @@ class OpenAIToAnthropicStreamTranslator:
                 buffer = tool_state["argument_buffer"]
                 if buffer:
                     try:
-                        # The buffer contains an escaped JSON string content, e.g., {\"key\": \"value\"}
-                        # We need to unescape it to get a valid JSON string.
-                        unescaped_json_text = json.loads(buffer)
+                        # The buffer contains a JSON string which itself contains stringified JSON.
+                        # e.g., "\"{\\\"key\\\": \\\"value\\\"}\""
+                        # We need to load it once to get the inner stringified JSON.
+                        unquoted_json_text = json.loads(buffer)
                         events.append(
                             ContentBlockDeltaEvent(
                                 type="content_block_delta",
                                 index=self._active_block_index,
-                                delta=InputJsonDelta(type="input_json_delta", partial_json=unescaped_json_text),
+                                delta=InputJsonDelta(type="input_json_delta", partial_json=unquoted_json_text),
                             )
                         )
                     except Exception as e:
                         logger.warning(
                             f"Could not unescape buffered tool arguments for tool {self._active_block_index}: {e}. Buffer: '{buffer}'"
                         )
-                self._active_tool_info.pop(self._active_tool_chunk_index)
+                # This tool index is now complete, remove its state.
+                self._active_tool_info.pop(self._active_tool_chunk_index, None)
 
         if self._active_block_type == "thinking":
             signature = hashlib.sha256(self._active_block_content.encode()).hexdigest()
@@ -328,28 +330,23 @@ class OpenAIToAnthropicStreamTranslator:
         if delta.tool_calls:
             for tc_chunk in delta.tool_calls:
                 tool_index = tc_chunk.index
-                # Is this the start of a new tool call?
-                if tool_index not in self._active_tool_info:
-                    if tc_chunk.id and tc_chunk.function and tc_chunk.function.name:
-                        # If the active block is not a tool_use block, we must close it
-                        # before starting a new tool_use block.
-                        if self._active_block_type is not None and self._active_block_type != "tool_use":
-                            events.extend(self._close_active_block())
 
-                        tool_info = {
-                            "id": tc_chunk.id,
-                            "name": tc_chunk.function.name,
-                            "argument_buffer": "",
-                            "is_escaped_json_string": None,
-                        }
-                        self._active_tool_info[tool_index] = tool_info
-                        events.extend(
-                            self._start_new_block("tool_use", tool_info=tool_info, tool_chunk_index=tool_index)
-                        )
+                # A new tool call is definitively declared if it has an `id` and `function.name`.
+                # This signals the need to start a new tool block.
+                if tc_chunk.id and tc_chunk.function and tc_chunk.function.name:
+                    # This is a new tool declaration. _start_new_block will close any prior block.
+                    tool_info = {
+                        "id": tc_chunk.id,
+                        "name": tc_chunk.function.name,
+                        "argument_buffer": "",
+                        "is_escaped_json_string": None,
+                    }
+                    self._active_tool_info[tool_index] = tool_info
+                    events.extend(self._start_new_block("tool_use", tool_info=tool_info, tool_chunk_index=tool_index))
 
+                # Arguments may be present in the same chunk as the declaration, or a subsequent one.
                 if tc_chunk.function and tc_chunk.function.arguments:
-                    # This logic assumes sequential tool call processing.
-                    # We check if the active block is a tool_use block for the correct tool index.
+                    # Check if we are in a valid state to receive arguments for this tool index.
                     if self._active_block_type != "tool_use" or self._active_tool_chunk_index != tool_index:
                         logger.warning(
                             f"Received tool arguments for tool {tool_index} but the active block is type '{self._active_block_type}' for tool index '{self._active_tool_chunk_index}'. This may indicate an unsupported interleaved stream. Ignoring."
@@ -366,13 +363,13 @@ class OpenAIToAnthropicStreamTranslator:
                     args = tc_chunk.function.arguments
 
                     # First time seeing args for this tool? Detect if it's an escaped stream.
-                    if not tool_state["is_escaped_json_string"] and args:
-                        # Heuristic: if arguments contain JSON escape sequences, buffer them.
-                        tool_state["is_escaped_json_string"] = '"{' == args
+                    if tool_state.get("is_escaped_json_string") is None and args:
+                        # Heuristic: if arguments stream starts with a quote, it's likely an escaped JSON string.
+                        tool_state["is_escaped_json_string"] = args.startswith('"')
 
                     if tool_state.get("is_escaped_json_string"):
                         tool_state["argument_buffer"] += args
-                        # Don't emit delta, just buffer.
+                        # Don't emit delta, just buffer. It will be flushed when the block closes.
                     else:
                         # Standard, non-escaped JSON stream.
                         events.append(
@@ -421,13 +418,6 @@ class OpenAIToAnthropicStreamTranslator:
         final_reason = stop_reason_map.get(self.finish_reason or "", "end_turn")
 
         # Anthropic's "tool_use" is for when the model's turn ends with one or more tool_use blocks.
-        if self._next_block_index > 0:  # if any blocks were created
-            last_block_was_tool = any(
-                isinstance(e, ContentBlockStartEvent) and e.content_block.type == "tool_use" for e in reversed(events)
-            )
-            if last_block_was_tool and final_reason != "max_tokens":
-                final_reason = "tool_use"
-
         if self.finish_reason == "tool_calls":
             final_reason = "tool_use"
 
@@ -465,7 +455,7 @@ async def _parse_openai_sse_stream(
                 continue
             if data_str == "[DONE]":
                 return
-            # print(data_str)
+            print(data_str)
             try:
                 yield OpenAIChatCompletionChunk.model_validate_json(data_str)
             except (json.JSONDecodeError, ValueError) as e:
@@ -489,17 +479,17 @@ async def translate_openai_to_anthropic_stream(
 
     # 2. Process the stream chunk by chunk
     async for openai_chunk in _parse_openai_sse_stream(openai_stream):
-        # print(openai_chunk)
+        print(openai_chunk)
         anthropic_events = translator.process_chunk(openai_chunk)
         for event_model in anthropic_events:
             event = _format_sse(event_model)
-            # print(event)
+            print(event)
             yield event
 
     # 3. Yield finalization events
     for event_model in translator.finalize():
         event = _format_sse(event_model)
-        # print(event)
+        print(event)
         yield event
 
 
@@ -572,10 +562,13 @@ def translate_openai_to_anthropic_non_stream(
             except json.JSONDecodeError:
                 # If that fails, it might be the escaped string format
                 try:
-                    # e.g., arguments = "{\"key\": \"value\"}"
-                    unescaped_args = tool_call.function.arguments.encode("latin-1").decode("unicode_escape")
-                    tool_input = json.loads(unescaped_args)
-                except (json.JSONDecodeError, Exception) as e:
+                    # e.g., arguments = "\"{\\\"key\\\": \\\"value\\\"}\""
+                    # The arguments field is a JSON string, which contains another JSON string.
+                    # We need to parse it once to get the inner string.
+                    tool_input_str = json.loads(tool_call.function.arguments)
+                    # Then parse the inner string to get the actual object.
+                    tool_input = json.loads(tool_input_str)
+                except (json.JSONDecodeError, TypeError, Exception) as e:
                     logger.warning(
                         f"Failed to decode tool call arguments in non-streaming mode: {e}. Raw args: {tool_call.function.arguments}"
                     )

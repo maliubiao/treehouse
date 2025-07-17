@@ -16,6 +16,7 @@ from .models_anthropic import (
     MessageStartEvent,
     MessageStopEvent,
     SignatureDelta,
+    TextDelta,
     ThinkingDelta,
 )
 from .models_openai import (
@@ -40,11 +41,8 @@ def_choice = OpenAIChoiceDelta(index=0, delta=OpenAIChatMessageDelta(), finish_r
 
 def assert_event_types(events: List[BaseModel], expected_types: List[type]):
     """Asserts that the produced events have the expected types in order."""
-    assert len(events) == len(expected_types), (
-        f"Expected {len(expected_types)} events, but got {len(events)}: {[type(e) for e in events]}"
-    )
-    for i, (event, expected_type) in enumerate(zip(events, expected_types)):
-        assert isinstance(event, expected_type), f"Event {i} was {type(event)}, expected {expected_type}"
+    actual_types = [type(e) for e in events]
+    assert actual_types == expected_types, f"Expected event types {expected_types}, but got {actual_types}"
 
 
 def test_start_stream(translator: OpenAIToAnthropicStreamTranslator):  # pylint: disable=redefined-outer-name
@@ -193,8 +191,13 @@ def test_escaped_json_string_tool_call(translator: OpenAIToAnthropicStreamTransl
     assert events1[0].content_block.type == "tool_use"
     assert events1[0].content_block.id == "tool_esc"
 
-    whole = json.dumps(json.dumps({"query": ""}))
+    # This is a string which is itself a valid JSON document.
+    # The OpenAI response contains this as a JSON string, so it's double-quoted.
+    inner_json_str = '{"query": "value"}'
+    outer_json_str = json.dumps(inner_json_str)  # Results in "\"{\\\"query\\\": \\\"value\\\"}\""
+
     # Chunk 2: First part of escaped arguments. This should trigger the detection.
+    # The first character of a JSON string is always '"'.
     chunk2 = OpenAIChatCompletionChunk(
         id="c2",
         created=2,
@@ -204,9 +207,7 @@ def test_escaped_json_string_tool_call(translator: OpenAIToAnthropicStreamTransl
             OpenAIChoiceDelta(
                 index=0,
                 delta=OpenAIChatMessageDelta(
-                    tool_calls=[
-                        OpenAIToolCallDelta(index=0, function=OpenAIFunctionCallDelta(arguments=whole[:2])),
-                    ]
+                    tool_calls=[OpenAIToolCallDelta(index=0, function=OpenAIFunctionCallDelta(arguments='"'))]
                 ),
             )
         ],
@@ -215,7 +216,7 @@ def test_escaped_json_string_tool_call(translator: OpenAIToAnthropicStreamTransl
     # No events should be emitted, as arguments are being buffered.
     assert_event_types(events2, [])
     assert translator._active_tool_info[0]["is_escaped_json_string"] is True
-    assert translator._active_tool_info[0]["argument_buffer"] == whole[:2]
+    assert translator._active_tool_info[0]["argument_buffer"] == '"'
 
     # Chunk 3: Second part of escaped arguments.
     chunk3 = OpenAIChatCompletionChunk(
@@ -228,7 +229,7 @@ def test_escaped_json_string_tool_call(translator: OpenAIToAnthropicStreamTransl
                 index=0,
                 delta=OpenAIChatMessageDelta(
                     tool_calls=[
-                        OpenAIToolCallDelta(index=0, function=OpenAIFunctionCallDelta(arguments=whole[2:])),
+                        OpenAIToolCallDelta(index=0, function=OpenAIFunctionCallDelta(arguments=outer_json_str[1:]))
                     ]
                 ),
             )
@@ -236,7 +237,7 @@ def test_escaped_json_string_tool_call(translator: OpenAIToAnthropicStreamTransl
     )
     events3 = translator.process_chunk(chunk3)
     assert_event_types(events3, [])
-    assert translator._active_tool_info[0]["argument_buffer"] == whole
+    assert translator._active_tool_info[0]["argument_buffer"] == outer_json_str
 
     # Finalize the stream. This should trigger _close_active_block and flush the buffer.
     translator.finish_reason = "tool_calls"
@@ -252,7 +253,7 @@ def test_escaped_json_string_tool_call(translator: OpenAIToAnthropicStreamTransl
     assert isinstance(delta_event, ContentBlockDeltaEvent)
     assert delta_event.index == 0
     assert isinstance(delta_event.delta, InputJsonDelta)
-    assert delta_event.delta.partial_json == json.dumps({"query": ""})
+    assert delta_event.delta.partial_json == inner_json_str
 
 
 def test_thinking_generation(translator: OpenAIToAnthropicStreamTranslator):
@@ -498,6 +499,81 @@ def test_usage_reporting(translator: OpenAIToAnthropicStreamTranslator):
     assert message_delta_event is not None, "MessageDeltaEvent not found in final events"
     assert message_delta_event.usage.input_tokens == 50
     assert message_delta_event.usage.output_tokens == 100
+
+
+def test_consecutive_tool_calls_same_index(translator: OpenAIToAnthropicStreamTranslator):
+    """Test a stream with two full tool calls sent back-to-back for the same index."""
+    # Chunk 1: First complete tool call
+    args1 = {"target": "all"}
+    chunk1 = OpenAIChatCompletionChunk(
+        id="c1",
+        created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(
+                    tool_calls=[
+                        OpenAIToolCallDelta(
+                            index=0,
+                            id="tool_1",
+                            function=OpenAIFunctionCallDelta(name="run_compile", arguments=json.dumps(args1)),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+    events1 = translator.process_chunk(chunk1)
+    # Should start block 0 and provide its arguments
+    assert_event_types(events1, [ContentBlockStartEvent, ContentBlockDeltaEvent])
+    assert events1[0].index == 0
+    assert events1[0].content_block.type == "tool_use"
+    assert events1[0].content_block.id == "tool_1"
+    assert events1[1].index == 0
+    assert isinstance(events1[1].delta, InputJsonDelta)
+    assert events1[1].delta.partial_json == json.dumps(args1)
+
+    # Chunk 2: Second complete tool call, same index, new ID
+    args2 = {"path": "./src"}
+    chunk2 = OpenAIChatCompletionChunk(
+        id="c2",
+        created=2,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(
+                    tool_calls=[
+                        OpenAIToolCallDelta(
+                            index=0,
+                            id="tool_2",
+                            function=OpenAIFunctionCallDelta(name="run_lint", arguments=json.dumps(args2)),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+    events2 = translator.process_chunk(chunk2)
+    # Should stop block 0, start block 1, and provide its arguments
+    assert_event_types(events2, [ContentBlockStopEvent, ContentBlockStartEvent, ContentBlockDeltaEvent])
+    assert events2[0].index == 0  # Stop block 0
+    assert events2[1].index == 1  # Start block 1
+    assert events2[1].content_block.type == "tool_use"
+    assert events2[1].content_block.id == "tool_2"
+    assert events2[2].index == 1
+    assert isinstance(events2[2].delta, InputJsonDelta)
+    assert events2[2].delta.partial_json == json.dumps(args2)
+
+    # Finalize
+    translator.finish_reason = "tool_calls"
+    final_events = translator.finalize()
+    # Should stop the last active block (index 1)
+    assert_event_types(final_events, [ContentBlockStopEvent, MessageDeltaEvent, MessageStopEvent])
+    assert final_events[0].index == 1
 
 
 if __name__ == "__main__":

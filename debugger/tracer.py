@@ -1,18 +1,12 @@
 import ast
-import base64
-import datetime
-import dis
 import fnmatch
 import functools
-import html
 import inspect
 import json
 import linecache
 import logging
 import os
 import queue
-import re
-import shutil
 import sys
 import threading
 import time
@@ -20,7 +14,10 @@ import traceback
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
-from unittest.mock import Mock
+
+from .source_cache import get_statement_info
+from .tracer_common import TraceTypes, truncate_repr_value
+from .tracer_html import CallTreeHtmlRender
 
 try:
     from colorama import Fore, Style, just_fix_windows_console
@@ -35,8 +32,6 @@ except ImportError:
     def just_fix_windows_console():
         pass
 
-
-from .source_cache import get_statement_info
 
 just_fix_windows_console()
 
@@ -68,8 +63,6 @@ if TYPE_CHECKING:
 
 
 # Constants
-_MAX_VALUE_LENGTH = 256
-_MAX_SEQ_ITEMS = 10
 _INDENT = "  "
 _LOG_DIR = Path(__file__).parent / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -77,48 +70,6 @@ TRACE_LOG_NAME = _LOG_DIR / "trace.log"
 LOG_NAME = _LOG_DIR / "debug.log"
 _MAX_CALL_DEPTH = 20
 _DEFAULT_REPORT_NAME = "trace_report.html"
-
-
-# Trace types
-class TraceTypes:
-    """Trace event and message type constants"""
-
-    # Event types
-    CALL = "call"
-    RETURN = "return"
-    LINE = "line"
-    EXCEPTION = "exception"
-    MODULE = "module"
-
-    # Message types
-    ERROR = "error"
-    TRACE = "trace"
-    VAR = "var"
-
-    # Color types
-    COLOR_CALL = "call"
-    COLOR_RETURN = "return"
-    COLOR_VAR = "var"
-    COLOR_LINE = "line"
-    COLOR_ERROR = "error"
-    COLOR_TRACE = "trace"
-    COLOR_RESET = "reset"
-    COLOR_EXCEPTION = "exception"  # For consistency with event types
-    COLOR_DEBUG = "debug"
-
-    # Log prefixes
-    PREFIX_CALL = "CALL"
-    PREFIX_RETURN = "RETURN"
-    PREFIX_MODULE = "MODULE"
-    PREFIX_EXCEPTION = "EXCEPTION"
-
-    # HTML classes
-    HTML_CALL = "call"
-    HTML_RETURN = "return"
-    HTML_ERROR = "error"
-    HTML_LINE = "line"
-    HTML_TRACE = "trace"
-    HTML_VAR = "var"
 
 
 # 该字典已被colorama替代
@@ -364,116 +315,6 @@ class TraceConfig:
     def is_excluded_function(self, func_name: str) -> bool:
         """检查函数名是否在排除列表中"""
         return func_name in self.exclude_functions
-
-
-def _truncate_sequence(value, keep_elements):
-    if len(value) <= keep_elements:
-        return repr(value)
-    keep_list = []
-    for i in range(keep_elements):
-        keep_list.append(value[i])
-    return f"{repr(keep_list)[:-1]} ...]"
-
-
-def _truncate_dict(value, keep_elements):
-    if len(value) <= keep_elements:
-        return repr(value)
-    keep_dict = {}
-    i = keep_elements
-    it = iter(value)
-    while i > 0 and value:
-        key = next(it)
-        keep_dict[key] = value[key]
-        i -= 1
-    s = repr(keep_dict)
-    return "%s ...}" % s[:-1]
-
-
-def _truncate_object(value, keep_elements):
-    if len(value.__dict__) <= keep_elements:
-        return f"{type(value).__name__}.({repr(value.__dict__)})"
-    keep_attrs = {}
-    i = keep_elements
-    it = iter(value.__dict__)
-    while i > 0 and value.__dict__:
-        key = next(it)
-        keep_attrs[key] = value.__dict__[key]
-        i -= 1
-    s = repr(keep_attrs)
-    return f"{type(value).__name__}(%s ...)" % s[:-1]
-
-
-def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
-    """
-    Intelligently truncates a value and creates a suitable string representation for it,
-    while preserving key type information.
-
-    This function is specifically tuned to handle strings correctly, avoiding the
-    "double-quoting" issue caused by applying `repr()` to a value that is already a string.
-
-    Args:
-        value: The value to be represented.
-        keep_elements: The maximum number of elements to keep for sequences and dicts.
-
-    Returns:
-        A truncated string representation suitable for logging and code generation.
-    """
-    preview = "..."
-    try:
-        # [FIX] Explicitly handle strings to prevent double-quoting by `repr()`.
-        # This is a common case and should be checked first for performance.
-        # Handle primitive and special types
-        if isinstance(value, str):
-            if len(value) > _MAX_VALUE_LENGTH:
-                half = _MAX_VALUE_LENGTH // 2
-                omitted = len(value) - 2 * half
-                return value[:half] + "..." + value[-half:] + f" (total length: {len(value)}, omitted: {omitted})"
-            return value
-        # Detect unittest.mock.Mock objects
-        elif isinstance(value, Mock):
-            # Provide a more informative representation for mock objects.
-            try:
-                name_part = f"name='{value._extract_mock_name()}'"
-            except AttributeError:
-                name_part = ""
-            spec_part = f"spec={value.__class__}"
-            preview = f"mock.Mock({', '.join(filter(None, [name_part, spec_part]))})"
-        elif isinstance(value, (list, tuple)):
-            preview = _truncate_sequence(value, keep_elements)
-        elif isinstance(value, dict):
-            preview = _truncate_dict(value, keep_elements)
-        # For other objects with a custom __repr__, use it as it's the developer's intended representation.
-        elif hasattr(value, "__repr__") and value.__repr__.__qualname__ != "object.__repr__":
-            preview = repr(value)
-        # As a fallback, use __str__ if it's customized.
-        elif hasattr(value, "__str__") and value.__str__.__qualname__ != "object.__str__":
-            preview = str(value)
-        # For simple objects, show their structure.
-        elif hasattr(value, "__dict__"):
-            if inspect.ismodule(value):
-                return f"<module '{value.__name__}'>"
-            if inspect.isclass(value):
-                return f"<class '{getattr(value, '__module__', '?')}.{value.__name__}'>"
-            preview = _truncate_object(value, keep_elements)
-        # The final fallback is the default repr().
-        # Functions, methods, and other callables
-        elif callable(value):
-            s = repr(value)
-            # General cleanup for callables
-            s = re.sub(r"\s+at\s+0x[0-9a-fA-F]+", "", s)
-            s = re.sub(r"\s+of\s+<class\s+'.*?'>", "", s)
-            if len(s) > _MAX_VALUE_LENGTH:
-                s = s[:_MAX_VALUE_LENGTH] + "..."
-            return s
-        else:
-            preview = repr(value)
-    except Exception as e:
-        # Catch any error during representation generation to prevent the tracer from crashing.
-        preview = f"[trace system error: {e}]"
-    # Perform a final length check on all generated previews.
-    if len(preview) > _MAX_VALUE_LENGTH:
-        preview = preview[:_MAX_VALUE_LENGTH] + "..."
-    return preview
 
 
 def color_wrap(text, color_type):
@@ -874,332 +715,6 @@ class SysMonitoringTraceDispatcher:
         logging.info("⏹ DEBUG SESSION ENDED\n")
         print(color_wrap("\n⏹ 调试会话结束", TraceTypes.COLOR_RETURN))
         return report_path
-
-
-class CallTreeHtmlRender:
-    """将跟踪日志渲染为美观的HTML页面，支持搜索、折叠等功能"""
-
-    def __init__(self, trace_logic: "TraceLogic"):
-        self.trace_logic = trace_logic
-        self._messages = []  # 存储(message, msg_type, log_data)三元组
-        self._executed_lines = defaultdict(lambda: defaultdict(set))  # 使用集合避免重复记录
-        self._frame_executed_lines = defaultdict(lambda: defaultdict(set))
-        self._source_files = {}  # 存储源代码文件内容
-        self._stack_variables = {}
-        self._comments_data = defaultdict(lambda: defaultdict(list))
-        self.current_message_id = 0
-        self._size_limit = 100 * 1024 * 1024
-        self._current_size = 0
-        self._size_exceeded = False
-        self._html_template = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Python Trace Report</title>
-            <link rel="stylesheet" href="../tracer_styles.css">
-            <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css"
-                rel="stylesheet" id="prism-theme">
-            <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css"
-                rel="stylesheet">
-            <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.css"
-                rel="stylesheet">
-        </head>
-        <body>
-            <div id="sourceDialog" class="source-dialog">
-                <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
-                <div class="close-overlay"></div>
-                <div class="source-header">
-                    <div class="source-title" id="sourceTitle"></div>
-                </div>
-                <div class="source-content" id="sourceContent"></div>
-            </div>
-            <h1>Python Trace Report</h1>
-            <div class="summary">
-                <p>Generated at: {generation_time}</p>
-                <p>Total messages: {message_count}</p>
-                <p>Errors: {error_count}</p>
-                <div class="theme-selector">
-                    <label>Theme: </label>
-                    <select id="themeSelector">
-                        <!-- Options will be populated by JavaScript -->
-                    </select>
-                </div>
-            </div>
-            <div id="controls">
-                <input type="text" id="search" placeholder="Search messages...">
-                <button id="expandAll">Expand All</button>
-                <button id="collapseAll">Collapse All</button>
-                <button id="exportBtn">Export as HTML</button>
-            </div>
-            <div id="content">\n{content}\n</div>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
-            <script src="../tracer_scripts.js"></script>
-            <script>
-                window.executedLines = {executed_lines_data};
-                window.sourceFiles = {source_files_data};
-                window.commentsData = {comments_data};
-            </script>
-        </body>
-        </html>
-        """
-
-    def _get_nested_dict_value(self, data_dict, filename, frame_id=None):
-        """获取嵌套字典中的值"""
-        try:
-            return data_dict[filename] if frame_id is None else data_dict[filename][frame_id]
-        except KeyError:
-            return None
-
-    def _set_nested_dict_value(self, data_dict, filename, value, frame_id=None):
-        """设置嵌套字典中的值"""
-        if frame_id is not None:
-            data_dict[filename][frame_id].add(value)
-        else:
-            data_dict[filename] = value
-
-    def format_stack_variables(self, variables):
-        if not variables:
-            return ""
-        text = []
-        seen = set()
-        for opcode, var_name, value in variables:
-            if "CALL" == dis.opname[opcode]:
-                is_method = value[-1]
-                value = value[:-1]
-                instance_name = ""
-                if is_method:
-                    instance = value[0]
-                    if getattr(instance, "__name__", None):
-                        instance_name = instance.__name__
-                    elif getattr(instance, "__class__", None):
-                        instance_name = instance.__class__.__name__
-                    else:
-                        instance_name = repr(instance)
-                    value = value[1:]
-                args = ", ".join(f"{truncate_repr_value(arg)}" for arg in value)
-                if getattr(var_name, "__code__", None):
-                    item = f"{var_name.__code__.co_name}({args})"
-                elif getattr(var_name, "__name__", None):
-                    item = f"{var_name.__name__}({args})"
-                else:
-                    item = f"{var_name}({args})"
-                if instance_name:
-                    item = f"{instance_name}.{item}"
-            elif "STORE_SUBSCR" == dis.opname[opcode]:
-                item = f"[{var_name}]={truncate_repr_value(value)}"
-            else:
-                item = f"{var_name}={truncate_repr_value(value)}"
-            if item not in seen:
-                seen.add(item)
-                text.append(item)
-        return " ".join(text)
-
-    def _message_to_html(self, message, msg_type, log_data):
-        """将消息转换为HTML片段"""
-        stripped_message = message.lstrip()
-        indent = len(message) - len(stripped_message)
-        escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
-
-        data = log_data.get("data", {}) if isinstance(log_data, dict) else {}
-        original_filename = data.get("original_filename")
-        line_number = data.get("lineno")
-        frame_id = data.get("frame_id")
-        comment_html = ""
-        idx = log_data.get("idx", None)
-        if self._stack_variables.get(idx):
-            comment = self.format_stack_variables(self._stack_variables[idx])
-            comment_id = f"comment_{idx}"
-            comment_html = self._build_comment_html(comment_id, comment) if comment else ""
-        view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
-        html_parts = []
-        if msg_type == TraceTypes.CALL:
-            html_parts.extend(
-                [
-                    f'<div class="foldable {TraceTypes.HTML_CALL}" style="padding-left:{indent}px">',
-                    f"    {escaped_content}{view_source_html}{comment_html}",
-                    "</div>",
-                    '<div class="call-group">',
-                ]
-            )
-        elif msg_type == TraceTypes.RETURN:
-            html_parts.extend(
-                [
-                    "</div>",
-                    f'<div class="{TraceTypes.HTML_RETURN}" style="padding-left:{indent}px">',
-                    f"    {escaped_content}{comment_html}",
-                    "</div>",
-                ]
-            )
-        elif msg_type in (TraceTypes.EXCEPTION, TraceTypes.ERROR, TraceTypes.COLOR_EXCEPTION):
-            html_parts.extend(
-                [
-                    "</div>",
-                    f'<div class="{TraceTypes.HTML_ERROR}" style="padding-left:{indent}px">',
-                    f"    {escaped_content}{view_source_html}{comment_html}",
-                    "</div>",
-                ]
-            )
-        else:
-            html_parts.extend(
-                [
-                    f'<div class="{msg_type}" style="padding-left:{indent}px">',
-                    f"    {escaped_content}{view_source_html}{comment_html}",
-                    "</div>",
-                ]
-            )
-        html_content = "\n".join(html_parts) + "\n"
-        self._current_size += len(html_content)
-        if self._current_size > self._size_limit and not self._size_exceeded:
-            self._size_exceeded = True
-            size_limit_mb = self._size_limit / (1024 * 1024)
-            return f'<div class="{TraceTypes.HTML_ERROR}">⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略</div>\n'
-        return html_content
-
-    def _build_comment_html(self, comment_id, comment):
-        """构建评论HTML片段"""
-        is_long = len(comment) > 64
-        short_comment = comment[:64] + "..." if is_long else comment
-        short_comment_escaped = html.escape(short_comment)
-        full_comment_escaped = html.escape(comment)
-        return f'''<span class="comment" id="{comment_id}" 
-onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
-<span class="comment-preview">{short_comment_escaped}</span>
-<span class="comment-full">{full_comment_escaped}</span></span>'''
-
-    def _build_view_source_html(self, filename, line_number, frame_id):
-        """构建查看源代码按钮HTML片段"""
-        if not filename or not line_number:
-            return ""
-        # Escape backslashes in filenames (important for Windows paths)
-        escaped_filename = filename.replace("\\", "\\\\").replace("'", "\\'")
-        return f'<span class="view-source-btn" onclick="showSource(\'{escaped_filename}\', {line_number}, {frame_id})">view source</span>'
-
-    def _load_source_file(self, filename):
-        """加载源代码文件内容"""
-        if filename in self._source_files:
-            return
-        try:
-            with open(filename, "rb") as f:
-                content = base64.b64encode(f.read()).decode("utf-8")
-                self._source_files[filename] = content
-        except (IOError, OSError) as e:
-            self._source_files[filename] = f"// Error loading source file: {str(e)}"
-
-    def add_message(self, message, msg_type, log_data=None):
-        """添加消息到消息列表"""
-        if self._size_exceeded:
-            return
-        self._messages.append((message, msg_type, log_data))
-
-    def add_stack_variable_create(self, idx, opcode, var_name, value):
-        if self._size_exceeded:
-            return
-        if idx not in self._stack_variables:
-            self._stack_variables[idx] = []
-        self._stack_variables[idx].append((opcode, var_name, value))
-
-    def add_raw_message(self, log_data, color_type):
-        """添加原始日志数据并处理"""
-        if self._size_exceeded:
-            return
-
-        if isinstance(log_data, str):
-            message = log_data
-        else:
-            # 预缓存格式化结果避免重复格式化
-            message = log_data["template"].format(**log_data["data"])
-
-        if color_type == TraceTypes.COLOR_LINE and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
-            data = log_data["data"]
-            original_filename = data.get("original_filename")
-            lineno = data["lineno"]
-            frame_id = data.get("frame_id")
-            if original_filename and lineno:
-                self._executed_lines[original_filename][frame_id].add(lineno)
-                self._load_source_file(original_filename)
-        self._messages.append((message, color_type, log_data))
-
-    def generate_html(self):
-        """生成完整的HTML报告"""
-        buffer = []
-        error_count = 0
-        # 这块需要在js中进行，翻译成js代码， 使用到的self._messages,  self._stack_variables 直接传入js
-        for idx, (message, msg_type, log_data) in enumerate(self._messages):
-            if self._size_exceeded:
-                continue
-            buffer.append(self._message_to_html(message, msg_type, log_data))
-            if msg_type in (TraceTypes.ERROR, TraceTypes.EXCEPTION, TraceTypes.COLOR_EXCEPTION):
-                error_count += 1
-
-        generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        executed_lines_data = {
-            filename: {frame_id: list(lines) for frame_id, lines in frames.items()}
-            for filename, frames in self._executed_lines.items()
-        }
-        executed_lines_json = json.dumps(executed_lines_data)
-
-        source_files_json = json.dumps(self._source_files)
-        comments_json = json.dumps(self._comments_data)
-
-        return self._html_template.format(
-            generation_time=generation_time,
-            message_count=len(self._messages),
-            error_count=error_count,
-            content="".join(buffer),
-            executed_lines_data=executed_lines_json,
-            source_files_data=source_files_json,
-            comments_data=comments_json,
-        )
-
-    def save_to_file(self, filename: str, is_multi_threaded: bool) -> Path:
-        """
-        将HTML报告保存到文件。如果为多线程，则创建自包含的目录。
-
-        Args:
-            filename: 报告的基础文件名。
-            is_multi_threaded: 是否为多线程模式。
-
-        Returns:
-            最终生成的HTML文件的路径。
-        """
-        report_dir = Path(__file__).parent / "logs"
-        report_dir.mkdir(exist_ok=True)
-        html_content = self.generate_html()
-
-        if is_multi_threaded:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            dir_name = f"{Path(filename).stem}_{timestamp}"
-            output_dir = report_dir / dir_name
-            output_dir.mkdir(exist_ok=True)
-            final_report_path = output_dir / "report.html"
-
-            # 复制资源文件
-            try:
-                asset_dir = Path(__file__).parent
-                assets = ["tracer_styles.css", "tracer_scripts.js"]
-                for asset in assets:
-                    source_asset = asset_dir / asset
-                    if source_asset.exists():
-                        shutil.copy(source_asset, output_dir / asset)
-
-                # 调整HTML中的资源路径
-                html_content = html_content.replace('href="../tracer_styles.css"', 'href="tracer_styles.css"')
-                html_content = html_content.replace('src="../tracer_scripts.js"', 'src="tracer_scripts.js"')
-            except Exception as e:
-                logging.error(f"无法复制资源文件: {e}")
-                print(color_wrap(f"无法复制资源文件: {e}", "error"))
-
-        else:
-            final_report_path = report_dir / filename
-
-        final_report_path.write_text(html_content, encoding="utf-8")
-        print(f"正在生成HTML报告 {final_report_path} ...")
-        return final_report_path
 
 
 class TraceLogExtractor:

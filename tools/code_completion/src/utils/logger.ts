@@ -23,6 +23,14 @@ class Logger {
         }
     }
 
+    public warn(message: string, data?: object) {
+        const logMessage = `[WARN] ${new Date().toISOString()} - ${message}`;
+        this._outputChannel.appendLine(logMessage);
+        if (data) {
+            this._outputChannel.appendLine(JSON.stringify(data, null, 2));
+        }
+    }
+
     public error(message: string, error?: any) {
         const logMessage = `[ERROR] ${new Date().toISOString()} - ${message}`;
         this._outputChannel.appendLine(logMessage);

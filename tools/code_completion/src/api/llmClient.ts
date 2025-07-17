@@ -7,6 +7,7 @@ import { GenerationContext } from '../types';
 // The user needs to manually install this dependency by running: npm install https-proxy-agent
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Agent } from 'http';
+import { StreamingAccumulator } from '../utils/streamingAccumulator';
 
 /**
  * Retrieves the HttpsProxyAgent based on VS Code's proxy settings.
@@ -322,8 +323,17 @@ export async function generateCode(
     };
     logger.log('Sending OpenAI Chat Completion Request with options:', completionOptions);
 
+    const streamingAccumulator = StreamingAccumulator.getInstance();
+    const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
+    const enableStreamingAccumulator = config.get<boolean>('output.streamingResults', true);
+    
     try {
         const timeoutMs = (activeService.timeout_seconds || 60) * 1000;
+        
+        // Start accumulation session
+        if (enableStreamingAccumulator) {
+            streamingAccumulator.startSession();
+        }
         
         // Always use streaming mode
         const stream = await openai.chat.completions.create(completionOptions, { timeout: timeoutMs });
@@ -338,6 +348,12 @@ export async function generateCode(
                 
                 if (content) {
                     accumulatedContent += content;
+                    
+                    // Add to streaming accumulator
+                    if (enableStreamingAccumulator) {
+                        streamingAccumulator.addChunk(content);
+                    }
+                    
                     tokenCount += content.split(/\s+/).length;
                     
                     // Always update progress if callback provided
@@ -378,8 +394,19 @@ export async function generateCode(
         };
 
         logger.log('Estimated token usage:', usage);
+        
+        // End streaming session
+        if (enableStreamingAccumulator) {
+            streamingAccumulator.endSession(true);
+        }
+        
         return { code: cleanResponse(accumulatedContent), usage };
     } catch (error) {
+        // End streaming session on error
+        if (enableStreamingAccumulator) {
+            streamingAccumulator.endSession(false);
+        }
+        
         const errorDetails = {
             message: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : new Error().stack,
@@ -426,8 +453,17 @@ export async function playgroundChat(
     };
     logger.log('Sending OpenAI Chat Completion Request from playground with options:', completionOptions);
 
+    const streamingAccumulator = StreamingAccumulator.getInstance();
+    const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
+    const enableStreamingAccumulator = config.get<boolean>('output.streamingResults', true);
+
     try {
         const timeoutMs = (serviceConfig.timeout_seconds || 60) * 1000;
+        
+        // Start accumulation session
+        if (enableStreamingAccumulator) {
+            streamingAccumulator.startSession();
+        }
         
         // Always use streaming mode
         const stream = await openai.chat.completions.create(completionOptions, { timeout: timeoutMs });
@@ -442,6 +478,12 @@ export async function playgroundChat(
                 
                 if (content) {
                     accumulatedContent += content;
+                    
+                    // Add to streaming accumulator
+                    if (enableStreamingAccumulator) {
+                        streamingAccumulator.addChunk(content);
+                    }
+                    
                     tokenCount += content.split(/\s+/).length;
                     
                     // Always update progress if callback provided
@@ -480,6 +522,11 @@ export async function playgroundChat(
             cost: calculateCost(estimatedPromptTokens, estimatedCompletionTokens),
             model: serviceConfig.model_name,
         };
+
+        // End streaming session
+        if (enableStreamingAccumulator) {
+            streamingAccumulator.endSession(true);
+        }
 
         return { response: accumulatedContent, usage };
     } catch (error) {

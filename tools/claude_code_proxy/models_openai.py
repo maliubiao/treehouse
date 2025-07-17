@@ -70,7 +70,7 @@ class OpenAIResponseMessage(BaseModel):
 
 
 class OpenAIChoice(BaseModel):
-    finish_reason: str
+    finish_reason: Optional[str] = None
     index: int
     message: OpenAIResponseMessage
 
