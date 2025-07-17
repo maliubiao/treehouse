@@ -280,8 +280,9 @@ button:hover {
     z-index: 1000;
     padding: 20px;
     border-radius: 8px;
+    display: flex;
     flex-direction: column;
-    overflow: auto;
+    overflow: hidden;
     isolation: isolate;
 }
 
@@ -317,7 +318,6 @@ button:hover {
 .source-container {
     display: flex;
     height: 100%;
-    overflow: auto;
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 14px;
     border-radius: 4px;
@@ -352,7 +352,6 @@ button:hover {
 /* Code content area */
 .code-content {
     flex: 1;
-    overflow: auto;
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 14px;
     line-height: 1.5;
@@ -412,6 +411,21 @@ button:hover {
     margin-left: 10px;
     font-size: 0.8em;
 }
+
+/* Action Buttons: Copy Subtree, Focus Subtree */
+.copy-subtree-btn, .focus-subtree-btn {
+    display: none;
+    margin-left: 8px;
+    cursor: pointer;
+    font-size: 0.9em;
+    user-select: none; /* Prevent text selection */
+}
+
+.foldable:hover .copy-subtree-btn,
+.foldable:hover .focus-subtree-btn {
+    display: inline-block;
+}
+
 
 /* Enhanced close buttons */
 .close-btn {
@@ -484,27 +498,23 @@ button:hover {
 }
 
 /* ===== Scrollbar Styling ===== */
-.line-numbers::-webkit-scrollbar,
-.code-content::-webkit-scrollbar {
+.source-content::-webkit-scrollbar {
     width: var(--scrollbar-width);
     height: var(--scrollbar-width);
 }
 
-.line-numbers::-webkit-scrollbar-thumb,
-.code-content::-webkit-scrollbar-thumb {
+.source-content::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
     border-radius: 4px;
 }
 
-.line-numbers::-webkit-scrollbar-track,
-.code-content::-webkit-scrollbar-track {
+.source-content::-webkit-scrollbar-track {
     background: var(--scrollbar-track);
     border-radius: 4px;
 }
 
 /* Firefox scrollbar compatibility */
-.line-numbers,
-.code-content {
+.source-content {
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }

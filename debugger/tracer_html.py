@@ -195,21 +195,29 @@ class CallTreeHtmlRender:
             comment_html = self._build_comment_html(comment_id, comment) if comment else ""
 
         view_source_html = self._build_view_source_html(original_filename, line_number, frame_id)
+
+        data_indent_attr = f'data-indent="{indent}"'
+        actions_html = ""
+        if msg_type == TraceTypes.COLOR_CALL:
+            copy_subtree_html = ' <span class="copy-subtree-btn" title="Copy subtree as text">📋</span>'
+            focus_subtree_html = ' <span class="focus-subtree-btn" title="Focus on this subtree (crop)">🔍</span>'
+            actions_html = copy_subtree_html + focus_subtree_html
+
         html_parts: List[str] = []
         if msg_type == TraceTypes.COLOR_CALL:
             html_parts.extend(
                 [
-                    f'<div class="foldable {TraceTypes.HTML_CALL}" style="padding-left:{indent}px">',
-                    f"    {escaped_content}{view_source_html}{comment_html}",
+                    f'<div class="foldable {TraceTypes.HTML_CALL}" {data_indent_attr} style="padding-left:{indent}px">',
+                    f"    {escaped_content}{view_source_html}{comment_html}{actions_html}",
                     "</div>",
-                    '<div class="call-group">',
+                    '<div class="call-group collapsed">',
                 ]
             )
         elif msg_type == TraceTypes.COLOR_RETURN:
             html_parts.extend(
                 [
                     "</div>",
-                    f'<div class="{TraceTypes.HTML_RETURN}" style="padding-left:{indent}px">',
+                    f'<div class="{TraceTypes.HTML_RETURN}" {data_indent_attr} style="padding-left:{indent}px">',
                     f"    {escaped_content}{comment_html}",
                     "</div>",
                 ]
@@ -218,7 +226,7 @@ class CallTreeHtmlRender:
             html_parts.extend(
                 [
                     "</div>",
-                    f'<div class="{TraceTypes.HTML_ERROR}" style="padding-left:{indent}px">',
+                    f'<div class="{TraceTypes.HTML_ERROR}" {data_indent_attr} style="padding-left:{indent}px">',
                     f"    {escaped_content}{view_source_html}{comment_html}",
                     "</div>",
                 ]
@@ -226,7 +234,7 @@ class CallTreeHtmlRender:
         else:
             html_parts.extend(
                 [
-                    f'<div class="{msg_type}" style="padding-left:{indent}px">',
+                    f'<div class="{msg_type}" {data_indent_attr} style="padding-left:{indent}px">',
                     f"    {escaped_content}{view_source_html}{comment_html}",
                     "</div>",
                 ]

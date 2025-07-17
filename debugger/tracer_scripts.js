@@ -47,6 +47,8 @@ const TraceViewer = {
         this.initSourceDialog();
         this.initKeyboardShortcuts();
         this.initCommentToggle();
+        this.initCopySubtree();
+        this.initFocusSubtree();
     },
 
     // Initialize folding functionality
@@ -58,38 +60,49 @@ const TraceViewer = {
             if (e.target.classList.contains('foldable')) {
                 e.target.classList.toggle('expanded');
                 const group = e.target.nextElementSibling;
-                if (group) group.classList.toggle('collapsed');
+                if (group && group.classList.contains('call-group')) {
+                    group.classList.toggle('collapsed');
+                }
             }
         });
 
         // Expand all button
-        expandAllBtn.addEventListener('click', () => {
-            const foldables = content.querySelectorAll('.foldable');
-            foldables.forEach(el => {
-                el.classList.add('expanded');
-                const group = el.nextElementSibling;
-                if (group) group.classList.remove('collapsed');
+        if (expandAllBtn) {
+            expandAllBtn.addEventListener('click', () => {
+                const foldables = content.querySelectorAll('.foldable');
+                foldables.forEach(el => {
+                    el.classList.add('expanded');
+                    const group = el.nextElementSibling;
+                    if (group && group.classList.contains('call-group')) {
+                        group.classList.remove('collapsed');
+                    }
+                });
             });
-        });
+        }
 
         // Collapse all button
-        collapseAllBtn.addEventListener('click', () => {
-            const foldables = content.querySelectorAll('.foldable');
-            foldables.forEach(el => {
-                el.classList.remove('expanded');
-                const group = el.nextElementSibling;
-                if (group) group.classList.add('collapsed');
+        if (collapseAllBtn) {
+            collapseAllBtn.addEventListener('click', () => {
+                const foldables = content.querySelectorAll('.foldable');
+                foldables.forEach(el => {
+                    el.classList.remove('expanded');
+                    const group = el.nextElementSibling;
+                    if (group && group.classList.contains('call-group')) {
+                        group.classList.add('collapsed');
+                    }
+                });
             });
-        });
+        }
     },
 
     // Initialize search functionality
     initSearch() {
         const { content, search } = this.elements;
+        if (!search) return;
 
         search.addEventListener('input', function() {
             const term = this.value.toLowerCase();
-            const elements = content.querySelectorAll('div');
+            const elements = content.querySelectorAll('div[class*="call"], div[class*="return"], div[class*="line"]');
 
             elements.forEach(el => {
                 const text = el.textContent.toLowerCase();
@@ -98,10 +111,12 @@ const TraceViewer = {
                     // Expand parent elements to show matches
                     let parent = el.parentElement;
                     while (parent && parent !== content) {
-                        if (parent.classList.contains('foldable')) {
-                            parent.classList.add('expanded');
-                            const group = parent.nextElementSibling;
-                            if (group) group.classList.remove('collapsed');
+                        if (parent.classList.contains('call-group')) {
+                            parent.classList.remove('collapsed');
+                            const foldable = parent.previousElementSibling;
+                            if (foldable && foldable.classList.contains('foldable')) {
+                                foldable.classList.add('expanded');
+                            }
                         }
                         parent = parent.parentElement;
                     }
@@ -115,6 +130,7 @@ const TraceViewer = {
     // Initialize export functionality
     initExport() {
         const { exportBtn } = this.elements;
+        if (!exportBtn) return;
 
         exportBtn.addEventListener('click', () => {
             const html = document.documentElement.outerHTML;
@@ -227,6 +243,216 @@ const TraceViewer = {
                 if (sourceDialog && sourceDialog.style.display === 'block') {
                     sourceDialog.style.display = 'none';
                 }
+            }
+        });
+    },
+    
+    // Initialize "Copy Subtree" functionality
+    initCopySubtree() {
+        const { content } = this.elements;
+        content.addEventListener('click', async (e) => {
+            if (!e.target.classList.contains('copy-subtree-btn')) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const copyBtn = e.target;
+            const foldable = copyBtn.closest('.foldable.call');
+            if (!foldable) return;
+
+            const callGroup = foldable.nextElementSibling;
+            if (!callGroup || !callGroup.classList.contains('call-group')) {
+                return;
+            }
+
+            const lines = [];
+            
+            // Helper function to process a single node into a clean text line
+            const processNodeToText = (node) => {
+                const clone = node.cloneNode(true);
+                // Remove all UI-only elements
+                clone.querySelector('.view-source-btn')?.remove();
+                clone.querySelector('.copy-subtree-btn')?.remove();
+                clone.querySelector('.focus-subtree-btn')?.remove();
+                clone.querySelector('.comment')?.remove();
+
+                const text = clone.textContent.trim().replace(/\s+/g, ' ');
+                const indent = parseInt(node.dataset.indent, 10) || 0;
+                
+                return ' '.repeat(indent) + text;
+            };
+
+            // Process the main foldable 'call' line itself
+            lines.push(processNodeToText(foldable));
+
+            // Process all descendant log lines within the call group
+            const descendants = callGroup.querySelectorAll('div[data-indent]');
+            descendants.forEach(node => {
+                lines.push(processNodeToText(node));
+            });
+            
+            // Process the corresponding 'return' line
+            let nextElement = callGroup.nextElementSibling;
+            while(nextElement) {
+                if (nextElement.classList.contains('return')) {
+                     const indent = parseInt(nextElement.dataset.indent, 10) || 0;
+                     const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
+                     if(indent === foldableIndent) {
+                        lines.push(processNodeToText(nextElement));
+                        break;
+                     }
+                }
+                // Stop if we hit another call at the same or higher level
+                if (nextElement.classList.contains('foldable')) {
+                    break;
+                }
+                nextElement = nextElement.nextElementSibling;
+            }
+
+            const fullText = lines.join('\n');
+
+            try {
+                await navigator.clipboard.writeText(fullText);
+                const originalContent = copyBtn.textContent;
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => {
+                    copyBtn.textContent = originalContent;
+                }, 1500);
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+                const originalContent = copyBtn.textContent;
+                copyBtn.textContent = 'Error!';
+                setTimeout(() => {
+                    copyBtn.textContent = originalContent;
+                }, 1500);
+            }
+        });
+    },
+    
+    // Initialize "Focus Subtree" functionality
+    initFocusSubtree() {
+        this.elements.content.addEventListener('click', e => {
+            if (!e.target.classList.contains('focus-subtree-btn')) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const focusBtn = e.target;
+            const foldable = focusBtn.closest('.foldable.call');
+            if (!foldable) return;
+
+            const callGroup = foldable.nextElementSibling;
+            if (!callGroup || !callGroup.classList.contains('call-group')) {
+                return;
+            }
+
+            // 1. Collect HTML content for the subtree
+            const subtreeContainer = document.createElement('div');
+            subtreeContainer.appendChild(foldable.cloneNode(true));
+            subtreeContainer.appendChild(callGroup.cloneNode(true));
+            
+            // Find and add the matching return
+            let nextElement = callGroup.nextElementSibling;
+            while(nextElement) {
+                if (nextElement.classList.contains('return')) {
+                     const indent = parseInt(nextElement.dataset.indent, 10) || 0;
+                     const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
+                     if(indent === foldableIndent) {
+                        subtreeContainer.appendChild(nextElement.cloneNode(true));
+                        break;
+                     }
+                }
+                if (nextElement.classList.contains('foldable')) {
+                    break;
+                }
+                nextElement = nextElement.nextElementSibling;
+            }
+            const subtreeHTML = subtreeContainer.innerHTML;
+            
+            // 2. Filter required data (executedLines, sourceFiles, commentsData)
+            const requiredFiles = new Set();
+            const requiredExecutedLines = {};
+
+            const viewSourceButtons = subtreeContainer.querySelectorAll('.view-source-btn');
+            viewSourceButtons.forEach(btn => {
+                const onclickAttr = btn.getAttribute('onclick');
+                // Use a regex to extract arguments: showSource('filename', lineno, frame_id)
+                const match = onclickAttr.match(/showSource\('(.+?)',\s*(\d+),\s*(\d+)\)/);
+                if (match) {
+                    let filename = match[1].replace(/\\\\/g, '\\'); // Un-escape backslashes for JS
+                    const frameId = match[3];
+
+                    requiredFiles.add(filename);
+
+                    if (window.executedLines[filename] && window.executedLines[filename][frameId]) {
+                        if (!requiredExecutedLines[filename]) {
+                            requiredExecutedLines[filename] = {};
+                        }
+                        requiredExecutedLines[filename][frameId] = window.executedLines[filename][frameId];
+                    }
+                }
+            });
+
+            const filteredSourceFiles = {};
+            requiredFiles.forEach(file => {
+                if (window.sourceFiles[file]) {
+                    filteredSourceFiles[file] = window.sourceFiles[file];
+                }
+            });
+
+            const filteredCommentsData = {};
+            requiredFiles.forEach(file => {
+                if(window.commentsData[file]){
+                    filteredCommentsData[file] = window.commentsData[file];
+                }
+            });
+
+
+            // 3. Construct the new HTML document
+            let newHtml = document.documentElement.outerHTML;
+
+            // Replace content
+            newHtml = newHtml.replace(
+                /<div id="content">[\s\S]*<\/div>/,
+                `<div id="content">\n${subtreeHTML}\n</div>`
+            );
+
+            // Replace data
+            newHtml = newHtml.replace(
+                /window\.executedLines = .*?;/,
+                `window.executedLines = ${JSON.stringify(requiredExecutedLines)};`
+            );
+            newHtml = newHtml.replace(
+                /window\.sourceFiles = .*?;/,
+                `window.sourceFiles = ${JSON.stringify(filteredSourceFiles)};`
+            );
+            newHtml = newHtml.replace(
+                /window\.commentsData = .*?;/,
+                `window.commentsData = ${JSON.stringify(filteredCommentsData)};`
+            );
+
+            // Update title
+            const callText = foldable.textContent.trim().replace(/\s+/g, ' ').substring(0, 50);
+            newHtml = newHtml.replace(
+                /<title>.*<\/title>/,
+                `<title>Focus: ${callText}...</title>`
+            );
+            newHtml = newHtml.replace(
+                /<h1>.*<\/h1>/,
+                `<h1>Focus View: ${foldable.textContent.trim().replace(/\s+/g, ' ')}</h1>`
+            );
+
+            // 4. Open in new window
+            const newWindow = window.open();
+            if(newWindow){
+                newWindow.document.write(newHtml);
+                newWindow.document.close();
+            } else {
+                alert("Please allow pop-ups for this site to use the focus feature.");
             }
         });
     },
@@ -378,8 +604,6 @@ const TraceViewer = {
             
             const codeContent = document.createElement('div');
             codeContent.className = 'code-content';
-            codeContent.style.overflow = 'auto';
-            codeContent.style.height = 'calc(100% - 20px)';
             
             const pre = document.createElement('pre');
             const code = document.createElement('code');
@@ -426,37 +650,67 @@ const TraceViewer = {
         
         // Process source code after rendering
         processSourceCode(lineNumbers, code, frameLines, lineNumber) {
-            // Highlight executed lines
-            if (frameLines) {
-                frameLines.all.forEach(line => {
-                    const lineElement = lineNumbers.querySelector(`.line-number[data-line="${line}"]`);
-                    if (lineElement) {
-                        lineElement.classList.add('executed-line');
-                    }
-                });
-            }
+            // Add loading indicator
+            const loadingIndicator = document.createElement('div');
+            loadingIndicator.style.position = 'absolute';
+            loadingIndicator.style.top = '50%';
+            loadingIndicator.style.left = '50%';
+            loadingIndicator.style.transform = 'translate(-50%, -50%)';
+            loadingIndicator.style.padding = '10px';
+            loadingIndicator.style.background = 'rgba(0,0,0,0.7)';
+            loadingIndicator.style.color = 'white';
+            loadingIndicator.style.borderRadius = '4px';
+            loadingIndicator.textContent = 'Loading syntax highlighting...';
+            lineNumbers.parentElement.appendChild(loadingIndicator);
+            
+            const doHighlight = () => {
+                // 1. Syntax highlighting must be done first to create the final DOM for the code.
+                Prism.highlightElement(code);
 
-            // Highlight and scroll to current line
-            const targetLine = lineNumbers.querySelector(`.line-number[data-line="${lineNumber}"]`);
-            if (targetLine) {
-                targetLine.classList.add('current-line');
-                targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
+                // 2. Synchronize line heights based on the now-highlighted code.
+                const codeLines = code.querySelectorAll('.token-line, .line');
+                if (!codeLines || codeLines.length === 0) {
+                    this.synchronizeLineHeights(lineNumbers, code.parentElement);
+                } else {
+                    this.synchronizeWithPrismLines(lineNumbers, codeLines);
+                }
 
-            // Syntax highlighting
-            Prism.highlightElement(code);
+                // 3. Highlight all lines that were executed in this frame.
+                if (frameLines) {
+                    frameLines.all.forEach(line => {
+                        const lineElement = lineNumbers.querySelector(`.line-number[data-line="${line}"]`);
+                        if (lineElement) {
+                            lineElement.classList.add('executed-line');
+                        }
+                    });
+                }
 
-            // Synchronize line heights
-            const codeLines = code.querySelectorAll('.token-line, .line');
-            if (!codeLines || codeLines.length === 0) {
-                this.synchronizeLineHeights(lineNumbers, code.parentElement);
+                // 4. Highlight the specific line that triggered the 'view source' action.
+                const targetLine = lineNumbers.querySelector(`.line-number[data-line="${lineNumber}"]`);
+                if (targetLine) {
+                    targetLine.classList.add('current-line');
+                    
+                    // 5. Scroll the single parent container to the target line.
+                    // This is robust because there is only one scrollable container.
+                    targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                
+                // Remove loading indicator
+                loadingIndicator.remove();
+            };
+            
+            // Check if Prism is loaded
+            if (typeof Prism !== 'undefined') {
+                doHighlight();
             } else {
-                this.synchronizeWithPrismLines(lineNumbers, codeLines);
+                // Poll until Prism is available
+                const prismCheckInterval = setInterval(() => {
+                    if (typeof Prism !== 'undefined') {
+                        clearInterval(prismCheckInterval);
+                        doHighlight();
+                    }
+                }, 100);
             }
-
-            // Adjust line numbers container
-            lineNumbers.style.overflowY = 'auto';
-            lineNumbers.style.height = 'calc(100% - 20px)';
         },
         
         // Synchronize line number heights with code
@@ -499,14 +753,6 @@ const TraceViewer = {
             
             // Apply theme styles
             TraceViewer.adjustLineNumberStyles(isDark);
-            
-            // Synchronize scrolling
-            const codeContent = lineNumbersContainer.nextElementSibling;
-            if (codeContent) {
-                codeContent.addEventListener('scroll', function() {
-                    lineNumbersContainer.scrollTop = this.scrollTop;
-                });
-            }
         }
     }
 };
