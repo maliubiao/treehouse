@@ -1434,13 +1434,15 @@ class TraceLogic:
         对于 sys.monitoring，此方法会将异常事件暂存到 exception_chain 中，
         以区分最终被捕获的异常和导致函数终止的异常。
         """
-
         # 如果当前字节码是 SEND 且异常是 StopIteration，则不算异常
-        if exc_type is StopIteration:
+        # 如果当前字节码是 END_ASYNC_FOR 且异常是 StopAsyncIteration，则不算异常
+        if exc_type in (StopIteration, StopAsyncIteration):
             current_offset = frame.f_lasti
+            target_op = "SEND" if exc_type is StopIteration else "END_ASYNC_FOR"
             for instr in dis.get_instructions(frame.f_code):
-                if instr.offset == current_offset and instr.opname == "SEND":
+                if instr.offset == current_offset and instr.opname == target_op:
                     return
+
         # 初始化线程本地堆栈深度
         if not hasattr(self._local, "stack_depth"):
             self._local.stack_depth = 0
@@ -1448,6 +1450,10 @@ class TraceLogic:
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self.get_or_reuse_frame_id(frame)
+        # 同一个frame, 不会重复抛出两个exception， 要么handled, 要么unwind, 要么finally reraise
+        if len(self.exception_chain) > 0:
+            if self.exception_chain[-1][0]["data"]["frame_id"] == frame_id:
+                return
         all_traced_vars = {}
         if self.config.enable_var_trace:
             if self.last_statement_vars:

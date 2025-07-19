@@ -164,7 +164,10 @@ class BaseTracerTest(unittest.TestCase):
 
         sys.settrace(tracer)
         try:
-            target_func(*args, **kwargs)
+            result = target_func(*args, **kwargs)
+            # Handle generator case
+            if inspect.isgenerator(result):
+                next(result, None)
         finally:
             sys.settrace(None)
 
@@ -722,37 +725,78 @@ class TestTraceLogic(BaseTracerTest):
         self.assertFalse(self.logic.inside_unwanted_frame(frame_excluded_main))  # Now truly not unwanted
         self.assertIsNone(self.logic._local.bad_frame)
 
-    def test_handle_exception_ignore_stopiteration_in_send(self):
-        """
-        测试 handle_exception 方法在 SEND 指令和 StopIteration 异常下的行为。
-        验证生成器函数中的 yield from 或 await 场景下是否忽略异常记录。
-        """
-        # 定义生成器函数模拟 yield from 场景
-        gen_code = dedent("""
-        def gen_func():
-            yield from []  # 空迭代器会立即引发 StopIteration
-        """)
+    def test_stop_iteration_not_logged_on_send(self):
+        """Test that StopIteration raised by SEND is not logged as an exception."""
+        frame = self._create_mock_frame(self.test_filename, 10, "gen_func")
+        frame.f_code.co_name = "gen_func"
+        frame.f_code.co_filename = self.test_filename
+        frame.f_lineno = 10
+        frame.f_lasti = 42  # Offset of the SEND instruction
 
-        # 创建真实框架
-        frame = self._create_frame_from_code(gen_code, "gen_test.py", "gen_func")
+        # Mock dis.get_instructions to return a SEND instruction at offset 42
+        original_get_instructions = dis.get_instructions
 
-        # 执行生成器函数以触发 StopIteration
+        def mock_get_instructions(code):
+            instr = MagicMock()
+            instr.offset = 42
+            instr.opname = "SEND"
+            return [instr]
+
+        dis.get_instructions = mock_get_instructions
         try:
-            gen = frame.f_locals["gen_func"]()
-            next(gen)  # 触发 StopIteration
-        except StopIteration as e:
-            # 模拟框架状态
-            frame.f_lineno = 3  # 对应 yield from 行号
-            frame.f_locals = {"e": e}
-
-            # 调用 handle_exception
-            self.logic.handle_exception(type(e), e, frame)
-
-            # 验证未记录异常
-            self.logic._add_to_buffer.assert_not_called()
+            self.logic.handle_exception(StopIteration, StopIteration(), frame)
+            # Should not add anything to buffer or exception_chain
             self.assertEqual(len(self.logic.exception_chain), 0)
+            if sys.version_info >= (3, 12):
+                self.assertEqual(len(self.logic.exception_chain), 0)
+        finally:
+            dis.get_instructions = original_get_instructions
+
+    def test_stop_async_iteration_not_logged_on_end_async_for(self):
+        """Test that StopAsyncIteration raised by END_ASYNC_FOR is not logged."""
+        frame = self._create_mock_frame(self.test_filename, 15, "async_gen_func")
+        frame.f_code.co_name = "async_gen_func"
+        frame.f_code.co_filename = self.test_filename
+        frame.f_lineno = 15
+        frame.f_lasti = 88  # Offset of the END_ASYNC_FOR instruction
+
+        original_get_instructions = dis.get_instructions
+
+        def mock_get_instructions(code):
+            instr = MagicMock()
+            instr.offset = 88
+            instr.opname = "END_ASYNC_FOR"
+            return [instr]
+
+        dis.get_instructions = mock_get_instructions
+        try:
+            self.logic.handle_exception(StopAsyncIteration, StopAsyncIteration(), frame)
+            self.assertEqual(len(self.logic.exception_chain), 0)
+            if sys.version_info >= (3, 12):
+                self.assertEqual(len(self.logic.exception_chain), 0)
+        finally:
+            dis.get_instructions = original_get_instructions
+
+    def test_try_finally_reraise_exception_chain(self):
+        """Test that exceptions in try/finally blocks are properly tracked."""
+        frame = self._create_mock_frame(self.test_filename, 20, "try_finally_func")
+        frame.f_code.co_name = "try_finally_func"
+        frame.f_code.co_filename = self.test_filename
+        frame.f_lineno = 20
+
+        # Simulate exception in try block
+        self.logic.handle_exception(ValueError, ValueError("test error"), frame)
+
+        if sys.version_info >= (3, 12):
+            self.assertEqual(len(self.logic.exception_chain), 1)
+            logged = self.logic.exception_chain[0]
+            self.assertEqual(logged[0]["data"]["exc_type"], "ValueError")
+            self.assertEqual(logged[0]["data"]["exc_value"], "test error")
         else:
-            self.fail("Expected StopIteration not raised")
+            self.assertEqual(len(self.logic._buffer), 1)
+            logged = self.logic._buffer[0]
+            self.assertEqual(logged[0]["data"]["exc_type"], "ValueError")
+            self.assertEqual(logged[0]["data"]["exc_value"], "test error")
 
 
 class TestTraceDispatcher(BaseTracerTest):

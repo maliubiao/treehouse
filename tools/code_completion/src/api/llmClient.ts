@@ -54,7 +54,19 @@ function buildMessages(
     context: GenerationContext
 ): ChatCompletionMessageParam[] {
     const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
-    const systemMessage = config.get<string>('prompt.systemMessage', "You are an expert software architect and programmer. Your task is to rewrite the provided code block according to the instruction, using the context of the file.\n\nIMPORTANT: Your response MUST be wrapped with these exact tags:\n<CODE_GENERATED>\n[your modified code here]\n</CODE_GENERATED>\n\nInclude ONLY the modified code block between these tags, no explanations or additional text.");
+    const systemMessage = config.get<string>('prompt.systemMessage', `You are an expert software architect and engineering partner. Your goal is to deeply understand the user's intent and provide the best possible code modification. The user will provide the full content of a file, a specific block of code to be changed, and an instruction.
+
+Your task is to:
+1.  **Analyze the Context:** Use the full file content to understand its purpose, existing design patterns, variable naming, and overall coding style.
+2.  **Infer the Intent:** The user's instruction is a starting point, not a rigid command. Deduce the true goal behind their request.
+3.  **Generate the Best Solution:** Rewrite the specified code block to elegantly and robustly achieve the user's inferred goal. Your code should seamlessly integrate with the existing codebase.
+
+IMPORTANT: Your response MUST be wrapped with these exact tags:
+<CODE_GENERATED>
+[your modified code here]
+</CODE_GENERATED>
+
+Include ONLY the modified code block between these tags, with no explanations or additional text.`);
     const rule = config.get<string>('prompt.rule', '');
 
     let contextBlock = '';
@@ -186,7 +198,7 @@ function cleanResponse(responseText: string): string {
     
     // Phase 4: Extract content or handle errors
     if (outermostStart !== -1 && outermostEnd !== -1 && contentStart < outermostEnd) {
-        const extracted = cleanedText.slice(contentStart, outermostEnd).trim();
+        const extracted = cleanedText.slice(contentStart, outermostEnd);
         
         // Validate extracted content isn't empty
         if (extracted.length > 0) {
@@ -197,7 +209,7 @@ function cleanResponse(responseText: string): string {
     // Phase 5: Handle malformed cases with partial recovery
     if (firstStart !== -1 && firstEnd !== -1 && firstStart < firstEnd) {
         // Fallback to first valid pair if outermost detection failed
-        const fallbackContent = cleanedText.slice(firstStart + startTag.length, firstEnd).trim();
+        const fallbackContent = cleanedText.slice(firstStart + startTag.length, firstEnd);
         if (fallbackContent.length > 0) {
             return fallbackContent;
         }
@@ -222,15 +234,15 @@ function handleFallbackExtraction(text: string): string {
         // Return the largest content from markdown blocks
         let largestContent = '';
         for (const match of matches) {
-            if (match[1] && match[1].trim().length > largestContent.length) {
-                largestContent = match[1].trim();
+            if (match[1] && match[1].length > largestContent.length) {
+                largestContent = match[1];
             }
         }
         if (largestContent) return largestContent;
     }
     
     // Fallback 2: Remove common prefixes/suffixes
-    let cleaned = text.trim();
+    let cleaned = text;
     
     // Remove common AI response prefixes
     const prefixes = [
@@ -260,7 +272,7 @@ function handleFallbackExtraction(text: string): string {
         cleaned = cleaned.replace(regex, '');
     }
     
-    return cleaned.trim();
+    return cleaned; 
 }
 
 /**
@@ -590,7 +602,7 @@ export async function testApiConnection(apiConfig: AiServiceConfig): Promise<{ s
         }, { timeout: timeoutMs });
         
         logger.log('Received test response from API:', response);
-        const content = response.choices[0]?.message?.content?.trim().toLowerCase();
+        const content = response.choices[0]?.message?.content?.toLowerCase();
 
         if (content === 'test') {
             logger.log('Test connection successful.');

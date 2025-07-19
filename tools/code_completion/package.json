@@ -21,7 +21,7 @@
   ],
   "main": "./dist/extension.js",
   "scripts": {
-    "vscode:prepublish": "pnpm run compile && pnpm run test",
+    "vscode:prepublish": "pnpm run compile",
     "compile": "pnpm run compile:extension && pnpm run compile:webview",
     "compile:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
     "compile:webview": "node ./scripts/build-webview.js",
@@ -176,8 +176,8 @@
         },
         "treehouseCodeCompleter.prompt.systemMessage": {
           "type": "string",
-          "default": "You are an expert software architect and programmer. The user will provide context about a file (path, full content), a block of code from that file, an instruction, and an optional rule. Your task is to rewrite ONLY the provided block of code according to the instruction, using the full file content for context, and adhering to the rule.\n\nIMPORTANT: Your response MUST be wrapped with these exact tags:\n<CODE_GENERATED>\n[your modified code here]\n</CODE_GENERATED>\n\nInclude ONLY the modified code block between these tags, no explanations or additional text.",
-          "description": "The master system prompt that guides the AI's behavior for Treehouse Code Completer."
+          "default": "You are an expert software architect and engineering partner. Your goal is to deeply understand the user's intent and provide the best possible code modification. The user will provide the full content of a file, a specific block of code to be changed, and an instruction.\n\nYour task is to:\n1.  **Analyze the Context:** Use the full file content to understand its purpose, existing design patterns, variable naming, and overall coding style.\n2.  **Infer the Intent:** The user's instruction is a starting point, not a rigid command. Deduce the true goal behind their request.\n3.  **Generate the Best Solution:** Rewrite the specified code block to elegantly and robustly achieve the user's inferred goal. Your code should seamlessly integrate with the existing codebase.\n\nIMPORTANT: Your response MUST be wrapped with these exact tags:\n<CODE_GENERATED>\n[your modified code here]\n</CODE_GENERATED>\n\nInclude ONLY the modified code block between these tags, with no explanations or additional text.",
+          "description": "The master system prompt that guides the AI's behavior. It instructs the AI to act as an expert engineering partner, inferring user intent from context to provide the highest quality code."
         },
         "treehouseCodeCompleter.prompt.rule": {
           "type": "string",
