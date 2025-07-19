@@ -78,13 +78,13 @@ class CallTreeHtmlRender:
                 rel="stylesheet">
         </head>
         <body>
-            <div id="sourceDialog" class="source-dialog">
-                <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
-                <div class="close-overlay"></div>
-                <div class="source-header">
-                    <div class="source-title" id="sourceTitle"></div>
-                </div>
-                <div class="source-content" id="sourceContent"></div>
+            <div id="sourceDialog"  class="source-dialog" style="display: none;">
+                    <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
+                    <div class="close-overlay"></div>
+                    <div class="source-header">
+                        <div class="source-title" id="sourceTitle"></div>
+                    </div>
+                    <div class="source-content" id="sourceContent"></div>
             </div>
             <h1>Python Trace Report</h1>
             <div class="summary">

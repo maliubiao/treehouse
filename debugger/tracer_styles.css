@@ -303,6 +303,7 @@ button:hover {
 .source-title {
     font-weight: bold;
     font-size: 1.2em;
+    flex-shrink: 0;
 }
 
 .source-content {
@@ -311,17 +312,19 @@ button:hover {
     line-height: 1.5;
     position: relative;
     flex: 1;
-    overflow: auto;
+    overflow: auto; /* This element will now scroll if content is too large */
+    max-height: 100%; /* Add this to fix flexbox scrolling issue */
 }
 
 /* Source container layout */
 .source-container {
     display: flex;
-    height: 100%;
+    /* height: 100% removed to allow it to grow with content */
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 14px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
+    /* overflow-y: auto removed, parent .source-content handles scrolling */
 }
 
 /* Line numbers column */
@@ -638,5 +641,5 @@ button:hover {
 .source-container .comment-full {
     display: inline;
     white-space: inherit;
-    overflow: visible;
+    overflow: auto;
 }

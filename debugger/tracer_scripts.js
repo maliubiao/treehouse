@@ -206,12 +206,6 @@ const TraceViewer = {
     initSourceDialog() {
         const { sourceDialog, closeSourceBtn, dialogCloseBtn } = this.elements;
         
-        // Hide dialog on page load
-        if (sourceDialog) {
-            sourceDialog.style.display = 'none';
-        }
-        
-        // Set up close button if it exists
         if (closeSourceBtn) {
             closeSourceBtn.addEventListener('click', e => {
                 e.stopPropagation();
@@ -226,13 +220,6 @@ const TraceViewer = {
             });
         }
         
-        // Close on click outside
-        document.addEventListener('click', event => {
-            if (event.target === sourceDialog) {
-                event.stopPropagation();
-                sourceDialog.style.display = 'none';
-            }
-        });
     },
 
     // Initialize keyboard shortcuts
@@ -240,7 +227,7 @@ const TraceViewer = {
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape') {
                 const sourceDialog = this.elements.sourceDialog;
-                if (sourceDialog && sourceDialog.style.display === 'block') {
+                if (sourceDialog) {
                     sourceDialog.style.display = 'none';
                 }
             }
@@ -536,7 +523,7 @@ const TraceViewer = {
             if (!window.sourceFiles || !window.sourceFiles[filename]) {
                 titleDiv.textContent = `${filename} (Source not available)`;
                 sourceContent.innerHTML = '<div>Source file not available</div>';
-                dialog.style.display = 'block';
+                dialog.style.display = 'flex';
                 return;
             }
             // Get source code, decode if it's Base64-encoded
@@ -564,7 +551,7 @@ const TraceViewer = {
             this.addDialogCloseControls(dialog);
             
             // Show the dialog
-            dialog.style.display = 'block';
+            dialog.style.display = 'flex';
 
             // Process after dialog is visible
             setTimeout(() => {

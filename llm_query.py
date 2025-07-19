@@ -4904,10 +4904,10 @@ def start_chatbot():
     from typing import TYPE_CHECKING
 
     if TYPE_CHECKING:
-        import tools
+        import tools.chatbot
     else:
-        tools = import_relative("tools")
-    tools.ChatbotUI().run()
+        tools = import_relative("tools.chatbot")
+    tools.chatbot.ChatbotUI().run()
 
 
 def find_changelog():
