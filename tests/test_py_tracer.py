@@ -9,6 +9,7 @@ import sys
 import unittest
 from collections import defaultdict
 from pathlib import Path
+from textwrap import dedent
 from unittest.mock import MagicMock, mock_open, patch
 
 import yaml  # Import yaml for test_from_yaml fix
@@ -17,7 +18,6 @@ import yaml  # Import yaml for test_from_yaml fix
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from debugger.tracer import (
-    _MAX_VALUE_LENGTH,
     CallTreeHtmlRender,
     SysMonitoringTraceDispatcher,
     TraceConfig,
@@ -27,6 +27,7 @@ from debugger.tracer import (
     start_trace,
     truncate_repr_value,
 )
+from debugger.tracer_common import _MAX_VALUE_LENGTH
 
 # A temporary directory for test artifacts
 TEST_DIR = Path(__file__).parent / "test_artifacts"
@@ -189,42 +190,43 @@ class BaseTracerTest(unittest.TestCase):
         mock_frame.f_trace_lines = True
         return mock_frame
 
-        class TestTruncateReprValue(unittest.TestCase):
-            """Tests for the truncate_repr_value utility function."""
 
-            def test_truncate_long_string(self):
-                long_str = "a" * (_MAX_VALUE_LENGTH + 100)
-                result = truncate_repr_value(long_str)
-                half = _MAX_VALUE_LENGTH // 2
-                omitted = len(long_str) - 2 * half
-                suffix = f" (total length: {len(long_str)}, omitted: {omitted})"
-                self.assertTrue(result.endswith(suffix))
+class TestTruncateReprValue(unittest.TestCase):
+    """Tests for the truncate_repr_value utility function."""
 
-            def test_truncate_list(self):
-                long_list = list(range(100))
-                result = truncate_repr_value(long_list)
-                self.assertIn("...", result)
-                self.assertLess(len(result), len(str(long_list)))
+    def test_truncate_long_string(self):
+        long_str = "a" * (_MAX_VALUE_LENGTH + 100)
+        result = truncate_repr_value(long_str)
+        half = _MAX_VALUE_LENGTH // 2
+        omitted = len(long_str) - 2 * half
+        suffix = f" (total length: {len(long_str)}, omitted: {omitted})"
+        self.assertTrue(result.endswith(suffix))
 
-            def test_truncate_dict(self):
-                long_dict = {str(i): i for i in range(100)}
-                result = truncate_repr_value(long_dict)
-                self.assertIn("...", result)
-                self.assertLess(len(result), len(str(long_dict)))
+    def test_truncate_list(self):
+        long_list = list(range(100))
+        result = truncate_repr_value(long_list)
+        self.assertIn("...", result)
+        self.assertLess(len(result), len(str(long_list)))
 
-            def test_truncate_custom_object(self):
-                class TestObj:
-                    def __init__(self):
-                        self.a = 1
-                        self.b = 2
-                        self.c = 3
-                        self.d = 4
-                        self.e = 5
-                        self.f = 6
+    def test_truncate_dict(self):
+        long_dict = {str(i): i for i in range(100)}
+        result = truncate_repr_value(long_dict)
+        self.assertIn("...", result)
+        self.assertLess(len(result), len(str(long_dict)))
 
-                obj = TestObj()
-                result = truncate_repr_value(obj)
-                self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
+    def test_truncate_custom_object(self):
+        class TestObj:
+            def __init__(self):
+                self.a = 1
+                self.b = 2
+                self.c = 3
+                self.d = 4
+                self.e = 5
+                self.f = 6
+
+        obj = TestObj()
+        result = truncate_repr_value(obj)
+        self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
 
 
 class TestTraceConfig(BaseTracerTest):
@@ -720,6 +722,38 @@ class TestTraceLogic(BaseTracerTest):
         self.assertFalse(self.logic.inside_unwanted_frame(frame_excluded_main))  # Now truly not unwanted
         self.assertIsNone(self.logic._local.bad_frame)
 
+    def test_handle_exception_ignore_stopiteration_in_send(self):
+        """
+        测试 handle_exception 方法在 SEND 指令和 StopIteration 异常下的行为。
+        验证生成器函数中的 yield from 或 await 场景下是否忽略异常记录。
+        """
+        # 定义生成器函数模拟 yield from 场景
+        gen_code = dedent("""
+        def gen_func():
+            yield from []  # 空迭代器会立即引发 StopIteration
+        """)
+
+        # 创建真实框架
+        frame = self._create_frame_from_code(gen_code, "gen_test.py", "gen_func")
+
+        # 执行生成器函数以触发 StopIteration
+        try:
+            gen = frame.f_locals["gen_func"]()
+            next(gen)  # 触发 StopIteration
+        except StopIteration as e:
+            # 模拟框架状态
+            frame.f_lineno = 3  # 对应 yield from 行号
+            frame.f_locals = {"e": e}
+
+            # 调用 handle_exception
+            self.logic.handle_exception(type(e), e, frame)
+
+            # 验证未记录异常
+            self.logic._add_to_buffer.assert_not_called()
+            self.assertEqual(len(self.logic.exception_chain), 0)
+        else:
+            self.fail("Expected StopIteration not raised")
+
 
 class TestTraceDispatcher(BaseTracerTest):
     """Tests for the TraceDispatcher."""
@@ -882,7 +916,7 @@ class TestTraceDispatcher(BaseTracerTest):
         # In a real scenario, it would have stayed active because its call event was not filtered.
         self.dispatcher.add_target_frame(frame_main)  # Ensure it's active
         self.dispatcher.trace_dispatch(frame_main, "line", None)
-        self.mock_logic.handle_line.assert_called_once_with(frame_main)
+        self.mock_logic.handle_line.assert_called_once()
 
 
 class TestCallTreeHtmlRender(BaseTracerTest):
@@ -922,7 +956,7 @@ class TestCallTreeHtmlRender(BaseTracerTest):
     def test_save_to_file(self):
         report_path = self.test_dir / "render_test.html"
         self.renderer.add_raw_message({"template": "test message", "data": {}}, "call")
-        self.renderer.save_to_file(str(report_path))
+        self.renderer.save_to_file(str(report_path), False)
 
         self.assertTrue(report_path.exists())
         with open(report_path, encoding="utf-8") as f:

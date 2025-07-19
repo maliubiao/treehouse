@@ -1,4 +1,5 @@
 import ast
+import dis
 import fnmatch
 import functools
 import inspect
@@ -1433,6 +1434,13 @@ class TraceLogic:
         对于 sys.monitoring，此方法会将异常事件暂存到 exception_chain 中，
         以区分最终被捕获的异常和导致函数终止的异常。
         """
+
+        # 如果当前字节码是 SEND 且异常是 StopIteration，则不算异常
+        if exc_type is StopIteration:
+            current_offset = frame.f_lasti
+            for instr in dis.get_instructions(frame.f_code):
+                if instr.offset == current_offset and instr.opname == "SEND":
+                    return
         # 初始化线程本地堆栈深度
         if not hasattr(self._local, "stack_depth"):
             self._local.stack_depth = 0
@@ -1474,7 +1482,6 @@ class TraceLogic:
             self._add_to_buffer(*msg)
         else:
             self.exception_chain.append(msg)
-
         # 不再在此处减少堆栈深度，将在PY_UNWIND事件中处理
 
     def handle_exception_was_handled(self, frame):
