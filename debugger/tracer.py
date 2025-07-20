@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tupl
 from .source_cache import get_statement_info
 from .tracer_common import TraceTypes, truncate_repr_value
 from .tracer_html import CallTreeHtmlRender
+from .utils.path_utils import to_relative_module_path
 
 try:
     from colorama import Fore, Style, just_fix_windows_console
@@ -1094,15 +1095,16 @@ class TraceLogic:
                     # 否则，使用绝对路径
                     formatted = str(file_path)
             else:
-                # 如果未提供 source_base_dir，则使用旧的简化逻辑
-                if file_path.name == "__init__.py":
-                    parts = list(file_path.parts)
-                    if len(parts) > 1:
-                        formatted = str(Path(*parts[-2:]))
-                    else:
-                        formatted = file_path.name
-                else:
-                    formatted = file_path.name
+                formatted = to_relative_module_path(filename)
+                # # 如果未提供 source_base_dir，则使用旧的简化逻辑
+                # if file_path.name == "__init__.py":
+                #     parts = list(file_path.parts)
+                #     if len(parts) > 1:
+                #         formatted = str(Path(*parts[-2:]))
+                #     else:
+                #         formatted = file_path.name
+                # else:
+                #     formatted = file_path.name
 
             self._file_cache._file_name_cache[filename] = formatted
             return formatted

@@ -62,21 +62,21 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!sessionManager.isSessionActive()) {
             return;
         }
-        const activeUris = sessionManager.getActiveSessionUris();
-        if (!activeUris) return;
+        // const activeUris = sessionManager.getActiveSessionUris();
+        // if (!activeUris) return;
 
-        const isDiffTabOpen = vscode.window.tabGroups.all.some(tg =>
-            tg.tabs.some(tab =>
-                tab.input instanceof vscode.TabInputTextDiff &&
-                tab.input.original.toString() === activeUris.originalUri.toString() &&
-                tab.input.modified.toString() === activeUris.newUri.toString()
-            )
-        );
+        // const isDiffTabOpen = vscode.window.tabGroups.all.some(tg =>
+        //     tg.tabs.some(tab =>
+        //         tab.input instanceof vscode.TabInputTextDiff &&
+        //         tab.input.original.toString() === activeUris.originalUri.toString() &&
+        //         tab.input.modified.toString() === activeUris.newUri.toString()
+        //     )
+        // );
         
-        if (!isDiffTabOpen) {
-            logger.log('Diff tab closed by user, ending session.');
-            sessionManager.end();
-        }
+        // if (!isDiffTabOpen) {
+        //     logger.log('Diff tab closed by user, ending session.');
+        //     sessionManager.end();
+        // }
     });
 
     context.subscriptions.push(
