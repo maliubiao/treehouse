@@ -115,6 +115,8 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
                 omitted = len(value) - 2 * half
                 return value[:half] + "..." + value[-half:] + f" (total length: {len(value)}, omitted: {omitted})"
             return value
+        elif callable(value) and hasattr(value, "__code__"):
+            return str(inspect.signature(value))
         # Detect unittest.mock.Mock objects
         elif isinstance(value, Mock):
             # Provide a more informative representation for mock objects.
@@ -141,16 +143,6 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
             if inspect.isclass(value):
                 return f"<class '{getattr(value, '__module__', '?')}.{value.__name__}'>"
             preview = _truncate_object(value, keep_elements)
-        # The final fallback is the default repr().
-        # Functions, methods, and other callables
-        elif callable(value):
-            s = repr(value)
-            # General cleanup for callables
-            s = re.sub(r"\s+at\s+0x[0-9a-fA-F]+", "", s)
-            s = re.sub(r"\s+of\s+<class\s+'.*?'>", "", s)
-            if len(s) > _MAX_VALUE_LENGTH:
-                s = s[:_MAX_VALUE_LENGTH] + "..."
-            return s
         else:
             preview = repr(value)
     except Exception as e:

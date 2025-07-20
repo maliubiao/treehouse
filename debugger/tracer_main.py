@@ -217,13 +217,6 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
             if file_path not in line_ranges:
                 line_ranges[file_path] = []
             line_ranges[file_path].append((start, end))
-
-    # 解析起始函数
-    start_function = None
-    if args.start_function:
-        filename, lineno = args.start_function.split(":")
-        start_function = (filename, int(lineno))
-
     return {
         "target_script": target_script,
         "target_module": target_module,
@@ -239,7 +232,7 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "report_name": args.report_name,
         "ignore_system_paths": not args.include_system,
         "ignore_self": not args.trace_self,
-        "start_function": start_function,
+        "start_function": args.start_function,
         "source_base_dir": args.source_base_dir,
         "include_stdlibs": args.include_stdlibs or [],
     }
@@ -330,7 +323,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         if args["line_ranges"]:
             print(color_wrap(f"📝 行号范围: {args['line_ranges']}", "var"))
         if args["start_function"]:
-            print(color_wrap(f"📝 起始函数: {args['start_function'][0]}:{args['start_function'][1]}", "var"))
+            print(color_wrap(f"📝 起始函数: {args['start_function']}", "var"))
         if args["source_base_dir"]:
             print(color_wrap(f"📝 源码根目录: {args['source_base_dir'].resolve()}", "var"))
         if args["include_stdlibs"]:

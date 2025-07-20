@@ -99,10 +99,10 @@ class TraceConfig:
         enable_var_trace: bool = False,
         ignore_self: bool = True,
         ignore_system_paths: bool = True,
-        start_function: Optional[Tuple[str, int]] = None,
+        start_function: Optional[List[str]] = None,
         source_base_dir: Optional[Path] = None,
         disable_html: bool = False,
-        include_stdlibs: Optional[List[str]] = None,  # 新增参数
+        include_stdlibs: Optional[List[str]] = None,
     ):
         """
         初始化跟踪配置
@@ -117,7 +117,7 @@ class TraceConfig:
             enable_var_trace: 是否启用变量操作跟踪
             ignore_self: 是否忽略跟踪器自身的文件
             ignore_system_paths: 是否忽略系统路径和第三方包路径
-            start_function: 指定开始跟踪的函数 (文件名, 行号)
+            start_function: 指定开始跟踪的函数
             source_base_dir: 源代码根目录，用于在报告中显示相对路径
             disable_html: 是否禁用HTML报告生成
             include_stdlibs: 特别包含的标准库模块列表（即使ignore_system_paths=True）
@@ -596,8 +596,7 @@ class SysMonitoringTraceDispatcher:
 
         # If we need to wait for a specific start function
         if self.start_function:
-            filename, line_number = self.start_function
-            if frame.f_code.co_filename == filename and frame.f_lineno == line_number:
+            if frame.f_code.co_name in self.start_function:
                 self.start_at_enable = True
                 self.active_frames.add(frame)
                 self._logic.handle_call(frame)
@@ -1096,15 +1095,6 @@ class TraceLogic:
                     formatted = str(file_path)
             else:
                 formatted = to_relative_module_path(filename)
-                # # 如果未提供 source_base_dir，则使用旧的简化逻辑
-                # if file_path.name == "__init__.py":
-                #     parts = list(file_path.parts)
-                #     if len(parts) > 1:
-                #         formatted = str(Path(*parts[-2:]))
-                #     else:
-                #         formatted = file_path.name
-                # else:
-                #     formatted = file_path.name
 
             self._file_cache._file_name_cache[filename] = formatted
             return formatted
@@ -1711,7 +1701,7 @@ def trace(
         enable_var_trace: 是否启用变量操作跟踪
         ignore_self: 是否忽略跟踪器自身
         ignore_system_paths: 是否忽略系统路径和第三方包路径
-        start_function: 起始函数名和行号
+        start_function: 起始函数
         source_base_dir: 源代码根目录，用于在报告中显示相对路径
         disable_html: 是否禁用HTML报告
         include_stdlibs: 同时trace一些标准库模块 ["unittest"] 比如
