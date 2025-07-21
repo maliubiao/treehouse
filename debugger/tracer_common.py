@@ -116,7 +116,7 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
                 return value[:half] + "..." + value[-half:] + f" (total length: {len(value)}, omitted: {omitted})"
             return value
         elif callable(value) and hasattr(value, "__code__"):
-            return str(inspect.signature(value))
+            return f"callable: {str(inspect.signature(value))}"
         # Detect unittest.mock.Mock objects
         elif isinstance(value, Mock):
             # Provide a more informative representation for mock objects.

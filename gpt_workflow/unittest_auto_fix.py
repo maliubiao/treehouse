@@ -22,6 +22,7 @@ from llm_query import (
     GPT_VALUE_STORAGE,
     FileSearchResult,
     FileSearchResults,
+    GPTContextProcessor,
     MatchResult,
     ModelSwitch,
     PatchPromptBuilder,
@@ -699,6 +700,7 @@ def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_
 def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
     """
     Presents the AI's analysis to the user and asks for feedback on how to proceed with the fix.
+    The user's feedback will be processed to include rich context (e.g., file paths and symbols).
 
     Returns:
         A tuple containing:
@@ -707,14 +709,17 @@ def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
     """
     print(Fore.YELLOW + "\n" + "=" * 15 + " User Review and Direction " + "=" * 15)
     print(Fore.CYAN + "The AI has analyzed the issue. Please review its findings and provide direction for the fix.")
-    print(Fore.YELLOW + "=" * 54)
+    print(Fore.YELLOW + "Hint: You can include file paths or symbols in your instructions for more context.")
+    print(Fore.YELLOW + "=" * 74)
 
     print(Fore.GREEN + "Please choose a course of action:")
     print(Fore.CYAN + "  1. Accept analysis and proceed with recommended fix.")
-    print(Fore.CYAN + "  2. Analysis is correct, but provide specific instruction.")
-    print(Fore.CYAN + "  3. Analysis seems wrong, provide new direction.")
+    print(Fore.CYAN + "  2. Analysis is correct, but provide specific instruction (context-aware).")
+    print(Fore.CYAN + "  3. Analysis seems wrong, provide new direction (context-aware).")
     print(Fore.YELLOW + "  4. Accept & auto-accept for this session.")
     print(Fore.CYAN + "  q. Quit the fix process.")
+
+    context_processor = GPTContextProcessor()
 
     while True:
         choice = input(Fore.GREEN + "Your choice (1/2/3/4/q): ").strip().lower()
@@ -726,13 +731,17 @@ def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
         elif choice == "2":
             user_instruction = input(Fore.GREEN + "Please provide your specific instruction: ").strip()
             if user_instruction:
-                return user_instruction, False
+                print(Fore.YELLOW + "Processing context from your instruction...")
+                processed_instruction = context_processor.process_text(user_instruction, tokens_left=32 * 1024)
+                return processed_instruction, False
             else:
                 print(Fore.RED + "Instruction cannot be empty. Please try again.")
         elif choice == "3":
             user_instruction = input(Fore.GREEN + "Please describe the correct analysis and how to fix it: ").strip()
             if user_instruction:
-                return user_instruction, False
+                print(Fore.YELLOW + "Processing context from your instruction...")
+                processed_instruction = context_processor.process_text(user_instruction, tokens_left=32 * 1024)
+                return processed_instruction, False
             else:
                 print(Fore.RED + "Direction cannot be empty. Please try again.")
         elif choice == "4":
