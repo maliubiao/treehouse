@@ -643,3 +643,10 @@ button:hover {
     white-space: inherit;
     overflow: auto;
 }
+
+/* ===== Skeleton View Mode ===== */
+body.skeleton-mode #content .line,
+body.skeleton-mode #content .trace,
+body.skeleton-mode #content .var {
+    display: none;
+}

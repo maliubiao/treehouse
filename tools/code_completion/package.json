@@ -31,6 +31,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:cancel": "jest --testNamePattern='cancellation|cancel'",
     "test:e2e": "node ./out/test/runTest.js",
     "lint": "tsc --noEmit",
     "package": "pnpm exec vsce package --no-dependencies"

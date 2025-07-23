@@ -102,6 +102,7 @@ class CallTreeHtmlRender:
                 <input type="text" id="search" placeholder="Search messages...">
                 <button id="expandAll">Expand All</button>
                 <button id="collapseAll">Collapse All</button>
+                <button id="skeletonViewBtn">框架模式</button>
                 <button id="exportBtn">Export as HTML</button>
             </div>
             <div id="content">\n{content}\n</div>

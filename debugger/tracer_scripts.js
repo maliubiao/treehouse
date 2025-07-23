@@ -20,6 +20,19 @@ const TraceViewer = {
             { value: 'prism-xonokai', label: 'Xonokai', isDark: true }
         ]
     },
+
+    // Utilities
+    utils: {
+        debounce(func, delay) {
+            let timeoutId;
+            return function(...args) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    func.apply(this, args);
+                }, delay);
+            };
+        }
+    },
     
     // DOM elements (populated on init)
     elements: {},
@@ -32,6 +45,7 @@ const TraceViewer = {
             search: document.getElementById('search'),
             expandAllBtn: document.getElementById('expandAll'),
             collapseAllBtn: document.getElementById('collapseAll'),
+            skeletonViewBtn: document.getElementById('skeletonViewBtn'),
             exportBtn: document.getElementById('exportBtn'),
             themeSelector: document.getElementById('themeSelector'),
             sourceDialog: document.getElementById('sourceDialog'),
@@ -49,6 +63,7 @@ const TraceViewer = {
         this.initCommentToggle();
         this.initCopySubtree();
         this.initFocusSubtree();
+        this.initSkeletonView();
     },
 
     // Initialize folding functionality
@@ -100,8 +115,8 @@ const TraceViewer = {
         const { content, search } = this.elements;
         if (!search) return;
 
-        search.addEventListener('input', function() {
-            const term = this.value.toLowerCase();
+        const searchLogic = (event) => {
+            const term = event.target.value.toLowerCase();
             const elements = content.querySelectorAll('div[class*="call"], div[class*="return"], div[class*="line"]');
 
             elements.forEach(el => {
@@ -124,7 +139,10 @@ const TraceViewer = {
                     el.classList.remove('highlight');
                 }
             });
-        });
+        };
+        
+        const debouncedSearch = this.utils.debounce(searchLogic, 300);
+        search.addEventListener('input', debouncedSearch);
     },
 
     // Initialize export functionality
@@ -444,6 +462,22 @@ const TraceViewer = {
         });
     },
 
+    // Initialize Skeleton View functionality
+    initSkeletonView() {
+        const { skeletonViewBtn } = this.elements;
+        if (!skeletonViewBtn) return;
+
+        skeletonViewBtn.addEventListener('click', () => {
+            document.body.classList.toggle('skeleton-mode');
+
+            if (document.body.classList.contains('skeleton-mode')) {
+                skeletonViewBtn.textContent = '完整视图';
+            } else {
+                skeletonViewBtn.textContent = '框架模式';
+            }
+        });
+    },
+    
     // Adjust line number styles based on theme
     adjustLineNumberStyles(isDark) {
         const lineNumbers = document.querySelectorAll('.line-number');

@@ -307,12 +307,14 @@ function calculateCost(promptTokens: number, completionTokens: number): number {
  * @param instruction - The user's instruction for modification.
  * @param context - The full generation context, including code, file info, etc.
  * @param onProgress - Callback function to report streaming progress (optional)
+ * @param cancellationToken - Token to signal cancellation of the operation (optional)
  * @returns Object containing generated code and token usage information.
  */
 export async function generateCode(
     instruction: string, 
     context: GenerationContext,
-    onProgress?: (tokenCount: number, currentText: string) => void
+    onProgress?: (tokenCount: number, currentText: string) => void,
+    cancellationToken?: { isCancellationRequested: boolean }
 ): Promise<{ code: string; usage: TokenUsage }> {
     const activeService = getActiveAiServiceConfig();
     if (!activeService) {
@@ -327,6 +329,9 @@ export async function generateCode(
     logger.log('Using AI Service for code generation:', { ...serviceToLog, key: '********' });
     logger.log('Sending prompt:', { messages });
 
+    // Create AbortController for cancellation support
+    const abortController = new AbortController();
+    
     const completionOptions = {
         model: activeService.model_name,
         messages: messages,
@@ -342,19 +347,34 @@ export async function generateCode(
     try {
         const timeoutMs = (activeService.timeout_seconds || 60) * 1000;
         
+        // Create AbortController for cancellation support
+        const abortController = new AbortController();
+        
         // Start accumulation session
         if (enableStreamingAccumulator) {
             streamingAccumulator.startSession();
         }
         
         // Always use streaming mode
-        const stream = await openai.chat.completions.create(completionOptions, { timeout: timeoutMs });
+        const stream = await openai.chat.completions.create(
+            completionOptions, 
+            { 
+                timeout: timeoutMs,
+                signal: abortController.signal
+            }
+        );
         let accumulatedContent = '';
         let tokenCount = 0;
         let isComplete = false;
 
         try {
             for await (const chunk of stream) {
+                // Check for cancellation
+                if (cancellationToken?.isCancellationRequested) {
+                    abortController.abort();
+                    throw new Error('Operation cancelled by user');
+                }
+                
                 const content = chunk.choices[0]?.delta?.content || '';
                 const finishReason = chunk.choices[0]?.finish_reason;
                 
@@ -414,9 +434,10 @@ export async function generateCode(
         
         return { code: cleanResponse(accumulatedContent), usage };
     } catch (error) {
-        // End streaming session on error
+        // End streaming session on error or cancellation
         if (enableStreamingAccumulator) {
-            streamingAccumulator.endSession(false);
+            const isCancellation = error instanceof Error && error.message === 'Operation cancelled by user';
+            streamingAccumulator.endSession(!isCancellation, isCancellation);
         }
         
         const errorDetails = {
@@ -472,19 +493,34 @@ export async function playgroundChat(
     try {
         const timeoutMs = (serviceConfig.timeout_seconds || 60) * 1000;
         
+        // Create AbortController for cancellation support
+        const abortController = new AbortController();
+        
         // Start accumulation session
         if (enableStreamingAccumulator) {
             streamingAccumulator.startSession();
         }
         
         // Always use streaming mode
-        const stream = await openai.chat.completions.create(completionOptions, { timeout: timeoutMs });
+        const stream = await openai.chat.completions.create(
+            completionOptions, 
+            { 
+                timeout: timeoutMs,
+                signal: abortController.signal
+            }
+        );
         let accumulatedContent = '';
         let tokenCount = 0;
         let isComplete = false;
 
         try {
             for await (const chunk of stream) {
+                // Check for cancellation
+                if (cancellationToken?.isCancellationRequested) {
+                    abortController.abort();
+                    throw new Error('Operation cancelled by user');
+                }
+                
                 const content = chunk.choices[0]?.delta?.content || '';
                 const finishReason = chunk.choices[0]?.finish_reason;
                 
@@ -542,6 +578,12 @@ export async function playgroundChat(
 
         return { response: accumulatedContent, usage };
     } catch (error) {
+        // End streaming session on error or cancellation
+        if (enableStreamingAccumulator) {
+            const isCancellation = error instanceof Error && error.message === 'Operation cancelled by user';
+            streamingAccumulator.endSession(!isCancellation, isCancellation);
+        }
+        
         const errorDetails = {
             message: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : new Error().stack,

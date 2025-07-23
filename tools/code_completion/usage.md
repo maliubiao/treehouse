@@ -11,6 +11,7 @@ Treehouse Code Completer empowers you to leverage Large Language Models (LLMs) l
 -   **Instruction-Based Code Generation**: Select a block of code, press a keybinding, and provide a natural language instruction (e.g., "Add error handling" or "Convert this to an async function").
 -   **Context-Aware Selection**: If you don't select any code, the extension automatically identifies the enclosing function or class at your cursor's position to use as context.
 -   **Interactive Diff View**: AI suggestions are not applied automatically. A clean side-by-side diff view is presented, allowing you to review every change before accepting.
+-   **Cancellable Operations**: Cancel ongoing code generation operations at any time with immediate request abort and resource cleanup.
 -   **Configurable Backend**: Easily configure the API endpoint, API key, and model name to work with any OpenAI-compatible service.
 -   **Customizable Prompts**: Tailor the system prompt to fit your specific needs or coding standards.
 -   **Safe Undo**: A dedicated command to revert the last AI-driven change, ensuring you can always go back.
@@ -22,8 +23,9 @@ The primary workflow is simple and designed to be non-intrusive.
 1.  **Select Code (Optional)**: Highlight a piece of code in your editor you wish to modify. If you don't make a selection, the extension will automatically detect the function or class your cursor is in.
 2.  **Trigger Command**: Press `Cmd+Alt+I` (on macOS) or `Ctrl+Alt+I` (on Windows/Linux).
 3.  **Provide Instruction**: An input box will appear at the top of your screen. Type your instruction (e.g., "Add comprehensive JSDoc comments") and press `Enter`.
-4.  **Review Diff**: The extension will communicate with the AI. Once a suggestion is ready, a new tab will open showing a diff between your original code and the AI's suggestion.
-5.  **Accept or Reject**: A notification will appear with "Accept" and "Reject" buttons.
+4.  **Monitor Progress**: While the extension communicates with the AI, a progress notification will appear in the bottom right corner showing the number of tokens generated. You can click the cancel button at any time to abort the operation.
+5.  **Review Diff**: If the operation completes successfully, a new tab will open showing a diff between your original code and the AI's suggestion.
+6.  **Accept or Reject**: A notification will appear with "Accept" and "Reject" buttons.
     -   Clicking **Accept** applies the changes to your source file.
     -   Clicking **Reject** discards the suggestion and closes the diff view.
 

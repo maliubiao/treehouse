@@ -29,6 +29,7 @@ from .models_anthropic import (
     Usage,
 )
 from .models_openai import OpenAIChatCompletion, OpenAIChatCompletionChunk
+from .qwen3coder_tool_parser import Qwen3CoderToolParser
 
 logger = get_logger("response_translator_v2")
 
@@ -79,6 +80,10 @@ class OpenAIToAnthropicStreamTranslator:
         self._active_tool_chunk_index: Optional[int] = None
         self._text_buffer: str = ""
 
+        # Qwen3 Coder tool parser
+        self.qwen3_parser = Qwen3CoderToolParser()
+        self.anthropic_request: AnthropicRequest
+
     def start(self) -> List[BaseModel]:
         """Generates the initial message_start event."""
         return [
@@ -114,7 +119,16 @@ class OpenAIToAnthropicStreamTranslator:
                         # The buffer contains a JSON string which itself contains stringified JSON.
                         # e.g., "\"{\\\"key\\\": \\\"value\\\"}\""
                         # We need to load it once to get the inner stringified JSON.
-                        unquoted_json_text = json.loads(buffer)
+                        if buffer.startswith('"'):
+                            unquoted_json_text = json.loads(buffer)
+                        else:
+                            unquoted_json_text = buffer
+                        tool_args = json.loads(unquoted_json_text)
+                        tool_args = _validate_and_convert_tool_arguments(
+                            tool_state["name"], tool_args, self.anthropic_request
+                        )
+                        unquoted_json_text = json.dumps(tool_args)
+
                         events.append(
                             ContentBlockDeltaEvent(
                                 type="content_block_delta",
@@ -179,15 +193,16 @@ class OpenAIToAnthropicStreamTranslator:
         )
         return events
 
-    def _process_text_buffer(self) -> List[BaseModel]:
+    def _process_text_buffer(self, anthropic_request: Optional[AnthropicRequest] = None) -> List[BaseModel]:
         """
         Processes the internal text buffer, handling plain text and custom
         embedded tool calls.
         """
         events: List[BaseModel] = []
-        start_tags = ["|tool_call_begin|>", "|tool_calls_section_begin|>"]
+        start_tags = ["|tool_call_begin|>", "|tool_calls_section_begin|>", "<tool_call>"]
         end_tag = "<|tool_call_end|>"
         arg_split_tag = "<|tool_call_argument_begin|>"
+        qwen3_end_tag = "</tool_call>"
 
         while True:
             # Find the earliest occurrence of any start tag
@@ -232,45 +247,87 @@ class OpenAIToAnthropicStreamTranslator:
                     )
 
             # Check for a complete custom tool call tag.
-            end_index = self._text_buffer.find(end_tag, first_start_index)
+            end_index = -1
+            if found_start_tag == "<tool_call>":
+                # Handle Qwen3 Coder format
+                end_index = self._text_buffer.find(qwen3_end_tag, first_start_index)
+            else:
+                # Handle existing custom format
+                end_index = self._text_buffer.find(end_tag, first_start_index)
+
             if end_index == -1:
                 # Incomplete tag, leave it in the buffer and wait for more data.
                 self._text_buffer = self._text_buffer[first_start_index:]
                 break
 
             # A complete tag is found.
-            assert found_start_tag is not None
-            full_tag_string = self._text_buffer[first_start_index : end_index + len(end_tag)]
-            inner_content = self._text_buffer[first_start_index + len(found_start_tag) : end_index]
+            full_tag_string = ""
+            inner_content = ""
+            if found_start_tag == "<tool_call>":
+                full_tag_string = self._text_buffer[first_start_index : end_index + len(qwen3_end_tag)]
+                inner_content = self._text_buffer[first_start_index + len(found_start_tag) : end_index]
+            else:
+                full_tag_string = self._text_buffer[first_start_index : end_index + len(end_tag)]
+                inner_content = self._text_buffer[first_start_index + len(found_start_tag) : end_index]
 
             tool_call_parsed = False
             try:
-                arg_split_index = inner_content.find(arg_split_tag)
-                if arg_split_index != -1:
-                    header = inner_content[:arg_split_index]
-                    args_json = inner_content[arg_split_index + len(arg_split_tag) :]
+                # Try to parse as Qwen3 Coder format first
+                if found_start_tag == "<tool_call>" and anthropic_request:
+                    # Use Qwen3 parser for this format
+                    extracted_info = self.qwen3_parser.extract_tool_calls(full_tag_string, anthropic_request)
+                    if extracted_info.tools_called and extracted_info.tool_calls:
+                        # Close active text block, then create the full tool block
+                        events.extend(self._close_active_block())
+                        tool_call = extracted_info.tool_calls[0]
+                        tool_info = {
+                            "id": tool_call.id or f"custom_tool_{hash(full_tag_string)}",
+                            "name": tool_call.function.name,
+                        }
+                        events.extend(self._start_new_block("tool_use", tool_info=tool_info))
 
-                    func_name_part, tool_id_str = header.rsplit(":", 1)
-                    func_name = func_name_part.split(".")[-1] if "." in func_name_part else func_name_part
-                    tool_id = f"custom_tool_{tool_id_str}"
-
-                    # Close active text block, then create the full tool block
-                    events.extend(self._close_active_block())
-                    tool_info = {"id": tool_id, "name": func_name}
-                    events.extend(self._start_new_block("tool_use", tool_info=tool_info))
-
-                    if self._active_block_index is not None:
-                        # self._active_tool_info is for standard tool calls, but let's be safe
-                        self._active_tool_info[self._active_block_index] = tool_info
-                        events.append(
-                            ContentBlockDeltaEvent(
-                                type="content_block_delta",
-                                index=self._active_block_index,
-                                delta=InputJsonDelta(type="input_json_delta", partial_json=args_json),
+                        if self._active_block_index is not None:
+                            # self._active_tool_info is for standard tool calls, but let's be safe
+                            self._active_tool_info[self._active_block_index] = tool_info
+                            events.append(
+                                ContentBlockDeltaEvent(
+                                    type="content_block_delta",
+                                    index=self._active_block_index,
+                                    delta=InputJsonDelta(
+                                        type="input_json_delta", partial_json=tool_call.function.arguments
+                                    ),
+                                )
                             )
-                        )
-                    events.extend(self._close_active_block())
-                    tool_call_parsed = True
+                        events.extend(self._close_active_block())
+                        tool_call_parsed = True
+                elif found_start_tag != "<tool_call>":
+                    # Handle existing custom format
+                    arg_split_index = inner_content.find(arg_split_tag)
+                    if arg_split_index != -1:
+                        header = inner_content[:arg_split_index]
+                        args_json = inner_content[arg_split_index + len(arg_split_tag) :]
+
+                        func_name_part, tool_id_str = header.rsplit(":", 1)
+                        func_name = func_name_part.split(".")[-1] if "." in func_name_part else func_name_part
+                        tool_id = f"custom_tool_{tool_id_str}"
+
+                        # Close active text block, then create the full tool block
+                        events.extend(self._close_active_block())
+                        tool_info = {"id": tool_id, "name": func_name}
+                        events.extend(self._start_new_block("tool_use", tool_info=tool_info))
+
+                        if self._active_block_index is not None:
+                            # self._active_tool_info is for standard tool calls, but let's be safe
+                            self._active_tool_info[self._active_block_index] = tool_info
+                            events.append(
+                                ContentBlockDeltaEvent(
+                                    type="content_block_delta",
+                                    index=self._active_block_index,
+                                    delta=InputJsonDelta(type="input_json_delta", partial_json=args_json),
+                                )
+                            )
+                        events.extend(self._close_active_block())
+                        tool_call_parsed = True
             except Exception as e:
                 logger.warning(f"Could not parse custom tool call: '{inner_content}'. Error: {e}. Treating as text.")
 
@@ -287,10 +344,14 @@ class OpenAIToAnthropicStreamTranslator:
                         )
                     )
 
-            self._text_buffer = self._text_buffer[end_index + len(end_tag) :]
+            self._text_buffer = self._text_buffer[
+                end_index + len(qwen3_end_tag if found_start_tag == "<tool_call>" else end_tag) :
+            ]
         return events
 
-    def process_chunk(self, chunk: OpenAIChatCompletionChunk) -> List[BaseModel]:
+    def process_chunk(
+        self, chunk: OpenAIChatCompletionChunk, anthropic_request: Optional[AnthropicRequest] = None
+    ) -> List[BaseModel]:
         """Processes a single OpenAI chunk and returns a list of Anthropic events."""
         events: List[BaseModel] = []
 
@@ -326,7 +387,6 @@ class OpenAIToAnthropicStreamTranslator:
                     )
                 )
 
-        # Handle Standard Tool Calls
         if delta.tool_calls:
             for tc_chunk in delta.tool_calls:
                 tool_index = tc_chunk.index
@@ -365,7 +425,8 @@ class OpenAIToAnthropicStreamTranslator:
                     # First time seeing args for this tool? Detect if it's an escaped stream.
                     if tool_state.get("is_escaped_json_string") is None and args:
                         # Heuristic: if arguments stream starts with a quote, it's likely an escaped JSON string.
-                        tool_state["is_escaped_json_string"] = args.startswith('"')
+                        # tool_state["is_escaped_json_string"] = args.startswith('"')
+                        tool_state["is_escaped_json_string"] = True
 
                     if tool_state.get("is_escaped_json_string"):
                         tool_state["argument_buffer"] += args
@@ -389,7 +450,7 @@ class OpenAIToAnthropicStreamTranslator:
             if self._active_block_type == "tool_use":
                 events.extend(self._close_active_block())
             self._text_buffer += delta.content
-            events.extend(self._process_text_buffer())
+            events.extend(self._process_text_buffer(anthropic_request))
 
         return events
 
@@ -472,7 +533,7 @@ async def translate_openai_to_anthropic_stream(
     This is a thin async wrapper around the synchronous OpenAIToAnthropicStreamTranslator.
     """
     translator = OpenAIToAnthropicStreamTranslator(response_id=response_id, model=anthropic_request.model)
-
+    translator.anthropic_request = anthropic_request
     # 1. Yield start event
     for event_model in translator.start():
         yield _format_sse(event_model)
@@ -480,7 +541,7 @@ async def translate_openai_to_anthropic_stream(
     # 2. Process the stream chunk by chunk
     async for openai_chunk in _parse_openai_sse_stream(openai_stream):
         print(openai_chunk)
-        anthropic_events = translator.process_chunk(openai_chunk)
+        anthropic_events = translator.process_chunk(openai_chunk, anthropic_request)
         for event_model in anthropic_events:
             event = _format_sse(event_model)
             print(event)
@@ -495,6 +556,7 @@ async def translate_openai_to_anthropic_stream(
 
 def translate_openai_to_anthropic_non_stream(
     openai_response: OpenAIChatCompletion,
+    anthropic_request: Optional[AnthropicRequest] = None,
 ) -> AnthropicMessageResponse:
     """Translates a non-streaming OpenAI ChatCompletion to an Anthropic Message."""
     message = openai_response.choices[0].message
@@ -506,9 +568,11 @@ def translate_openai_to_anthropic_non_stream(
     if message.content:
         # Here we must also parse for custom tool calls, even in non-streaming mode.
         text_buffer = message.content
-        start_tags = ["|tool_call_begin|>", "|tool_calls_section_begin|>"]
+        start_tags = ["|tool_call_begin|>", "|tool_calls_section_begin|>", "<tool_call>"]
         end_tag = "<|tool_call_end|>"
         arg_split_tag = "<|tool_call_argument_begin|>"
+        qwen3_end_tag = "</tool_call>"
+        qwen3_parser = Qwen3CoderToolParser()
 
         while text_buffer:
             first_start_index = -1
@@ -528,31 +592,88 @@ def translate_openai_to_anthropic_non_stream(
             if text_before:
                 content.append(AnthropicTextContent(type="text", text=text_before))
 
-            end_index = text_buffer.find(end_tag, first_start_index)
+            end_index = -1
+            if found_start_tag == "<tool_call>":
+                # Handle Qwen3 Coder format
+                end_index = text_buffer.find(qwen3_end_tag, first_start_index)
+            else:
+                # Handle existing custom format
+                end_index = text_buffer.find(end_tag, first_start_index)
+
             if end_index == -1:
                 # Incomplete tag, treat as text
                 content.append(AnthropicTextContent(type="text", text=text_buffer[first_start_index:]))
                 break
 
-            assert found_start_tag is not None
-            inner_content = text_buffer[first_start_index + len(found_start_tag) : end_index]
+            inner_content = ""
+            if found_start_tag == "<tool_call>":
+                inner_content = text_buffer[first_start_index + len(found_start_tag) : end_index]
+            else:
+                inner_content = text_buffer[first_start_index + len(found_start_tag) : end_index]
 
             try:
-                arg_split_index = inner_content.find(arg_split_tag)
-                header = inner_content[:arg_split_index]
-                args_json = inner_content[arg_split_index + len(arg_split_tag) :]
-                args = json.loads(args_json)
-                func_name_part, tool_id_str = header.rsplit(":", 1)
-                func_name = func_name_part.split(".")[-1] if "." in func_name_part else func_name_part
-                tool_id = f"custom_tool_{tool_id_str}"
-                content.append(AnthropicToolUseContent(type="tool_use", id=tool_id, name=func_name, input=args))
+                # Try to parse as Qwen3 Coder format first
+                if found_start_tag == "<tool_call>" and anthropic_request:
+                    # Use Qwen3 parser for this format
+                    extracted_info = qwen3_parser.extract_tool_calls(
+                        text_buffer[first_start_index : end_index + len(qwen3_end_tag)], anthropic_request
+                    )
+                    if extracted_info.tools_called and extracted_info.tool_calls:
+                        tool_call = extracted_info.tool_calls[0]
+                        tool_arguments = json.loads(tool_call.function.arguments)
+                        # 验证和转换工具参数
+                        tool_arguments = _validate_and_convert_tool_arguments(
+                            tool_call.function.name, tool_arguments, anthropic_request
+                        )
+                        content.append(
+                            AnthropicToolUseContent(
+                                type="tool_use",
+                                id=tool_call.id or f"custom_tool_{hash(inner_content)}",
+                                name=tool_call.function.name,
+                                input=tool_arguments,
+                            )
+                        )
+                    else:
+                        # Fallback to text if parsing fails
+                        content.append(
+                            AnthropicTextContent(
+                                type="text", text=text_buffer[first_start_index : end_index + len(qwen3_end_tag)]
+                            )
+                        )
+                elif found_start_tag != "<tool_call>":
+                    # Handle existing custom format
+                    arg_split_index = inner_content.find(arg_split_tag)
+                    header = inner_content[:arg_split_index]
+                    args_json = inner_content[arg_split_index + len(arg_split_tag) :]
+                    args = json.loads(args_json)
+                    func_name_part, tool_id_str = header.rsplit(":", 1)
+                    func_name = func_name_part.split(".")[-1] if "." in func_name_part else func_name_part
+                    tool_id = f"custom_tool_{tool_id_str}"
+                    content.append(AnthropicToolUseContent(type="tool_use", id=tool_id, name=func_name, input=args))
+                else:
+                    # Fallback to text if parsing fails
+                    content.append(
+                        AnthropicTextContent(
+                            type="text",
+                            text=text_buffer[
+                                first_start_index : end_index
+                                + len(qwen3_end_tag if found_start_tag == "<tool_call>" else end_tag)
+                            ],
+                        )
+                    )
             except Exception:
                 # Fallback to text if parsing fails
                 content.append(
-                    AnthropicTextContent(type="text", text=text_buffer[first_start_index : end_index + len(end_tag)])
+                    AnthropicTextContent(
+                        type="text",
+                        text=text_buffer[
+                            first_start_index : end_index
+                            + len(qwen3_end_tag if found_start_tag == "<tool_call>" else end_tag)
+                        ],
+                    )
                 )
 
-            text_buffer = text_buffer[end_index + len(end_tag) :]
+            text_buffer = text_buffer[end_index + len(qwen3_end_tag if found_start_tag == "<tool_call>" else end_tag) :]
 
     if message.tool_calls:
         for tool_call in message.tool_calls:
@@ -573,7 +694,10 @@ def translate_openai_to_anthropic_non_stream(
                         f"Failed to decode tool call arguments in non-streaming mode: {e}. Raw args: {tool_call.function.arguments}"
                     )
                     tool_input = {"error": "Failed to decode arguments", "raw": tool_call.function.arguments}
-
+            if anthropic_request:
+                tool_input = _validate_and_convert_tool_arguments(
+                    tool_call.function.name, tool_input, anthropic_request
+                )
             content.append(
                 AnthropicToolUseContent(
                     type="tool_use",
@@ -600,3 +724,135 @@ def translate_openai_to_anthropic_non_stream(
         stop_reason=stop_reason,
         usage=usage,
     )
+
+
+def _convert_param_value(param_value: Any, param_name: str, param_schema: dict, tool_name: str) -> Any:
+    """Convert parameter value based on JSON schema type, supporting nested schemas."""
+    if param_value is None:
+        return None
+
+    # Handle direct null string
+    if isinstance(param_value, str) and param_value.lower() == "null":
+        return None
+
+    # Handle array type
+    if param_schema.get("type") == "array":
+        items_schema = param_schema.get("items", {})
+        if isinstance(param_value, list):
+            return [_convert_param_value(item, f"{param_name}[i]", items_schema, tool_name) for item in param_value]
+        elif isinstance(param_value, str):
+            try:
+                parsed = json.loads(param_value)
+                if isinstance(parsed, list):
+                    return [_convert_param_value(item, f"{param_name}[i]", items_schema, tool_name) for item in parsed]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # Handle object type
+    if param_schema.get("type") == "object":
+        properties = param_schema.get("properties", {})
+        if isinstance(param_value, dict):
+            converted = {}
+            for key, value in param_value.items():
+                sub_schema = properties.get(key, {})
+                converted[key] = _convert_param_value(value, f"{param_name}.{key}", sub_schema, tool_name)
+            return converted
+        elif isinstance(param_value, str):
+            try:
+                parsed = json.loads(param_value)
+                if isinstance(parsed, dict):
+                    converted = {}
+                    for key, value in parsed.items():
+                        sub_schema = properties.get(key, {})
+                        converted[key] = _convert_param_value(value, f"{param_name}.{key}", sub_schema, tool_name)
+                    return converted
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # Handle oneOf/anyOf/allOf schemas
+    for schema_key in ["oneOf", "anyOf", "allOf"]:
+        if schema_key in param_schema:
+            for sub_schema in param_schema[schema_key]:
+                try:
+                    return _convert_param_value(param_value, param_name, sub_schema, tool_name)
+                except (ValueError, TypeError):
+                    continue
+
+    # Handle basic types
+    param_type = param_schema.get("type", "string")
+
+    try:
+        if param_type == "number":
+            if isinstance(param_value, (int, float)):
+                return param_value
+            try:
+                return int(param_value)
+            except ValueError:
+                return float(param_value)
+        elif param_type == "integer":
+            if isinstance(param_value, int):
+                return param_value
+            return int(param_value)
+        elif param_type == "boolean":
+            if isinstance(param_value, bool):
+                return param_value
+            return str(param_value).lower() == "true"
+        elif param_type == "string":
+            return str(param_value)
+        else:
+            # For any other type, return as-is
+            return param_value
+    except (ValueError, TypeError):
+        logger.warning(
+            "Failed to convert parameter '%s' to type '%s' for tool '%s'. Keeping original value.",
+            param_name,
+            param_type,
+            tool_name,
+        )
+        return param_value
+
+
+def _get_tool_arguments_config(tool_name: str, anthropic_request: Optional[AnthropicRequest]) -> dict:
+    """
+    Retrieves the argument schema for a given tool name from the request tools.
+    """
+    if not anthropic_request or not anthropic_request.tools:
+        return {}
+
+    for tool in anthropic_request.tools:
+        if tool.name == tool_name:
+            if hasattr(tool, "input_schema") and isinstance(tool.input_schema, dict):
+                return tool.input_schema
+            # Fallback to original structure check
+            elif hasattr(tool, "function"):
+                if hasattr(tool.function, "parameters"):
+                    params = tool.function.parameters
+                    if isinstance(params, dict):
+                        return params
+            return {}
+
+    logger.warning("Tool '%s' is not defined in the tools list.", tool_name)
+    return {}
+
+
+def _validate_and_convert_tool_arguments(
+    tool_name: str, arguments: dict, anthropic_request: Optional[AnthropicRequest]
+) -> dict:
+    """
+    Validates and converts tool arguments based on the tool schema.
+    """
+    if not anthropic_request:
+        return arguments
+
+    tool_schema = _get_tool_arguments_config(tool_name, anthropic_request)
+    if not tool_schema:
+        return arguments
+
+    properties = tool_schema.get("properties", {})
+    converted_arguments = {}
+
+    for param_name, param_value in arguments.items():
+        param_schema = properties.get(param_name, {})
+        converted_arguments[param_name] = _convert_param_value(param_value, param_name, param_schema, tool_name)
+
+    return converted_arguments

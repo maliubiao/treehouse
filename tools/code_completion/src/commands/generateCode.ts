@@ -18,7 +18,8 @@ import { logger } from '../utils/logger';
 async function callLLMWithTimeout(
     instruction: string,
     generationContext: GenerationContext,
-    onProgress: (tokenCount: number, currentText: string) => void
+    onProgress: (tokenCount: number, currentText: string) => void,
+    cancellationToken?: { isCancellationRequested: boolean }
 ): Promise<{ code: string; usage: TokenUsage }> {
     const timeoutMs = 120000; // 2 minutes timeout
     
@@ -30,15 +31,31 @@ async function callLLMWithTimeout(
         }, timeoutMs);
     });
     
-    const apiPromise = callLLMApi(instruction, generationContext, onProgress);
+    // Create a promise that rejects when cancellation is requested
+    const cancellationPromise = new Promise<never>((_, reject) => {
+        if (cancellationToken) {
+            const checkCancellation = () => {
+                if (cancellationToken.isCancellationRequested) {
+                    reject(new Error('Operation cancelled by user'));
+                } else {
+                    // Check again in 100ms
+                    setTimeout(checkCancellation, 100);
+                }
+            };
+            checkCancellation();
+        }
+    });
     
-    // Race the API call against our timeout
+    const apiPromise = callLLMApi(instruction, generationContext, onProgress, cancellationToken);
+    
+    // Race the API call against our timeout and cancellation
     const result = await Promise.race([
         apiPromise.then(result => {
             if (rejectTimeout) clearTimeout(rejectTimeout);
             return result;
         }),
-        timeoutPromise
+        timeoutPromise,
+        cancellationPromise
     ]);
     
     return result;
@@ -89,13 +106,22 @@ export async function generateCodeCommand(
         }, async (progress, token) => {
             progress.report({ message: 'Initializing...' });
             
+            // Create cancellation token object that references the VS Code cancellation token
+            const cancellationToken = { isCancellationRequested: false };
+            
+            // Set up cancellation check
+            token.onCancellationRequested(() => {
+                cancellationToken.isCancellationRequested = true;
+            });
+            
             result = await callLLMWithTimeout(
                 instruction, 
                 generationContext, 
                 (tokenCount: number, currentText: string) => {
                     progressMessage = `Generated ${tokenCount} tokens...`;
                     progress.report({ message: progressMessage });
-                }
+                },
+                cancellationToken
             );
             
             progress.report({ message: 'Finalizing response...' });
