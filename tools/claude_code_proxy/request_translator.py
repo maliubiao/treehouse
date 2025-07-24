@@ -207,7 +207,7 @@ def get_openai_request_with_reasoning(
 
     # Handle Max Tokens Override
     max_tokens_override = provider_config.get("max_tokens_override")
-    if max_tokens_override is not None:
+    if max_tokens_override is not None and isinstance(max_tokens_override, int):
         original_max_tokens = openai_request.max_tokens
         if original_max_tokens is None or original_max_tokens > max_tokens_override:
             logger.info(

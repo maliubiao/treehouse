@@ -139,9 +139,12 @@ class OpenAIToAnthropicStreamTranslator:
                             )
                         )
                     except Exception as e:
-                        logger.warning(
-                            f"Could not unescape buffered tool arguments for tool {self._active_block_index}: {e}. Buffer: '{buffer}'"
+                        import traceback
+
+                        logger.error(
+                            f"Could not unescape buffered tool arguments for tool {self._active_block_index}: {e}. Buffer: '{buffer}'\n{traceback.format_exc()}"
                         )
+                        raise
                 # This tool index is now complete, remove its state.
                 self._active_tool_info.pop(self._active_tool_chunk_index, None)
 

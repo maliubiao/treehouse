@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
@@ -170,6 +171,14 @@ async def messages_proxy(request: Request) -> Response:
         body = await request.json()
         request_logger.log_request_received(request_id, request, body)
         anthropic_request = AnthropicRequest.model_validate(body)
+
+        # # Debug dump
+        # dump_dir = "logs/requests"
+        # os.makedirs(dump_dir, exist_ok=True)
+        # dump_path = os.path.join(dump_dir, f"{request_id}.json")
+        # with open(dump_path, "w", encoding="utf-8") as f:
+        #     json.dump(body, f, indent=2, ensure_ascii=False)
+
     except (json.JSONDecodeError, ValidationError) as e:
         request_logger.log_error(request_id, e, {"context": "request_validation"})
         return _create_error_response(f"Invalid request body: {e}")
@@ -227,6 +236,9 @@ async def messages_proxy(request: Request) -> Response:
             f"'{anthropic_request.model}' -> '{target_model}' via provider '{provider.name}'",
             request_payload,
         )
+    except ValidationError as e:
+        request_logger.log_error(request_id, e, {"context": "request_validation"})
+        return _create_error_response(f"Invalid request: {e}", "invalid_request_error", 400)
     except Exception as e:
         request_logger.log_error(request_id, e, {"context": "request_translation"})
         return _create_error_response(f"Error during request translation: {e}", "api_error", 500)
@@ -248,7 +260,8 @@ async def messages_proxy(request: Request) -> Response:
         else:
             response = await http_client.post("/chat/completions", json=request_payload, timeout=provider.timeout)
             response.raise_for_status()
-            openai_response = OpenAIChatCompletion.model_validate(response.json())
+            response_data = await response.json()
+            openai_response = OpenAIChatCompletion.model_validate(response_data)
             request_logger.log_response_received(request_id, provider.name, openai_response.model_dump())
 
             anthropic_response = response_translator.translate_openai_to_anthropic_non_stream(openai_response)
@@ -323,7 +336,32 @@ async def create_batch(request: Request) -> Response:
             "/v1/chat/completions/batches", json={"requests": openai_batch_requests}, timeout=provider.timeout
         )
         response.raise_for_status()
-        return JSONResponse({"status": "Batch request sent successfully to provider", "provider": provider_key})
+
+        # Process the response to check for partial failures
+        batch_response = await response.json()
+        responses = batch_response.get("responses", [])
+
+        # Check if we have any failures
+        has_failures = any(resp.get("status") == "error" for resp in responses)
+        has_successes = any(resp.get("status") == "success" for resp in responses)
+
+        if has_failures and has_successes:
+            # Partial success - return 207
+            return JSONResponse(
+                {"status": "partial_failure", "provider": provider_key, "results": responses}, status_code=207
+            )
+        elif has_failures and not has_successes:
+            # All failures - return error
+            return JSONResponse({"status": "error", "provider": provider_key, "results": responses}, status_code=400)
+        else:
+            # All successes - return 200
+            return JSONResponse(
+                {
+                    "status": "Batch request sent successfully to provider",
+                    "provider": provider_key,
+                    "results": responses,
+                }
+            )
 
     except httpx.HTTPStatusError as e:
         return _handle_downstream_error(e, request_id, provider_key)

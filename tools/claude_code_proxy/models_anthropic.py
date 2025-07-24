@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # --- Content Block Models ---
 
@@ -85,6 +85,50 @@ class AnthropicRequest(BaseModel):
     tools: Optional[List[AnthropicTool]] = Field(default=None)
     thinking: Optional[AnthropicThinkingConfig] = Field(default=None)
     conversation_id: Optional[str] = Field(default=None)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: str) -> str:
+        """Validate model parameter to prevent SQL injection and other malicious input."""
+        if not isinstance(v, str):
+            raise ValueError("Model must be a string")
+
+        # Check for SQL injection patterns
+        sql_injection_patterns = [
+            "'",
+            '"',
+            ";",
+            "--",
+            "/*",
+            "*/",
+            "xp_",
+            "sp_",
+            "union",
+            "select",
+            "insert",
+            "update",
+            "delete",
+            "drop",
+            "create",
+            "alter",
+            "exec",
+            "execute",
+        ]
+
+        v_lower = v.lower()
+        for pattern in sql_injection_patterns:
+            if pattern in v_lower:
+                raise ValueError(f"Invalid model name: contains forbidden pattern '{pattern}'")
+
+        # Ensure model name follows expected format (alphanumeric, hyphens, dots)
+        import re
+
+        if not re.match(r"^[a-zA-Z0-9._-]+$", v):
+            raise ValueError("Invalid model name format")
+
+        return v
+
+    model_config = {"str_strip_whitespace": True, "validate_default": True}
 
 
 # --- Response Models ---
@@ -219,6 +263,14 @@ class AnthropicBatchRequestItem(BaseModel):
 
     custom_id: str
     params: AnthropicRequest
+
+    @field_validator("custom_id")
+    @classmethod
+    def validate_custom_id(cls, v: str) -> str:
+        """Validate that custom_id is not empty."""
+        if not v.strip():
+            raise ValueError("custom_id cannot be empty")
+        return v
 
 
 class AnthropicBatchRequest(BaseModel):

@@ -5,9 +5,7 @@ import json
 from typing import List
 
 import pytest
-from pydantic import BaseModel
-
-from .models_anthropic import (
+from claude_code_proxy.models_anthropic import (
     AnthropicRequest,
     ContentBlockDeltaEvent,
     ContentBlockStartEvent,
@@ -20,7 +18,7 @@ from .models_anthropic import (
     TextDelta,
     ThinkingDelta,
 )
-from .models_openai import (
+from claude_code_proxy.models_openai import (
     OpenAIChatCompletionChunk,
     OpenAIChatMessageDelta,
     OpenAIChoiceDelta,
@@ -28,7 +26,8 @@ from .models_openai import (
     OpenAIFunctionCallDelta,
     OpenAIToolCallDelta,
 )
-from .response_translator_v2 import OpenAIToAnthropicStreamTranslator
+from claude_code_proxy.response_translator_v2 import OpenAIToAnthropicStreamTranslator
+from pydantic import BaseModel
 
 
 @pytest.fixture
@@ -590,8 +589,8 @@ def test_consecutive_tool_calls_same_index(translator: OpenAIToAnthropicStreamTr
 
 def test_kimi_k2_tool_call_in_text_non_streaming(anthropic_request_with_typed_tools: AnthropicRequest):
     """Test non-streaming translation with Kimi K2 tool call embedded in content."""
-    from .models_openai import OpenAIChatCompletion, OpenAIChoice, OpenAIResponseMessage, OpenAIUsage
-    from .response_translator_v2 import translate_openai_to_anthropic_non_stream
+    from claude_code_proxy.models_openai import OpenAIChatCompletion, OpenAIChoice, OpenAIResponseMessage, OpenAIUsage
+    from claude_code_proxy.response_translator_v2 import translate_openai_to_anthropic_non_stream
 
     # Simulate full response with Kimi K2 tool call
     kimi_tool_section = (
