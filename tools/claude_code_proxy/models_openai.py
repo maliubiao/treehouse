@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, NamedTuple, Optional
 
 from pydantic import BaseModel, Field
 
@@ -133,3 +133,10 @@ class OpenAIChatCompletionChunk(BaseModel):
     model: str
     object: Literal["chat.completion.chunk"]
     usage: Optional[OpenAIChunkUsage] = Field(default=None)
+
+
+# 定义一个简单的命名元组来模拟 vLLM 的 ExtractedToolCallInformation
+class ExtractedToolCallInfo(NamedTuple):
+    tools_called: bool
+    tool_calls: List[OpenAIToolCall]
+    content: Optional[str]

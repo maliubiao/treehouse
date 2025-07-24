@@ -150,7 +150,7 @@ def test_tool_call_generation_with_type_conversion(translator: OpenAIToAnthropic
         ],
     )
     events1 = translator.process_chunk(chunk1)
-    assert_event_types(events1, [ContentBlockStartEvent])
+    assert_event_types(events1, [ContentBlockStartEvent, ContentBlockDeltaEvent])
     assert events1[0].content_block.type == "tool_use"
     assert events1[0].content_block.id == "tool_123"
     assert events1[0].content_block.name == "calculate_area"
@@ -163,32 +163,15 @@ def test_tool_call_generation_with_type_conversion(translator: OpenAIToAnthropic
     delta_events = [
         e for e in final_events if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, InputJsonDelta)
     ]
-    assert len(delta_events) >= 1  # Might be split across multiple events or handled in _close_active_block
-
-    # The key check is in the finalize logic which calls _validate_and_convert_tool_arguments
-    # We need to check the final state or the event that gets the converted args.
-    # Let's restructure the test to capture the final arguments from the closed block event or the message delta.
-    # Actually, the arguments are sent via ContentBlockDeltaEvent(s). The conversion happens when the block is closed
-    # and the buffered arguments are processed. Let's check the content of the delta event(s).
-
-    # Since arguments are streamed, they might be in one or more delta events.
-    # The conversion logic applies to the *final* parsed arguments.
-    # The easiest way to test this is to check the arguments after parsing the final JSON in the test itself,
-    # or ensure the process that generates the delta event uses the converted args.
-    # The _close_active_block method is where the conversion for buffered escaped strings happens.
-    # For standard streaming, the conversion happens if we parse the full arguments string.
-    # The current code for standard streaming doesn't buffer and re-parse the full arguments string,
-    # it just passes the partial JSON. This means the conversion logic in _validate_and_convert_tool_arguments
-    # is not directly used for standard streaming *chunks*. It's used for non-streaming and for the final
-    # flush of buffered escaped strings.
-
-    # Let's check the non-streaming test for conversion, as that's where it's more directly applicable.
-    # For streaming, the test should ensure that if the provider sends correctly typed data, it's passed through,
-    # and if it's incorrectly typed, the system behaves predictably (though direct per-chunk conversion is less common).
-
-    # This test primarily checks that the tool call is recognized and started correctly.
-    # A more direct test of conversion is in the non-streaming test below.
-    assert True  # Placeholder, logic checked in non-streaming test
+    # In this specific test case, the arguments are sent in the first chunk, and since they are not
+    # detected as an "escaped json string", they are emitted directly as a delta.
+    # The type conversion logic, however, is applied in _close_active_block (for buffered args)
+    # and in the non-streaming translator. The standard streaming delta just passes the JSON string through.
+    # So we look for the initial delta event from the first chunk processing.
+    initial_delta_events = [
+        e for e in events1 if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, InputJsonDelta)
+    ]
+    assert len(initial_delta_events) == 1
 
 
 def test_escaped_json_string_tool_call_with_type_conversion(translator: OpenAIToAnthropicStreamTranslator):
@@ -423,9 +406,15 @@ def test_interleaved_content(translator: OpenAIToAnthropicStreamTranslator):
 
 
 def test_custom_tool_call_in_text_stream(translator: OpenAIToAnthropicStreamTranslator):
-    """Tests parsing of custom tool call format embedded in text."""
-    # Chunk 1: Text before and start of custom tool call with typed args
-    chunk1_content = 'Here is the tool: |tool_call_begin|>functions.calculate_area:1<|tool_call_argument_begin|>{"shape": "circle", "width": "15.7", "height": "15"}<|tool_call_end|>And here is more text.'
+    """Tests parsing of custom tool call format embedded in text (updated to Kimi format)."""
+    kimi_tool_section = (
+        "<|tool_calls_section_begin|>"
+        "<|tool_call_begin|>functions.calculate_area:1<|tool_call_argument_begin|>"
+        '{"shape": "circle", "width": "15.7", "height": "15"}'
+        "<|tool_call_end|>"
+        "<|tool_calls_section_end|>"
+    )
+    chunk1_content = f"Here is the tool: {kimi_tool_section}And here is more text."
     chunk1 = OpenAIChatCompletionChunk(
         id="c1",
         created=1,
@@ -433,23 +422,26 @@ def test_custom_tool_call_in_text_stream(translator: OpenAIToAnthropicStreamTran
         object="chat.completion.chunk",
         choices=[OpenAIChoiceDelta(index=0, delta=OpenAIChatMessageDelta(content=chunk1_content), finish_reason=None)],
     )
-    events1 = translator.process_chunk(chunk1)
-    # Expected: text block start, text delta, text block stop, tool block start, tool delta (converted), tool block stop, text block start, text delta
-    # print(f"Events1 types: {[type(e) for e in events1]}")
-    # print(f"Events1: {events1}")
+    events1 = translator.process_chunk(chunk1, translator.anthropic_request)
 
     # Find the tool delta event
     tool_delta_events = [
-        e
-        for e in events1
-        if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, InputJsonDelta) and e.index == 1
+        e for e in events1 if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, InputJsonDelta)
     ]
-    assert len(tool_delta_events) == 1
+    assert len(tool_delta_events) == 1, "Expected one tool call delta event"
+
     parsed_args = json.loads(tool_delta_events[0].delta.partial_json)
     # Check conversion happened
     assert parsed_args["shape"] == "circle"
     assert parsed_args["width"] == 15.7  # Converted from "15.7"
     assert parsed_args["height"] == 15  # Converted from "15"
+
+    # Check that text parts are also present
+    all_text = "".join(
+        e.delta.text for e in events1 if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, TextDelta)
+    )
+    assert "Here is the tool: " in all_text
+    assert "And here is more text." in all_text
 
 
 def test_finalize_with_incomplete_custom_tool_call(translator: OpenAIToAnthropicStreamTranslator):
@@ -462,14 +454,14 @@ def test_finalize_with_incomplete_custom_tool_call(translator: OpenAIToAnthropic
         choices=[
             OpenAIChoiceDelta(
                 index=0,
-                delta=OpenAIChatMessageDelta(content="|tool_call_begin|>incomplete..."),
+                delta=OpenAIChatMessageDelta(content="<tool_call>incomplete..."),
                 finish_reason=None,
             )
         ],
     )
     # process_chunk will buffer this, as it looks like a partial tag
     translator.process_chunk(chunk)
-    assert translator._text_buffer == "|tool_call_begin|>incomplete..."
+    assert translator._text_buffer == "<tool_call>incomplete..."
 
     final_events = translator.finalize()
     # Expect: new text block, text delta, stop block, message delta, message stop
@@ -478,7 +470,7 @@ def test_finalize_with_incomplete_custom_tool_call(translator: OpenAIToAnthropic
         [ContentBlockStartEvent, ContentBlockDeltaEvent, ContentBlockStopEvent, MessageDeltaEvent, MessageStopEvent],
     )
     assert final_events[0].content_block.type == "text"
-    assert final_events[1].delta.text == "|tool_call_begin|>incomplete..."
+    assert final_events[1].delta.text == "<tool_call>incomplete..."
 
 
 def test_usage_reporting(translator: OpenAIToAnthropicStreamTranslator):
@@ -594,6 +586,213 @@ def test_consecutive_tool_calls_same_index(translator: OpenAIToAnthropicStreamTr
     # Should stop the last active block (index 1)
     assert_event_types(final_events, [ContentBlockStopEvent, MessageDeltaEvent, MessageStopEvent])
     assert final_events[0].index == 1
+
+
+def test_kimi_k2_tool_call_in_text_non_streaming(anthropic_request_with_typed_tools: AnthropicRequest):
+    """Test non-streaming translation with Kimi K2 tool call embedded in content."""
+    from .models_openai import OpenAIChatCompletion, OpenAIChoice, OpenAIResponseMessage, OpenAIUsage
+    from .response_translator_v2 import translate_openai_to_anthropic_non_stream
+
+    # Simulate full response with Kimi K2 tool call
+    kimi_tool_section = (
+        "<|tool_calls_section_begin|>"
+        "<|tool_call_begin|>functions.calculate_area:1<|tool_call_argument_begin|>"
+        '{"shape": "circle", "width": "7.5", "height": "7", "active": "true"}'
+        "<|tool_call_end|>"
+        "<|tool_calls_section_end|>"
+    )
+    content_before = "I will calculate the area now. "
+    content_after = " That's all."
+
+    full_content = content_before + kimi_tool_section + content_after
+
+    openai_response = OpenAIChatCompletion(
+        id="resp_kimi_1",
+        created=1,
+        model="kimi-1",
+        object="chat.completion",
+        choices=[
+            OpenAIChoice(
+                index=0,
+                message=OpenAIResponseMessage(
+                    role="assistant",
+                    content=full_content,
+                ),
+                finish_reason="stop",
+            )
+        ],
+        usage=OpenAIUsage(prompt_tokens=60, completion_tokens=45, total_tokens=105),
+    )
+
+    result = translate_openai_to_anthropic_non_stream(openai_response, anthropic_request_with_typed_tools)
+
+    # Should have three content blocks: text, tool_use, text
+    assert len(result.content) == 3
+    assert result.content[0].type == "text"
+    assert result.content[0].text == content_before.strip()
+
+    tool_block = result.content[1]
+    assert tool_block.type == "tool_use"
+    assert tool_block.name == "calculate_area"
+    assert tool_block.input["shape"] == "circle"
+    assert tool_block.input["width"] == 7.5  # Converted from string
+    assert tool_block.input["height"] == 7  # Converted from string
+    assert tool_block.input["active"] is True  # Converted from "true"
+
+    assert result.content[2].type == "text"
+    assert result.content[2].text == content_after.strip()
+
+
+def test_kimi_k2_tool_call_in_streaming_content(
+    translator: OpenAIToAnthropicStreamTranslator, anthropic_request_with_typed_tools: AnthropicRequest
+):
+    """Test streaming text containing a complete Kimi K2 tool call."""
+    kimi_section = (
+        "<|tool_calls_section_begin|>"
+        "<|tool_call_begin|>functions.calculate_area:1<|tool_call_argument_begin|>"
+        '{"shape": "triangle", "width": "6.0", "height": "8", "active": "false"}'
+        "<|tool_call_end|>"
+        "<|tool_calls_section_end|>"
+    )
+    chunk = OpenAIChatCompletionChunk(
+        id="chunk_kimi",
+        created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(content="Before. " + kimi_section + " After."),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    events = translator.process_chunk(chunk, anthropic_request_with_typed_tools)
+
+    # Expected sequence:
+    # 1. Text block start + delta ("Before. ")
+    # 2. Text block stop
+    # 3. Tool block start
+    # 4. Tool block delta (converted args)
+    # 5. Tool block stop
+    # 6. Text block start
+    # 7. Text delta (" After.")
+
+    assert len(events) >= 7
+    assert isinstance(events[0], ContentBlockStartEvent)
+    assert events[0].content_block.type == "text"
+    assert isinstance(events[1], ContentBlockDeltaEvent)
+    assert events[1].delta.text == "Before. "
+
+    assert isinstance(events[2], ContentBlockStopEvent)
+    assert isinstance(events[3], ContentBlockStartEvent)
+    assert events[3].content_block.type == "tool_use"
+    assert events[3].content_block.name == "calculate_area"
+
+    # Check argument delta with type conversion
+    tool_delta_event = next(
+        e for e in events if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, InputJsonDelta)
+    )
+    parsed_args = json.loads(tool_delta_event.delta.partial_json)
+    assert parsed_args["shape"] == "triangle"
+    assert parsed_args["width"] == 6.0
+    assert parsed_args["height"] == 8
+    assert parsed_args["active"] is False
+
+    # Final text
+    last_text_event = next(
+        e for e in reversed(events) if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, TextDelta)
+    )
+    assert last_text_event.delta.text == " After."
+
+
+def test_kimi_k2_incomplete_section_in_streaming(translator: OpenAIToAnthropicStreamTranslator):
+    """Test that incomplete Kimi K2 section is treated as plain text and flushed on finalize."""
+    incomplete_kimi = (
+        '<|tool_calls_section_begin|>functions.calculate_area:1<|tool_call_argument_begin|>{"shape": "square"'
+    )
+
+    chunk = OpenAIChatCompletionChunk(
+        id="chunk_incomplete",
+        created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(content=incomplete_kimi),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    events = translator.process_chunk(chunk)
+    # The new logic will now buffer this, as it can't find the end tag.
+    assert translator._text_buffer == incomplete_kimi
+    assert not events  # No events should be emitted yet.
+
+    # Finalize should flush remaining buffer as text
+    final_events = translator.finalize()
+    assert any(isinstance(e, MessageStopEvent) for e in final_events)
+    text_delta = next(
+        (e for e in final_events if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, TextDelta)), None
+    )
+    assert text_delta is not None
+    assert text_delta.delta.text == incomplete_kimi
+
+
+def test_kimi_k2_multiple_tool_calls_in_section(
+    translator: OpenAIToAnthropicStreamTranslator, anthropic_request_with_typed_tools: AnthropicRequest
+):
+    """Test parsing multiple tool calls within a single <|tool_calls_section|>."""
+    kimi_section = (
+        "<|tool_calls_section_begin|>"
+        '<|tool_call_begin|>functions.calculate_area:1<|tool_call_argument_begin|>{"shape": "rect", "width": "10", "height": "5"}<|tool_call_end|>'
+        '<|tool_call_begin|>functions.calculate_area:2<|tool_call_argument_begin|>{"shape": "circle", "width": "3.14", "height": "3", "active": "true"}<|tool_call_end|>'
+        "<|tool_calls_section_end|>"
+    )
+
+    chunk = OpenAIChatCompletionChunk(
+        id="chunk_multi_kimi",
+        created=1,
+        model="m",
+        object="chat.completion.chunk",
+        choices=[
+            OpenAIChoiceDelta(
+                index=0,
+                delta=OpenAIChatMessageDelta(content=kimi_section),
+                finish_reason=None,
+            )
+        ],
+    )
+
+    events = translator.process_chunk(chunk, anthropic_request_with_typed_tools)
+
+    # Should produce: text start/delta, stop, tool1 start/delta/stop, tool2 start/delta/stop, text start (if any trailing)
+    # But since it's all in one chunk, we expect:
+    # - Text block for the section
+    # - Then two tool blocks created and closed in _process_text_buffer
+
+    tool_starts = [e for e in events if isinstance(e, ContentBlockStartEvent) and e.content_block.type == "tool_use"]
+    assert len(tool_starts) == 2
+    assert tool_starts[0].content_block.name == "calculate_area"
+    assert tool_starts[1].content_block.name == "calculate_area"
+
+    # Check arguments are converted
+    deltas = [e for e in events if isinstance(e, ContentBlockDeltaEvent) and isinstance(e.delta, InputJsonDelta)]
+    assert len(deltas) == 2
+
+    args1 = json.loads(deltas[0].delta.partial_json)
+    assert args1["shape"] == "rect"
+    assert args1["width"] == 10
+    assert args1["height"] == 5
+
+    args2 = json.loads(deltas[1].delta.partial_json)
+    assert args2["shape"] == "circle"
+    assert args2["width"] == 3.14
+    assert args2["height"] == 3
+    assert args2["active"] is True
 
 
 if __name__ == "__main__":
