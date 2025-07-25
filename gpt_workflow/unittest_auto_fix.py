@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from debugger import tracer
 from llm_query import (
+    GPT_FLAG_EDIT,
     GPT_FLAG_PATCH,
     GPT_FLAGS,
     GPT_SYMBOL_PATCH,
@@ -26,6 +27,10 @@ from llm_query import (
     MatchResult,
     ModelSwitch,
     PatchPromptBuilder,
+    detect_proxies,
+    get_clipboard_content_string,
+    handle_ask_mode,
+    print_proxy_info,
     process_patch_response,
     query_symbol_service,
 )
@@ -301,9 +306,6 @@ class TestAutoFix:
             show_full_trace=True,
         )
 
-        # # log_extractor = tracer.TraceLogExtractor(fn)
-        # logs, references_group = log_extractor.lookup(file_path, line, sibling_config=config)
-        # if not logs and test_id:
         frame_id = extract_test_case_trace_from_log(str(fn), test_id=test_id.split(".")[-1])
         logs, references_group = log_extractor.lookup(frame_id=frame_id, next_siblings=2)
         if frame_ref_lines:
@@ -562,12 +564,22 @@ from tests.test_main import run_tests
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Test auto-fix tool with continuous repair workflow.")
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
         "test_patterns",
         nargs="*",
         default=None,
         help="Test selection patterns (e.g. +test_module*, -/exclude.*/, TestCase.test_method)",
     )
+    group.add_argument(
+        "--from-log",
+        dest="from_log_file",
+        nargs="?",
+        const=True,
+        default=None,
+        help="Fix from a log file. Reads from clipboard if no path is given.",
+    )
+
     parser.add_argument(
         "-v",
         "--verbosity",
@@ -1412,6 +1424,85 @@ def run_single_test_fix_loop(args: argparse.Namespace, test_id: str):
     _restart_with_original_args()
 
 
+class MockArgs:
+    """Mocks the argparse object for handle_ask_mode."""
+
+    def __init__(self, ask_text: str, obsidian_doc: Optional[str] = None):
+        self.ask = ask_text
+        self.obsidian_doc = obsidian_doc
+        self.file: Optional[str] = None
+        self.chatbot = False
+        self.project_search: Optional[List[str]] = None
+
+
+def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: ModelSwitch) -> None:
+    """
+    New workflow to fix code based on a provided trace log.
+    """
+    print(Fore.CYAN + "🚀 " + "=" * 20 + " Log-Based Fix Mode Engaged " + "=" * 20 + " 🚀")
+
+    log_content = ""
+    if args.from_log_file is True:  # --from-log without a path
+        print(Fore.YELLOW + "Reading trace log from clipboard...")
+        log_content = get_clipboard_content_string()
+    else:  # --from-log with a path
+        log_path = Path(args.from_log_file)
+        print(f"Reading trace log from file: {log_path}")
+        if not log_path.exists():
+            print(Fore.RED + f"Error: Log file not found at {log_path}")
+            sys.exit(1)
+        log_content = log_path.read_text(encoding="utf-8")
+
+    if not log_content.strip():
+        print(Fore.RED + "Error: No log content found. Aborting.")
+        sys.exit(1)
+
+    # Extract file paths from the log
+    # A simple regex to find python file paths
+    file_path_pattern = re.compile(r"([\w/.-]+\.py)")
+    extracted_paths = sorted(list(set(file_path_pattern.findall(log_content))))
+
+    # Verify paths exist and make them relative to the project root
+    project_root = Path(os.getcwd())
+    valid_paths = []
+    for path in extracted_paths:
+        abs_path = project_root / path
+        if abs_path.exists():
+            valid_paths.append(str(abs_path))
+        else:
+            print(Fore.YELLOW + f"Warning: Skipping path from log as it does not exist: {path}")
+
+    if not valid_paths:
+        print(Fore.RED + "Error: Could not find any valid source file paths in the log. Aborting.")
+        sys.exit(1)
+
+    print(Fore.GREEN + "\nFound the following source files in the log:")
+    for path in valid_paths:
+        print(f"  - {path}")
+
+    # Construct the prompt for handle_ask_mode
+    ask_prompt = (
+        f"请仔细分析以下追踪日志，并修复在提供的文件中发现的任何错误或问题。"
+        f"你的目标是让代码能够正确运行。\n\n"
+        f"--- Trace Log ---\n"
+        f"{log_content}\n"
+        f"--- End Trace Log ---"
+    )
+
+    # Prepend the @edit command with all file paths
+    # This leverages the existing file editing mechanism
+    ask_string = f"@edit {' '.join(['@%s' % path for path in valid_paths])}\n\n{ask_prompt}"
+    GPT_FLAGS[GPT_FLAG_EDIT] = True
+
+    # Use a mock object to pass arguments to handle_ask_mode
+    mock_args = MockArgs(ask_string)
+    proxies, _ = detect_proxies()
+
+    print(Fore.CYAN + "\nInvoking LLM for analysis and fix generation...")
+    handle_ask_mode(mock_args, proxies)
+    print(Fore.GREEN + "\nLog-based fix process complete.")
+
+
 def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
@@ -1428,13 +1519,32 @@ def main():
         args.parallel_analysis is not None,
         args.parallel_autofix is not None,
         args.isolated_fix,
+        args.from_log_file is not None,
     ]
     if sum(active_workflows) > 1:
-        print(
-            Fore.RED
-            + "Error: --auto-pilot, --parallel-analysis, --parallel-autofix, and --isolated-fix are mutually exclusive."
-        )
+        print(Fore.RED + "Error: Workflow flags are mutually exclusive.")
         sys.exit(1)
+
+    # --- Model setup ---
+    fixer_model_name = args.model
+    analyzer_model_name = args.analyzer_model if args.analyzer_model else fixer_model_name
+
+    print(Fore.CYAN + f"\nUsing Analyzer Model: {analyzer_model_name}")
+    print(Fore.CYAN + f"Using Fixer Model   : {fixer_model_name}" + Style.RESET_ALL)
+
+    analyzer_model_switch = ModelSwitch()
+    analyzer_model_switch.select(analyzer_model_name)
+
+    if analyzer_model_name == fixer_model_name:
+        fixer_model_switch = analyzer_model_switch
+    else:
+        fixer_model_switch = ModelSwitch()
+        fixer_model_switch.select(fixer_model_name)
+    # --- End model setup ---
+
+    if args.from_log_file:
+        run_log_based_fix_workflow(args, analyzer_model_switch)
+        return
 
     if args.lookup:
         file_path, line = args.lookup
@@ -1456,23 +1566,6 @@ def main():
             for test_id in test_results["test_cases"]:
                 print(test_id)
         return
-
-    # --- Model setup ---
-    fixer_model_name = args.model
-    analyzer_model_name = args.analyzer_model if args.analyzer_model else fixer_model_name
-
-    print(Fore.CYAN + f"\nUsing Analyzer Model: {analyzer_model_name}")
-    print(Fore.CYAN + f"Using Fixer Model   : {fixer_model_name}" + Style.RESET_ALL)
-
-    analyzer_model_switch = ModelSwitch()
-    analyzer_model_switch.select(analyzer_model_name)
-
-    if analyzer_model_name == fixer_model_name:
-        fixer_model_switch = analyzer_model_switch
-    else:
-        fixer_model_switch = ModelSwitch()
-        fixer_model_switch.select(fixer_model_name)
-    # --- End model setup ---
 
     if args.isolated_fix:
         # This script is the parent process in isolated mode.

@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
  * Shows a user input box to get additional instructions.
  * @returns The user's input, or undefined if they cancel.
  */
-export function getInstruction(): Promise<string | undefined> {
+export async function getInstruction(): Promise<string | undefined> {
     return vscode.window.showInputBox({
         prompt: 'Enter your instruction for the AI',
         placeHolder: 'e.g., "Refactor this to be more efficient" or "Add JSDoc comments"',

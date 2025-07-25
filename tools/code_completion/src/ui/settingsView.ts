@@ -103,8 +103,24 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                     }
 
                     try {
-                        const response = await playgroundChat(message.prompt, serviceConfig);
-                        panel.webview.postMessage({ command: 'playgroundResponse', success: true, text: response });
+                        const { response, usage } = await playgroundChat(message.prompt, serviceConfig);
+                        
+                        // playgroundChat embeds error messages in the response string.
+                        // We can check for these patterns to determine success.
+                        const isErrorResponse = /^(API Error|Failed to communicate|The request timed out|An unknown error occurred)/i.test(response);
+                
+                        let responseText = response;
+                        if (!isErrorResponse && usage.totalTokens > 0) {
+                            const cost = usage.cost ? ` (Cost: $${usage.cost.toFixed(4)})` : '';
+                            const tokenInfo = `\n\n---\nModel: ${usage.model}\nTokens: ${usage.totalTokens} (Prompt: ${usage.promptTokens}, Completion: ${usage.completionTokens})${cost}`;
+                            responseText += tokenInfo;
+                        }
+                
+                        panel.webview.postMessage({ 
+                            command: 'playgroundResponse', 
+                            success: !isErrorResponse, 
+                            text: responseText
+                        });
                     } catch (error) {
                         const errorMessage = error instanceof Error ? error.message : String(error);
                         panel.webview.postMessage({ command: 'playgroundResponse', success: false, text: `Error: ${errorMessage}` });

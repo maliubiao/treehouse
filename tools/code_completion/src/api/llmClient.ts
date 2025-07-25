@@ -1,9 +1,10 @@
 import OpenAI from 'openai';
-import { ChatCompletionMessageParam } from 'openai/resources/chat';
+import { ChatCompletionMessageParam, ChatCompletionCreateParamsStreaming, ChatCompletionCreateParamsNonStreaming } from 'openai/resources/chat';
 import { getActiveAiServiceConfig, AiServiceConfig } from '../config/configuration';
 import { logger } from '../utils/logger';
 import * as vscode from 'vscode';
 import { GenerationContext } from '../types';
+
 // The user needs to manually install this dependency by running: npm install https-proxy-agent
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Agent } from 'http';
@@ -61,12 +62,16 @@ Your task is to:
 2.  **Infer the Intent:** The user's instruction is a starting point, not a rigid command. Deduce the true goal behind their request.
 3.  **Generate the Best Solution:** Rewrite the specified code block to elegantly and robustly achieve the user's inferred goal. Your code should seamlessly integrate with the existing codebase.
 
-IMPORTANT: Your response MUST be wrapped with these exact tags:
-<CODE_GENERATED>
-[your modified code here]
-</CODE_GENERATED>
+IMPORTANT: Your response MUST contain the modified code in an <UPDATED_CODE> block. If you are adding or changing imports, you MUST place them in a separate <UPDATED_IMPORTS> block that comes before the <UPDATED_CODE> block.
 
-Include ONLY the modified code block between these tags, with no explanations or additional text.`);
+Example:
+<UPDATED_IMPORTS>
+import { useState } from 'react';
+</UPDATED_IMPORTS>
+
+<UPDATED_CODE>
+const [count, setCount] = useState(0);
+</UPDATED_CODE>`);
     const rule = config.get<string>('prompt.rule', '');
 
     let contextBlock = '';
@@ -124,157 +129,6 @@ ${instruction}
     ];
 }
 
-
-/**
- * Cleans the AI's response by extracting code from CODE_GENERATED tags.
- * Uses robust stack-based parsing to handle nested tags and malformed responses.
- * Includes comprehensive error handling for unbalanced tags and edge cases.
- */
-function cleanResponse(responseText: string): string {
-    let cleanedText = responseText
-    
-    if (!cleanedText) {
-        return '';
-    }
-    
-    const startTag = '<CODE_GENERATED>';
-    const endTag = '</CODE_GENERATED>';
-    
-    // Phase 1: Validate basic tag presence
-    const firstStart = cleanedText.indexOf(startTag);
-    const firstEnd = cleanedText.indexOf(endTag);
-    
-    // Quick validation: if no tags found, skip to fallback
-    if (firstStart === -1 && firstEnd === -1) {
-        return handleFallbackExtraction(cleanedText);
-    }
-    
-    // Phase 2: Robust stack-based parsing with error handling
-    let stack = 0;
-    let outermostStart = -1;
-    let outermostEnd = -1;
-    let contentStart = -1;
-    let positions = [];
-    
-    // Collect all tag positions
-    let pos = 0;
-    while (pos < cleanedText.length) {
-        const startMatch = cleanedText.indexOf(startTag, pos);
-        const endMatch = cleanedText.indexOf(endTag, pos);
-        
-        if (startMatch === -1 && endMatch === -1) break;
-        
-        if (startMatch !== -1 && (endMatch === -1 || startMatch < endMatch)) {
-            positions.push({ type: 'start', pos: startMatch });
-            pos = startMatch + startTag.length;
-        } else if (endMatch !== -1) {
-            positions.push({ type: 'end', pos: endMatch });
-            pos = endMatch + endTag.length;
-        } else {
-            break;
-        }
-    }
-    
-    // Phase 3: Validate tag balance and find outermost pair
-    let validPairs = [];
-    let openStack = [];
-    
-    for (let i = 0; i < positions.length; i++) {
-        const current = positions[i];
-        
-        if (current.type === 'start') {
-            openStack.push(current);
-        } else if (current.type === 'end' && openStack.length > 0) {
-            const matchingStart = openStack.pop();
-            if (openStack.length === 0) {
-                // This is the outermost pair
-                outermostStart = matchingStart.pos;
-                outermostEnd = current.pos;
-                contentStart = matchingStart.pos + startTag.length;
-                break;
-            }
-        }
-    }
-    
-    // Phase 4: Extract content or handle errors
-    if (outermostStart !== -1 && outermostEnd !== -1 && contentStart < outermostEnd) {
-        const extracted = cleanedText.slice(contentStart, outermostEnd);
-        
-        // Validate extracted content isn't empty
-        if (extracted.length > 0) {
-            return extracted;
-        }
-    }
-    
-    // Phase 5: Handle malformed cases with partial recovery
-    if (firstStart !== -1 && firstEnd !== -1 && firstStart < firstEnd) {
-        // Fallback to first valid pair if outermost detection failed
-        const fallbackContent = cleanedText.slice(firstStart + startTag.length, firstEnd);
-        if (fallbackContent.length > 0) {
-            return fallbackContent;
-        }
-    }
-    
-    // Phase 6: Final fallback mechanisms
-    return handleFallbackExtraction(cleanedText);
-}
-
-/**
- * Handles fallback extraction when CODE_GENERATED tags are malformed or missing.
- * Provides multiple levels of fallback for maximum compatibility.
- */
-function handleFallbackExtraction(text: string): string {
-    if (!text) return '';
-    
-    // Fallback 1: Try markdown code blocks
-    const markdownRegex = /```(?:\w+)?\s*\n?([\s\S]*?)\s*\n?```/g;
-    const matches = [...text.matchAll(markdownRegex)];
-    
-    if (matches.length > 0) {
-        // Return the largest content from markdown blocks
-        let largestContent = '';
-        for (const match of matches) {
-            if (match[1] && match[1].length > largestContent.length) {
-                largestContent = match[1];
-            }
-        }
-        if (largestContent) return largestContent;
-    }
-    
-    // Fallback 2: Remove common prefixes/suffixes
-    let cleaned = text;
-    
-    // Remove common AI response prefixes
-    const prefixes = [
-        'Here is the modified code:',
-        'Here\'s the updated code:',
-        'Modified code:',
-        'Updated code:',
-        'The modified code is:',
-        '```',
-        '```\w+',
-    ];
-    
-    for (const prefix of prefixes) {
-        const regex = new RegExp(`^${prefix}\s*\n?`, 'i');
-        cleaned = cleaned.replace(regex, '');
-    }
-    
-    // Remove common suffixes
-    const suffixes = [
-        '\n```$',
-        '\s+Let me know if you need any changes.$',
-        '\s+Please let me know if you need anything else.$',
-    ];
-    
-    for (const suffix of suffixes) {
-        const regex = new RegExp(suffix, 'i');
-        cleaned = cleaned.replace(regex, '');
-    }
-    
-    return cleaned; 
-}
-
 /**
  * Token usage information for billing purposes
  */
@@ -308,7 +162,7 @@ function calculateCost(promptTokens: number, completionTokens: number): number {
  * @param context - The full generation context, including code, file info, etc.
  * @param onProgress - Callback function to report streaming progress (optional)
  * @param cancellationToken - Token to signal cancellation of the operation (optional)
- * @returns Object containing generated code and token usage information.
+ * @returns Object containing the raw generated code from the model and token usage information.
  */
 export async function generateCode(
     instruction: string, 
@@ -329,14 +183,13 @@ export async function generateCode(
     logger.log('Using AI Service for code generation:', { ...serviceToLog, key: '********' });
     logger.log('Sending prompt:', { messages });
 
-    // Create AbortController for cancellation support
     const abortController = new AbortController();
     
-    const completionOptions = {
+    const completionOptions: ChatCompletionCreateParamsStreaming = {
         model: activeService.model_name,
         messages: messages,
         temperature: activeService.temperature,
-        stream: true, // Always use streaming mode
+        stream: true,
     };
     logger.log('Sending OpenAI Chat Completion Request with options:', completionOptions);
 
@@ -347,15 +200,10 @@ export async function generateCode(
     try {
         const timeoutMs = (activeService.timeout_seconds || 60) * 1000;
         
-        // Create AbortController for cancellation support
-        const abortController = new AbortController();
-        
-        // Start accumulation session
         if (enableStreamingAccumulator) {
             streamingAccumulator.startSession();
         }
         
-        // Always use streaming mode
         const stream = await openai.chat.completions.create(
             completionOptions, 
             { 
@@ -367,53 +215,41 @@ export async function generateCode(
         let tokenCount = 0;
         let isComplete = false;
 
-        try {
-            for await (const chunk of stream) {
-                // Check for cancellation
-                if (cancellationToken?.isCancellationRequested) {
-                    abortController.abort();
-                    throw new Error('Operation cancelled by user');
+        for await (const chunk of stream) {
+            if (cancellationToken?.isCancellationRequested) {
+                abortController.abort();
+                throw new Error('Operation cancelled by user');
+            }
+            
+            const content = chunk.choices[0]?.delta?.content || '';
+            const finishReason = chunk.choices[0]?.finish_reason;
+            
+            if (content) {
+                accumulatedContent += content;
+                
+                if (enableStreamingAccumulator) {
+                    streamingAccumulator.addChunk(content);
                 }
                 
-                const content = chunk.choices[0]?.delta?.content || '';
-                const finishReason = chunk.choices[0]?.finish_reason;
+                tokenCount += content.split(/\s+/).length;
                 
-                if (content) {
-                    accumulatedContent += content;
-                    
-                    // Add to streaming accumulator
-                    if (enableStreamingAccumulator) {
-                        streamingAccumulator.addChunk(content);
-                    }
-                    
-                    tokenCount += content.split(/\s+/).length;
-                    
-                    // Always update progress if callback provided
-                    if (onProgress) {
-                        onProgress(tokenCount, accumulatedContent);
-                    }
-                }
-                
-                // Check if streaming is complete
-                if (finishReason === 'stop' || finishReason === 'length') {
-                    isComplete = true;
-                    break;
+                if (onProgress) {
+                    onProgress(tokenCount, accumulatedContent);
                 }
             }
             
-            // Ensure we mark progress as complete
-            if (!isComplete && accumulatedContent.length > 0 && onProgress) {
-                onProgress(tokenCount, accumulatedContent);
+            if (finishReason === 'stop' || finishReason === 'length') {
+                isComplete = true;
+                break;
             }
-            
-        } catch (streamError) {
-            logger.error('Streaming error:', streamError);
-            throw streamError;
+        }
+        
+        if (!isComplete && accumulatedContent.length > 0 && onProgress) {
+            onProgress(tokenCount, accumulatedContent);
         }
 
         logger.log('Raw accumulated content from stream:', { content: accumulatedContent });
 
-        // For streaming, we estimate usage since OpenAI doesn't provide usage in streaming
         const estimatedPromptTokens = Math.ceil(messages.reduce((total, msg) => total + (msg.content?.toString().length || 0), 0) / 4);
         const estimatedCompletionTokens = Math.ceil(accumulatedContent.length / 4);
         
@@ -427,14 +263,12 @@ export async function generateCode(
 
         logger.log('Estimated token usage:', usage);
         
-        // End streaming session
         if (enableStreamingAccumulator) {
             streamingAccumulator.endSession(true);
         }
         
-        return { code: cleanResponse(accumulatedContent), usage };
+        return { code: accumulatedContent, usage };
     } catch (error) {
-        // End streaming session on error or cancellation
         if (enableStreamingAccumulator) {
             const isCancellation = error instanceof Error && error.message === 'Operation cancelled by user';
             streamingAccumulator.endSession(!isCancellation, isCancellation);
@@ -477,12 +311,14 @@ export async function playgroundChat(
     const { key, ...serviceToLog } = serviceConfig;
     logger.log('Using AI Service for playground:', { ...serviceToLog, key: '********' });
     logger.log('Sending playground prompt:', { prompt });
+
+    const messages: ChatCompletionMessageParam[] = [{ role: 'user', content: prompt }];
     
-    const completionOptions = {
+    const completionOptions: ChatCompletionCreateParamsStreaming = {
         model: serviceConfig.model_name,
-        messages: [{ role: 'user', content: prompt }],
+        messages: messages,
         temperature: serviceConfig.temperature,
-        stream: true, // Always use streaming mode
+        stream: true,
     };
     logger.log('Sending OpenAI Chat Completion Request from playground with options:', completionOptions);
 
@@ -493,15 +329,12 @@ export async function playgroundChat(
     try {
         const timeoutMs = (serviceConfig.timeout_seconds || 60) * 1000;
         
-        // Create AbortController for cancellation support
         const abortController = new AbortController();
         
-        // Start accumulation session
         if (enableStreamingAccumulator) {
             streamingAccumulator.startSession();
         }
         
-        // Always use streaming mode
         const stream = await openai.chat.completions.create(
             completionOptions, 
             { 
@@ -513,53 +346,36 @@ export async function playgroundChat(
         let tokenCount = 0;
         let isComplete = false;
 
-        try {
-            for await (const chunk of stream) {
-                // Check for cancellation
-                if (cancellationToken?.isCancellationRequested) {
-                    abortController.abort();
-                    throw new Error('Operation cancelled by user');
+        for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content || '';
+            const finishReason = chunk.choices[0]?.finish_reason;
+            
+            if (content) {
+                accumulatedContent += content;
+                
+                if (enableStreamingAccumulator) {
+                    streamingAccumulator.addChunk(content);
                 }
                 
-                const content = chunk.choices[0]?.delta?.content || '';
-                const finishReason = chunk.choices[0]?.finish_reason;
+                tokenCount += content.split(/\s+/).length;
                 
-                if (content) {
-                    accumulatedContent += content;
-                    
-                    // Add to streaming accumulator
-                    if (enableStreamingAccumulator) {
-                        streamingAccumulator.addChunk(content);
-                    }
-                    
-                    tokenCount += content.split(/\s+/).length;
-                    
-                    // Always update progress if callback provided
-                    if (onProgress) {
-                        onProgress(tokenCount, accumulatedContent);
-                    }
-                }
-                
-                // Check if streaming is complete
-                if (finishReason === 'stop' || finishReason === 'length') {
-                    isComplete = true;
-                    break;
+                if (onProgress) {
+                    onProgress(tokenCount, accumulatedContent);
                 }
             }
             
-            // Ensure we mark progress as complete
-            if (!isComplete && accumulatedContent.length > 0 && onProgress) {
-                onProgress(tokenCount, accumulatedContent);
+            if (finishReason === 'stop' || finishReason === 'length') {
+                isComplete = true;
+                break;
             }
-            
-        } catch (streamError) {
-            logger.error('Playground streaming error:', streamError);
-            throw streamError;
+        }
+        
+        if (!isComplete && accumulatedContent.length > 0 && onProgress) {
+            onProgress(tokenCount, accumulatedContent);
         }
 
         logger.log('Raw accumulated content from playground stream:', { content: accumulatedContent });
 
-        // Estimate usage for streaming
         const estimatedPromptTokens = Math.ceil(prompt.length / 4);
         const estimatedCompletionTokens = Math.ceil(accumulatedContent.length / 4);
         
@@ -571,14 +387,12 @@ export async function playgroundChat(
             model: serviceConfig.model_name,
         };
 
-        // End streaming session
         if (enableStreamingAccumulator) {
             streamingAccumulator.endSession(true);
         }
 
         return { response: accumulatedContent, usage };
     } catch (error) {
-        // End streaming session on error or cancellation
         if (enableStreamingAccumulator) {
             const isCancellation = error instanceof Error && error.message === 'Operation cancelled by user';
             streamingAccumulator.endSession(!isCancellation, isCancellation);
@@ -630,27 +444,30 @@ export async function testApiConnection(apiConfig: AiServiceConfig): Promise<{ s
     logger.log('Testing API connection with config:', { ...apiConfig, key: '********' });
     
     try {
-        // Use the centralized client initializer to include proxy support
         const client = initializeClient(apiConfig);
         
-        const timeoutMs = (apiConfig.timeout_seconds || 15) * 1000; // Shorter timeout for a simple test
+        const timeoutMs = (apiConfig.timeout_seconds || 15) * 1000;
         const testPrompt = "Respond with only the word 'test'";
         logger.log(`Sending test prompt: "${testPrompt}" to model: ${apiConfig.model_name}`);
 
-        const response = await client.chat.completions.create({
+        const messages: ChatCompletionMessageParam[] = [{ role: 'user', content: testPrompt }];
+
+        const params: ChatCompletionCreateParamsNonStreaming = {
             model: apiConfig.model_name,
-            messages: [{ role: 'user', content: testPrompt }],
+            messages: messages,
             max_tokens: 5,
-        }, { timeout: timeoutMs });
+        };
+
+        const response = await client.chat.completions.create(params, { timeout: timeoutMs });
         
         logger.log('Received test response from API:', response);
-        const content = response.choices[0]?.message?.content?.toLowerCase();
+        const content = response.choices[0]?.message?.content?.toLowerCase().trim();
 
         if (content === 'test') {
             logger.log('Test connection successful.');
             return { success: true, message: 'Connection successful.' };
         } else {
-            logger.log('WARN: Test connection failed: Unexpected response.', { response: content });
+            logger.warn('WARN: Test connection failed: Unexpected response.', { response: content });
             return { success: false, message: `Received an unexpected response: "${content}"` };
         }
     } catch (error) {

@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
-
 import argparse
 import glob
 import json
+import locale
 import logging
 import os
 import shutil
@@ -11,7 +10,6 @@ import sys
 from typing import Dict
 
 import lldb
-
 from lldb_tester.core.discovery import ScriptLoader, TestFileFinder, TestFunctionFinder
 from lldb_tester.core.executor import TestFunctionExecutor
 from lldb_tester.core.models import TestResult, TestStatus
@@ -179,16 +177,38 @@ class LLDBTester:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LLDB API Test Framework")
-    parser.add_argument("-c", "--config", help="Path to config file")
-    parser.add_argument("-t", "--test", help="Run specific test file")
-    parser.add_argument("-p", "--pattern", default="test_*.py", help="Test file pattern")
-    parser.add_argument("--continue-on-failure", action="store_true", help="Continue on test failure")
-    parser.add_argument("--list-tests", action="store_true", help="List available tests")
-    parser.add_argument("--build", action="store_true", help="Build all test programs and exit")
-    parser.add_argument("--clean", action="store_true", help="Clean up build artifacts after tests")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
+    # Detect system language
+    lang, _ = locale.getdefaultlocale()
+    is_chinese = lang and lang.startswith("zh")
 
+    parser = argparse.ArgumentParser(description="LLDB API 测试框架" if is_chinese else "LLDB API Test Framework")
+
+    parser.add_argument("-c", "--config", help="配置文件路径" if is_chinese else "Path to config file")
+    parser.add_argument("-t", "--test", help="运行指定测试文件" if is_chinese else "Run specific test file")
+    parser.add_argument(
+        "-p", "--pattern", default="test_*.py", help="测试文件匹配模式" if is_chinese else "Test file pattern"
+    )
+    parser.add_argument(
+        "--continue-on-failure",
+        action="store_true",
+        help="失败时继续执行" if is_chinese else "Continue on test failure",
+    )
+    parser.add_argument(
+        "--list-tests", action="store_true", help="列出可用测试" if is_chinese else "List available tests"
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="构建所有测试程序并退出" if is_chinese else "Build all test programs and exit",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="测试后清理构建产物" if is_chinese else "Clean up build artifacts after tests",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="启用详细日志" if is_chinese else "Enable verbose logging"
+    )
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.verbose else logging.INFO

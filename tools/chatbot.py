@@ -246,6 +246,7 @@ class ChatbotUI:
             stream=True,
             console=self.console,
             temperature=self.temperature,
+            disable_conversation_history=False,
         )
 
     def run(self):

@@ -212,11 +212,21 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
     line_ranges = {}
     if args.line_ranges:
         for range_str in args.line_ranges.split(","):
-            file_path, ranges = range_str.split(":")
-            start, end = map(int, ranges.split("-"))
-            if file_path not in line_ranges:
-                line_ranges[file_path] = []
-            line_ranges[file_path].append((start, end))
+            try:
+                file_path, ranges = range_str.split(":", 1)
+                file_path = os.path.abspath(file_path)  # 转换为绝对路径
+                start_str, end_str = ranges.split("-", 1)
+                start, end = int(start_str), int(end_str)
+                if start > end:
+                    raise ValueError(f"起始行号 {start} 大于结束行号 {end}")
+                if file_path not in line_ranges:
+                    line_ranges[file_path] = []
+                line_ranges[file_path].append((start, end))
+            except ValueError as e:
+                raise ValueError(f"行号范围格式错误 '{range_str}': {e}") from e
+            except Exception as e:
+                raise ValueError(f"解析行号范围时发生未知错误 '{range_str}': {e}") from e
+
     return {
         "target_script": target_script,
         "target_module": target_module,
