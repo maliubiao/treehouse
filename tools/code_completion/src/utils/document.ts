@@ -145,10 +145,21 @@ function findSymbolNeighbors(
  * It now clearly distinguishes between replacement (user has a selection) and
  * insertion (user has a cursor but no selection).
  * It always attempts to find an enclosing symbol for smart context, regardless of selection.
+ * 
+ * This function also validates that the active editor is a proper code file,
+ * excluding special editors like terminal or debug console.
  */
 export async function getGenerationContext(): Promise<GenerationContext | null> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || !editor.document) {
+        return null;
+    }
+
+    // Check if the editor is a special type that shouldn't trigger code generation
+    const specialEditors = ['terminal', 'debug-console', 'output'];
+    if (specialEditors.includes(editor.document.languageId)) {
+        // Not returning an error here but simply returning null
+        // The command handler will show an appropriate message
         return null;
     }
 

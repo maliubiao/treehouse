@@ -195,6 +195,16 @@ export async function generateCodeCommand(
 
     const generationContext = await getGenerationContext();
     if (!generationContext) {
+        // Check if we're in a special editor to show a more specific message
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document) {
+            const specialEditors = ['terminal', 'debug-console', 'output'];
+            if (specialEditors.includes(editor.document.languageId)) {
+                showInfoMessage('Code generation is not available in terminals, debug console, or output panels.');
+                return;
+            }
+        }
+        
         showInfoMessage('Place your cursor or select code in a file to generate code.');
         return;
     }

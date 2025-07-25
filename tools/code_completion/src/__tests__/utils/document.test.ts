@@ -97,9 +97,79 @@ describe('document utilities', () => {
       expect(result).toBeNull();
     });
 
+    it('should return null when in terminal editor', async () => {
+      const mockEditor = {
+        document: {
+          languageId: 'terminal',
+          getText: jest.fn().mockReturnValue(''),
+          uri: { fsPath: '/test/file.js', toString: () => 'file:///test/file.js' },
+          fileName: 'file.js'
+        },
+        selection: {
+          isEmpty: true,
+          active: { line: 0, character: 0 },
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 }
+        }
+      };
+      
+      (vscode.window.activeTextEditor as any) = mockEditor;
+      (vscode.commands.executeCommand as jest.Mock).mockResolvedValue([]);
+
+      const result = await getGenerationContext();
+      expect(result).toBeNull();
+    });
+
+    it('should return null when in debug console editor', async () => {
+      const mockEditor = {
+        document: {
+          languageId: 'debug-console',
+          getText: jest.fn().mockReturnValue(''),
+          uri: { fsPath: '/test/file.js', toString: () => 'file:///test/file.js' },
+          fileName: 'file.js'
+        },
+        selection: {
+          isEmpty: true,
+          active: { line: 0, character: 0 },
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 }
+        }
+      };
+      
+      (vscode.window.activeTextEditor as any) = mockEditor;
+      (vscode.commands.executeCommand as jest.Mock).mockResolvedValue([]);
+
+      const result = await getGenerationContext();
+      expect(result).toBeNull();
+    });
+
+    it('should return null when in output panel editor', async () => {
+      const mockEditor = {
+        document: {
+          languageId: 'output',
+          getText: jest.fn().mockReturnValue(''),
+          uri: { fsPath: '/test/file.js', toString: () => 'file:///test/file.js' },
+          fileName: 'file.js'
+        },
+        selection: {
+          isEmpty: true,
+          active: { line: 0, character: 0 },
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 }
+        }
+      };
+      
+      (vscode.window.activeTextEditor as any) = mockEditor;
+      (vscode.commands.executeCommand as jest.Mock).mockResolvedValue([]);
+
+      const result = await getGenerationContext();
+      expect(result).toBeNull();
+    });
+
     it('should handle empty selection with no enclosing symbol', async () => {
       const mockEditor = {
         document: {
+          languageId: 'javascript',
           getText: jest.fn().mockReturnValue('const x = 1;\nconsole.log(x);'),
           uri: { fsPath: '/test/file.js', toString: () => 'file:///test/file.js' },
           fileName: 'file.js'
@@ -125,6 +195,7 @@ describe('document utilities', () => {
     it('should handle text selection', async () => {
       const mockEditor = {
         document: {
+          languageId: 'javascript',
           getText: jest.fn().mockImplementation((range?: any) => {
             if (!range) return 'const x = 1;\nconsole.log(x);';
             return 'const x = 1;';
