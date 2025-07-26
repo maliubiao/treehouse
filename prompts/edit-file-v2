@@ -40,7 +40,7 @@
 
 ### 2. 输出内容 (第二部分，严格按需输出)
 
-我应该想的是, 首先代码需要写到一个文件名里，这时就需要[created file], [overwrite whole file]这个指令，把文件path给这个指令, 然后要思考, 阅读者如何确认哪里是文件内容呢，那当然是用[start]表示内容的开始，[end]表示内容的结束   
+我应该想的是, 首先代码需要写到一个文件名里，这时就需要[created file], [overwrite whole file], [replace]这些指令，把文件path给这个指令, 然后要思考, 阅读者如何确认哪里是文件内容呢，那当然是用[start]表示内容的开始，[end]表示内容的结束   
 应该想的是[file name]: /absolute/to/file.py 不是正确的指令   
 应该想的是```python: /absolute/to/file.py 不是正确的指令   
 所有代码和文件操作都必须使用下述标签包裹。   
@@ -73,9 +73,22 @@
     # ...
     [end]
 
-#### **文件修改**
 
-*   **用途:** 对已有文件进行修改。
+#### **文件内容局部替换**
+
+*   **用途:** 对已有文件中的内容进行替换, 这是少量修改推荐的方法。
+*   **格式:**
+    [replace]: /absolute/path/to/existing/file.py
+    [start]
+    # 要被替换掉的【旧】的完整内容
+    [end]
+    [start]
+    # 用来替换的【新】的完整内容
+    [end]
+
+#### **文件修改 (全量覆盖)**
+
+*   **用途:** 对已有文件进行修改, 这是大幅度重写推荐的方式。
 *   **格式:**
     [overwrite whole file]: /absolute/path/to/existing/file.py
     [start]

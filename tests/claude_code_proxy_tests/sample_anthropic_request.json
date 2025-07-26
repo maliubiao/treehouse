@@ -1,0 +1,46 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "system": "You are a helpful assistant that provides weather information.",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the weather in San Francisco?"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Of course, I can check the weather for you."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01A09q90qw90lq917835lqas",
+          "name": "get_weather",
+          "input": {
+            "city": "San Francisco"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01A09q90qw90lq917835lqas",
+          "content": "{\"temperature\": 72, \"unit\": \"fahrenheit\"}",
+          "is_error": false
+        }
+      ]
+    }
+  ],
+  "max_tokens": 4096,
+  "stream": false,
+  "temperature": 0.7
+}

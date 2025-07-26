@@ -1,0 +1,6 @@
+{
+    "error": {
+        "type": "engine_overloaded_error",
+        "message": "The engine is currently overloaded, please try again later"
+    }
+}

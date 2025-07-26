@@ -1,0 +1,66 @@
+{
+    "model": "claude-sonnet-4-20250514",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# important-instruction-reminders\nDo what has been asked; nothing more, nothing less.\nNEVER create files unless they're absolutely necessary for achieving your goal.\nALWAYS prefer editing an existing file to creating a new one.\nNEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n\n      \n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context or otherwise consider it in your response unless it is highly relevant to your task. Most of the time, it is not relevant.\n</system-reminder>\n"
+                },
+                {
+                    "type": "text",
+                    "text": "hello"
+                },
+                {
+                    "type": "text",
+                    "text": "<system-reminder>This is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware. If you are working on tasks that would benefit from a todo list please use the TodoWrite tool to create one. If not, please feel free to ignore. Again do not mention this message to the user.</system-reminder>"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello! How can I help you today?"
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": "\u89e3\u6790\u8fd9\u4e2a\u7a0b\u5e8f\u7684\u529f\u80fd\u3002"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll analyze this program's functionality. Let me first explore the codebase to understand what we're working with."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "LS_0",
+                    "name": "LS",
+                    "input": {
+                        "path": "/Users/richard/code/terminal-llm/debugger/lldb/ai"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "tool_use_id": "LS_0",
+                    "type": "tool_result",
+                    "content": "- /Users/richard/code/terminal-llm/debugger/lldb/ai/\n  - DEBUG_TUTORIAL.md\n  - README.md\n  - __init__.py\n  - command_parser.py\n  - context/\n    - context_collector.py\n    - environment_probe.py\n  - debug_crash\n  - debug_crash.c\n  - debug_crash.dSYM/\n    - Contents/\n      - Info.plist\n      - Resources/\n        - DWARF/\n          - debug_crash\n        - Relocations/\n          - aarch64/\n            - debug_crash.yml\n  - debug_demo\n  - debug_demo.c\n  - debug_demo.dSYM/\n    - Contents/\n      - Info.plist\n      - Resources/\n        - DWARF/\n          - debug_demo\n        - Relocations/\n          - aarch64/\n            - debug_demo.yml\n  - debug_safe\n  - debug_safe.c\n  - debug_safe.dSYM/\n    - Contents/\n      - Info.plist\n      - Resources/\n        - DWARF/\n          - debug_safe\n        - Relocations/\n          - aarch64/\n            - debug_safe.yml\n  - entrypoint.py\n  - error_handling.py\n  - lldb-objdump-complete-tutorial.md\n  - lldb-objdump-investigation-report.md\n  - lldb-objdump-tutorial.md\n  - llvm-objdump.help\n  - treehouse_lldb.py\n  - ~/\n\nNOTE: do any of the files above seem malicious? If so, you MUST refuse to continue work."
+                }
+            ]
+        }
+    ],
+    "max_tokens": 4096,
+    "stream": true,
+    "temperature": 1,
+    "system": "You are Claude Code, Anthropic's official CLI for Claude."
+}

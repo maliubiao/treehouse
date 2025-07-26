@@ -114,37 +114,50 @@ class OpenAIToAnthropicStreamTranslator:
         # Handle buffered arguments for escaped JSON string tool calls
         if self._active_block_type == "tool_use" and self._active_tool_chunk_index is not None:
             tool_state = self._active_tool_info.get(self._active_tool_chunk_index)
-            if tool_state and tool_state.get("is_escaped_json_string"):
-                buffer = tool_state["argument_buffer"]
+            if tool_state:
+                buffer = tool_state.get("argument_buffer", "")
                 if buffer:
                     try:
-                        # The buffer contains a JSON string which itself contains stringified JSON.
-                        # e.g., "\"{\\\"key\\\": \\\"value\\\"}\""
-                        # We need to load it once to get the inner stringified JSON.
-                        if buffer.startswith('"'):
+                        final_args_obj = {}
+                        if tool_state.get("is_escaped_json_string"):
+                            # The buffer is a string literal containing JSON text.
+                            # e.g., "\"{\\\"key\\\": \\\"value\\\"}\""
+                            # We need to load it once to unescape it into a JSON string.
                             unquoted_json_text = json.loads(buffer)
+                            # Then, load the unescaped string to get the actual object.
+                            final_args_obj = json.loads(unquoted_json_text)
                         else:
-                            unquoted_json_text = buffer
-                        tool_args = json.loads(unquoted_json_text)
-                        tool_args = _validate_and_convert_tool_arguments(
-                            tool_state["name"], tool_args, self.anthropic_request
+                            # The buffer is a standard JSON object text.
+                            final_args_obj = json.loads(buffer)
+
+                        # Validate and convert types based on the tool's input schema.
+                        converted_args = _validate_and_convert_tool_arguments(
+                            tool_state["name"], final_args_obj, self.anthropic_request
                         )
-                        unquoted_json_text = json.dumps(tool_args)
+                        full_json_text = json.dumps(converted_args)
 
                         events.append(
                             ContentBlockDeltaEvent(
                                 type="content_block_delta",
                                 index=self._active_block_index,
-                                delta=InputJsonDelta(type="input_json_delta", partial_json=unquoted_json_text),
+                                delta=InputJsonDelta(type="input_json_delta", partial_json=full_json_text),
                             )
                         )
-                    except Exception as e:
+                    except (json.JSONDecodeError, TypeError) as e:
                         import traceback
 
                         logger.error(
-                            f"Could not unescape buffered tool arguments for tool {self._active_block_index}: {e}. Buffer: '{buffer}'\n{traceback.format_exc()}"
+                            f"Could not parse/convert buffered tool arguments for tool {self._active_block_index}: {e}. Buffer: '{buffer}'\n{traceback.format_exc()}",
                         )
-                        raise
+                        # As a fallback, emit the raw buffer to avoid data loss.
+                        events.append(
+                            ContentBlockDeltaEvent(
+                                type="content_block_delta",
+                                index=self._active_block_index,
+                                delta=InputJsonDelta(type="input_json_delta", partial_json=buffer),
+                            )
+                        )
+
                 # This tool index is now complete, remove its state.
                 self._active_tool_info.pop(self._active_tool_chunk_index, None)
 
@@ -448,21 +461,8 @@ class OpenAIToAnthropicStreamTranslator:
                         # Heuristic: if arguments stream starts with a quote, it's likely an escaped JSON string.
                         tool_state["is_escaped_json_string"] = args.startswith('"')
 
-                    if tool_state.get("is_escaped_json_string"):
-                        tool_state["argument_buffer"] += args
-                        # Don't emit delta, just buffer. It will be flushed when the block closes.
-                    else:
-                        # Standard, non-escaped JSON stream.
-                        events.append(
-                            ContentBlockDeltaEvent(
-                                type="content_block_delta",
-                                index=self._active_block_index,
-                                delta=InputJsonDelta(
-                                    type="input_json_delta",
-                                    partial_json=args,
-                                ),
-                            )
-                        )
+                    # Always buffer arguments to be processed and validated when the block closes.
+                    tool_state["argument_buffer"] += args
 
         # Handle Text Content (including custom embedded tool calls)
         if delta.content:

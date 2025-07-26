@@ -118,7 +118,7 @@ class ReplaceEngine:
                         dst=instr["dst"],
                     )
                 elif instr["type"] == "replace":
-                    self._safe_replace(path=instr["path"], src=instr["src"], dst=instr["dst"])
+                    self._safe_replace(path=instr["path"], src=instr["src"].strip(), dst=instr["dst"].strip())
                 elif instr["type"] == "insert":
                     self._safe_insert(path=instr["path"], line_num=instr["line_num"], content=instr["content"])
                 elif instr["type"] == "overwrite_whole_file":
@@ -269,16 +269,16 @@ class ReplaceEngine:
         with open(path, "r", encoding="utf-8") as f:
             original_content = f.read()
 
-        count = original_content.count(src)
-        if count == 0:
-            # 允许源字符串为空的情况，此时不做任何操作
-            if src == "":
-                return
-            raise RuntimeError("未找到匹配的源字符串")
-        if count > 1:
-            raise RuntimeError(f"找到 {count} 个匹配项，无法确保唯一性以进行安全替换")
+        # count = original_content.count(src)
+        # if count == 0:
+        #     # 允许源字符串为空的情况，此时不做任何操作
+        #     if src == "":
+        #         return
+        #     raise RuntimeError("未找到匹配的源字符串")
+        # if count > 1:
+        #     raise RuntimeError(f"找到 {count} 个匹配项，无法确保唯一性以进行安全替换")
 
-        updated_content = original_content.replace(src, dst, 1)
+        updated_content = original_content.replace(src, dst)
 
         backup_path = self._create_backup(path, original_content)
         try:

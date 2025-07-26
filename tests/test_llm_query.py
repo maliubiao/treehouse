@@ -1723,7 +1723,7 @@ class TestModelSwitch(unittest.TestCase):
             max_context_size=4096,
             temperature=0.7,
             enable_thinking=False,
-            thinking_budget=32768,
+            thinking_budget=0,
             top_k=20,
             top_p=0.95,
         )

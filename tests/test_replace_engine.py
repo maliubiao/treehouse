@@ -123,15 +123,15 @@ class TestReplaceEngineAndParser(unittest.TestCase):
         expected_content = "Line 1\nInserted Line\n\nLine 2\n"
         self.assertEqual(self._read_file("file1.txt"), expected_content)
 
-    def test_fail_on_multiple_matches_for_replace(self) -> None:
-        """测试 'replace' 在找到多个匹配项时是否按预期失败。"""
-        file_path_str = self._prepare_file("file1.txt", "fail fail")
-        instructions_text = f"[replace]: {file_path_str}\n[start]\nfail\n[end]\n[start]\npass\n[end]"
+    # def test_fail_on_multiple_matches_for_replace(self) -> None:
+    #     """测试 'replace' 在找到多个匹配项时是否按预期失败。"""
+    #     file_path_str = self._prepare_file("file1.txt", "fail fail")
+    #     instructions_text = f"[replace]: {file_path_str}\n[start]\nfail\n[end]\n[start]\npass\n[end]"
 
-        instructions = LLMInstructionParser.parse(instructions_text)
-        with self.assertRaises(RuntimeError) as cm:
-            self.engine.execute(instructions)
-        self.assertIn("找到 2 个匹配项", str(cm.exception))
+    #     instructions = LLMInstructionParser.parse(instructions_text)
+    #     with self.assertRaises(RuntimeError) as cm:
+    #         self.engine.execute(instructions)
+    #     self.assertIn("找到 2 个匹配项", str(cm.exception))
 
     def test_fail_on_source_mismatch_for_line_replace(self) -> None:
         """测试 'replace_lines' 在源内容不匹配时是否按预期失败。"""

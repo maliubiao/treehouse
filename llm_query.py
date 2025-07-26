@@ -24,7 +24,6 @@ import tempfile
 import textwrap
 import threading
 import time
-import trace
 import traceback
 from collections import defaultdict
 from dataclasses import dataclass
@@ -88,7 +87,7 @@ class ModelConfig:
         temperature: float = 0.0,
         is_thinking: bool = False,
         max_tokens: int | None = None,
-        thinking_budget: int = 32768,
+        thinking_budget: int = 0,
         top_k: int = 20,
         top_p: float = 0.95,
         price_1m_input: float | None = None,
@@ -113,6 +112,9 @@ class ModelConfig:
         self.http_proxy = http_proxy
         self.https_proxy = https_proxy
         self.supports_json_output = supports_json_output  # 初始化
+
+        if self.thinking_budget < 0:
+            raise ValueError("无效的thinking_budget值，必须为非负整数")
 
     def __repr__(self) -> str:
         masked_key = f"{self.key[:3]}***" if self.key else "None"
@@ -210,7 +212,9 @@ class ModelConfig:
             raise ValueError(f"无效的max_tokens值: {max_tokens}") from exc
 
         try:
-            thinking_budget = int(thinking_budget) if thinking_budget is not None else 32768
+            thinking_budget = int(thinking_budget) if thinking_budget is not None else 0
+            if thinking_budget < 0:
+                raise ValueError(f"无效的thinking_budget值: {thinking_budget}")
         except ValueError as exc:
             raise ValueError(f"无效的thinking_budget值: {thinking_budget}") from exc
 
@@ -251,8 +255,8 @@ class ModelConfig:
             thinking_budget=thinking_budget,
             top_k=top_k,
             top_p=top_p,
-            price_1M_input=price_1M_input,
-            price_1M_output=price_1M_output,
+            price_1m_input=price_1M_input,
+            price_1m_output=price_1M_output,
             http_proxy=http_proxy,
             https_proxy=https_proxy,
             supports_json_output=supports_json_output,  # 传递参数
@@ -3870,6 +3874,11 @@ def _apply_changes_to_shadow_files(valid_file_instructions: list, path_mapping: 
         original_path = Path(instr["path"])
         shadow_path = path_mapping.get(original_path)
         if shadow_path:
+            # 如果指令类型以 "replace" 开头，则先将原始文件内容复制到影子文件
+            if instr.get("type", "").startswith("replace"):
+                if original_path.exists():
+                    shadow_path.write_bytes(original_path.read_bytes())
+
             new_instr = instr.copy()
             new_instr["path"] = str(shadow_path)
             shadow_instructions.append(new_instr)
@@ -4250,14 +4259,14 @@ def print_proxy_info(proxies, proxy_sources):
 
 def handle_ask_mode(program_args, proxies):
     """处理--ask模式"""
-    ask_text = _prepare_ask_text(program_args.ask)
+    ask_text = prepare_ask_text(program_args.ask)
     model_switch = ModelSwitch()
     model_switch.select(os.environ["GPT_MODEL_KEY"])
     context_processor = GPTContextProcessor()
     nodes = context_processor.parse_text_into_nodes(ask_text)
-    use_json_output = _should_use_json_output(nodes)
+    use_json_output = should_use_json_output(nodes)
     text = context_processor.process_text(ask_text, use_json_output=use_json_output)
-    text = _inject_edit_prompt_if_needed(text, nodes, use_json_output)
+    text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
     print(text)
     response_data = model_switch.query(
         os.environ["GPT_MODEL_KEY"], text, proxies=proxies, use_json_output=use_json_output
@@ -4273,16 +4282,16 @@ def handle_ask_mode(program_args, proxies):
     )
 
 
-def _prepare_ask_text(raw_ask: str) -> str:
+def prepare_ask_text(raw_ask: str) -> str:
     return raw_ask.replace("@symbol_", "@symbol:").strip()
 
 
-def _should_use_json_output(nodes) -> bool:
+def should_use_json_output(nodes) -> bool:
     has_patch_or_edit = any(isinstance(node, CmdNode) and node.command in ["patch", "edit"] for node in nodes)
     return has_patch_or_edit and GLOBAL_MODEL_CONFIG.supports_json_output
 
 
-def _inject_edit_prompt_if_needed(text: str, nodes, use_json_output: bool) -> str:
+def inject_edit_prompt_if_needed(text: str, nodes, use_json_output: bool) -> str:
     has_edit = any(isinstance(node, CmdNode) and node.command == "edit" for node in nodes)
     if not has_edit:
         return text
@@ -4491,7 +4500,7 @@ class ModelSwitch:
             temperature=config_dict.get("temperature", 0.0),
             is_thinking=config_dict.get("is_thinking", False),
             max_tokens=config_dict.get("max_tokens"),
-            thinking_budget=config_dict.get("thinking_budget", 32768),
+            thinking_budget=config_dict.get("thinking_budget", 0),
             top_k=config_dict.get("top_k", 20),
             top_p=config_dict.get("top_p", 0.95),
             price_1m_input=config_dict.get("price_1M_input"),

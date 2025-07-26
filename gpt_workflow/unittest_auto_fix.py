@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -28,12 +29,13 @@ from llm_query import (
     MatchResult,
     ModelSwitch,
     PatchPromptBuilder,
-    detect_proxies,
     get_clipboard_content_string,
-    handle_ask_mode,
-    print_proxy_info,
+    inject_edit_prompt_if_needed,
+    prepare_ask_text,
     process_patch_response,
+    process_response,
     query_symbol_service,
+    should_use_json_output,
 )
 
 
@@ -1464,7 +1466,7 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
         print(f"  - {path}")
 
     # Construct the prompt for handle_ask_mode
-    ask_prompt = "请仔细分析追踪日志，判断是原代码写错了，还是测试集写错了，根据具体使用场景做具体分析，并选择合适的修复目标进行修复。你的目标是让代码能够正确运行。"
+    ask_prompt = "请仔细分析追踪日志，判断是原代码写错了，还是测试集写错了，根据具体使用场景做具体分析，并选择合适的修复目标进行修复。你的目标是让代码能够正确运行， 使用replace指令节省时间。"
 
     # Prepend the @edit command with all file paths and the log file reference
     # This leverages the existing file editing mechanism
@@ -1475,13 +1477,28 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
     ask_string = f"@edit {' '.join(all_file_refs)} \n\n{ask_prompt}"
     GPT_FLAGS[GPT_FLAG_PATCH] = False
     GPT_FLAGS[GPT_FLAG_EDIT] = True
-    print(ask_string)
-    # Use a mock object to pass arguments to handle_ask_mode
-    mock_args = MockArgs(ask_string)
-    proxies, _ = detect_proxies()
 
-    print(Fore.CYAN + "\nInvoking LLM for analysis and fix generation...")
-    handle_ask_mode(mock_args, proxies)
+    # Set the conversation UUID
+    os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
+
+    ask_text = prepare_ask_text(ask_string)
+    context_processor = GPTContextProcessor()
+    nodes = context_processor.parse_text_into_nodes(ask_text)
+    use_json_output = should_use_json_output(nodes)
+    text = context_processor.process_text(
+        ask_text, use_json_output=use_json_output, tokens_left=analyzer_model_switch.current_config.max_context_size
+    )
+    text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
+    response_data = analyzer_model_switch.query(analyzer_model_switch.model_name, text, use_json_output=use_json_output)
+    process_response(
+        text,
+        response_data,
+        "",
+        save=False,
+        obsidian_doc=args.obsidian_doc,
+        ask_param=ask_string,
+        use_json_output=use_json_output,
+    )
     print(Fore.GREEN + "\nLog-based fix process complete.")
 
 
