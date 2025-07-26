@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -284,6 +285,47 @@ class TestAutoFix:
         """Display reference information for a specific file and line."""
         self._display_tracer_logs(file_path, lineno)
 
+    def get_error_log(self, selected_error: Dict) -> str:
+        """
+        Extract and return the tracer log for the selected error.
+
+        Args:
+            selected_error: Dictionary containing error details
+
+        Returns:
+            str: The tracer log text for the error
+        """
+        # Temporarily store original values
+        original_trace_log = self.trace_log
+        original_uniq_references = self.uniq_references.copy()
+        original_exception_location = self.exception_location
+        original_main_call_chain = self.main_call_chain
+
+        try:
+            # Reset tracking variables
+            self.trace_log = ""
+            self.uniq_references = set()
+            self.exception_location = None
+            self.main_call_chain = None
+
+            # Extract the tracer logs for this error
+            if selected_error.get("file_path") and selected_error.get("line"):
+                self._display_tracer_logs(
+                    selected_error["file_path"],
+                    selected_error["line"],
+                    silent=True,
+                    test_id=selected_error["test_id"],
+                    frame_ref_lines=selected_error.get("frame_ref_lines", []),
+                )
+
+            return self.trace_log
+        finally:
+            # Restore original values
+            self.trace_log = original_trace_log
+            self.uniq_references = original_uniq_references
+            self.exception_location = original_exception_location
+            self.main_call_chain = original_main_call_chain
+
     def _display_tracer_logs(
         self,
         file_path: str,
@@ -558,100 +600,6 @@ class TestAutoFix:
         return run_tests(test_patterns=test_patterns, verbosity=verbosity, json_output=True, list_mode=list_tests)
 
 
-from tests.test_main import run_tests
-
-
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Test auto-fix tool with continuous repair workflow.")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "test_patterns",
-        nargs="*",
-        default=None,
-        help="Test selection patterns (e.g. +test_module*, -/exclude.*/, TestCase.test_method)",
-    )
-    group.add_argument(
-        "--from-log",
-        dest="from_log_file",
-        nargs="?",
-        const=True,
-        default=None,
-        help="Fix from a log file. Reads from clipboard if no path is given.",
-    )
-
-    parser.add_argument(
-        "-v",
-        "--verbosity",
-        type=int,
-        choices=[0, 1, 2],
-        default=1,
-        help="Output verbosity (0=quiet, 1=default, 2=verbose)",
-    )
-    parser.add_argument("--list-tests", action="store_true", help="List all available test cases without running them")
-    parser.add_argument(
-        "--lookup",
-        nargs=2,
-        metavar=("FILE", "LINE"),
-        help="Lookup reference information for specific file and line number",
-    )
-    parser.add_argument("--user-requirement", help="User's specific requirements to be added to the prompt", default="")
-    parser.add_argument(
-        "--model",
-        default="deepseek-r1",
-        help="Specify the language model for FIXING the code. This is the 'fixer' model.",
-    )
-    parser.add_argument(
-        "--analyzer-model",
-        default=None,
-        help="Specify the language model for ANALYZING the failure. This is the 'analyzer' model. If not provided, the fixer model will be used for analysis as well.",
-    )
-    parser.add_argument(
-        "--direct-fix", action="store_true", help="Directly generate a fix without the interactive explanation step."
-    )
-    parser.add_argument(
-        "--auto-pilot", action="store_true", help="Enable fully automated regression analysis and fix mode."
-    )
-    parser.add_argument(
-        "--parallel-analysis",
-        nargs="?",
-        const=os.cpu_count() or 4,
-        type=int,
-        metavar="N",
-        help="Enable parallel analysis of all failed tests with N concurrent workers, followed by INTERACTIVE fixing.",
-    )
-    parser.add_argument(
-        "--parallel-autofix",
-        nargs="?",
-        const=os.cpu_count() or 4,
-        type=int,
-        metavar="N",
-        help="Enable parallel analysis followed by AUTOMATED, sequential fixing of all detected issues using N workers for analysis.",
-    )
-    parser.add_argument(
-        "--isolated-fix",
-        action="store_true",
-        help="Run each failing test in an isolated subprocess for analysis and fixing. Overrides other workflow modes.",
-    )
-    parser.add_argument(
-        "--run-single-test",
-        metavar="TEST_ID",
-        help=argparse.SUPPRESS,  # Hide from help menu
-        default=None,
-        dest="single_test_id",
-    )
-    default_report_dir = Path(__file__).parent.parent / "doc/testcase-report"
-    parser.add_argument(
-        "--report-dir",
-        default=str(default_report_dir),
-        help=f"Directory to save analysis reports. Defaults to: {default_report_dir}",
-    )
-    parser.add_argument(
-        "--auto-accept-analysis", action="store_true", help=argparse.SUPPRESS
-    )  # Hidden arg for session state
-    return parser.parse_args()
-
-
 def _consume_stream_and_get_text(stream_generator, print_stream: bool = True) -> str:
     """Consumes a generator, prints its content, and returns the full text."""
     text_chunks = []
@@ -920,8 +868,37 @@ def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, f
 
     auto_fix.uniq_references = set()
     auto_fix.trace_log = ""
-    auto_fix.display_selected_error_details(selected_error)
+    trace_log = auto_fix.get_error_log(selected_error)
+    if trace_log:
+        # Save the log to a temporary file
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".log") as f:
+            f.write(trace_log)
+            log_file_path = f.name
+        print(Fore.GREEN + f"\n追踪日志已保存到临时文件: {log_file_path}")
 
+        # Use the existing log-based workflow function
+        class MockArgs:
+            """Mocks the argparse object for handle_ask_mode."""
+
+            def __init__(self, ask_text: str, obsidian_doc: Optional[str] = None):
+                self.ask = ask_text
+                self.obsidian_doc = obsidian_doc
+                self.file: Optional[str] = None
+                self.chatbot = False
+                self.project_search: Optional[List[str]] = None
+                self.from_log_file = log_file_path
+
+        mock_args = MockArgs("")
+        run_log_based_fix_workflow(mock_args, analyzer_model_switch)
+
+        # Clean up the temporary file
+        try:
+            os.unlink(log_file_path)
+        except OSError:
+            pass
+        _restart_with_original_args(auto_accept="y")
+
+    auto_fix.display_selected_error_details(selected_error)
     if not auto_fix.uniq_references:
         print(Fore.YELLOW + "\n未找到错误的有效引用。无法自动修复，请手动检查。")
         continue_choice = input(Fore.GREEN + "\n是否返回列表选择其他问题或重新运行测试? (y/n): ").strip().lower()
@@ -1442,11 +1419,13 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
     print(Fore.CYAN + "🚀 " + "=" * 20 + " Log-Based Fix Mode Engaged " + "=" * 20 + " 🚀")
 
     log_content = ""
+    log_path_ref = ""
     if args.from_log_file is True:  # --from-log without a path
         print(Fore.YELLOW + "Reading trace log from clipboard...")
         log_content = get_clipboard_content_string()
     else:  # --from-log with a path
         log_path = Path(args.from_log_file)
+        log_path_ref = f"@{log_path}"
         print(f"Reading trace log from file: {log_path}")
         if not log_path.exists():
             print(Fore.RED + f"Error: Log file not found at {log_path}")
@@ -1472,6 +1451,10 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
         else:
             print(Fore.YELLOW + f"Warning: Skipping path from log as it does not exist: {path}")
 
+    # Remove duplicates while preserving order
+    unique_valid_paths = list(dict.fromkeys(valid_paths))
+    valid_paths = unique_valid_paths
+
     if not valid_paths:
         print(Fore.RED + "Error: Could not find any valid source file paths in the log. Aborting.")
         sys.exit(1)
@@ -1481,19 +1464,18 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
         print(f"  - {path}")
 
     # Construct the prompt for handle_ask_mode
-    ask_prompt = (
-        f"请仔细分析以下追踪日志，并修复在提供的文件中发现的任何错误或问题。"
-        f"你的目标是让代码能够正确运行。\n\n"
-        f"--- Trace Log ---\n"
-        f"{log_content}\n"
-        f"--- End Trace Log ---"
-    )
+    ask_prompt = "请仔细分析追踪日志，判断是原代码写错了，还是测试集写错了，根据具体使用场景做具体分析，并选择合适的修复目标进行修复。你的目标是让代码能够正确运行。"
 
-    # Prepend the @edit command with all file paths
+    # Prepend the @edit command with all file paths and the log file reference
     # This leverages the existing file editing mechanism
-    ask_string = f"@edit {' '.join(['@%s' % path for path in valid_paths])}\n\n{ask_prompt}"
-    GPT_FLAGS[GPT_FLAG_EDIT] = True
+    all_file_refs = [f"@{path}" for path in valid_paths]
+    if log_path_ref:
+        all_file_refs.append(log_path_ref)
 
+    ask_string = f"@edit {' '.join(all_file_refs)} \n\n{ask_prompt}"
+    GPT_FLAGS[GPT_FLAG_PATCH] = False
+    GPT_FLAGS[GPT_FLAG_EDIT] = True
+    print(ask_string)
     # Use a mock object to pass arguments to handle_ask_mode
     mock_args = MockArgs(ask_string)
     proxies, _ = detect_proxies()
@@ -1503,9 +1485,114 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
     print(Fore.GREEN + "\nLog-based fix process complete.")
 
 
+from tests.test_main import run_tests
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Test auto-fix tool with continuous repair workflow.")
+    group = parser.add_mutually_exclusive_group(required=False)  # Changed to False
+    group.add_argument(
+        "test_patterns",
+        nargs="*",  # This already allows zero or more arguments
+        default=None,
+        help="Test selection patterns (e.g. +test_module*, -/exclude.*/, TestCase.test_method)",
+    )
+    group.add_argument(
+        "--from-log",
+        dest="from_log_file",
+        nargs="?",
+        const=True,
+        default=None,
+        help="Fix from a log file. Reads from clipboard if no path is given.",
+    )
+
+    parser.add_argument(
+        "-v",
+        "--verbosity",
+        type=int,
+        choices=[0, 1, 2],
+        default=1,
+        help="Output verbosity (0=quiet, 1=default, 2=verbose)",
+    )
+    parser.add_argument("--list-tests", action="store_true", help="List all available test cases without running them")
+    parser.add_argument(
+        "--lookup",
+        nargs=2,
+        metavar=("FILE", "LINE"),
+        help="Lookup reference information for specific file and line number",
+    )
+    parser.add_argument("--user-requirement", help="User's specific requirements to be added to the prompt", default="")
+    parser.add_argument(
+        "--model",
+        default="deepseek-r1",
+        help="Specify the language model for FIXING the code. This is the 'fixer' model.",
+    )
+    parser.add_argument(
+        "--analyzer-model",
+        default=None,
+        help="Specify the language model for ANALYZING the failure. This is the 'analyzer' model. If not provided, the fixer model will be used for analysis as well.",
+    )
+    parser.add_argument(
+        "--direct-fix", action="store_true", help="Directly generate a fix without the interactive explanation step."
+    )
+    parser.add_argument(
+        "--auto-pilot", action="store_true", help="Enable fully automated regression analysis and fix mode."
+    )
+    parser.add_argument(
+        "--parallel-analysis",
+        nargs="?",
+        const=os.cpu_count() or 4,
+        type=int,
+        metavar="N",
+        help="Enable parallel analysis of all failed tests with N concurrent workers, followed by INTERACTIVE fixing.",
+    )
+    parser.add_argument(
+        "--parallel-autofix",
+        nargs="?",
+        const=os.cpu_count() or 4,
+        type=int,
+        metavar="N",
+        help="Enable parallel analysis followed by AUTOMATED, sequential fixing of all detected issues using N workers for analysis.",
+    )
+    parser.add_argument(
+        "--isolated-fix",
+        action="store_true",
+        help="Run each failing test in an isolated subprocess for analysis and fixing. Overrides other workflow modes.",
+    )
+    parser.add_argument(
+        "--run-single-test",
+        metavar="TEST_ID",
+        help=argparse.SUPPRESS,  # Hide from help menu
+        default=None,
+        dest="single_test_id",
+    )
+    default_report_dir = Path(__file__).parent.parent / "doc/testcase-report"
+    parser.add_argument(
+        "--report-dir",
+        default=str(default_report_dir),
+        help=f"Directory to save analysis reports. Defaults to: {default_report_dir}",
+    )
+    parser.add_argument(
+        "--auto-accept-analysis", action="store_true", help=argparse.SUPPRESS
+    )  # Hidden arg for session state
+    return parser.parse_args()
+
+
 def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
+
+    # Handle the case where no arguments are provided
+    if (
+        not args.test_patterns
+        and not args.from_log_file
+        and not args.list_tests
+        and not args.lookup
+        and not args.single_test_id
+    ):
+        # No specific action requested, run all tests by default
+        args.test_patterns = []  # Empty list means run all tests
 
     # --- New Isolated Fix Workflow ---
     if args.single_test_id:

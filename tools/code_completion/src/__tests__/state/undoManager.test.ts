@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { UndoManager } from '../../state/undoManager';
+import { showInfoMessage } from '../../ui/interactions';
 
 // Mock vscode
 jest.mock('vscode', () => ({
@@ -10,13 +11,14 @@ jest.mock('vscode', () => ({
   },
   ViewColumn: {
     Active: 1,
-  }
+  },
+  Range: jest.fn(),
+  Position: jest.fn()
 }));
 
-// Mock interactions
-jest.mock('../../ui/interactions', () => ({
-  showInfoMessage: jest.fn()
-}));
+// Mock interactions and i18n
+jest.mock('../../ui/interactions');
+jest.mock('../../util/i18n', () => ({ t: (key: string) => key }));
 
 describe('UndoManager', () => {
   let undoManager: UndoManager;
@@ -26,40 +28,30 @@ describe('UndoManager', () => {
     undoManager = new UndoManager();
   });
 
-  describe('remember', () => {
-    it('should store edit details', () => {
-      const mockUri = { toString: () => 'test' } as any;
-      const mockRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } } as any;
-      const originalText = 'const x = 1;';
-      
-      undoManager.remember(mockUri, mockRange, originalText);
-      
-      // We can't directly access private property, but we can test behavior
-      expect(true).toBe(true); // Placeholder - actual testing happens in undo
-    });
-  });
-
   describe('undo', () => {
     it('should show message when no edit to undo', async () => {
       await undoManager.undo();
       
-      const interactions = require('../../ui/interactions');
-      expect(interactions.showInfoMessage).toHaveBeenCalledWith('No AI generation to undo.');
+      expect(showInfoMessage).toHaveBeenCalledWith('undoManager.nothingToUndo');
     });
 
     it('should successfully undo last edit', async () => {
-      const mockUri = { toString: () => 'test' } as any;
+      const mockUri = { path: '/test.ts' } as any;
       const mockRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } } as any;
       const originalText = 'const x = 1;';
       
-      // Remember an edit
       undoManager.remember(mockUri, mockRange, originalText);
       
-      // Mock showTextDocument to return editor with edit method
       const mockEditor = {
+        document: {
+          positionAt: jest.fn().mockReturnValue({ line: 0, character: 0 }),
+          getText: jest.fn().mockReturnValue('some new text')
+        },
+        selection: {},
         edit: jest.fn(callback => {
             const builder = { replace: jest.fn() };
             callback(builder);
+            expect(builder.replace).toHaveBeenCalledWith(expect.any(Object), originalText);
             return Promise.resolve(true);
         })
       };
@@ -67,30 +59,22 @@ describe('UndoManager', () => {
       
       await undoManager.undo();
       
-      expect(vscode.window.showTextDocument).toHaveBeenCalledWith(mockUri, {
-        viewColumn: 1 // vscode.ViewColumn.Active
-      });
-      
-      const interactions = require('../../ui/interactions');
-      expect(interactions.showInfoMessage).toHaveBeenCalledWith('Last AI generation has been reverted.');
+      expect(vscode.window.showTextDocument).toHaveBeenCalledWith(mockUri, { viewColumn: vscode.ViewColumn.Active });
+      expect(showInfoMessage).toHaveBeenCalledWith('undoManager.reverted');
     });
 
     it('should handle undo failure', async () => {
-      const mockUri = { toString: () => 'test' } as any;
+      const mockUri = { path: '/test.ts' } as any;
       const mockRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } } as any;
       const originalText = 'const x = 1;';
       
-      // Remember an edit
       undoManager.remember(mockUri, mockRange, originalText);
       
-      // Mock showTextDocument to throw error
       (vscode.window.showTextDocument as jest.Mock).mockRejectedValue(new Error('Test error'));
       
       await undoManager.undo();
       
-      expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(
-        'Failed to undo last edit: Test error'
-      );
+      expect(vscode.window.showErrorMessage).toHaveBeenCalledWith('undoManager.revertFailed');
     });
   });
 });

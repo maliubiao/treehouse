@@ -1,6 +1,6 @@
 import './styles.css';
 import { AiServiceConfig } from '../config/configuration';
-
+declare const i18next: any;
 // --- TYPE DEFINITIONS ---
 
 /**
@@ -9,7 +9,7 @@ import { AiServiceConfig } from '../config/configuration';
 interface VSCodeAPI {
     postMessage(message: any): void;
     getState(): any;
-    setState(newState: any): void;
+    setState(newState: any): any;
 }
 
 // --- CONSTANTS ---
@@ -18,6 +18,8 @@ const RENDER_PROPS: (keyof Omit<AiServiceConfig, 'is_thinking'>)[] = [
     'max_context_size', 'timeout_seconds', 'price_1M_input', 'price_1M_output', 
     'supports_json_output'
 ];
+
+const I18N_INIT_TIMEOUT = 2000; // 2 seconds timeout for i18n initialization
 
 // --- MAIN APPLICATION CLASS ---
 // Ensure vscode is declared
@@ -31,6 +33,8 @@ class ConfigApp {
     private activeServiceName: string | undefined = undefined;
     private systemPrompt: string = '';
     private promptRule: string = '';
+    private i18nInitialized: boolean = false;
+    private i18nInitTimeout: ReturnType<typeof setTimeout> | null = null;
 
     // A central place to hold all queried DOM elements for easy access and performance.
     private elements: { [key: string]: HTMLElement } = {};
@@ -43,11 +47,176 @@ class ConfigApp {
      * Initializes the application, renders the layout, queries elements, and sets up listeners.
      */
     public init(): void {
-        this.renderLayout();
-        this.queryElements();
-        this.bindEventListeners();
-        window.addEventListener('message', (event) => this.handleMessage(event));
-        this.vscode.postMessage({ command: 'getConfigs' });
+        this.initI18n().then(() => {
+            this.renderLayout();
+            this.queryElements();
+            this.bindEventListeners();
+            window.addEventListener('message', (event) => this.handleMessage(event));
+            this.vscode.postMessage({ command: 'getConfigs' });
+        }).catch(error => {
+            console.error('Failed to initialize i18n, falling back to English', error);
+            this.fallbackToEnglish();
+            this.renderLayout();
+            this.queryElements();
+            this.bindEventListeners();
+            window.addEventListener('message', (event) => this.handleMessage(event));
+            this.vscode.postMessage({ command: 'getConfigs' });
+        });
+    }
+
+    /**
+     * Initializes i18next with the configuration provided by the extension.
+     */
+    private async initI18n(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            // Set up timeout to prevent hanging if config is never received
+            this.i18nInitTimeout = setTimeout(() => {
+                if (this.i18nInitTimeout) {
+                    clearTimeout(this.i18nInitTimeout);
+                    this.i18nInitTimeout = null;
+                    reject(new Error('i18n configuration timeout'));
+                }
+            }, I18N_INIT_TIMEOUT);
+
+            const i18nConfigElement = document.getElementById('i18n-config');
+            if (!i18nConfigElement) {
+                reject(new Error("i18n-config element not found"));
+                return;
+            }
+
+            try {
+                const config = JSON.parse(i18nConfigElement.textContent || '{}');
+                
+                if (this.i18nInitTimeout) {
+                    clearTimeout(this.i18nInitTimeout);
+                    this.i18nInitTimeout = null;
+                }
+                
+                i18next.init({
+                    lng: config.language,
+                    fallbackLng: 'en',
+                    resources: config.resources,
+                    ns: config.namespaces,
+                    defaultNS: 'common',
+                    interpolation: {
+                        escapeValue: false
+                    }
+                }, (err: any) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    this.i18nInitialized = true;
+                    console.log('i18next initialized in Webview');
+                    resolve();
+                });
+            } catch (e) {
+                if (this.i18nInitTimeout) {
+                    clearTimeout(this.i18nInitTimeout);
+                    this.i18nInitTimeout = null;
+                }
+                reject(new Error(`Failed to parse i18n configuration: ${e instanceof Error ? e.message : String(e)}`));
+            }
+        });
+    }
+
+    /**
+     * Fallback to English when i18n initialization fails
+     */
+    private fallbackToEnglish(): void {
+        console.warn('Falling back to English due to i18n initialization failure');
+        
+        i18next.init({
+            lng: 'en',
+            fallbackLng: 'en',
+            resources: {
+                en: {
+                    common: {
+                        retry: "Retry",
+                        saveButton: "Save",
+                        cancelButton: "Cancel",
+                        editButton: "Edit",
+                        deleteButton: "Delete",
+                        selectButton: "Select"
+                    },
+                    webview: {
+                        mainTitle: "Treehouse AI Settings",
+                        servicesTitle: "AI Services",
+                        addNewService: "Add New Service",
+                        importExportTitle: "Import / Export",
+                        importExportPlaceholder: "Paste JSON array of services to import, or export all services here.",
+                        importAll: "Import All",
+                        exportAll: "Export All",
+                        promptsTitle: "Prompts",
+                        systemPromptLabel: "System Prompt",
+                        saveSystemPrompt: "Save System Prompt",
+                        customRuleLabel: "Custom Rule",
+                        saveCustomRule: "Save Custom Rule",
+                        playgroundTitle: "Playground",
+                        playgroundServiceLabel: "Service to use:",
+                        playgroundPromptLabel: "Prompt:",
+                        playgroundPromptPlaceholder: "Enter your prompt to test a service...",
+                        playgroundSend: "Send",
+                        playgroundResponseLabel: "Response:",
+                        noServicesConfigured: "No AI services configured.",
+                        activeBadge: "ACTIVE",
+                        noServicesAvailable: "No services available",
+                        thinking: "Thinking...",
+                        invalidJsonServices: "Invalid JSON format for services array.",
+                        invalidJsonService: "Invalid JSON format for service object.",
+                        serviceNotFound: "Service '{{serviceName}}' not found.",
+                        playgroundError: "Playground request failed: {{message}}",
+                        editModalTitle: "Edit AI Service",
+                        addModalTitle: "Add New AI Service",
+                        modalImportLabel: "Import Service from JSON",
+                        modalImportPlaceholder: "Paste a single service configuration object here...",
+                        modalImportButton: "Import from JSON",
+                        serviceNameLabel: "Service Name",
+                        modelNameLabel: "Model Name",
+                        baseUrlLabel: "Base URL",
+                        apiKeyLabel: "API Key",
+                        temperatureLabel: "Temperature",
+                        maxTokensLabel: "Max Tokens",
+                        maxContextSizeLabel: "Max Context Size",
+                        timeoutLabel: "Timeout (sec)",
+                        priceInputLabel: "Price/1M Input ($)",
+                        priceOutputLabel: "Price/1M Output ($)",
+                        supportsJsonLabel: "Supports JSON output",
+                        testConnectionButton: "Test Connection",
+                        connectionSuccessful: "Connection successful!",
+                        connectionFailed: "Connection failed: {{message}}"
+                    }
+                }
+            },
+            ns: ['common', 'webview'],
+            defaultNS: 'common',
+            interpolation: {
+                escapeValue: false
+            }
+        });
+        
+        this.i18nInitialized = true;
+    }
+
+    /**
+     * A translation function that uses i18next.
+     * @param key The i18n key (e.g., 'webview.mainTitle' or 'common.retry').
+     * @param options An object with placeholder values.
+     */
+    private t(key: string, options?: { [key: string]: string | number }): string {
+        if (!this.i18nInitialized) {
+            console.warn(`i18next not initialized, returning key "${key}" as fallback`);
+            // Simple interpolation for fallback
+            if (options) {
+                return Object.entries(options).reduce(
+                    (acc, [k, v]) => acc.replace(`{{${k}}}`, String(v)),
+                    key
+                );
+            }
+            return key;
+        }
+        
+        return i18next.t(key, options);
     }
 
     /**
@@ -80,50 +249,50 @@ class ConfigApp {
         if (!root) return;
         root.innerHTML = `
             <div class="container">
-                <h1>Treehouse AI Service Configurations</h1>
+                <h1>${this.t('webview.mainTitle')}</h1>
 
                 <div class="section">
-                    <h2>Services</h2>
+                    <h2>${this.t('webview.servicesTitle')}</h2>
                     <div id="service-list" class="service-list"></div>
-                    <div class="button-group"><button id="new-service">Add New Service</button></div>
+                    <div class="button-group"><button id="new-service">${this.t('webview.addNewService')}</button></div>
                 </div>
 
                 <div class="section">
-                    <h2>Import/Export All Services</h2>
-                    <textarea id="json-import-export" placeholder="Paste an array of service configs here..."></textarea>
+                    <h2>${this.t('webview.importExportTitle')}</h2>
+                    <textarea id="json-import-export" placeholder="${this.t('webview.importExportPlaceholder')}"></textarea>
                     <div class="button-group">
-                        <button id="import-json">Import All</button>
-                        <button id="export-json">Export All</button>
+                        <button id="import-json">${this.t('webview.importAll')}</button>
+                        <button id="export-json">${this.t('webview.exportAll')}</button>
                     </div>
                 </div>
 
                 <div class="section">
-                    <h2>Prompts & Rules</h2>
+                    <h2>${this.t('webview.promptsTitle')}</h2>
                     <div class="form-item">
-                        <label for="system-prompt">System Prompt (Master Instruction)</label>
+                        <label for="system-prompt">${this.t('webview.systemPromptLabel')}</label>
                         <textarea id="system-prompt" rows="5"></textarea>
-                        <div class="button-group"><button id="save-system-prompt">Save System Prompt</button></div>
+                        <div class="button-group"><button id="save-system-prompt">${this.t('webview.saveSystemPrompt')}</button></div>
                     </div>
                     <div class="form-item" style="margin-top: 15px;">
-                        <label for="prompt-rule">Custom Rule (Appended to every request)</label>
+                        <label for="prompt-rule">${this.t('webview.customRuleLabel')}</label>
                         <textarea id="prompt-rule" rows="3"></textarea>
-                        <div class="button-group"><button id="save-prompt-rule">Save Rule</button></div>
+                        <div class="button-group"><button id="save-prompt-rule">${this.t('webview.saveCustomRule')}</button></div>
                     </div>
                 </div>
 
                 <div class="section">
-                    <h2>Playground</h2>
+                    <h2>${this.t('webview.playgroundTitle')}</h2>
                     <div class="form-item">
-                        <label for="playground-service-select">Select Service</label>
+                        <label for="playground-service-select">${this.t('webview.playgroundServiceLabel')}</label>
                         <select id="playground-service-select"></select>
                     </div>
                     <div class="form-item">
-                        <label for="playground-prompt">Prompt</label>
-                        <textarea id="playground-prompt" rows="6" placeholder="Enter your prompt here..."></textarea>
+                        <label for="playground-prompt">${this.t('webview.playgroundPromptLabel')}</label>
+                        <textarea id="playground-prompt" rows="6" placeholder="${this.t('webview.playgroundPromptPlaceholder')}"></textarea>
                     </div>
-                    <div class="button-group"><button id="playground-send">Send</button></div>
+                    <div class="button-group"><button id="playground-send">${this.t('webview.playgroundSend')}</button></div>
                     <div class="form-item">
-                        <label>Response</label>
+                        <label>${this.t('webview.playgroundResponseLabel')}</label>
                         <div id="playground-response-area" class="response-area" aria-live="polite"></div>
                     </div>
                 </div>
@@ -131,44 +300,44 @@ class ConfigApp {
 
             <div id="edit-modal" class="modal">
                 <div class="modal-content">
-                    <h2 id="modal-title">Edit Service</h2>
+                    <h2 id="modal-title">${this.t('webview.editModalTitle')}</h2>
                     <div class="modal-form">
                         <input type="hidden" id="original-service-name">
                         <div class="form-item">
-                            <label for="json-import-modal">Import from JSON</label>
-                            <textarea id="json-import-modal" rows="4" placeholder="Paste a single service JSON config here..."></textarea>
+                            <label for="json-import-modal">${this.t('webview.modalImportLabel')}</label>
+                            <textarea id="json-import-modal" rows="4" placeholder="${this.t('webview.modalImportPlaceholder')}"></textarea>
                             <div class="button-group" style="justify-content: flex-start; margin-top: 5px;">
-                                <button id="import-from-json-btn">Import and Fill Form</button>
+                                <button id="import-from-json-btn">${this.t('webview.modalImportButton')}</button>
                             </div>
                         </div>
                         <div class="form-row">
-                            <div class="form-item"><label for="name">Service Name</label><input type="text" id="name"></div>
-                            <div class="form-item"><label for="model_name">Model Name</label><input type="text" id="model_name"></div>
+                            <div class="form-item"><label for="name">${this.t('webview.serviceNameLabel')}</label><input type="text" id="name"></div>
+                            <div class="form-item"><label for="model_name">${this.t('webview.modelNameLabel')}</label><input type="text" id="model_name"></div>
                         </div>
-                        <div class="form-item"><label for="base_url">Base URL</label><input type="text" id="base_url"></div>
-                        <div class="form-item"><label for="key">API Key</label><input type="password" id="key"></div>
+                        <div class="form-item"><label for="base_url">${this.t('webview.baseUrlLabel')}</label><input type="text" id="base_url"></div>
+                        <div class="form-item"><label for="key">${this.t('webview.apiKeyLabel')}</label><input type="password" id="key"></div>
                         <div class="form-row">
-                            <div class="form-item"><label for="temperature">Temperature</label><input type="number" id="temperature" step="0.1" min="0" max="2"></div>
-                            <div class="form-item"><label for="max_tokens">Max Tokens</label><input type="number" id="max_tokens" step="1"></div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-item"><label for="max_context_size">Max Context Size</label><input type="number" id="max_context_size" step="1"></div>
-                            <div class="form-item"><label for="timeout_seconds">Timeout (seconds)</label><input type="number" id="timeout_seconds" step="1" min="1"></div>
+                            <div class="form-item"><label for="temperature">${this.t('webview.temperatureLabel')}</label><input type="number" id="temperature" step="0.1" min="0" max="2"></div>
+                            <div class="form-item"><label for="max_tokens">${this.t('webview.maxTokensLabel')}</label><input type="number" id="max_tokens" step="1"></div>
                         </div>
                         <div class="form-row">
-                            <div class="form-item"><label for="price_1M_input">Price/1M Input ($)</label><input type="number" id="price_1M_input" step="0.01"></div>
-                            <div class="form-item"><label for="price_1M_output">Price/1M Output ($)</label><input type="number" id="price_1M_output" step="0.01"></div>
+                            <div class="form-item"><label for="max_context_size">${this.t('webview.maxContextSizeLabel')}</label><input type="number" id="max_context_size" step="1"></div>
+                            <div class="form-item"><label for="timeout_seconds">${this.t('webview.timeoutLabel')}</label><input type="number" id="timeout_seconds" step="1" min="1"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-item"><label for="price_1M_input">${this.t('webview.priceInputLabel')}</label><input type="number" id="price_1M_input" step="0.01"></div>
+                            <div class="form-item"><label for="price_1M_output">${this.t('webview.priceOutputLabel')}</label><input type="number" id="price_1M_output" step="0.01"></div>
                         </div>
                         <div class="form-row">
                             <div class="form-item" style="flex-direction: row; align-items: center; gap: 10px;">
-                                <input type="checkbox" id="supports_json_output" style="width: auto;"><label for="supports_json_output">Supports JSON Output</label>
+                                <input type="checkbox" id="supports_json_output" style="width: auto;"><label for="supports_json_output">${this.t('webview.supportsJsonLabel')}</label>
                             </div>
                         </div>
                         <div id="test-status-modal" style="height: 20px;"></div>
                         <div class="button-group">
-                            <button id="test-connection-modal">Test Connection</button>
-                            <button id="save-service-modal">Save</button>
-                            <button id="cancel-modal" style="background-color: var(--vscode-button-secondaryBackground);">Cancel</button>
+                            <button id="test-connection-modal">${this.t('webview.testConnectionButton')}</button>
+                            <button id="save-service-modal">${this.t('common.saveButton')}</button>
+                            <button id="cancel-modal" style="background-color: var(--vscode-button-secondaryBackground);">${this.t('common.cancelButton')}</button>
                         </div>
                     </div>
                 </div>
@@ -226,7 +395,7 @@ class ConfigApp {
         if (!list) return;
         list.innerHTML = '';
         if (this.services.length === 0) {
-            list.innerHTML = '<p>No services configured. Add a new service or import a configuration.</p>';
+            list.innerHTML = `<p>${this.t('webview.noServicesConfigured')}</p>`;
             return;
         }
         this.services.forEach(service => {
@@ -236,12 +405,12 @@ class ConfigApp {
             item.innerHTML = `
                 <div class="service-name-status">
                     <span class="service-name">${service.name}</span>
-                    ${isActive ? '<span class="active-badge">Active</span>' : ''}
+                    ${isActive ? `<span class="active-badge">${this.t('webview.activeBadge')}</span>` : ''}
                 </div>
                 <div class="button-group">
-                    ${!isActive ? '<button class="select-btn">Select</button>' : ''}
-                    <button class="edit-btn">Edit</button>
-                    <button class="delete-btn">Delete</button>
+                    ${!isActive ? `<button class="select-btn">${this.t('common.selectButton')}</button>` : ''}
+                    <button class="edit-btn">${this.t('common.editButton')}</button>
+                    <button class="delete-btn">${this.t('common.deleteButton')}</button>
                 </div>`;
             
             if (!isActive) {
@@ -275,7 +444,7 @@ class ConfigApp {
                 select.appendChild(option);
             });
         } else {
-            select.innerHTML = '<option disabled>No services available</option>';
+            select.innerHTML = `<option disabled>${this.t('webview.noServicesAvailable')}</option>`;
         }
     }
 
@@ -297,7 +466,7 @@ class ConfigApp {
             this.vscode.postMessage({ command: 'importServices', services: importedServices });
             (this.elements['json-import-export'] as HTMLTextAreaElement).value = '';
         } catch (e) {
-            this.vscode.postMessage({ command: 'showError', text: 'Invalid JSON format for services array.' });
+            this.vscode.postMessage({ command: 'showError', text: this.t('webview.invalidJsonServices') });
         }
     }
 
@@ -322,7 +491,7 @@ class ConfigApp {
         
         if (serviceSelect.value && promptText.value && responseArea) {
             responseArea.className = 'response-area';
-            responseArea.textContent = 'Thinking...';
+            responseArea.textContent = this.t('webview.thinking');
             this.vscode.postMessage({
                 command: 'playgroundRequest',
                 serviceName: serviceSelect.value,
@@ -350,13 +519,13 @@ class ConfigApp {
             this.populateModal(service);
             (this.elements['json-import-modal'] as HTMLTextAreaElement).value = '';
         } catch (e) {
-            this.vscode.postMessage({ command: 'showError', text: 'Invalid JSON format for single service.' });
+            this.vscode.postMessage({ command: 'showError', text: this.t('webview.invalidJsonService') });
         }
     }
 
     // --- Modal Management ---
     private openModal(service: Partial<AiServiceConfig>, isNew: boolean = false): void {
-        this.elements['modal-title'].textContent = isNew ? 'Add New Service' : 'Edit Service';
+        this.elements['modal-title'].textContent = isNew ? this.t('webview.addModalTitle') : this.t('webview.editModalTitle');
         (this.elements['original-service-name'] as HTMLInputElement).value = isNew ? '' : service.name || '';
         this.populateModal(service);
         (this.elements['json-import-modal'] as HTMLTextAreaElement).value = '';
@@ -417,9 +586,9 @@ class ConfigApp {
         const statusEl = this.elements['test-status-modal'];
         if (statusEl) {
             if (success) {
-                statusEl.innerHTML = '<span class="success-text">✔️ Connection successful!</span>';
+                statusEl.innerHTML = `<span class="success-text">${this.t('webview.connectionSuccessful')}</span>`;
             } else {
-                statusEl.innerHTML = `<span class="error-text">❌ ${message}</span>`;
+                statusEl.innerHTML = `<span class="error-text">${this.t('webview.connectionFailed', { message })}</span>`;
             }
         }
     }

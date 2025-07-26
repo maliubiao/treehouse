@@ -23,12 +23,20 @@ class ProviderRouter:
         self._config: Optional[AppConfig] = None
         self._name_to_key_map: Dict[str, str] = {}
 
-    async def initialize(self) -> None:
+    async def initialize(self, config: Optional[AppConfig] = None) -> None:
         """
         Initializes the router by loading configuration and creating HTTP clients
         for all configured providers.
+
+        Args:
+            config: Optional AppConfig to use instead of loading from config manager.
+                   This is useful for testing with mock configurations.
         """
-        self._config = config_manager.load_config(reload=True)
+        if config is not None:
+            self._config = config
+        else:
+            self._config = config_manager.load_config(reload=True)
+
         if not self._config:
             logger.critical("Failed to load application configuration. Router is disabled.")
             return

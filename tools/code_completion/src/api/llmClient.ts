@@ -4,8 +4,7 @@ import { getActiveAiServiceConfig, AiServiceConfig } from '../config/configurati
 import { logger } from '../utils/logger';
 import * as vscode from 'vscode';
 import { GenerationContext } from '../types';
-
-// The user needs to manually install this dependency by running: npm install https-proxy-agent
+import { t } from '../util/i18n';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Agent } from 'http';
 import { StreamingAccumulator } from '../utils/streamingAccumulator';
@@ -31,7 +30,7 @@ function getHttpsProxyAgent(): Agent | undefined {
  */
 function initializeClient(serviceConfig: AiServiceConfig): OpenAI {
     if (!serviceConfig || !serviceConfig.key) {
-        throw new Error('AI service configuration with an API key is required.');
+        throw new Error(t('llmClient.apiKeyRequired'));
     }
     
     const httpAgent = getHttpsProxyAgent();
@@ -55,23 +54,7 @@ function buildMessages(
     context: GenerationContext
 ): ChatCompletionMessageParam[] {
     const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
-    const systemMessage = config.get<string>('prompt.systemMessage', `You are an expert software architect and engineering partner. Your goal is to deeply understand the user's intent and provide the best possible code modification. The user will provide the full content of a file, a specific block of code to be changed, and an instruction.
-
-Your task is to:
-1.  **Analyze the Context:** Use the full file content to understand its purpose, existing design patterns, variable naming, and overall coding style.
-2.  **Infer the Intent:** The user's instruction is a starting point, not a rigid command. Deduce the true goal behind their request.
-3.  **Generate the Best Solution:** Rewrite the specified code block to elegantly and robustly achieve the user's inferred goal. Your code should seamlessly integrate with the existing codebase.
-
-IMPORTANT: Your response MUST contain the modified code in an <UPDATED_CODE> block. If you are adding or changing imports, you MUST place them in a separate <UPDATED_IMPORTS> block that comes before the <UPDATED_CODE> block.
-
-Example:
-<UPDATED_IMPORTS>
-import { useState } from 'react';
-</UPDATED_IMPORTS>
-
-<UPDATED_CODE>
-const [count, setCount] = useState(0);
-</UPDATED_CODE>`);
+    const systemMessage = config.get<string>('prompt.systemMessage', t('llmClient.defaultSystemPrompt'));
     const rule = config.get<string>('prompt.rule', '');
 
     let contextBlock = '';
@@ -146,7 +129,7 @@ export interface TokenUsage {
  */
 function calculateCost(promptTokens: number, completionTokens: number): number {
     const activeService = getActiveAiServiceConfig();
-    if (!activeService) {
+    if (!activeService || activeService.price_1M_input === undefined || activeService.price_1M_output === undefined) {
         return 0;
     }
     
@@ -172,7 +155,7 @@ export async function generateCode(
 ): Promise<{ code: string; usage: TokenUsage }> {
     const activeService = getActiveAiServiceConfig();
     if (!activeService) {
-        throw new Error("No active AI service configured.");
+        throw new Error(t("generateCode.noActiveService"));
     }
     
     const openai = initializeClient(activeService);
@@ -218,7 +201,7 @@ export async function generateCode(
         for await (const chunk of stream) {
             if (cancellationToken?.isCancellationRequested) {
                 abortController.abort();
-                throw new Error('Operation cancelled by user');
+                // This will cause the stream to throw an error, which is caught below
             }
             
             const content = chunk.choices[0]?.delta?.content || '';
@@ -244,13 +227,13 @@ export async function generateCode(
             }
         }
         
-        if (!isComplete && accumulatedContent.length > 0 && onProgress) {
-            onProgress(tokenCount, accumulatedContent);
+        if (!isComplete && !cancellationToken?.isCancellationRequested) {
+            logger.warn("Stream finished without a 'stop' or 'length' reason.");
         }
 
         logger.log('Raw accumulated content from stream:', { content: accumulatedContent });
 
-        const estimatedPromptTokens = Math.ceil(messages.reduce((total, msg) => total + (msg.content?.toString().length || 0), 0) / 4);
+        const estimatedPromptTokens = Math.ceil(messages.reduce((total, msg) => total + (typeof msg.content === 'string' ? msg.content.length : 0), 0) / 4);
         const estimatedCompletionTokens = Math.ceil(accumulatedContent.length / 4);
         
         const usage: TokenUsage = {
@@ -264,33 +247,36 @@ export async function generateCode(
         logger.log('Estimated token usage:', usage);
         
         if (enableStreamingAccumulator) {
-            streamingAccumulator.endSession(true);
+            streamingAccumulator.endSession(true, cancellationToken?.isCancellationRequested);
         }
         
         return { code: accumulatedContent, usage };
     } catch (error) {
+        const isCancellation = (error instanceof Error && error.name === 'AbortError') || (cancellationToken?.isCancellationRequested ?? false);
+
         if (enableStreamingAccumulator) {
-            const isCancellation = error instanceof Error && error.message === 'Operation cancelled by user';
             streamingAccumulator.endSession(!isCancellation, isCancellation);
         }
         
+        if (isCancellation) {
+            throw new Error(t('generateCode.cancelled'));
+        }
+
         const errorDetails = {
             message: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : new Error().stack,
-            type: error?.constructor?.name || 'Unknown',
-            timestamp: new Date().toISOString()
+            stack: error instanceof Error ? error.stack : undefined,
+            name: error instanceof Error ? error.name : 'UnknownError',
         };
         
         logger.error('API Error Details:', errorDetails);
-        logger.error('Full Error Object:', error);
         
-        if (error?.constructor?.name === 'TimeoutError') {
-             throw new Error(`The request timed out after ${activeService.timeout_seconds || 60} seconds.\nStack: ${errorDetails.stack}`);
+        if (errorDetails.name === 'TimeoutError') {
+             throw new Error(t(`llmClient.requestTimeout`, { seconds: activeService.timeout_seconds || 60, stack: errorDetails.stack ?? 'N/A' }));
         }
         if (error instanceof OpenAI.APIError) {
-            throw new Error(`API request failed with status ${error.status}: ${error.message}\nStack: ${errorDetails.stack}`);
+            throw new Error(t(`llmClient.apiError`, { status: error.status, message: error.message, stack: errorDetails.stack ?? 'N/A' }));
         }
-        throw new Error(`Failed to communicate with the API. Check your network connection and configuration.\nError: ${errorDetails.message}\nStack: ${errorDetails.stack}`);
+        throw new Error(t(`llmClient.communicationError`, { message: errorDetails.message, stack: errorDetails.stack ?? 'N/A' }));
     }
 }
 
@@ -299,13 +285,11 @@ export async function generateCode(
  *
  * @param prompt - The user's prompt.
  * @param serviceConfig - The configuration of the AI service to use.
- * @param onProgress - Callback function to report streaming progress (optional)
  * @returns Object containing response and token usage information.
  */
 export async function playgroundChat(
     prompt: string, 
-    serviceConfig: AiServiceConfig,
-    onProgress?: (tokenCount: number, currentText: string) => void
+    serviceConfig: AiServiceConfig
 ): Promise<{ response: string; usage: TokenUsage }> {
     const openai = initializeClient(serviceConfig);
     const { key, ...serviceToLog } = serviceConfig;
@@ -322,56 +306,15 @@ export async function playgroundChat(
     };
     logger.log('Sending OpenAI Chat Completion Request from playground with options:', completionOptions);
 
-    const streamingAccumulator = StreamingAccumulator.getInstance();
-    const config = vscode.workspace.getConfiguration('treehouseCodeCompleter');
-    const enableStreamingAccumulator = config.get<boolean>('output.streamingResults', true);
-
     try {
         const timeoutMs = (serviceConfig.timeout_seconds || 60) * 1000;
         
-        const abortController = new AbortController();
+        const stream = await openai.chat.completions.create(completionOptions, { timeout: timeoutMs });
         
-        if (enableStreamingAccumulator) {
-            streamingAccumulator.startSession();
-        }
-        
-        const stream = await openai.chat.completions.create(
-            completionOptions, 
-            { 
-                timeout: timeoutMs,
-                signal: abortController.signal
-            }
-        );
         let accumulatedContent = '';
-        let tokenCount = 0;
-        let isComplete = false;
 
         for await (const chunk of stream) {
-            const content = chunk.choices[0]?.delta?.content || '';
-            const finishReason = chunk.choices[0]?.finish_reason;
-            
-            if (content) {
-                accumulatedContent += content;
-                
-                if (enableStreamingAccumulator) {
-                    streamingAccumulator.addChunk(content);
-                }
-                
-                tokenCount += content.split(/\s+/).length;
-                
-                if (onProgress) {
-                    onProgress(tokenCount, accumulatedContent);
-                }
-            }
-            
-            if (finishReason === 'stop' || finishReason === 'length') {
-                isComplete = true;
-                break;
-            }
-        }
-        
-        if (!isComplete && accumulatedContent.length > 0 && onProgress) {
-            onProgress(tokenCount, accumulatedContent);
+            accumulatedContent += chunk.choices[0]?.delta?.content || '';
         }
 
         logger.log('Raw accumulated content from playground stream:', { content: accumulatedContent });
@@ -387,28 +330,15 @@ export async function playgroundChat(
             model: serviceConfig.model_name,
         };
 
-        if (enableStreamingAccumulator) {
-            streamingAccumulator.endSession(true);
-        }
-
         return { response: accumulatedContent, usage };
     } catch (error) {
-        if (enableStreamingAccumulator) {
-            const isCancellation = error instanceof Error && error.message === 'Operation cancelled by user';
-            streamingAccumulator.endSession(!isCancellation, isCancellation);
-        }
-        
         const errorDetails = {
             message: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : new Error().stack,
-            type: error?.constructor?.name || 'Unknown',
-            timestamp: new Date().toISOString(),
-            service: serviceConfig.name,
-            model: serviceConfig.model_name
+            stack: error instanceof Error ? error.stack : 'N/A',
+            name: error instanceof Error ? error.name : 'UnknownError',
         };
         
         logger.error('Playground API Error Details:', errorDetails);
-        logger.error('Full Error Object:', error);
         
         const usage: TokenUsage = {
             promptTokens: 0,
@@ -418,19 +348,13 @@ export async function playgroundChat(
             model: serviceConfig.model_name,
         };
         
-        if (error?.constructor?.name === 'TimeoutError') {
-             const message = `The request timed out after ${serviceConfig.timeout_seconds || 60} seconds.\nStack: ${errorDetails.stack}`;
-             logger.error('Timeout Error Message:', message);
-             return { response: message, usage };
+        if (errorDetails.name === 'TimeoutError') {
+             return { response: t('llmClient.playground.timeout', { seconds: serviceConfig.timeout_seconds || 60, stack: errorDetails.stack }), usage };
         }
         if (error instanceof OpenAI.APIError) {
-            const message = `API Error: ${error.status} ${error.name} - ${error.message}\nStack: ${errorDetails.stack}`;
-            logger.error('API Error Message:', message);
-            return { response: message, usage };
+            return { response: t('llmClient.playground.apiError', { status: error.status, name: error.name, message: error.message, stack: errorDetails.stack }), usage };
         }
-        const message = `Failed to communicate with the API: ${errorDetails.message}\nStack: ${errorDetails.stack}`;
-        logger.error('Communication Error Message:', message);
-        return { response: message, usage };
+        return { response: t('llmClient.playground.communicationError', { message: errorDetails.message, stack: errorDetails.stack }), usage };
     }
 }
 
@@ -447,7 +371,7 @@ export async function testApiConnection(apiConfig: AiServiceConfig): Promise<{ s
         const client = initializeClient(apiConfig);
         
         const timeoutMs = (apiConfig.timeout_seconds || 15) * 1000;
-        const testPrompt = "Respond with only the word 'test'";
+        const testPrompt = t("llmClient.testConnection.prompt");
         logger.log(`Sending test prompt: "${testPrompt}" to model: ${apiConfig.model_name}`);
 
         const messages: ChatCompletionMessageParam[] = [{ role: 'user', content: testPrompt }];
@@ -465,37 +389,26 @@ export async function testApiConnection(apiConfig: AiServiceConfig): Promise<{ s
 
         if (content === 'test') {
             logger.log('Test connection successful.');
-            return { success: true, message: 'Connection successful.' };
+            return { success: true, message: t('llmClient.testConnection.success') };
         } else {
-            logger.warn('WARN: Test connection failed: Unexpected response.', { response: content });
-            return { success: false, message: `Received an unexpected response: "${content}"` };
+            logger.warn('Test connection failed: Unexpected response.', { response: content });
+            return { success: false, message: t('llmClient.testConnection.unexpectedResponse', { response: content ?? 'null' }) };
         }
     } catch (error) {
-        const errorDetails = {
+         const errorDetails = {
             message: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : new Error().stack,
-            type: error?.constructor?.name || 'Unknown',
-            timestamp: new Date().toISOString(),
-            service: apiConfig.name,
-            model: apiConfig.model_name,
-            timeout: apiConfig.timeout_seconds
+            stack: error instanceof Error ? error.stack : 'N/A',
+            name: error instanceof Error ? error.name : 'UnknownError',
         };
         
         logger.error('Test Connection Error Details:', errorDetails);
-        logger.error('Full Error Object:', error);
         
-        if (error?.constructor?.name === 'TimeoutError') {
-            const message = `Request timed out after ${apiConfig.timeout_seconds || 15}s.\nStack: ${errorDetails.stack}`;
-            logger.error('Test Timeout Message:', message);
-            return { success: false, message };
+        if (errorDetails.name === 'TimeoutError') {
+            return { success: false, message: t('llmClient.testConnection.timeout', { seconds: apiConfig.timeout_seconds || 15, stack: errorDetails.stack }) };
         }
         if (error instanceof OpenAI.APIError) {
-            const message = `API Error: ${error.status} ${error.name} - ${error.message}\nStack: ${errorDetails.stack}`;
-            logger.error('Test API Error Message:', message);
-            return { success: false, message };
+            return { success: false, message: t('llmClient.testConnection.apiError', { status: error.status, name: error.name, message: error.message, stack: errorDetails.stack }) };
         }
-        const message = `An unknown error occurred: ${errorDetails.message}\nStack: ${errorDetails.stack}`;
-        logger.error('Test Unknown Error Message:', message);
-        return { success: false, message };
+        return { success: false, message: t('llmClient.testConnection.unknownError', { message: errorDetails.message, stack: errorDetails.stack }) };
     }
 }

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { t } from '../util/i18n';
 
 /**
  * Shows a user input box to get additional instructions.
@@ -6,8 +7,8 @@ import * as vscode from 'vscode';
  */
 export async function getInstruction(): Promise<string | undefined> {
     return vscode.window.showInputBox({
-        prompt: 'Enter your instruction for the AI',
-        placeHolder: 'e.g., "Refactor this to be more efficient" or "Add JSDoc comments"',
+        prompt: t('interactions.getInstruction.prompt'),
+        placeHolder: t('interactions.getInstruction.placeholder'),
         ignoreFocusOut: true,
     });
 }
@@ -17,7 +18,7 @@ export async function getInstruction(): Promise<string | undefined> {
  * @param message - The message to display.
  */
 export function showInfoMessage(message: string): void {
-    vscode.window.showInformationMessage(`Treehouse Completer: ${message}`);
+    vscode.window.showInformationMessage(t('interactions.showInfoMessage_prefix', { message }));
 }
 
 /**
@@ -28,11 +29,12 @@ export function showInfoMessage(message: string): void {
  */
 export async function showErrorMessage(message: string, onRetry?: () => void): Promise<string | undefined> {
     const options: string[] = [];
+    const retryOption = t('common.retry');
     if (onRetry) {
-        options.push('Retry');
+        options.push(retryOption);
     }
-    const selection = await vscode.window.showErrorMessage(`Treehouse Completer Error: ${message}`, ...options);
-    if (selection === 'Retry' && onRetry) {
+    const selection = await vscode.window.showErrorMessage(t('interactions.showErrorMessage_prefix', { message }), ...options);
+    if (selection === retryOption && onRetry) {
         onRetry();
     }
     return selection;

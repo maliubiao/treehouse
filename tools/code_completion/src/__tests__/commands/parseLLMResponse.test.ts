@@ -11,6 +11,16 @@ jest.mock('../../utils/logger', () => ({
   }
 }));
 
+// Mock i18n to provide the expected error message
+jest.mock('../../util/i18n', () => ({
+  t: jest.fn((key: string) => {
+    if (key === 'generateCode.emptyResponse') {
+      return 'AI response was empty.';
+    }
+    return key; // Return the key for other translations
+  }),
+}));
+
 describe('parseLLMResponse', () => {
   beforeEach(() => {
     jest.clearAllMocks();

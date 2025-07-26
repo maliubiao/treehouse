@@ -1,7 +1,7 @@
 {
   "name": "treehouse-code-completer",
-  "displayName": "Treehouse Code Completer",
-  "description": "Uses AI to complete or refactor selected code blocks via OpenAI-compatible APIs.",
+  "displayName": "%displayName%",
+  "description": "%description%",
   "version": "0.1.0",
   "license": "MIT",
   "repository": {
@@ -12,6 +12,7 @@
   "engines": {
     "vscode": "^1.102.0"
   },
+  "l10n": "./l10n",
   "categories": [
     "Programming Languages",
     "Other"
@@ -21,7 +22,7 @@
   ],
   "main": "./dist/extension.js",
   "scripts": {
-    "vscode:prepublish": "pnpm run compile",
+    "vscode:prepublish": "pnpm run l10n:generate && pnpm run compile",
     "compile": "pnpm run compile:extension && pnpm run compile:webview",
     "compile:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
     "compile:webview": "node ./scripts/build-webview.js",
@@ -34,12 +35,15 @@
     "test:cancel": "jest --testNamePattern='cancellation|cancel'",
     "test:e2e": "node ./out/test/runTest.js",
     "lint": "tsc --noEmit",
-    "package": "pnpm exec vsce package --no-dependencies"
+    "package": "pnpm exec vsce package --no-dependencies",
+    "l10n:generate": "vscode-l10n-dev generate"
   },
   "devDependencies": {
+    "@types/i18next": "^13.0.0",
     "@types/jest": "^29.5.14",
-    "@types/node": "^20.19.8",
+    "@types/node": "^20.19.9",
     "@types/vscode": "^1.102.0",
+    "@vscode/l10n-dev": "^0.0.35",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^2.32.0",
     "esbuild": "^0.20.2",
@@ -48,34 +52,37 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "fs-extra": "^11.3.0",
+    "https-proxy-agent": "^7.0.6",
+    "i18next": "^23.16.8",
     "openai": "^4.104.0"
   },
   "contributes": {
     "commands": [
       {
         "command": "treehouse-code-completer.generateCode",
-        "title": "Treehouse: Generate/Refactor Code"
+        "title": "%commands.generateCode.title%"
       },
       {
         "command": "treehouse-code-completer.undoLastGeneration",
-        "title": "Treehouse: Undo Last Generation"
+        "title": "%commands.undoLastGeneration.title%"
       },
       {
         "command": "treehouse-code-completer.openWebviewDeveloperTools",
-        "title": "Treehouse: Open Webview Developer Tools"
+        "title": "%commands.openWebviewDeveloperTools.title%"
       },
       {
         "command": "treehouse-code-completer.openSettings",
-        "title": "Treehouse: Open Settings"
+        "title": "%commands.openSettings.title%"
       },
       {
         "command": "treehouse-code-completer.acceptChanges",
-        "title": "Treehouse: Accept AI Suggestion",
+        "title": "%commands.acceptChanges.title%",
         "icon": "$(check)"
       },
       {
         "command": "treehouse-code-completer.rejectChanges",
-        "title": "Treehouse: Reject AI Suggestion",
+        "title": "%commands.rejectChanges.title%",
         "icon": "$(close)"
       }
     ],
@@ -120,12 +127,12 @@
       ]
     },
     "configuration": {
-      "title": "Treehouse Code Completer",
+      "title": "%configuration.title%",
       "properties": {
         "treehouseCodeCompleter.services": {
           "type": "array",
           "default": [],
-          "description": "A list of AI service configurations for Treehouse Code Completer.",
+          "description": "%configuration.services.description%",
           "items": {
             "type": "object",
             "properties": {
@@ -173,39 +180,39 @@
         "treehouseCodeCompleter.activeService": {
           "type": "string",
           "default": "",
-          "description": "The name of the active AI service configuration for Treehouse Code Completer."
+          "description": "%configuration.activeService.description%"
         },
         "treehouseCodeCompleter.prompt.systemMessage": {
           "type": "string",
           "default": "You are an expert software architect and engineering partner. Your goal is to deeply understand the user's intent and provide the best possible code modification, including any necessary import statements.\n\nThe user will provide context including the full file, a specific block of code to modify, and potentially the file's existing import block. Your task is to analyze all context, infer the user's true goal, and generate the best solution.\n\nINPUT FORMAT:\nYour input will contain the user's instruction followed by one or two code blocks:\n1.  An optional `<IMPORTS_BLOCK>` containing the existing imports.\n2.  A mandatory `<CODE_TO_MODIFY>` containing the code the user wants to change.\n\nOUTPUT FORMAT:\nYou must provide your response in two corresponding blocks:\n1.  If you need to add, remove, or change imports, provide the complete, updated import block inside `<UPDATED_IMPORTS>` tags. If no changes are needed, OMIT this tag entirely.\n2.  Provide the new, rewritten code inside `<UPDATED_CODE>` tags. This tag is mandatory.\n\nEXAMPLE RESPONSE (if imports changed):\n<UPDATED_IMPORTS>\nimport React, { useState } from 'react';\n</UPDATED_IMPORTS>\n<UPDATED_CODE>\nconst MyComponent = () => {\n  const [count, setCount] = useState(0);\n  return <button onClick={() => setCount(count + 1)}>{count}</button>;\n};\n</UPDATED_CODE>\n\nEXAMPLE RESPONSE (if imports did NOT change):\n<UPDATED_CODE>\n// Refactored code goes here...\n</UPDATED_CODE>\n\nCRITICAL: Adhere strictly to this input/output format. Only include the raw code in your response tags, with no extra explanations.",
-          "description": "The master system prompt that guides the AI's behavior. It instructs the AI to act as an expert engineering partner, inferring user intent from context to provide the highest quality code."
+          "description": "%configuration.systemMessage.description%"
         },
         "treehouseCodeCompleter.prompt.rule": {
           "type": "string",
           "default": "Follow all existing coding conventions and style from the provided file content.",
-          "description": "A custom rule or guideline to be appended to every prompt, e.g., 'All unit tests must be written using the `unittest` framework'."
+          "description": "%configuration.rule.description%"
         },
         "treehouseCodeCompleter.prompt.usePrefixCompletion": {
           "type": "boolean",
           "default": false,
-          "description": "Enable this for models that use a specific prefix-based completion format (e.g., some versions of DeepSeek Coder Instruct). If true, the prompt is sent in a special format. For most standard chat models (like GPT series), this should be false."
+          "description": "%configuration.usePrefixCompletion.description%"
         },
         "treehouseCodeCompleter.output.streamingResults": {
           "type": "boolean",
           "default": true,
-          "description": "Save and display streaming results in terminal on completion. When enabled, all chunks of AI responses are accumulated and printed to the terminal when generation is complete."
+          "description": "%configuration.output.streamingResults.description%"
         },
         "treehouseCodeCompleter.debug.streamingChunks": {
           "type": "boolean",
           "default": false,
-          "description": "Enable debug logging for each streaming chunk received from the AI service. Only use for troubleshooting as this will generate a lot of logs."
+          "description": "%configuration.debug.streamingChunks.description%"
         }
       }
     },
     "context": [
       {
         "name": "treehouseCodeCompleter.diffViewActive",
-        "description": "True when the Treehouse Code Completer diff view is active and awaiting user action.",
+        "description": "%context.diffViewActive.description%",
         "type": "boolean"
       }
     ]

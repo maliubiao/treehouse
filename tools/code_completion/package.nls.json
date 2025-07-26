@@ -1,0 +1,19 @@
+{
+  "displayName": "Treehouse Code Completer",
+  "description": "An AI-powered code completion and refactoring assistant for Visual Studio Code.",
+  "commands.generateCode.title": "Treehouse: Generate Code",
+  "commands.undoLastGeneration.title": "Treehouse: Undo Last Generation",
+  "commands.openWebviewDeveloperTools.title": "Treehouse: Open Webview Developer Tools",
+  "commands.openSettings.title": "Treehouse: Open Settings",
+  "commands.acceptChanges.title": "Accept Changes",
+  "commands.rejectChanges.title": "Reject Changes",
+  "configuration.title": "Treehouse Code Completer",
+  "configuration.services.description": "Configure LLM service providers. You can add multiple providers and switch between them.",
+  "configuration.activeService.description": "The name of the active service to use for code generation.",
+  "configuration.systemMessage.description": "The system message that sets the context and instructions for the AI model.",
+  "configuration.rule.description": "An additional rule or instruction to be appended to the prompt.",
+  "configuration.usePrefixCompletion.description": "When enabled, the selected code is treated as a prefix for the AI to complete, rather than a block to be replaced.",
+  "configuration.output.streamingResults.description": "Enable to stream results from the language model as they become available for a more responsive UI.",
+  "configuration.debug.streamingChunks.description": "For debugging purposes. Logs raw streaming data chunks to the output channel.",
+  "context.diffViewActive.description": "A boolean context variable that is true when a Treehouse diff view is visible to the user."
+}

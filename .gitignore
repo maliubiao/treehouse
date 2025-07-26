@@ -66,3 +66,5 @@ obsidian
 
 tools/claude_code_proxy/*.env
 tools/claude_code_proxy/config.yml
+.shadowroot
+conversation

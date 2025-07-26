@@ -1,38 +1,59 @@
-// Import removed - using global jest
-import { sessionManager } from '../../state/sessionManager';
+import { sessionManager, GenerationSession } from '../../state/sessionManager';
 import { TempFileManager } from '../../utils/tempFileManager';
+import * as vscode from 'vscode';
+import { showInfoMessage } from '../../ui/interactions';
+import { TextEncoder } from 'util';
 
-// Mock all dependencies
+// Mock dependencies
 jest.mock('../../utils/logger');
 jest.mock('../../utils/tempFileManager');
 jest.mock('../../ui/interactions');
+jest.mock('../../util/i18n', () => ({ t: (key: string) => key }));
+
 // Simple vscode mock
 jest.mock('vscode', () => ({
     window: {
-        createOutputChannel: jest.fn(),
         showInformationMessage: jest.fn(),
-        showTextDocument: jest.fn(),
+        showTextDocument: jest.fn().mockResolvedValue({
+            document: {
+                lineAt: (i: number) => ({ range: { start: { line: i, character: 0 }, end: { line: i, character: 10 } } }),
+                lineCount: 2,
+            },
+            selection: {},
+            revealRange: jest.fn(),
+        }),
         tabGroups: {
-            close: jest.fn()
-        }
+            close: jest.fn(),
+            all: [],
+        },
+        createOutputChannel: jest.fn(() => ({
+            appendLine: jest.fn(),
+            show: jest.fn(),
+        })),
     },
     workspace: {
-        getConfiguration: jest.fn(() => ({
-            get: jest.fn()
-        })),
-        applyEdit: jest.fn(),
+        applyEdit: jest.fn().mockResolvedValue(true),
         fs: {
             readFile: jest.fn(),
         }
     },
     commands: {
-        executeCommand: jest.fn()
+        executeCommand: jest.fn().mockResolvedValue(undefined)
     },
     Uri: {
         file: (path: string) => ({
             path: path,
+            fsPath: path,
             toString: () => `file://${path}`
         })
+    },
+    Position: jest.fn((line, character) => ({ line, character })),
+    Range: jest.fn((start, end) => ({ start, end })),
+    Selection: jest.fn((start, end) => ({ start, end })),
+    TabInputTextDiff: class {},
+    TextEditorRevealType: { InCenterIfOutsideViewport: 2 },
+    WorkspaceEdit: class {
+        replace = jest.fn();
     }
 }));
 
@@ -42,176 +63,74 @@ describe('SessionManager', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     
-    // Mock TempFileManager
-    mockTempFileManager = {
-      cleanup: jest.fn().mockResolvedValue(undefined),
-    } as any;
+    mockTempFileManager = new TempFileManager() as jest.Mocked<TempFileManager>;
+    mockTempFileManager.cleanup = jest.fn().mockResolvedValue(undefined);
     
-    // Reset sessionManager state
     (sessionManager as any).currentSession = null;
     (sessionManager as any).endingPromise = null;
   });
 
-  describe('isSessionActive', () => {
-    it('should return false initially', () => {
-      expect(sessionManager.isSessionActive()).toBe(false);
-    });
-
-    it('should return true when session is active', async () => {
-      await sessionManager.start({
-        originalUri: { toString: () => 'test' } as any,
-        newUri: { toString: () => 'test' } as any,
-        targetEditorUri: { fsPath: '/test' } as any,
-        targetSelection: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 }
-        } as any,
-        tempFileManager: mockTempFileManager
-      });
-      
-      expect(sessionManager.isSessionActive()).toBe(true);
-    });
+  const createMockSession = (): GenerationSession => ({
+    originalUri: vscode.Uri.file('/tmp/original.ts'),
+    newUri: vscode.Uri.file('/tmp/new.ts'),
+    targetEditorUri: vscode.Uri.file('/project/file.ts'),
+    targetSelection: new vscode.Range(new (vscode.Position as any)(5, 0), new (vscode.Position as any)(10, 0)),
+    tempFileManager: mockTempFileManager,
   });
 
   describe('start', () => {
-    it('should start a new session', async () => {
-      const sessionData = {
-        originalUri: { toString: () => 'test' } as any,
-        newUri: { toString: () => 'test' } as any,
-        targetEditorUri: { resourceUri: 'test' } as any,
-        targetSelection: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 }
-        } as any,
-        tempFileManager: mockTempFileManager
-      };
+    it('should start a session and show diff view', async () => {
+      const session = createMockSession();
+      await sessionManager.start(session);
 
-      await sessionManager.start(sessionData);
-      
-      expect(sessionManager.isSessionActive()).toBe(true);
-      expect((sessionManager as any).currentSession).toEqual(sessionData);
-    });
-
-    it('should end previous session before starting new one', async () => {
-      const sessionData1 = {
-        originalUri: { toString: () => 'test1' } as any,
-        newUri: { toString: () => 'test1' } as any,
-        targetEditorUri: { resourceUri: 'test1' } as any,
-        targetSelection: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 }
-        } as any,
-        tempFileManager: mockTempFileManager
-      };
-
-      const sessionData2 = {
-        originalUri: { toString: () => 'test2' } as any,
-        newUri: { toString: () => 'test2' } as any,
-        targetEditorUri: { resourceUri: 'test2' } as any,
-        targetSelection: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 }
-        } as any,
-        tempFileManager: mockTempFileManager
-      };
-
-      await sessionManager.start(sessionData1);
-      await sessionManager.start(sessionData2);
-      
-      expect((sessionManager as any).currentSession).toEqual(sessionData2);
+      expect((sessionManager as any).currentSession).toBe(session);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith('setContext', 'treehouseCodeCompleter.diffViewActive', true);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith('vscode.diff', session.originalUri, session.newUri, expect.any(String));
+      expect(showInfoMessage).toHaveBeenCalledWith('sessionManager.suggestionReady');
     });
   });
 
   describe('end', () => {
-    it('should do nothing when no session active', async () => {
-      await sessionManager.end();
+    it('should end an active session and clean up', async () => {
+      const session = createMockSession();
+      (sessionManager as any).currentSession = session;
       
-      // Should not throw
-      expect((sessionManager as any).currentSession).toBe(null);
-    });
-
-    it('should end active session', async () => {
-      const sessionData = {
-        originalUri: { toString: () => 'test' } as any,
-        newUri: { toString: () => 'test' } as any,
-        targetEditorUri: { resourceUri: 'test' } as any,
-        targetSelection: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 }
-        } as any,
-        tempFileManager: mockTempFileManager
-      };
-
-      await sessionManager.start(sessionData);
       await sessionManager.end();
-      
-      expect(sessionManager.isSessionActive()).toBe(false);
+
+      expect((sessionManager as any).currentSession).toBeNull();
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith('setContext', 'treehouseCodeCompleter.diffViewActive', false);
+      expect(mockTempFileManager.cleanup).toHaveBeenCalled();
     });
   });
 
   describe('accept', () => {
-    it('should do nothing when no session active', async () => {
+    it('should apply changes and end the session', async () => {
+      const session = createMockSession();
+      (sessionManager as any).currentSession = session;
+      
+      const newContent = 'const newCode = "accepted";';
+      const newContentBytes = new TextEncoder().encode(newContent);
+      (vscode.workspace.fs.readFile as jest.Mock).mockResolvedValue(newContentBytes);
+
       await sessionManager.accept();
-      
-      // Should not throw
-      expect(mockTempFileManager.cleanup).not.toHaveBeenCalled();
-    });
 
-    // Note: Full accept testing requires complex VS Code mocking
-    // Simplified for now - would need document/workspace mocking
-  });
-
-  describe('reject', () => {
-    it('should do nothing when no session active', async () => {
-      await sessionManager.reject();
-      
-      // Should not throw
-      expect(mockTempFileManager.cleanup).not.toHaveBeenCalled();
-    });
-
-    it('should end session when active', async () => {
-      const sessionData = {
-        originalUri: { toString: () => 'test' } as any,
-        newUri: { toString: () => 'test' } as any,
-        targetEditorUri: { resourceUri: 'test' } as any,
-        targetSelection: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 }
-        } as any,
-        tempFileManager: mockTempFileManager
-      };
-
-      await sessionManager.start(sessionData);
-      await sessionManager.reject();
-      
+      expect(vscode.workspace.fs.readFile).toHaveBeenCalledWith(session.newUri);
+      expect(vscode.workspace.applyEdit).toHaveBeenCalled();
+      expect(showInfoMessage).toHaveBeenCalledWith('sessionManager.changesApplied');
       expect(sessionManager.isSessionActive()).toBe(false);
     });
   });
 
-  describe('getActiveSessionUris', () => {
-    it('should return null when no session active', () => {
-      expect(sessionManager.getActiveSessionUris()).toBe(null);
-    });
-
-    it('should return URIs when session is active', async () => {
-      const sessionData = {
-        originalUri: { toString: () => 'original' } as any,
-        newUri: { toString: () => 'new' } as any,
-        targetEditorUri: { resourceUri: 'test' } as any,
-        targetSelection: {
-          start: { line: 0, character: 0 },
-          end: { line: 1, character: 0 }
-        } as any,
-        tempFileManager: mockTempFileManager
-      };
-
-      await sessionManager.start(sessionData);
-      const uris = sessionManager.getActiveSessionUris();
+  describe('reject', () => {
+    it('should reject changes and end the session', async () => {
+      const session = createMockSession();
+      (sessionManager as any).currentSession = session;
       
-      expect(uris).toEqual({
-        originalUri: expect.any(Object),
-        newUri: expect.any(Object),
-      });
+      await sessionManager.reject();
+
+      expect(vscode.workspace.applyEdit).not.toHaveBeenCalled();
+      expect(showInfoMessage).toHaveBeenCalledWith('sessionManager.changesRejected');
+      expect(sessionManager.isSessionActive()).toBe(false);
     });
   });
 });

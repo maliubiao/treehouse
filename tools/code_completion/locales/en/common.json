@@ -1,0 +1,118 @@
+{
+  "extension": {
+    "activated": "Treehouse Code Completer is now active.",
+    "noActiveWebview": "No active Treehouse Code Completer webview to inspect."
+  },
+  "common": {
+    "retry": "Retry"
+  },
+  "interactions": {
+    "getInstruction": {
+      "prompt": "Enter your instruction for the AI",
+      "placeholder": "e.g., \"Refactor this to be more efficient\" or \"Add JSDoc comments\""
+    },
+    "showInfoMessage_prefix": "Treehouse Completer: {{message}}",
+    "showErrorMessage_prefix": "Treehouse Completer Error: {{message}}"
+  },
+  "llmClient": {
+    "apiKeyRequired": "AI service configuration with an API key is required.",
+    "defaultSystemPrompt": "You are an expert software architect and engineering partner. Your goal is to deeply understand the user's intent and provide the best possible code modification. The user will provide the full content of a file, a specific block of code to be changed, and an instruction.\n\nYour task is to:\n1.  **Analyze the Context:** Use the full file content to understand its purpose, existing design patterns, variable naming, and overall coding style.\n2.  **Infer the Intent:** The user's instruction is a starting point, not a rigid command. Deduce the true goal behind their request.\n3.  **Generate the Best Solution:** Rewrite the specified code block to elegantly and robustly achieve the user's inferred goal. Your code should seamlessly integrate with the existing codebase.\n\nIMPORTANT: Your response MUST contain the modified code in an <UPDATED_CODE> block. If you are adding or changing imports, you MUST place them in a separate <UPDATED_IMPORTS> block that comes before the <UPDATED_CODE> block.\n\nExample:\n<UPDATED_IMPORTS>\nimport { useState } from 'react';\n</UPDATED_IMPORTS>\n\n<UPDATED_CODE>\nconst [count, setCount] = useState(0);\n</UPDATED_CODE>",
+    "requestTimeout": "The request timed out after {{seconds}} seconds.\nStack: {{stack}}",
+    "apiError": "API request failed with status {{status}}: {{message}}\nStack: {{stack}}",
+    "communicationError": "Failed to communicate with the API. Check your network connection and configuration.\nError: {{message}}\nStack: {{stack}}",
+    "playground": {
+      "timeout": "The request timed out after {{seconds}} seconds.\nStack: {{stack}}",
+      "apiError": "API Error: {{status}} {{name}} - {{message}}\nStack: {{stack}}",
+      "communicationError": "Failed to communicate with the API: {{message}}\nStack: {{stack}}"
+    },
+    "testConnection": {
+      "prompt": "Respond with only the word 'test'",
+      "success": "Connection successful.",
+      "unexpectedResponse": "Received an unexpected response: \"{{response}}\"",
+      "timeout": "Request timed out after {{seconds}}s.\nStack: {{stack}}",
+      "apiError": "API Error: {{status}} {{name}} - {{message}}\nStack: {{stack}}",
+      "unknownError": "An unknown error occurred: {{message}}\nStack: {{stack}}"
+    }
+  },
+  "generateCode": {
+    "emptyResponse": "AI response was empty.",
+    "noActiveService": "No active Treehouse AI service is configured. Please set up a service to continue.",
+    "openSettings": "Open Settings",
+    "notAvailableInSpecialEditor": "Code generation is not available in terminals, debug console, or output panels.",
+    "noFileSelected": "Place your cursor or select code in a file to generate code.",
+    "timeout": "AI generation request timed out after 2 minutes.",
+    "cancelled": "Operation cancelled by user.",
+    "progress": {
+      "working": "Treehouse AI is working...",
+      "initializing": "Initializing...",
+      "finalizing": "Finalizing response..."
+    },
+    "success": "✅ Code generation completed | {{totalTokens}} tokens{{costDisplay}}",
+    "error": "Treehouse Completer Error: {{errorMessage}}",
+    "showDetails": "Show Details"
+  },
+  "sessionManager": {
+    "suggestionReady": "AI suggestion ready. Use {{acceptKey}} to accept or {{rejectKey}} to reject.",
+    "changesApplied": "Changes have been applied.",
+    "changesRejected": "Changes were rejected.",
+    "applyFailed": "Failed to apply changes",
+    "applyFailedError": "Failed to apply changes: {{error}}"
+  },
+  "undoManager": {
+    "nothingToUndo": "No AI generation to undo.",
+    "reverted": "Last AI generation has been reverted.",
+    "revertFailed": "Failed to undo last edit: {{error}}"
+  },
+  "webview": {
+    "mainTitle": "Treehouse AI Service Configurations",
+    "servicesTitle": "Services",
+    "addNewService": "Add New Service",
+    "importExportTitle": "Import/Export All Services",
+    "importExportPlaceholder": "Paste an array of service configs here...",
+    "importAll": "Import All",
+    "exportAll": "Export All",
+    "promptsTitle": "Prompts & Rules",
+    "systemPromptLabel": "System Prompt (Master Instruction)",
+    "saveSystemPrompt": "Save System Prompt",
+    "customRuleLabel": "Custom Rule (Appended to every request)",
+    "saveCustomRule": "Save Rule",
+    "playgroundTitle": "Playground",
+    "playgroundServiceLabel": "Select Service",
+    "playgroundPromptLabel": "Prompt",
+    "playgroundPromptPlaceholder": "Enter your prompt here...",
+    "playgroundSend": "Send",
+    "playgroundResponseLabel": "Response",
+    "editModalTitle": "Edit Service",
+    "addModalTitle": "Add New Service",
+    "modalImportLabel": "Import from JSON",
+    "modalImportPlaceholder": "Paste a single service JSON config here...",
+    "modalImportButton": "Import and Fill Form",
+    "serviceNameLabel": "Service Name",
+    "modelNameLabel": "Model Name",
+    "baseUrlLabel": "Base URL",
+    "apiKeyLabel": "API Key",
+    "temperatureLabel": "Temperature",
+    "maxTokensLabel": "Max Tokens",
+    "maxContextSizeLabel": "Max Context Size",
+    "timeoutLabel": "Timeout (seconds)",
+    "priceInputLabel": "Price/1M Input ($)",
+    "priceOutputLabel": "Price/1M Output ($)",
+    "supportsJsonLabel": "Supports JSON Output",
+    "testConnectionButton": "Test Connection",
+    "saveButton": "Save",
+    "cancelButton": "Cancel",
+    "thinking": "Thinking...",
+    "noServicesConfigured": "No services configured. Add a new service or import a configuration.",
+    "activeBadge": "Active",
+    "selectButton": "Select",
+    "editButton": "Edit",
+    "deleteButton": "Delete",
+    "noServicesAvailable": "No services available",
+    "invalidJsonServices": "Invalid JSON format for services array.",
+    "invalidJsonService": "Invalid JSON format for single service.",
+    "connectionSuccessful": "✔️ Connection successful!",
+    "connectionFailed": "❌ {{message}}",
+    "playgroundError": "Error: {{message}}",
+    "serviceNotFound": "Error: Service '{{serviceName}}' not found."
+  }
+}

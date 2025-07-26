@@ -1,0 +1,118 @@
+{
+  "common": {
+    "retry": "Retry",
+    "saveButton": "Save",
+    "cancelButton": "Cancel",
+    "editButton": "Edit",
+    "deleteButton": "Delete",
+    "selectButton": "Select"
+  },
+  "extension": {
+    "activated": "Treehouse Code Completer is now active.",
+    "noActiveWebview": "No active webview to open developer tools for."
+  },
+  "interactions": {
+    "getInstruction": {
+      "prompt": "Enter your instruction for the AI",
+      "placeholder": "e.g., \"Refactor this to be more efficient\" or \"Add JSDoc comments\""
+    },
+    "showInfoMessage_prefix": "Treehouse Completer: {{message}}",
+    "showErrorMessage_prefix": "Treehouse Completer Error: {{message}}"
+  },
+  "undoManager": {
+    "nothingToUndo": "No AI generation to undo.",
+    "reverted": "Last AI generation has been reverted.",
+    "revertFailed": "Failed to undo last edit: {{error}}"
+  },
+  "sessionManager": {
+    "suggestionReady": "AI suggestion is ready. Accept with {{acceptKey}}, Reject with {{rejectKey}}.",
+    "changesApplied": "Changes have been applied.",
+    "applyFailed": "Failed to apply changes.",
+    "applyFailedError": "Failed to apply changes: {{error}}",
+    "changesRejected": "Changes have been rejected."
+  },
+  "generateCode": {
+    "noActiveService": "No active AI service is configured. Please set one up in the settings.",
+    "openSettings": "Open Settings",
+    "notAvailableInSpecialEditor": "This command is not available in this type of editor (e.g., Terminal, Debug Console).",
+    "noFileSelected": "No active code file selected. Please open a file to use this command.",
+    "timeout": "The code generation request timed out after 120 seconds.",
+    "cancelled": "Operation cancelled by user.",
+    "progress": {
+      "working": "Treehouse AI is working...",
+      "initializing": "Initializing...",
+      "finalizing": "Finalizing..."
+    },
+    "success": "AI generation successful. Tokens used: {{totalTokens}}{{costDisplay}}.",
+    "error": "An error occurred during code generation: {{errorMessage}}",
+    "showDetails": "Show Details",
+    "emptyResponse": "AI response was empty."
+  },
+  "llmClient": {
+    "apiKeyRequired": "API key for the active service is required.",
+    "defaultSystemPrompt": "You are a helpful AI assistant.",
+    "requestTimeout": "The request timed out after {{seconds}} seconds.\nStack: {{stack}}",
+    "apiError": "API Error ({{status}}): {{message}}\nStack: {{stack}}",
+    "communicationError": "Failed to communicate with the API: {{message}}\nStack: {{stack}}",
+    "testConnection": {
+      "prompt": "test",
+      "success": "Connection successful.",
+      "unexpectedResponse": "Received an unexpected response from the API: {{response}}",
+      "timeout": "Connection test timed out after {{seconds}} seconds.\nStack: {{stack}}",
+      "apiError": "API Error ({{status}}): {{name}} - {{message}}\nStack: {{stack}}",
+      "unknownError": "An unknown error occurred during connection test: {{message}}\nStack: {{stack}}"
+    },
+    "playground": {
+      "timeout": "Playground request timed out after {{seconds}} seconds.\nStack: {{stack}}",
+      "apiError": "Playground API Error ({{status}}): {{name}} - {{message}}\nStack: {{stack}}",
+      "communicationError": "Failed to communicate with the API for playground: {{message}}\nStack: {{stack}}"
+    }
+  },
+  "webview": {
+    "mainTitle": "Treehouse AI Settings",
+    "servicesTitle": "AI Services",
+    "addNewService": "Add New Service",
+    "importExportTitle": "Import / Export",
+    "importExportPlaceholder": "Paste JSON array of services to import, or export all services here.",
+    "importAll": "Import All",
+    "exportAll": "Export All",
+    "promptsTitle": "Prompts",
+    "systemPromptLabel": "System Prompt",
+    "saveSystemPrompt": "Save System Prompt",
+    "customRuleLabel": "Custom Rule",
+    "saveCustomRule": "Save Custom Rule",
+    "playgroundTitle": "Playground",
+    "playgroundServiceLabel": "Service to use:",
+    "playgroundPromptLabel": "Prompt:",
+    "playgroundPromptPlaceholder": "Enter your prompt to test a service...",
+    "playgroundSend": "Send",
+    "playgroundResponseLabel": "Response:",
+    "noServicesConfigured": "No AI services configured.",
+    "activeBadge": "ACTIVE",
+    "noServicesAvailable": "No services available",
+    "thinking": "Thinking...",
+    "invalidJsonServices": "Invalid JSON format for services array.",
+    "invalidJsonService": "Invalid JSON format for service object.",
+    "serviceNotFound": "Service '{{serviceName}}' not found.",
+    "playgroundError": "Playground request failed: {{message}}",
+    "editModalTitle": "Edit AI Service",
+    "addModalTitle": "Add New AI Service",
+    "modalImportLabel": "Import Service from JSON",
+    "modalImportPlaceholder": "Paste a single service configuration object here...",
+    "modalImportButton": "Import from JSON",
+    "serviceNameLabel": "Service Name",
+    "modelNameLabel": "Model Name",
+    "baseUrlLabel": "Base URL",
+    "apiKeyLabel": "API Key",
+    "temperatureLabel": "Temperature",
+    "maxTokensLabel": "Max Tokens",
+    "maxContextSizeLabel": "Max Context Size",
+    "timeoutLabel": "Timeout (sec)",
+    "priceInputLabel": "Price/1M Input ($)",
+    "priceOutputLabel": "Price/1M Output ($)",
+    "supportsJsonLabel": "Supports JSON output",
+    "testConnectionButton": "Test Connection",
+    "connectionSuccessful": "Connection successful!",
+    "connectionFailed": "Connection failed: {{message}}"
+  }
+}

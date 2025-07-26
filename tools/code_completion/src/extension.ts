@@ -6,13 +6,16 @@ import { panelManager } from './ui/panelManager';
 import { logger } from './utils/logger';
 import { showSettingsView } from './ui/settingsView';
 import { sessionManager } from './state/sessionManager';
+import { initI18n, t } from './util/i18n';
 
 /**
  * This method is called when your extension is activated.
  * Your extension is activated the very first time the command is executed.
  */
-export function activate(context: vscode.ExtensionContext): void {
-    logger.log('Treehouse Code Completer is now active.');
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    await initI18n(context);
+
+    logger.log(t('extension.activated'));
 
     const undoManager = new UndoManager();
 
@@ -35,7 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
             if (panelManager.getPanel()) {
                 vscode.commands.executeCommand('workbench.action.webview.openDeveloperTools');
             } else {
-                vscode.window.showInformationMessage('No active Treehouse Code Completer webview to inspect.');
+                vscode.window.showInformationMessage(t('extension.noActiveWebview'));
             }
         }
     );
@@ -58,25 +61,27 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     // Listener to clean up session if diff tab is closed manually
-    const onDidChangeTabs = vscode.window.tabGroups.onDidChangeTabs(() => {
+    const onDidChangeTabs = vscode.window.tabGroups.onDidChangeTabs(async () => {
         if (!sessionManager.isSessionActive()) {
             return;
         }
-        // const activeUris = sessionManager.getActiveSessionUris();
-        // if (!activeUris) return;
+        const activeUris = sessionManager.getActiveSessionUris();
+        if (!activeUris) return;
 
-        // const isDiffTabOpen = vscode.window.tabGroups.all.some(tg =>
-        //     tg.tabs.some(tab =>
-        //         tab.input instanceof vscode.TabInputTextDiff &&
-        //         tab.input.original.toString() === activeUris.originalUri.toString() &&
-        //         tab.input.modified.toString() === activeUris.newUri.toString()
-        //     )
-        // );
+        // Check if any diff tab corresponding to our session is still open
+        const isDiffTabOpen = vscode.window.tabGroups.all.some(tg =>
+            tg.tabs.some(tab =>
+                tab.input instanceof vscode.TabInputTextDiff &&
+                tab.input.original.toString() === activeUris.originalUri.toString() &&
+                tab.input.modified.toString() === activeUris.newUri.toString()
+            )
+        );
         
-        // if (!isDiffTabOpen) {
-        //     logger.log('Diff tab closed by user, ending session.');
-        //     sessionManager.end();
-        // }
+        if (!isDiffTabOpen) {
+            logger.log('Diff tab closed by user, ending session.');
+            // Using a small delay to prevent race conditions with other tab events
+            setTimeout(() => sessionManager.end(), 100);
+        }
     });
 
     context.subscriptions.push(

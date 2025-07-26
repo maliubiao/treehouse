@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getGenerationContext } from '../utils/document';
-import { getInstruction, showInfoMessage } from '../ui/interactions';
+import { getInstruction, showInfoMessage, showErrorMessage } from '../ui/interactions';
 import { generateCode as callLLMApi, TokenUsage } from '../api/llmClient';
 import { UndoManager } from '../state/undoManager';
 import { TempFileManager } from '../utils/tempFileManager';
@@ -8,6 +8,8 @@ import { getActiveAiServiceConfig } from '../config/configuration';
 import { showSettingsView } from '../ui/settingsView';
 import { logger } from '../utils/logger';
 import { GenerationContext } from '../types';
+import { t } from '../util/i18n';
+import { sessionManager } from '../state/sessionManager';
 
 /**
  * Parses the raw LLM response to extract code and imports from tagged sections.
@@ -32,18 +34,17 @@ import { GenerationContext } from '../types';
  */
 export function parseLLMResponse(responseText: string): { newCode: string; newImports: string | null } {
     if (!responseText || !responseText.trim()) {
-        throw new Error('AI response was empty.');
+        throw new Error(t('generateCode.emptyResponse'));
     }
 
     const CODE_TAG = 'UPDATED_CODE';
     const IMPORTS_TAG = 'UPDATED_IMPORTS';
 
-    // Fallback for responses without any tags. Using a simpler regex for the check.
     if (!/<UPDATED_(CODE|IMPORTS)>/.test(responseText)) {
         return { newCode: responseText, newImports: null };
     }
 
-    const tagRegex = /<(\/?)(UPDATED_CODE|UPDATED_IMPORTS)>/g;
+    const tagRegex = /<(\/)?(UPDATED_CODE|UPDATED_IMPORTS)>/g;
     let match;
 
     const codeStack: number[] = [];
@@ -64,15 +65,15 @@ export function parseLLMResponse(responseText: string): { newCode: string; newIm
                 if (stack.length === 0) { // Closing an outermost tag
                     const content = responseText.substring(startIndex, match.index);
                     if (tagName === CODE_TAG) {
-                        if (codeContent === null) codeContent = content; // Capture first one
+                        if (codeContent === null) codeContent = content;
                     } else {
-                        if (importsContent === null) importsContent = content; // Capture first one
+                        if (importsContent === null) importsContent = content;
                     }
                 }
             } else {
                 logger.warn(`Found end tag </${tagName}> without matching start tag.`);
             }
-        } else { // Start Tag
+        } else {
             stack.push(match.index + fullMatch.length);
         }
     }
@@ -113,56 +114,64 @@ export function stitchNewFileContent(
     const selectionStartOffset = document.offsetAt(selection.start);
     const selectionEndOffset = document.offsetAt(selection.end);
     
-    const importStartOffset = importBlock ? document.offsetAt(importBlock.range.start) : 0;
-    const importEndOffset = importBlock ? document.offsetAt(importBlock.range.end) : 0;
-    
-    let finalImportText = newImports ?? (importBlock?.text ?? null);
-
-    if (newImports && !importBlock) {
-        finalImportText = `${newImports.trim()}`;
-    } else if (newImports) {
-        finalImportText = newImports.trim();
+    if (!importBlock) {
+        return originalContent.slice(0, selectionStartOffset) + newCode + originalContent.slice(selectionEndOffset);
     }
-
-
-    if (importEndOffset > selectionStartOffset) {
+    
+    const importStartOffset = document.offsetAt(importBlock.range.start);
+    const importEndOffset = document.offsetAt(importBlock.range.end);
+    
+    if (importEndOffset >= selectionStartOffset) {
         logger.warn('Selection is within or before the import block. Performing a simple replacement.');
         return originalContent.slice(0, selectionStartOffset) + newCode + originalContent.slice(selectionEndOffset);
     }
-
+    
+    let finalImportText = importBlock.text;
+    if (newImports !== null) {
+        finalImportText = newImports;
+    }
+    
     const beforeImports = originalContent.slice(0, importStartOffset);
-    const betweenImportsAndCode = originalContent.slice(importEndOffset, selectionStartOffset);
+    let betweenImportsAndCode = originalContent.slice(importEndOffset, selectionStartOffset);
     const afterCode = originalContent.slice(selectionEndOffset);
     
-    const stitched = beforeImports + (finalImportText ?? '') + betweenImportsAndCode + newCode + afterCode;
-    return stitched;
+    if (finalImportText.trim().length > 0 && !finalImportText.endsWith('\n') && !finalImportText.endsWith('\r\n')) {
+        finalImportText += '\n';
+    }
+
+    if (finalImportText.endsWith('\n') || finalImportText.endsWith('\r\n')) {
+        if (betweenImportsAndCode.startsWith('\r\n')) {
+            betweenImportsAndCode = betweenImportsAndCode.substring(2);
+        } else if (betweenImportsAndCode.startsWith('\n')) {
+            betweenImportsAndCode = betweenImportsAndCode.substring(1);
+        }
+    }
+    
+    return beforeImports + finalImportText + betweenImportsAndCode + newCode + afterCode;
 }
 
-/**
- * Wraps the LLM API call with a timeout and cancellation logic.
- */
 async function callLLMWithTimeout(
     instruction: string,
     generationContext: GenerationContext,
     cancellationToken: vscode.CancellationToken,
 ): Promise<{ code: string; usage: TokenUsage }> {
-    const timeoutMs = 120000; // 2 minutes timeout
+    const activeService = getActiveAiServiceConfig();
+    const timeoutSeconds = activeService?.timeout_seconds ?? 120;
+    const timeoutMs = timeoutSeconds * 1000;
 
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
-            reject(new Error('AI generation request timed out after 2 minutes.'));
+            cancellationRegistration.dispose();
+            reject(new Error(t('generateCode.timeout')));
         }, timeoutMs);
 
         const cancellationRegistration = cancellationToken.onCancellationRequested(() => {
             clearTimeout(timeout);
-            reject(new Error('Operation cancelled by user.'));
+            cancellationRegistration.dispose();
+            // The rejection is handled inside callLLMApi, which will throw an AbortError
         });
 
-        const onProgress = (_tokenCount: number, _currentText: string) => {
-            // This function can be passed to callLLMApi if progress updates are needed.
-        };
-
-        callLLMApi(instruction, generationContext, onProgress, cancellationToken)
+        callLLMApi(instruction, generationContext, undefined, cancellationToken)
             .then(result => {
                 clearTimeout(timeout);
                 cancellationRegistration.dispose();
@@ -179,15 +188,15 @@ async function callLLMWithTimeout(
 export async function generateCodeCommand(
     context: vscode.ExtensionContext, 
     undoManager: UndoManager,
-    sessionManager: any
+    _sessionManager: typeof sessionManager
 ): Promise<void> {
     const activeService = getActiveAiServiceConfig();
     if (!activeService) {
         const selection = await vscode.window.showInformationMessage(
-            'No active Treehouse AI service is configured. Please set up a service to continue.',
-            'Open Settings'
+            t('generateCode.noActiveService'),
+            t('generateCode.openSettings')
         );
-        if (selection === 'Open Settings') {
+        if (selection === t('generateCode.openSettings')) {
             showSettingsView(context);
         }
         return;
@@ -195,17 +204,16 @@ export async function generateCodeCommand(
 
     const generationContext = await getGenerationContext();
     if (!generationContext) {
-        // Check if we're in a special editor to show a more specific message
         const editor = vscode.window.activeTextEditor;
-        if (editor && editor.document) {
+        if (editor?.document) {
             const specialEditors = ['terminal', 'debug-console', 'output'];
             if (specialEditors.includes(editor.document.languageId)) {
-                showInfoMessage('Code generation is not available in terminals, debug console, or output panels.');
+                showInfoMessage(t('generateCode.notAvailableInSpecialEditor'));
                 return;
             }
         }
         
-        showInfoMessage('Place your cursor or select code in a file to generate code.');
+        showInfoMessage(t('generateCode.noFileSelected'));
         return;
     }
 
@@ -223,29 +231,23 @@ export async function generateCodeCommand(
         
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
-            title: 'Treehouse AI is working...',
+            title: t('generateCode.progress.working'),
             cancellable: true
         }, async (progress, token) => {
-            progress.report({ message: 'Initializing...' });
+            progress.report({ message: t('generateCode.progress.initializing') });
             
             result = await callLLMWithTimeout(instruction, generationContext, token);
             
-            progress.report({ message: 'Finalizing response...' });
+            progress.report({ message: t('generateCode.progress.finalizing') });
         });
         
         const { code: rawResponse, usage } = result!;
         const { newCode, newImports } = parseLLMResponse(rawResponse);
         
-        const costDisplay = usage.cost ? ` ($${usage.cost.toFixed(4)})` : '';
-        showInfoMessage(`✅ Code generation completed | ${usage.totalTokens} tokens${costDisplay}`);
+        const costDisplay = (usage.cost ?? 0) > 0 ? ` ($${usage.cost!.toFixed(4)})` : '';
+        showInfoMessage(t('generateCode.success', { totalTokens: usage.totalTokens, costDisplay }));
         
-        logger.log('Token usage details:', {
-            model: usage.model,
-            promptTokens: usage.promptTokens,
-            completionTokens: usage.completionTokens,
-            totalTokens: usage.totalTokens,
-            cost: usage.cost
-        });
+        logger.log('Token usage details:', usage);
         
         const originalFullContent = editor.document.getText();
         
@@ -263,15 +265,13 @@ export async function generateCodeCommand(
             fileExtension
         );
 
-        const sessionData = {
+        await sessionManager.start({
             originalUri,
             newUri,
             targetEditorUri: editor.document.uri,
             targetSelection: generationContext.selection,
             tempFileManager
-        };
-
-        await sessionManager.start(sessionData);
+        });
 
     } catch (error) {
         await tempFileManager.cleanup();
@@ -282,24 +282,27 @@ export async function generateCodeCommand(
                 message: errorMessage,
                 stack: error instanceof Error ? error.stack : undefined,
             },
-            context: 'generateCodeCommand',
         });
 
-        if (errorMessage.includes('Operation cancelled')) {
-            showInfoMessage('Operation cancelled.');
+        if (errorMessage === t('generateCode.cancelled')) {
+            showInfoMessage(t('generateCode.cancelled'));
             return;
         }
 
-        const selection = await vscode.window.showErrorMessage(
-            `Treehouse Completer Error: ${errorMessage}`, 
-            'Show Details', 
-            'Retry'
-        );
-        
-        if (selection === 'Show Details') {
-            logger.show();
-        } else if (selection === 'Retry') {
-            vscode.commands.executeCommand('treehouse-code-completer.generateCode');
+        const retryOption = t('common.retry');
+        const selection = await showErrorMessage(errorMessage, () => {
+             vscode.commands.executeCommand('treehouse-code-completer.generateCode');
+        });
+
+        if (selection !== retryOption) {
+            const showDetailsOption = t('generateCode.showDetails');
+            const userChoice = await vscode.window.showErrorMessage(
+                t('generateCode.error', { errorMessage }),
+                showDetailsOption
+            );
+            if (userChoice === showDetailsOption) {
+                logger.show();
+            }
         }
     }
 }

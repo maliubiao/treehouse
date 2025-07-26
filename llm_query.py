@@ -69,7 +69,7 @@ class ModelConfig:
     temperature: float = 0.0
     is_thinking: bool = False
     max_tokens: int | None = None
-    thinking_budget: int = 32768
+    thinking_budget: int = 0
     top_k: int = 20
     top_p: float = 0.95
     price_1m_input: float | None = None
@@ -689,10 +689,12 @@ def _get_api_response(
         # 原始OpenAI实现
         client = OpenAI(api_key=api_key, base_url=kwargs.get("base_url"))
         extra_body = {}
-        # extra_body = {
-        #    "enable_thinking": True if kwargs.get("enable_thinking") else False,
-        #    "thinking_budget": kwargs.get("thinking_budget", 32 * 1024),
-        # }
+        thinking_budget = kwargs.get("thinking_budget")
+        if thinking_budget:
+            extra_body = {
+                "enable_thinking": True if kwargs.get("enable_thinking") else False,
+                "thinking_budget": thinking_budget,
+            }
         model_config = kwargs.get("model_config") or GLOBAL_MODEL_CONFIG
         use_json_output = kwargs.get("use_json_output", False)
         is_json_mode = use_json_output and model_config and model_config.supports_json_output

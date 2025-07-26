@@ -11,24 +11,31 @@ import {
 import { showInfoMessage, showErrorMessage } from './interactions';
 import { panelManager } from './panelManager';
 import { testApiConnection, playgroundChat } from '../api/llmClient';
+import { t, getI18nConfigForWebview } from '../util/i18n';
 
 export function showSettingsView(context: vscode.ExtensionContext): void {
     const panel = vscode.window.createWebviewPanel(
         'treehouseCodeCompleterSettings',
-        'Treehouse AI Service Configurations',
+        t('webview.mainTitle'),
         vscode.ViewColumn.One,
         {
             enableScripts: true,
-            // Allow the webview to load resources from the 'dist' directory
             localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist')]
         }
     );
 
     panelManager.register(panel);
 
-    // Load the pre-built, self-contained HTML file
     const htmlPath = path.join(context.extensionPath, 'dist', 'webview.html');
-    const htmlContent = fs.readFileSync(htmlPath, 'utf8');
+    let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+    // Inject i18n configuration for Webview
+    const i18nConfig = getI18nConfigForWebview();
+    htmlContent = htmlContent.replace(
+        '<!-- I18N_DATA -->',
+        `<script id="i18n-config" type="application/json">${JSON.stringify(i18nConfig)}</script>`
+    );
+
     panel.webview.html = htmlContent;
 
     const sendConfigsToWebview = (): void => {
@@ -59,7 +66,7 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                     }
                     await saveAiServiceConfigs(services);
                     sendConfigsToWebview();
-                    showInfoMessage(`Service '${message.service.name}' saved.`);
+                    showInfoMessage(t("Service '{{name}}' saved.", { name: message.service.name }));
                     return;
                 }
                 case 'deleteService': {
@@ -67,18 +74,18 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                     currentServices = currentServices.filter(s => s.name !== message.name);
                     await saveAiServiceConfigs(currentServices);
                     sendConfigsToWebview();
-                    showInfoMessage(`Service '${message.name}' deleted.`);
+                    showInfoMessage(t("Service '{{name}}' deleted.", { name: message.name }));
                     return;
                 }
                 case 'setActive':
                     await setActiveAiService(message.name);
                     sendConfigsToWebview();
-                    showInfoMessage(`Service '${message.name}' is now active.`);
+                    showInfoMessage(t("Service '{{name}}' is now active.", { name: message.name }));
                     return;
                 case 'importServices':
                     await saveAiServiceConfigs(message.services);
                     sendConfigsToWebview();
-                    showInfoMessage(`Imported ${message.services.length} services.`);
+                    showInfoMessage(t("Imported {{count}} services.", { count: message.services.length }));
                     return;
                 case 'testConnection': {
                     const testResult = await testApiConnection(message.service as AiServiceConfig);
@@ -87,26 +94,24 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                 }
                 case 'saveSystemPrompt':
                     await config.update('prompt.systemMessage', message.text, vscode.ConfigurationTarget.Global);
-                    showInfoMessage('System prompt saved.');
+                    showInfoMessage(t('System prompt saved.'));
                     return;
                 case 'saveRule':
                     await config.update('prompt.rule', message.text, vscode.ConfigurationTarget.Global);
-                    showInfoMessage('Prompt rule saved.');
+                    showInfoMessage(t('Prompt rule saved.'));
                     return;
                 case 'playgroundRequest': {
                     const allServices = getAiServiceConfigs();
                     const serviceConfig = allServices.find(s => s.name === message.serviceName);
 
                     if (!serviceConfig) {
-                        panel.webview.postMessage({ command: 'playgroundResponse', success: false, text: `Error: Service '${message.serviceName}' not found.` });
+                        panel.webview.postMessage({ command: 'playgroundResponse', success: false, text: t("webview.serviceNotFound", { serviceName: message.serviceName }) });
                         return;
                     }
 
                     try {
                         const { response, usage } = await playgroundChat(message.prompt, serviceConfig);
                         
-                        // playgroundChat embeds error messages in the response string.
-                        // We can check for these patterns to determine success.
                         const isErrorResponse = /^(API Error|Failed to communicate|The request timed out|An unknown error occurred)/i.test(response);
                 
                         let responseText = response;
@@ -123,7 +128,7 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                         });
                     } catch (error) {
                         const errorMessage = error instanceof Error ? error.message : String(error);
-                        panel.webview.postMessage({ command: 'playgroundResponse', success: false, text: `Error: ${errorMessage}` });
+                        panel.webview.postMessage({ command: 'playgroundResponse', success: false, text: t("webview.playgroundError", { message: errorMessage }) });
                     }
                     return;
                 }
