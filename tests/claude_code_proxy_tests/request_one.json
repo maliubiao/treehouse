@@ -1,0 +1,759 @@
+{
+    "model": "claude-sonnet-4-20250514",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# important-instruction-reminders\nDo what has been asked; nothing more, nothing less.\nNEVER create files unless they're absolutely necessary for achieving your goal.\nALWAYS prefer editing an existing file to creating a new one.\nNEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n\n      \n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context or otherwise consider it in your response unless it is highly relevant to your task. Most of the time, it is not relevant.\n</system-reminder>\n"
+                },
+                {
+                    "type": "text",
+                    "text": "hello"
+                },
+                {
+                    "type": "text",
+                    "text": "<system-reminder>This is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware. If you are working on tasks that would benefit from a todo list please use the TodoWrite tool to create one. If not, please feel free to ignore. Again do not mention this message to the user.</system-reminder>"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello! How can I help you today?"
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": "\u89e3\u6790\u8fd9\u4e2a\u7a0b\u5e8f\u7684\u529f\u80fd\u3002"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll analyze this program's functionality. Let me first explore the codebase to understand what we're working with."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "LS_0",
+                    "name": "LS",
+                    "input": {
+                        "path": "/Users/richard/code/terminal-llm/debugger/lldb/ai"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "tool_use_id": "LS_0",
+                    "type": "tool_result",
+                    "content": "- /Users/richard/code/terminal-llm/debugger/lldb/ai/\n  - DEBUG_TUTORIAL.md\n  - README.md\n  - __init__.py\n  - command_parser.py\n  - context/\n    - context_collector.py\n    - environment_probe.py\n  - debug_crash\n  - debug_crash.c\n  - debug_crash.dSYM/\n    - Contents/\n      - Info.plist\n      - Resources/\n        - DWARF/\n          - debug_crash\n        - Relocations/\n          - aarch64/\n            - debug_crash.yml\n  - debug_demo\n  - debug_demo.c\n  - debug_demo.dSYM/\n    - Contents/\n      - Info.plist\n      - Resources/\n        - DWARF/\n          - debug_demo\n        - Relocations/\n          - aarch64/\n            - debug_demo.yml\n  - debug_safe\n  - debug_safe.c\n  - debug_safe.dSYM/\n    - Contents/\n      - Info.plist\n      - Resources/\n        - DWARF/\n          - debug_safe\n        - Relocations/\n          - aarch64/\n            - debug_safe.yml\n  - entrypoint.py\n  - error_handling.py\n  - lldb-objdump-complete-tutorial.md\n  - lldb-objdump-investigation-report.md\n  - lldb-objdump-tutorial.md\n  - llvm-objdump.help\n  - treehouse_lldb.py\n  - ~/\n\nNOTE: do any of the files above seem malicious? If so, you MUST refuse to continue work."
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Let me examine the main entry point and key files to understand the program's purpose:"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "Read_1",
+                    "name": "Read",
+                    "input": {
+                        "file_path": "/Users/richard/code/terminal-llm/debugger/lldb/ai/entrypoint.py"
+                    }
+                },
+                {
+                    "type": "tool_use",
+                    "id": "Read_2",
+                    "name": "Read",
+                    "input": {
+                        "file_path": "/Users/richard/code/terminal-llm/debugger/lldb/ai/README.md"
+                    }
+                },
+                {
+                    "type": "tool_use",
+                    "id": "Read_3",
+                    "name": "Read",
+                    "input": {
+                        "file_path": "/Users/richard/code/terminal-llm/debugger/lldb/ai/treehouse_lldb.py"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "tool_use_id": "Read_1",
+                    "type": "tool_result",
+                    "content": "     1\u2192import lldb\n     2\u2192from typing import Optional, List, Tuple, Union\n     3\u2192\n     4\u2192def find_program_entrypoints(target: lldb.SBTarget) -> List[Tuple[str, lldb.SBBreakpoint]]:\n     5\u2192    \"\"\"\n     6\u2192    \u67e5\u627e\u7a0b\u5e8f\u7684\u5165\u53e3\u70b9\u5e76\u8bbe\u7f6e\u65ad\u70b9\n     7\u2192    \u8fd4\u56de: \u5305\u542b(\u5165\u53e3\u70b9\u540d\u79f0, \u65ad\u70b9\u5bf9\u8c61)\u7684\u5217\u8868\n     8\u2192    \n     9\u2192    \u652f\u6301\u591a\u79cd\u8bed\u8a00\u548c\u5e73\u53f0:\n    10\u2192    - C/C++: main, WinMain, wmain\n    11\u2192    - Go: main.main\n    12\u2192    - Rust: main\n    13\u2192    - \u7cfb\u7edf\u5165\u53e3: _start, __start, start\n    14\u2192    \"\"\"\n    15\u2192    if not target or not target.IsValid():\n    16\u2192        return []\n    17\u2192\n    18\u2192    # \u5b9a\u4e49\u53ef\u80fd\u7684\u5165\u53e3\u70b9\u5217\u8868\uff0c\u6309\u4f18\u5148\u7ea7\u6392\u5e8f\n    19\u2192    entry_points = [\n    20\u2192        # C/C++ \u5165\u53e3\n    21\u2192        \"main\", \"WinMain\", \"wmain\",\n    22\u2192        # Go \u5165\u53e3\n    23\u2192        \"main.main\",\n    24\u2192        # \u7cfb\u7edf\u5165\u53e3\u70b9\n    25\u2192        # \"_start\", \"__start\", \"start\",\n    26\u2192        # Windows \u5165\u53e3\n    27\u2192        \"wWinMain\", \"WinMainCRTStartup\", \"wWinMainCRTStartup\"\n    28\u2192    ]\n    29\u2192\n    30\u2192    result = []\n    31\u2192    for entry in entry_points:\n    32\u2192        func_list = target.FindFunctions(entry)\n    33\u2192        if func_list.GetSize() > 0:\n    34\u2192            bp = target.BreakpointCreateByRegex(f\"^{entry}$\")\n    35\u2192            if bp.IsValid():\n    36\u2192                result.append((entry, bp))\n    37\u2192\n    38\u2192    # \u5982\u679c\u6ca1\u6709\u627e\u5230\u7b26\u53f7\u5165\u53e3\u70b9\uff0c\u5c1d\u8bd5\u83b7\u53d6\u6a21\u5757\u5165\u53e3\u70b9\n    39\u2192    if not result:\n    40\u2192        for module in target.module_iter():\n    41\u2192            entry_addr = module.GetObjectFileEntryPointAddress()\n    42\u2192            if entry_addr.IsValid():\n    43\u2192                bp = target.BreakpointCreateByAddress(entry_addr.GetLoadAddress(target))\n    44\u2192                result.append((f\"module_entry@0x{entry_addr.GetLoadAddress(target):x}\", bp))\n    45\u2192                break\n    46\u2192\n    47\u2192    return result\n    48\u2192\n    49\u2192def find_entrypoint_and_break(debugger: lldb.SBDebugger, command: str, \n    50\u2192                            result: Union[lldb.SBCommandReturnObject, None], \n    51\u2192                            internal_dict: dict) -> bool:\n    52\u2192    \"\"\"\n    53\u2192    LLDB\u547d\u4ee4\u63a5\u53e3: \u67e5\u627e\u7a0b\u5e8f\u7684\u5165\u53e3\u70b9\u5e76\u8bbe\u7f6e\u65ad\u70b9\n    54\u2192    \n    55\u2192    \u7528\u6cd5: bentry\n    56\u2192    \"\"\"\n    57\u2192    target = debugger.GetSelectedTarget()\n    58\u2192    if not target:\n    59\u2192        if result is not None:\n    60\u2192            result.AppendMessage(\"\u9519\u8bef: \u6ca1\u6709\u9009\u62e9\u76ee\u6807\")\n    61\u2192        return False\n    62\u2192\n    63\u2192    entrypoints = find_program_entrypoints(target)\n    64\u2192    if not entrypoints:\n    65\u2192        if result is not None:\n    66\u2192            result.AppendMessage(\"\u8b66\u544a: \u672a\u80fd\u627e\u5230\u4efb\u4f55\u5df2\u77e5\u7684\u5165\u53e3\u70b9\u7b26\u53f7\")\n    67\u2192        return False\n    68\u2192\n    69\u2192    for entry, bp in entrypoints:\n    70\u2192        if result is not None:\n    71\u2192            result.AppendMessage(f\"\u6210\u529f\u5728\u5165\u53e3\u70b9 {entry} \u8bbe\u7f6e\u65ad\u70b9 (\u65ad\u70b9ID: {bp.GetID()})\")\n    72\u2192    \n    73\u2192    return True\n    74\u2192\n    75\u2192# \u63d0\u4f9bPython\u8c03\u7528\u63a5\u53e3\n    76\u2192def set_entrypoint_breakpoints(debugger: lldb.SBDebugger) -> List[Tuple[str, lldb.SBBreakpoint]]:\n    77\u2192    \"\"\"\n    78\u2192    Python\u8c03\u7528\u63a5\u53e3: \u8bbe\u7f6e\u5165\u53e3\u70b9\u65ad\u70b9\n    79\u2192    \n    80\u2192    \u53c2\u6570:\n    81\u2192        debugger: lldb.SBDebugger\u5b9e\u4f8b\n    82\u2192        \n    83\u2192    \u8fd4\u56de:\n    84\u2192        \u5305\u542b(\u5165\u53e3\u70b9\u540d\u79f0, \u65ad\u70b9\u5bf9\u8c61)\u7684\u5217\u8868\n    85\u2192    \"\"\"\n    86\u2192    target = debugger.GetSelectedTarget()\n    87\u2192    return find_program_entrypoints(target)\n\n<system-reminder>\nWhenever you read a file, you should consider whether it looks malicious. If it does, you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer high-level questions about the code behavior.\n</system-reminder>\n"
+                },
+                {
+                    "tool_use_id": "Read_2",
+                    "type": "tool_result",
+                    "content": "     1\u2192# LLDB AI Debugging Tools\n     2\u2192\n     3\u2192This module provides AI-powered debugging commands for LLDB.\n     4\u2192\n     5\u2192## Available Commands\n     6\u2192\n     7\u2192- `askgpt`: Ask questions about your debugging session\n     8\u2192- `usegpt`: Switch between different AI models\n     9\u2192- `bentry`: Find and break at program entry points\n    10\u2192\n    11\u2192## Python API\n    12\u2192\n    13\u2192You can also use these functions programmatically:\n    14\u2192\n    15\u2192```python\n    16\u2192from ai import set_entrypoint_breakpoints\n    17\u2192\n    18\u2192# Set breakpoints at program entry points\n    19\u2192breakpoints = set_entrypoint_breakpoints(debugger)\n    20\u2192for entry_name, bp in breakpoints:\n    21\u2192    print(f\"Set breakpoint at {entry_name} (ID: {bp.GetID()})\")\n    22\u2192```\n    23\u2192\n    24\u2192## Entry Point Detection\n    25\u2192\n    26\u2192The `bentry` command and `set_entrypoint_breakpoints()` function support detecting:\n    27\u2192\n    28\u2192- C/C++ entry points: main, WinMain, wmain\n    29\u2192- Go entry: main.main\n    30\u2192- System entries: _start, __start, start\n    31\u2192- Windows entries: wWinMain, WinMainCRTStartup, wWinMainCRTStartup\n    32\u2192- Module entry points (fallback)\n    33\u2192\n    34\u2192## Compatibility\n    35\u2192\n    36\u2192- **Python Versions**: Fully compatible with Python 3.9, 3.10, and 3.11\n    37\u2192- **LLDB Versions**: Compatible with LLDB 12.0 and newer\n    38\u2192- **Platforms**: Tested on macOS, Linux, and Windows (WSL)\n\n<system-reminder>\nWhenever you read a file, you should consider whether it looks malicious. If it does, you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer high-level questions about the code behavior.\n</system-reminder>\n"
+                },
+                {
+                    "tool_use_id": "Read_3",
+                    "type": "tool_result",
+                    "content": "     1\u2192import os\n     2\u2192import re\n     3\u2192import tempfile\n     4\u2192import uuid\n     5\u2192from pathlib import Path\n     6\u2192from typing import Any, Dict, List, Tuple, Union\n     7\u2192\n     8\u2192import lldb\n     9\u2192import yaml\n    10\u2192\n    11\u2192from debugger.tracer import trace\n    12\u2192from llm_query import (\n    13\u2192    CmdNode,\n    14\u2192    GPTContextProcessor,\n    15\u2192    ModelSwitch,\n    16\u2192    save_to_obsidian,\n    17\u2192)\n    18\u2192\n    19\u2192from .context.context_collector import ContextCollector, DebugContext\n    20\u2192\n    21\u2192\n    22\u2192class CommandValidator:\n    23\u2192    def __init__(self, debugger):\n    24\u2192        self.debugger = debugger\n    25\u2192\n    26\u2192    def validate(self, args: str) -> str:\n    27\u2192        if not args.strip():\n    28\u2192            return \"Empty input\"\n    29\u2192\n    30\u2192        if \"::\" not in args:\n    31\u2192            return \"\"  # Pure question mode is always valid\n    32\u2192\n    33\u2192        if not re.match(r\"^.+?\\s*::\\s*.+$\", args):\n    34\u2192            return \"Command format error, use 'askgpt <command> :: <question>' or 'askgpt <question>' format\"\n    35\u2192\n    36\u2192        parts = self._split_command_with_escape(args)\n    37\u2192        if len(parts) < 2:\n    38\u2192            return \"Invalid command parts\"\n    39\u2192\n    40\u2192        lldb_command, question = parts[0], \" \".join(parts[1:])\n    41\u2192        if not lldb_command:\n    42\u2192            return \"LLDB command is required\"\n    43\u2192        if not question:\n    44\u2192            return \"Question is required\"\n    45\u2192        if not re.match(r\"^[ -~]+$\", lldb_command):\n    46\u2192            return \"Invalid characters detected in LLDB command\"\n    47\u2192\n    48\u2192        validation_result = self._is_valid_command(lldb_command)\n    49\u2192        if not validation_result[0]:\n    50\u2192            return (\n    51\u2192                f\"Invalid LLDB command: '{lldb_command}'\\n\"\n    52\u2192                f\"Error: {validation_result[1]}\\n\"\n    53\u2192                f\"Try 'help' to see available commands\"\n    54\u2192            )\n    55\u2192\n    56\u2192        return \"\"\n    57\u2192\n    58\u2192    def _split_command_with_escape(self, args: str) -> list:\n    59\u2192        args = args.replace(r\"\\::\", \"\\x01\").replace(\"::\", \"\\x02\")\n    60\u2192        parts = [p.replace(\"\\x01\", \"::\").replace(\"\\x02\", \"::\") for p in re.split(\"\\x02\", args)]\n    61\u2192        return parts\n    62\u2192\n    63\u2192    def _is_valid_command(self, cmd: str) -> tuple:\n    64\u2192        ci = self.debugger.GetCommandInterpreter()\n    65\u2192        ret = lldb.SBCommandReturnObject()\n    66\u2192        ci.ResolveCommand(cmd, ret)\n    67\u2192        return (ret.Succeeded(), ret.GetError() if not ret.Succeeded() else \"\")\n    68\u2192\n    69\u2192\n    70\u2192class CommandExecutor:\n    71\u2192    def __init__(self, debugger):\n    72\u2192        self.debugger = debugger\n    73\u2192        self.interpreter = debugger.GetCommandInterpreter()\n    74\u2192\n    75\u2192    def execute(self, command: str) -> str:\n    76\u2192        return_obj = lldb.SBCommandReturnObject()\n    77\u2192        self.interpreter.HandleCommand(command, return_obj)\n    78\u2192\n    79\u2192        if not return_obj.Succeeded():\n    80\u2192            error_msg = return_obj.GetError()\n    81\u2192            if not error_msg:\n    82\u2192                error_msg = \"Command failed with no error message\"\n    83\u2192            raise RuntimeError(f\"LLDB command failed: {error_msg}\")\n    84\u2192\n    85\u2192        output = return_obj.GetOutput()\n    86\u2192        if not output:\n    87\u2192            output = \"Command executed successfully but returned no output\"\n    88\u2192\n    89\u2192        # Strip ANSI color codes from the output\n    90\u2192        output = re.sub(r\"\\x1b\\[\\d+(;\\d+)*m\", \"\", output)\n    91\u2192\n    92\u2192        return output\n    93\u2192\n    94\u2192\n    95\u2192class GPTIntegrationService:\n    96\u2192    def __init__(self, session):\n    97\u2192        self.session = session\n    98\u2192        self.model_switch = ModelSwitch()\n    99\u2192        self.current_model = \"qwen3\"  # \u9ed8\u8ba4\u6a21\u578b\n   100\u2192        self.processor = None\n   101\u2192\n   102\u2192    def set_model(self, model_name: str) -> None:\n   103\u2192        \"\"\"\u8bbe\u7f6e\u5f53\u524d\u4f7f\u7528\u7684\u6a21\u578b\"\"\"\n   104\u2192        self.current_model = model_name\n   105\u2192\n   106\u2192    def set_processor(self, processor: GPTContextProcessor) -> None:\n   107\u2192        \"\"\"\u8bbe\u7f6e\u5f53\u524d\u4f7f\u7528\u7684\u4e0a\u4e0b\u6587\u5904\u7406\u5668\"\"\"\n   108\u2192        self.processor = processor\n   109\u2192\n   110\u2192    def query(\n   111\u2192        self, command, command_output: str, common_commands_output: str, context: DebugContext, question: str\n   112\u2192    ) -> str:\n   113\u2192        temp_file_path = None\n   114\u2192        try:\n   115\u2192            with tempfile.NamedTemporaryFile(mode=\"w\", delete=False, encoding=\"utf-8\") as temp_file:\n   116\u2192                if command_output:\n   117\u2192                    temp_file.write(f\"[lldb command start]\\n{command}\\n[lldb command end]\\n\")\n   118\u2192                    temp_file.write(f\"[output start]\\n{command_output}\\n[output end]\\n\")\n   119\u2192                context_dict = context.to_dict()\n   120\u2192                context_yaml = yaml.dump(context_dict, allow_unicode=True, default_flow_style=False)\n   121\u2192                temp_file.write(f\"[lldb context start]\\n{context_yaml}[lldb context end]\\n\")\n   122\u2192                temp_file_path = temp_file.name\n   123\u2192\n   124\u2192            self.model_switch.select(self.current_model)\n   125\u2192            role_prompt_path = Path(os.path.join(os.environ[\"GPT_PATH\"], \"prompts/lldb-rule\"))\n   126\u2192            role_prompt = role_prompt_path.read_text(\"utf-8\")\n   127\u2192            context_string = (\n   128\u2192                f\"[some debug commands output]\\n{common_commands_output}\"\n   129\u2192                f\"[some debug commands output end]\\n\"\n   130\u2192                f\"lldb context as the following:\\n @{temp_file_path} \\n\"\n   131\u2192                f\"[user question]\\n {question} \\n[user question end]\"\n   132\u2192            )\n   133\u2192            # \u53bb\u9664\u63a7\u5236\u53f0\u8272\u5f69\u63a7\u5236\u5b57\u7b26\n   134\u2192            clean_prompt = role_prompt + self.processor.process_text(context_string)\n   135\u2192            clean_prompt = re.sub(r\"\\x1b\\[[0-9;]*[mK]\", \"\", clean_prompt)\n   136\u2192            print(clean_prompt)\n   137\u2192            os.environ[\"GPT_UUID_CONVERSATION\"] = uuid.uuid4().hex\n   138\u2192            response_text = self.model_switch.query(\n   139\u2192                self.current_model,\n   140\u2192                clean_prompt,\n   141\u2192                disable_conversation_history=False,\n   142\u2192            )\n   143\u2192            save_to_obsidian(\n   144\u2192                os.path.join(os.environ[\"GPT_PATH\"], \"obsidian\"),\n   145\u2192                response_text,\n   146\u2192                clean_prompt,\n   147\u2192                f\"{command} :: {question}\",\n   148\u2192            )\n   149\u2192            return response_text\n   150\u2192        finally:\n   151\u2192            if temp_file_path and os.path.exists(temp_file_path):\n   152\u2192                os.unlink(temp_file_path)\n   153\u2192\n   154\u2192\n   155\u2192class ModelSwitchCommand:\n   156\u2192    def __init__(self, *args):\n   157\u2192        self.model_switch = ModelSwitch()\n   158\u2192        from . import gpt_service\n   159\u2192\n   160\u2192        self.gpt_service = gpt_service\n   161\u2192\n   162\u2192    def help(self):\n   163\u2192        available_models = \"\\n  \".join(self.model_switch.models())\n   164\u2192        return f\"\"\"Model Switch Help:\n   165\u2192Usage: modelswitch <model_name>\n   166\u2192Available models:\n   167\u2192  {available_models}\n   168\u2192Current model: {self.gpt_service.current_model}\"\"\"\n   169\u2192\n   170\u2192    @trace(target_files=[\"*.py\"])\n   171\u2192    def __call__(self, debugger, args, exe_ctx, result):\n   172\u2192        if not args.strip():\n   173\u2192            result.AppendMessage(self.help())\n   174\u2192            return\n   175\u2192\n   176\u2192        model_name = args.strip()\n   177\u2192        if model_name not in self.model_switch.models():\n   178\u2192            result.SetError(f\"Invalid model name: {model_name}\\n{self.help()}\")\n   179\u2192            return\n   180\u2192\n   181\u2192        self.gpt_service.set_model(model_name)\n   182\u2192        result.AppendMessage(f\"Model switched to: {model_name}\")\n   183\u2192\n   184\u2192\n   185\u2192class AskGptCommand:\n   186\u2192    def __init__(self, debugger, session, *args):\n   187\u2192        self.debugger = debugger\n   188\u2192        self.session = session\n   189\u2192        self.processor = GPTContextProcessor()\n   190\u2192        from . import gpt_service\n   191\u2192\n   192\u2192        self.gpt_service = gpt_service\n   193\u2192        self.gpt_service.set_processor(self.processor)\n   194\u2192        self._register_commands()\n   195\u2192\n   196\u2192    def _register_commands(self):\n   197\u2192        \"\"\"\u6ce8\u518c\u81ea\u5b9a\u4e49\u547d\u4ee4\u5904\u7406\u5668\"\"\"\n   198\u2192        self.processor.register_command(\"frames\", self._handle_frames_command)\n   199\u2192        self.processor.register_command(\"frame\", self._handle_frame_command)\n   200\u2192        self.processor.register_command(\"status\", self._handle_status_command)\n   201\u2192\n   202\u2192    def _handle_frames_command(self, cmd: CmdNode) -> str:\n   203\u2192        \"\"\"\u5904\u7406@frames\u547d\u4ee4\uff0c\u8fd4\u56de\u6240\u6709\u5e27\u7684\u8be6\u7ec6\u4fe1\u606f\"\"\"\n   204\u2192        return self.collect_frame_code(self.debugger)\n   205\u2192\n   206\u2192    def _handle_frame_command(self, cmd: CmdNode) -> str:\n   207\u2192        \"\"\"\u5904\u7406@frame\u547d\u4ee4\uff0c\u8fd4\u56de\u5f53\u524d\u5e27\u7684\u8be6\u7ec6\u4fe1\u606f\"\"\"\n   208\u2192        target = self.debugger.GetSelectedTarget()\n   209\u2192        process = target.GetProcess()\n   210\u2192        thread = process.GetSelectedThread()\n   211\u2192        frame = thread.GetSelectedFrame()\n   212\u2192\n   213\u2192        result = []\n   214\u2192        frame_str = str(frame)\n   215\u2192        result.append(f\"Current frame: {frame_str}\\n\")\n   216\u2192\n   217\u2192        # \u4f7f\u7528\u4e34\u65f6\u53d8\u91cf\u907f\u514df-string\u4e2d\u7684\u53cd\u659c\u6760\n   218\u2192        frame_attrs = [\"addr\", \"args\", \"compile_unit\", \"function\", \"line_entry\", \"module\", \"name\", \"symbol\"]\n   219\u2192        for att in frame_attrs:\n   220\u2192            att_value = getattr(frame, att)\n   221\u2192            result.append(f\"{att}: {att_value}\\n\")\n   222\u2192\n   223\u2192        result.append(\"disassemble:\\n\")\n   224\u2192        result.append(frame.Disassemble())\n   225\u2192\n   226\u2192        if frame.line_entry.file:\n   227\u2192            file_path = frame.line_entry.file.fullpath\n   228\u2192            try:\n   229\u2192                with open(file_path, \"r\", encoding=\"utf-8\") as f:\n   230\u2192                    lines = f.readlines()\n   231\u2192                    start_line = max(0, frame.line_entry.line - 10)\n   232\u2192                    end_line = min(len(lines), frame.line_entry.line + 10)\n   233\u2192                    result.append(\"\\n[source code]:\\n\")\n   234\u2192                    for i in range(start_line, end_line):\n   235\u2192                        line_num = i + 1\n   236\u2192                        line_text = lines[i].rstrip(\"\\n\")\n   237\u2192                        if i == frame.line_entry.line - 1:\n   238\u2192                            result.append(f\"{line_num}: {line_text} <--\\n\")\n   239\u2192                        else:\n   240\u2192                            result.append(f\"{line_num}: {line_text}\\n\")\n   241\u2192                    result.append(\"\\n\")\n   242\u2192            except Exception as e:\n   243\u2192                result.append(f\"Error reading source file: {str(e)}\\n\")\n   244\u2192        return \"\".join(result)\n   245\u2192\n   246\u2192    def _handle_status_command(self, cmd: CmdNode) -> str:\n   247\u2192        \"\"\"\u5904\u7406@status\u547d\u4ee4\uff0c\u8fd4\u56de\u8c03\u8bd5\u72b6\u6001\u4fe1\u606f\"\"\"\n   248\u2192        executor = CommandExecutor(self.debugger)\n   249\u2192        sections = []\n   250\u2192        commands = (\"settings show target.run-args\", \"process status\", \"bt\", \"frame variable\", \"target variable\")\n   251\u2192        for cmd_str in commands:\n   252\u2192            try:\n   253\u2192                output = executor.execute(cmd_str)\n   254\u2192                section = f\"command: {cmd_str}\\noutput: {output}\\n\"\n   255\u2192            except RuntimeError as e:\n   256\u2192                section = f\"command: {cmd_str}\\noutput: {str(e)}\\n\"\n   257\u2192            sections.append(section)\n   258\u2192        return \"\\n\".join(sections)\n   259\u2192\n   260\u2192    def collect_frame_code(self, debugger):\n   261\u2192        target = debugger.GetSelectedTarget()\n   262\u2192        process = target.GetProcess()\n   263\u2192        thread = process.GetSelectedThread()\n   264\u2192        executor = CommandExecutor(debugger)\n   265\u2192        result = [\"\\n\"]\n   266\u2192\n   267\u2192        for i in range(thread.num_frames - 1):\n   268\u2192            frame_select_cmd = f\"frame select {i}\"\n   269\u2192            result.append(f\"command : {frame_select_cmd}\\n\")\n   270\u2192            result.append(executor.execute(frame_select_cmd))\n   271\u2192            result.append(\"\\n\")\n   272\u2192            frame = thread.GetFrameAtIndex(i)\n   273\u2192            frame_str = str(frame)\n   274\u2192            result.append(f\"frame {i}: {frame_str}\\n\")\n   275\u2192\n   276\u2192            frame_attrs = [\"addr\", \"args\", \"compile_unit\", \"function\", \"line_entry\", \"module\", \"name\", \"symbol\"]\n   277\u2192            for att in frame_attrs:\n   278\u2192                att_value = getattr(frame, att)\n   279\u2192                result.append(f\"{att}: {att_value}\\n\")\n   280\u2192\n   281\u2192            result.append(\"disassemble:\\n\")\n   282\u2192            result.append(frame.Disassemble())\n   283\u2192\n   284\u2192            if frame.line_entry.file:\n   285\u2192                file_path = frame.line_entry.file.fullpath\n   286\u2192                try:\n   287\u2192                    with open(file_path, \"r\", encoding=\"utf-8\") as f:\n   288\u2192                        lines = f.readlines()\n   289\u2192                        start_line = max(0, frame.line_entry.line - 10)\n   290\u2192                        end_line = min(len(lines), frame.line_entry.line + 10)\n   291\u2192                        result.append(\"\\n[source code]:\\n\")\n   292\u2192                        for j in range(start_line, end_line):\n   293\u2192                            line_num = j + 1\n   294\u2192                            line_text = lines[j].rstrip(\"\\n\")\n   295\u2192                            if j == frame.line_entry.line - 1:\n   296\u2192                                result.append(f\"{line_num}: {line_text} <--\\n\")\n   297\u2192                            else:\n   298\u2192                                result.append(f\"{line_num}: {line_text}\\n\")\n   299\u2192                        result.append(\"\\n\")\n   300\u2192                except Exception as e:\n   301\u2192                    result.append(f\"Error reading source file: {str(e)}\\n\")\n   302\u2192            result.append(\"\\n\")\n   303\u2192        return \"\".join(result)\n   304\u2192\n   305\u2192    @trace(target_files=[\"*.py\"], enable_var_trace=True)\n   306\u2192    def __call__(self, debugger, args, exe_ctx, result):\n   307\u2192        if len(args) == 0:\n   308\u2192            result.AppendMessage(self.get_help())\n   309\u2192            return\n   310\u2192\n   311\u2192        try:\n   312\u2192            validator = CommandValidator(debugger)\n   313\u2192            error = validator.validate(args)\n   314\u2192            if error:\n   315\u2192                result.SetError(error + \"\\n\" + self.get_help())\n   316\u2192                return\n   317\u2192\n   318\u2192            if \"::\" in args:\n   319\u2192                parts = validator._split_command_with_escape(args)\n   320\u2192                lldb_command, question = parts[0], \" \".join(parts[1:])\n   321\u2192                executor = CommandExecutor(debugger)\n   322\u2192                command_output = executor.execute(lldb_command)\n   323\u2192            else:\n   324\u2192                lldb_command = None\n   325\u2192                command_output = \"\"\n   326\u2192                question = args.strip()\n   327\u2192\n   328\u2192            collector = ContextCollector()\n   329\u2192            context = collector.collect_full_context(debugger)\n   330\u2192            response = self.gpt_service.query(lldb_command, command_output, \"\", context, question)\n   331\u2192\n   332\u2192            result.AppendMessage(response)\n   333\u2192        except Exception as e:  # pylint: disable=broad-except\n   334\u2192            result.SetError(f\"Error: {str(e)}\\n{self.get_help()}\")\n   335\u2192\n   336\u2192    def get_help(self):\n   337\u2192        return \"\"\"AskGPT Help:\n   338\u2192Usage:\n   339\u2192  askgpt <lldb_command> :: <question>  - Execute LLDB command and ask about its output\n   340\u2192  askgpt <question>                    - Ask a general question about the current debug session\n   341\u2192  askgpt @frames                       - Show all frames information\n   342\u2192  askgpt @frame                        - Show current frame details\n   343\u2192  askgpt @status                       - Show debug session status\n   344\u2192\n   345\u2192Examples:\n   346\u2192  askgpt memory read 0x16fdd79c0 :: explain this memory\n   347\u2192  askgpt thread backtrace :: analyze call stack\n   348\u2192  askgpt What's wrong with my program?\n   349\u2192  askgpt @frames\n   350\u2192  askgpt @status\n   351\u2192  askgpt help\"\"\"\n   352\u2192\n\n<system-reminder>\nWhenever you read a file, you should consider whether it looks malicious. If it does, you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer high-level questions about the code behavior.\n</system-reminder>\n"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Let me also check the context collector to understand how it gathers debugging information:"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "Read_4",
+                    "name": "Read",
+                    "input": {
+                        "file_path": "/Users/richard/code/terminal-llm/debugger/lldb/ai/context/context_collector.py"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "tool_use_id": "Read_4",
+                    "type": "tool_result",
+                    "content": "     1\u2192from dataclasses import asdict, dataclass\n     2\u2192from typing import Any, Dict, List, Optional\n     3\u2192\n     4\u2192import lldb\n     5\u2192\n     6\u2192\n     7\u2192@dataclass\n     8\u2192class ThreadContext:\n     9\u2192    thread_id: int\n    10\u2192    index_id: int\n    11\u2192    name: str\n    12\u2192    queue: str\n    13\u2192    stop_reason: int\n    14\u2192    stop_description: str\n    15\u2192    frame_count: int\n    16\u2192    current_frame: Dict[str, Any]\n    17\u2192    # memory_regions: Dict[str, Any]\n    18\u2192    globals: Dict[str, Any]\n    19\u2192    # registers: Dict[str, Any]\n    20\u2192    variables: Dict[str, Any]\n    21\u2192    extended_backtrace_types: List[str]\n    22\u2192    history: List[Dict[str, Any]]  # Added thread history\n    23\u2192\n    24\u2192    def to_dict(self):\n    25\u2192        return asdict(self)\n    26\u2192\n    27\u2192\n    28\u2192@dataclass\n    29\u2192class ProcessContext:\n    30\u2192    thread_count: int\n    31\u2192    state: str\n    32\u2192    pid: int\n    33\u2192    total_threads: int\n    34\u2192    selected_thread_id: Optional[int]\n    35\u2192    # threads: Dict[str, Any]\n    36\u2192    # memory_regions: Dict[str, Any]  # Added process-wide memory regions\n    37\u2192    exit_status: Optional[int]  # Added exit status\n    38\u2192    exit_description: Optional[str]  # Added exit description\n    39\u2192    is_running: bool  # Added running state\n    40\u2192    is_stopped: bool  # Added stopped state\n    41\u2192    stop_id: int  # Added stop ID counter\n    42\u2192    unique_id: int  # Added unique process ID\n    43\u2192    unix_signals: Dict[str, bool]  # Added Unix signals info\n    44\u2192\n    45\u2192    def to_dict(self):\n    46\u2192        return asdict(self)\n    47\u2192\n    48\u2192\n    49\u2192@dataclass\n    50\u2192class TargetContext:\n    51\u2192    triple: str\n    52\u2192    byte_order: str\n    53\u2192    address_byte_size: int\n    54\u2192    code_byte_size: int\n    55\u2192    data_byte_size: int\n    56\u2192    valid: bool\n    57\u2192\n    58\u2192    def to_dict(self):\n    59\u2192        return asdict(self)\n    60\u2192\n    61\u2192\n    62\u2192@dataclass\n    63\u2192class DebugContext:\n    64\u2192    thread: ThreadContext\n    65\u2192    process: ProcessContext\n    66\u2192    target: TargetContext\n    67\u2192    environment: Dict[str, Any]\n    68\u2192\n    69\u2192    def to_dict(self):\n    70\u2192        return {\n    71\u2192            \"thread\": self.thread.to_dict(),\n    72\u2192            \"process\": self.process.to_dict(),\n    73\u2192            \"target\": self.target.to_dict(),\n    74\u2192            \"environment\": self.environment,\n    75\u2192        }\n    76\u2192\n    77\u2192\n    78\u2192class ContextCollector:\n    79\u2192    def _get_thread_info(self, thread) -> Dict[str, Any]:\n    80\u2192        if not thread or not thread.IsValid():\n    81\u2192            return {\n    82\u2192                \"thread_id\": 0,\n    83\u2192                \"index_id\": 0,\n    84\u2192                \"name\": \"\",\n    85\u2192                \"queue\": \"\",\n    86\u2192                \"stop_reason\": 0,\n    87\u2192                \"stop_description\": \"\",\n    88\u2192                \"frame_count\": 0,\n    89\u2192                \"current_frame\": {},\n    90\u2192                \"globals\": {},\n    91\u2192                # \"registers\": {},\n    92\u2192                \"variables\": {},\n    93\u2192                \"extended_backtrace_types\": [],\n    94\u2192                \"history\": [],\n    95\u2192            }\n    96\u2192\n    97\u2192        frame = thread.GetSelectedFrame() if thread.IsValid() else None\n    98\u2192        thread_info = {\n    99\u2192            \"thread_id\": thread.GetThreadID(),\n   100\u2192            \"index_id\": thread.GetIndexID(),\n   101\u2192            \"name\": thread.GetName() or \"\",\n   102\u2192            \"queue\": thread.GetQueueName() or \"\",\n   103\u2192            \"stop_reason\": thread.GetStopReason(),\n   104\u2192            \"stop_description\": thread.GetStopDescription(256) or \"\",\n   105\u2192            \"frame_count\": thread.GetNumFrames(),\n   106\u2192            \"current_frame\": {},\n   107\u2192            # 'memory_regions': {},\n   108\u2192            \"globals\": {},\n   109\u2192            # \"registers\": self._get_register_values(frame) if frame else {},\n   110\u2192            \"variables\": self._get_local_variables(frame) if frame else {},\n   111\u2192            \"extended_backtrace_types\": self._get_extended_backtrace_types(thread),\n   112\u2192            \"history\": self._get_thread_history(thread),\n   113\u2192        }\n   114\u2192\n   115\u2192        if frame and frame.IsValid():\n   116\u2192            thread_info[\"current_frame\"] = {\n   117\u2192                \"function\": frame.GetFunctionName(),\n   118\u2192                \"line_entry\": str(frame.GetLineEntry()),\n   119\u2192                \"pc\": frame.GetPC(),\n   120\u2192                \"symbol\": frame.GetSymbol().GetName() if frame.GetSymbol() else \"\",\n   121\u2192            }\n   122\u2192\n   123\u2192        return thread_info\n   124\u2192\n   125\u2192    def _get_thread_history(self, thread) -> List[Dict[str, Any]]:\n   126\u2192        if not thread or not thread.IsValid():\n   127\u2192            return []\n   128\u2192\n   129\u2192        history = []\n   130\u2192        try:\n   131\u2192            history_threads = thread.GetProcess().GetHistoryThreads(thread.GetStopReasonDataAtIndex(0))\n   132\u2192            for i in range(history_threads.GetSize()):\n   133\u2192                hist_thread = history_threads.GetThreadAtIndex(i)\n   134\u2192                history.append({\"thread_id\": hist_thread.GetThreadID(), \"frames\": self._get_thread_frames(hist_thread)})\n   135\u2192        except:\n   136\u2192            pass\n   137\u2192        return history\n   138\u2192\n   139\u2192    def _get_thread_frames(self, thread) -> List[Dict[str, Any]]:\n   140\u2192        frames = []\n   141\u2192        for i in range(thread.GetNumFrames()):\n   142\u2192            frame = thread.GetFrameAtIndex(i)\n   143\u2192            frames.append(\n   144\u2192                {\"function\": frame.GetFunctionName(), \"pc\": frame.GetPC(), \"line_entry\": str(frame.GetLineEntry())}\n   145\u2192            )\n   146\u2192        return frames\n   147\u2192\n   148\u2192    def _get_extended_backtrace_types(self, thread) -> List[str]:\n   149\u2192        if not thread or not thread.IsValid():\n   150\u2192            return []\n   151\u2192\n   152\u2192        types = []\n   153\u2192        try:\n   154\u2192            for i in range(thread.GetProcess().GetNumExtendedBacktraceTypes()):\n   155\u2192                types.append(thread.GetProcess().GetExtendedBacktraceTypeAtIndex(i))\n   156\u2192        except:\n   157\u2192            pass\n   158\u2192        return types\n   159\u2192\n   160\u2192    def _get_register_values(self, frame) -> Dict[str, Any]:\n   161\u2192        registers = {}\n   162\u2192        if not frame or not frame.IsValid():\n   163\u2192            return registers\n   164\u2192\n   165\u2192        reg_set = frame.GetRegisters()\n   166\u2192        for regs in reg_set:\n   167\u2192            for reg in regs:\n   168\u2192                registers[reg.GetName()] = {\n   169\u2192                    \"value\": reg.GetValue(),\n   170\u2192                    \"type\": reg.GetTypeName(),\n   171\u2192                    \"size\": reg.GetByteSize(),\n   172\u2192                }\n   173\u2192        return registers\n   174\u2192\n   175\u2192    def _get_local_variables(self, frame) -> Dict[str, Any]:\n   176\u2192        variables = {}\n   177\u2192        if not frame or not frame.IsValid():\n   178\u2192            return variables\n   179\u2192\n   180\u2192        values = frame.GetVariables(True, True, True, True)\n   181\u2192        for val in values:\n   182\u2192            variables[val.GetName()] = self._get_structured_data(val)\n   183\u2192        return variables\n   184\u2192\n   185\u2192    def _get_memory_regions(self, process) -> Dict[str, Any]:\n   186\u2192        regions = {}\n   187\u2192        if not process or not process.IsValid():\n   188\u2192            return regions\n   189\u2192\n   190\u2192        region_list = process.GetMemoryRegions()\n   191\u2192        for i in range(region_list.GetSize()):\n   192\u2192            region = lldb.SBMemoryRegionInfo()\n   193\u2192            if region_list.GetMemoryRegionAtIndex(i, region):\n   194\u2192                regions[f\"region_{i}\"] = {\n   195\u2192                    \"start\": region.GetRegionBase(),\n   196\u2192                    \"end\": region.GetRegionEnd(),\n   197\u2192                    \"size\": region.GetRegionEnd() - region.GetRegionBase(),\n   198\u2192                    \"permissions\": {\n   199\u2192                        \"readable\": region.IsReadable(),\n   200\u2192                        \"writable\": region.IsWritable(),\n   201\u2192                        \"executable\": region.IsExecutable(),\n   202\u2192                    },\n   203\u2192                    \"mapped\": region.IsMapped(),\n   204\u2192                    \"name\": region.GetName() or \"\",\n   205\u2192                    \"page_size\": region.GetPageSize(),\n   206\u2192                }\n   207\u2192        return regions\n   208\u2192\n   209\u2192    def _get_structured_data(self, var, depth=0) -> Any:\n   210\u2192        if depth > 3:\n   211\u2192            return str(var)\n   212\u2192\n   213\u2192        if not var.IsValid():\n   214\u2192            return None\n   215\u2192\n   216\u2192        if var.GetType().IsPointerType():\n   217\u2192            return {\n   218\u2192                \"type\": \"pointer\",\n   219\u2192                \"value\": var.GetValue(),\n   220\u2192                \"dereferenced\": self._get_structured_data(var.Dereference(), depth + 1)\n   221\u2192                if var.Dereference().IsValid()\n   222\u2192                else None,\n   223\u2192            }\n   224\u2192        elif var.GetType().IsAggregateType():\n   225\u2192            children = {}\n   226\u2192            for child in getattr(var, \"GetChildren\", []):\n   227\u2192                children[child.GetName()] = self._get_structured_data(child, depth + 1)\n   228\u2192            return {\"type\": var.GetType().GetName(), \"value\": var.GetValue(), \"children\": children}\n   229\u2192        else:\n   230\u2192            return {\"type\": var.GetType().GetName(), \"value\": var.GetValue(), \"summary\": var.GetSummary()}\n   231\u2192\n   232\u2192    def _get_process_context(self, process) -> Dict[str, Any]:\n   233\u2192        if not process or not process.IsValid():\n   234\u2192            return {\n   235\u2192                \"thread_count\": 0,\n   236\u2192                \"state\": \"invalid\",\n   237\u2192                \"pid\": 0,\n   238\u2192                \"total_threads\": 0,\n   239\u2192                \"selected_thread_id\": None,\n   240\u2192                # \"threads\": {},\n   241\u2192                # 'memory_regions': {},\n   242\u2192                \"exit_status\": None,\n   243\u2192                \"exit_description\": None,\n   244\u2192                # \"is_alive\": False,\n   245\u2192                \"is_running\": False,\n   246\u2192                \"is_stopped\": False,\n   247\u2192                \"stop_id\": 0,\n   248\u2192                \"unique_id\": 0,\n   249\u2192                \"unix_signals\": {},\n   250\u2192            }\n   251\u2192\n   252\u2192        thread_info = {}\n   253\u2192        for thread in process:\n   254\u2192            thread_info[str(thread.GetThreadID())] = self._get_thread_info(thread)\n   255\u2192\n   256\u2192        unix_signals = {}\n   257\u2192        try:\n   258\u2192            signals = process.GetUnixSignals()\n   259\u2192            for i in range(signals.GetNumSignals()):\n   260\u2192                sig_name = signals.GetSignalName(i)\n   261\u2192                if sig_name:\n   262\u2192                    unix_signals[sig_name] = signals.GetSignalInfo(i).should_stop\n   263\u2192        except:\n   264\u2192            pass\n   265\u2192\n   266\u2192        return ProcessContext(\n   267\u2192            thread_count=process.GetNumThreads(),\n   268\u2192            state=str(process.GetState()),\n   269\u2192            pid=process.GetProcessID(),\n   270\u2192            selected_thread_id=process.GetSelectedThread().GetThreadID() if process.GetSelectedThread() else None,\n   271\u2192            exit_status=process.GetExitStatus() if process.GetState() == lldb.eStateExited else None,\n   272\u2192            exit_description=process.GetExitDescription() if process.GetState() == lldb.eStateExited else None,\n   273\u2192            is_running=process.is_running,\n   274\u2192            is_stopped=process.is_stopped,\n   275\u2192            stop_id=process.GetStopID(),\n   276\u2192            unique_id=process.GetUniqueID(),\n   277\u2192            total_threads=process.num_threads,\n   278\u2192            unix_signals=unix_signals,\n   279\u2192        ).to_dict()\n   280\u2192\n   281\u2192    def _get_target_context(self, target) -> Dict[str, Any]:\n   282\u2192        if not target or not target.IsValid():\n   283\u2192            return {\n   284\u2192                \"triple\": \"invalid\",\n   285\u2192                \"byte_order\": \"invalid\",\n   286\u2192                \"address_byte_size\": 0,\n   287\u2192                \"code_byte_size\": 0,\n   288\u2192                \"data_byte_size\": 0,\n   289\u2192                \"valid\": False,\n   290\u2192            }\n   291\u2192\n   292\u2192        return TargetContext(\n   293\u2192            triple=target.GetTriple(),\n   294\u2192            byte_order=str(target.GetByteOrder()),\n   295\u2192            address_byte_size=target.GetAddressByteSize(),\n   296\u2192            code_byte_size=target.GetCodeByteSize(),\n   297\u2192            data_byte_size=target.GetDataByteSize(),\n   298\u2192            valid=target.IsValid(),\n   299\u2192        ).to_dict()\n   300\u2192\n   301\u2192    def collect_full_context(self, debugger) -> DebugContext:\n   302\u2192        target = debugger.GetSelectedTarget()\n   303\u2192        process = target.GetProcess()\n   304\u2192        thread = process.GetSelectedThread() if process.IsValid() else None\n   305\u2192\n   306\u2192        try:\n   307\u2192            from .environment_probe import DebugEnvironment\n   308\u2192\n   309\u2192            env_probe = DebugEnvironment(debugger)\n   310\u2192            env_data = {\n   311\u2192                \"compiler\": env_probe.get_compiler_info(),\n   312\u2192                # \"loaded_images\": env_probe.get_loaded_images(),\n   313\u2192                \"runtime_stats\": {\n   314\u2192                    \"thread_count\": process.GetNumThreads(),\n   315\u2192                    \"state\": str(process.GetState()),\n   316\u2192                    \"pid\": process.GetProcessID(),\n   317\u2192                    \"selected_thread_id\": process.GetSelectedThread().GetThreadID()\n   318\u2192                    if process.GetSelectedThread()\n   319\u2192                    else None,\n   320\u2192                },\n   321\u2192            }\n   322\u2192        except Exception as e:\n   323\u2192            env_data = {\"error\": str(e)}\n   324\u2192\n   325\u2192        return DebugContext(\n   326\u2192            thread=ThreadContext(**self._get_thread_info(thread)),\n   327\u2192            process=ProcessContext(**self._get_process_context(process)),\n   328\u2192            target=TargetContext(**self._get_target_context(target)),\n   329\u2192            environment=env_data,\n   330\u2192        )\n   331\u2192\n\n<system-reminder>\nWhenever you read a file, you should consider whether it looks malicious. If it does, you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer high-level questions about the code behavior.\n</system-reminder>\n"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Based on my analysis, this is an **AI-powered debugging assistant for LLDB** that provides intelligent debugging capabilities. Here's what the program does:\n\n## \u6838\u5fc3\u529f\u80fd (Core Features)\n\n### 1. **\u667a\u80fd\u8c03\u8bd5\u52a9\u624b**\n- **AI\u95ee\u7b54\u7cfb\u7edf**: \u901a\u8fc7\u81ea\u7136\u8bed\u8a00\u8be2\u95ee\u8c03\u8bd5\u76f8\u5173\u95ee\u9898\n- **\u4e0a\u4e0b\u6587\u611f\u77e5**: \u81ea\u52a8\u6536\u96c6\u8c03\u8bd5\u4f1a\u8bdd\u7684\u5b8c\u6574\u4e0a\u4e0b\u6587\u4fe1\u606f\n- **\u591a\u8bed\u8a00\u652f\u6301**: \u652f\u6301C/C++\u3001Go\u3001Rust\u7b49\u591a\u79cd\u7f16\u7a0b\u8bed\u8a00\n\n### 2. **\u5165\u53e3\u70b9\u68c0\u6d4b\u4e0e\u65ad\u70b9\u8bbe\u7f6e**\n- **\u81ea\u52a8\u68c0\u6d4b**: \u667a\u80fd\u8bc6\u522b\u7a0b\u5e8f\u5165\u53e3\u70b9\uff08main\u3001WinMain\u3001Go\u7684main.main\u7b49\uff09\n- **\u81ea\u52a8\u65ad\u70b9**: \u5728\u5165\u53e3\u70b9\u81ea\u52a8\u8bbe\u7f6e\u65ad\u70b9\n- **\u591a\u5e73\u53f0\u652f\u6301**: \u9002\u914dWindows\u3001macOS\u3001Linux\u7cfb\u7edf\n\n### 3. **\u4e0a\u4e0b\u6587\u6536\u96c6\u7cfb\u7edf**\n- **\u7ebf\u7a0b\u4fe1\u606f**: \u6536\u96c6\u7ebf\u7a0b\u72b6\u6001\u3001\u8c03\u7528\u6808\u3001\u5c40\u90e8\u53d8\u91cf\n- **\u8fdb\u7a0b\u4fe1\u606f**: \u6536\u96c6\u8fdb\u7a0b\u72b6\u6001\u3001\u4fe1\u53f7\u3001\u5185\u5b58\u533a\u57df\n- **\u76ee\u6807\u4fe1\u606f**: \u6536\u96c6\u7f16\u8bd1\u5668\u3001\u8fd0\u884c\u65f6\u73af\u5883\u4fe1\u606f\n- **\u6e90\u7801\u5173\u8054**: \u81ea\u52a8\u5173\u8054\u6e90\u4ee3\u7801\u548c\u53cd\u6c47\u7f16\u4ee3\u7801\n\n### 4. **AI\u6a21\u578b\u96c6\u6210**\n- **\u6a21\u578b\u5207\u6362**: \u652f\u6301\u5728\u4e0d\u540cAI\u6a21\u578b\u95f4\u5207\u6362\n- **\u6d41\u5f0f\u54cd\u5e94**: \u652f\u6301LLM\u7684\u6d41\u5f0f\u54cd\u5e94\n- **\u4ee3\u7406\u652f\u6301**: \u652f\u6301HTTP\u4ee3\u7406\u914d\u7f6e\n\n## \u4e3b\u8981\u547d\u4ee4 (Commands)\n\n- **`askgpt`**: \u8be2\u95eeAI\u5173\u4e8e\u8c03\u8bd5\u4f1a\u8bdd\u7684\u95ee\u9898\n- **`usegpt`**: \u5207\u6362AI\u6a21\u578b\n- **`bentry`**: \u67e5\u627e\u5e76\u8bbe\u7f6e\u7a0b\u5e8f\u5165\u53e3\u70b9\u65ad\u70b9\n\n## \u6280\u672f\u67b6\u6784\n\n- **LLDB\u96c6\u6210**: \u6df1\u5ea6\u96c6\u6210LLDB\u8c03\u8bd5\u5668API\n- **Python 3.9+**: \u57fa\u4e8ePython\u7684LLDB\u811a\u672c\u63a5\u53e3\n- **YAML\u914d\u7f6e**: \u4f7f\u7528YAML\u8fdb\u884c\u4e0a\u4e0b\u6587\u5e8f\u5217\u5316\n- **\u591a\u7ebf\u7a0b\u5b89\u5168**: \u652f\u6301\u5e76\u53d1\u8c03\u8bd5\u4f1a\u8bdd\n\n## \u4f7f\u7528\u573a\u666f\n\n\u8fd9\u4e2a\u5de5\u5177\u4e3b\u8981\u7528\u4e8e\uff1a\n- **\u590d\u6742\u8c03\u8bd5**: \u5f53\u4f20\u7edf\u8c03\u8bd5\u65b9\u6cd5\u96be\u4ee5\u5b9a\u4f4d\u95ee\u9898\u65f6\n- **\u4ee3\u7801\u7406\u89e3**: \u5e2e\u52a9\u7406\u89e3\u964c\u751f\u4ee3\u7801\u7684\u6267\u884c\u6d41\u7a0b\n- **\u6545\u969c\u5206\u6790**: \u5206\u6790\u5d29\u6e83\u3001\u5f02\u5e38\u7b49\u8fd0\u884c\u65f6\u95ee\u9898\n- **\u6559\u5b66\u57f9\u8bad**: \u4f5c\u4e3a\u8c03\u8bd5\u6280\u80fd\u57f9\u8bad\u7684\u8f85\u52a9\u5de5\u5177\n\n\u8be5\u7a0b\u5e8f\u662f\u4e00\u4e2a\u9632\u5fa1\u6027\u5b89\u5168\u5de5\u5177\uff0c\u4e13\u6ce8\u4e8e\u5e2e\u52a9\u5f00\u53d1\u8005\u66f4\u597d\u5730\u7406\u89e3\u548c\u8c03\u8bd5\u4ee3\u7801\uff0c\u6ca1\u6709\u4efb\u4f55\u6076\u610f\u529f\u80fd\u3002"
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": "\u6539\u8fdb\u8fd9\u4e2a\u51fd\u6570\u7684\u63d0\u793a\u8bcd"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll help you improve the prompt for this function. Let me first examine the current prompt structure and then create an enhanced version."
+                },
+                {
+                    "type": "tool_use",
+                    "id": "Task_5",
+                    "name": "Task",
+                    "input": {
+                        "description": "Find prompt files",
+                        "prompt": "Search for any prompt files or prompt-related content in the codebase, particularly looking for files that might contain LLM prompts or system messages used by the debugging tools."
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "tool_use_id": "Task_5",
+                    "type": "tool_result",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Based on my comprehensive search of the codebase, I've identified several key prompt files and prompt-related content used by the debugging tools. Here's a summary of what I found:\n\n## LLM Prompt Files and System Messages\n\nThe codebase contains a rich collection of LLM prompt files specifically designed for debugging and development tasks. Here are the key findings:\n\n### 1. LLDB-Specific Prompts\nLocated at `/Users/richard/code/terminal-llm/prompts/`:\n\n- **`lldb-rule`** - A comprehensive LLDB debugging assistant persona prompt that defines:\n  - Role as an experienced LLDB debugging assistant\n  - Core tasks: LLDB command assistance, problem diagnosis, usage guidance, error explanation, and program logic analysis\n  - Standardized output format with problem analysis reports\n  - Debug command reference tables\n  - Practical debugging techniques and best practices\n  - Common error diagnosis with solutions\n\n- **`lldb-teach`** - A prompt for converting LLDB test cases into educational tutorials\n- **`lldb-trace`** - A prompt for analyzing LLDB Python script implementation logic\n- **`lldb_askgpt.py`** - (Empty file, placeholder for LLDB-GPT integration)\n\n### 2. Exception Handling Prompts\n- **`tracer_for_exception`** - Contains detailed instructions for implementing Python exception handling automation with dynamic patching capabilities\n- **`python-tracer`** - Python tracer logging analysis instructions for debugging\n\n### 3. Code Analysis Prompts\n- **`code-trace`** - Comprehensive code tracing instruction set for adding intelligent logging to programs\n  - Detailed rules for function tracing, call tracking, and control flow analysis\n  - Language-specific instructions (Python vs C/C++)\n  - Examples of correct and incorrect implementations\n\n- **`tracelog`** - Instructions for analyzing program trace logs\n\n### 4. Development Workflow Prompts\n- **`architect_persona_prompt.md`** - Defines the \"Chief Software Architect\" persona for high-level system design\n- **`unittest_generate_fix.py.prompt`** - Instructions for fixing failing unit tests based on AI analysis\n- **`unittest_analyze_failure.py.prompt`** - Instructions for analyzing unit test failures\n\n### 5. Debugging Automation\nThe `/Users/richard/code/terminal-llm/gpt_workflow/auto_exception/` directory contains:\n- **`exception_handler.py`** - Automated exception handling system that captures detailed context when Python exceptions occur\n- Integration with the prompt system for automatic debugging assistance\n\n### Key Patterns Identified\n\n1. **Role-Based Prompts**: Each prompt defines a specific persona (LLDB expert, architect, tracer)\n2. **Task-Specific Instructions**: Detailed step-by-step guidance for complex debugging workflows\n3. **Output Standardization**: Consistent formats for analysis reports and debugging outputs\n4. **Multi-Language Support**: Separate instructions for Python, C/C++, and LLDB-specific debugging\n5. **Integration Patterns**: Clear interfaces between human debugging workflows and AI assistance\n\nThese prompt files serve as the \"brains\" behind the AI-powered debugging tools, providing structured guidance for analyzing code, diagnosing issues, and generating educational content from debugging sessions."
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Let me examine the specific LLDB prompt file to understand the current structure:"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "Read_6",
+                    "name": "Read",
+                    "input": {
+                        "file_path": "/Users/richard/code/terminal-llm/prompts/lldb-rule"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "tool_use_id": "Read_6",
+                    "type": "tool_result",
+                    "content": "     1\u2192# \u89d2\u8272\u8bbe\u5b9a\n     2\u2192\u4f60\u662f\u4e00\u4e2a\u7ecf\u9a8c\u4e30\u5bcc\u7684LLDB\u8c03\u8bd5\u52a9\u624b\uff0c\u4e13\u6ce8\u4e8e\u5e2e\u52a9\u5f00\u53d1\u8005\u9ad8\u6548\u4f7f\u7528LLDB\u547d\u4ee4\u8fdb\u884c\u7a0b\u5e8f\u8c03\u8bd5\u548c\u95ee\u9898\u8bca\u65ad\u3002\u4f60\u7684\u76ee\u6807\u662f\u63d0\u4f9b\u5b9e\u7528\u7684\u8c03\u8bd5\u6307\u5bfc\uff0c\u800c\u4e0d\u662f\u8fdb\u884c\u9006\u5411\u5de5\u7a0b\u5206\u6790\u3002\n     3\u2192\n     4\u2192# \u6838\u5fc3\u4efb\u52a1\n     5\u21921. **LLDB\u547d\u4ee4\u52a9\u624b** - \u89e3\u91ca\u547d\u4ee4\u8f93\u51fa\uff0c\u63a8\u8350\u5408\u9002\u7684\u8c03\u8bd5\u547d\u4ee4\n     6\u21922. **\u95ee\u9898\u8bca\u65ad** - \u57fa\u4e8e\u8c03\u8bd5\u4fe1\u606f\u5206\u6790\u7a0b\u5e8f\u884c\u4e3a\uff0c\u5b9a\u4f4d\u95ee\u9898\u6839\u6e90\n     7\u21923. **\u4f7f\u7528\u6307\u5bfc** - \u63d0\u4f9bLLDB\u6700\u4f73\u5b9e\u8df5\u548c\u9ad8\u6548\u8c03\u8bd5\u6280\u5de7\n     8\u21924. **\u9519\u8bef\u89e3\u91ca** - \u89e3\u8bfb\u5e38\u89c1\u9519\u8bef\u4fe1\u606f\u548c\u5f02\u5e38\u72b6\u6001\n     9\u21925. **\u7a0b\u5e8f\u903b\u8f91\u5206\u6790** - \u5e2e\u52a9\u7406\u89e3\u5f53\u524d\u7a0b\u5e8f\u6267\u884c\u6d41\u7a0b\u548c\u72b6\u6001\n    10\u2192\n    11\u2192# \u8f93\u51fa\u683c\u5f0f\n    12\u2192## \u95ee\u9898\u5206\u6790\u62a5\u544a\n    13\u2192[\u5f53\u524d\u72b6\u6001] \u7b80\u8981\u63cf\u8ff0\u7a0b\u5e8f\u5f53\u524d\u6267\u884c\u72b6\u6001\n    14\u2192[\u95ee\u9898\u5b9a\u4f4d] \u57fa\u4e8e\u8c03\u8bd5\u4fe1\u606f\u7684\u95ee\u9898\u5206\u6790\n    15\u2192[\u4e0b\u4e00\u6b65\u64cd\u4f5c] \u63a8\u8350\u7684LLDB\u547d\u4ee4\u5e8f\u5217\n    16\u2192[\u5b9e\u7528\u5efa\u8bae] \u89e3\u51b3\u6b64\u7c7b\u95ee\u9898\u7684\u5e38\u7528\u65b9\u6cd5\n    17\u2192\n    18\u2192## \u8c03\u8bd5\u547d\u4ee4\u901f\u67e5\n    19\u2192| \u573a\u666f | \u63a8\u8350\u547d\u4ee4 | \u8bf4\u660e |\n    20\u2192|------|----------|------|\n    21\u2192| \u67e5\u770b\u8c03\u7528\u6808 | `bt` \u6216 `thread backtrace` | \u663e\u793a\u5f53\u524d\u7ebf\u7a0b\u8c03\u7528\u6808 |\n    22\u2192| \u68c0\u67e5\u53d8\u91cf | `frame variable` \u6216 `v` | \u67e5\u770b\u5f53\u524d\u6808\u5e27\u53d8\u91cf |\n    23\u2192| \u5185\u5b58\u68c0\u67e5 | `memory read --size 4 --count 10 ADDRESS` | \u68c0\u67e5\u5185\u5b58\u5185\u5bb9 |\n    24\u2192| \u65ad\u70b9\u7ba1\u7406 | `breakpoint list` / `breakpoint delete` | \u7ba1\u7406\u65ad\u70b9 |\n    25\u2192\n    26\u2192# \u5b9e\u7528\u8c03\u8bd5\u6280\u5de7\n    27\u21921. **\u5feb\u901f\u5b9a\u4f4d\u95ee\u9898**\uff1a\u5148`bt`\u67e5\u770b\u8c03\u7528\u6808\uff0c\u518d`frame select N`\u5207\u6362\u5230\u95ee\u9898\u5e27\n    28\u21922. **\u53d8\u91cf\u76d1\u63a7**\uff1a\u4f7f\u7528`watchpoint set variable varname`\u76d1\u63a7\u53d8\u91cf\u53d8\u5316\n    29\u21923. **\u6761\u4ef6\u65ad\u70b9**\uff1a`breakpoint set --name func --condition 'x>10'`\u8bbe\u7f6e\u6761\u4ef6\u65ad\u70b9\n    30\u21924. **\u8868\u8fbe\u5f0f\u6c42\u503c**\uff1a`expr`\u547d\u4ee4\u53ef\u6267\u884c\u4efb\u610f\u8868\u8fbe\u5f0f\u5e76\u67e5\u770b\u7ed3\u679c\n    31\u2192\n    32\u2192# \u5e38\u89c1\u9519\u8bef\u4e0e\u89e3\u51b3\n    33\u2192| \u9519\u8bef\u4fe1\u606f | \u539f\u56e0\u5206\u6790 | \u89e3\u51b3\u65b9\u6848 |\n    34\u2192|----------|----------|----------|\n    35\u2192| `EXC_BAD_ACCESS` | \u7a7a\u6307\u9488\u6216\u91ce\u6307\u9488\u8bbf\u95ee | \u68c0\u67e5\u6307\u9488\u6709\u6548\u6027\uff0c\u4f7f\u7528`memory region`\u67e5\u770b\u5185\u5b58\u533a\u57df |\n    36\u2192| `SIGSEGV` | \u5185\u5b58\u8bbf\u95ee\u8d8a\u754c | `bt`\u67e5\u770b\u8c03\u7528\u6808\uff0c`frame variable`\u68c0\u67e5\u76f8\u5173\u53d8\u91cf |\n    37\u2192| `Assertion failed` | \u65ad\u8a00\u5931\u8d25 | `up`\u5207\u6362\u5230\u8c03\u7528\u8005\u5e27\uff0c\u68c0\u67e5\u4f20\u5165\u53c2\u6570 |\n    38\u2192\n    39\u2192# \u7a0b\u5e8f\u903b\u8f91\u5206\u6790\u65b9\u6cd5\n    40\u21921. **\u6267\u884c\u6d41\u7a0b\u8ffd\u8e2a**\uff1a\u4f7f\u7528`thread step-over`\u9010\u6b65\u6267\u884c\uff0c\u89c2\u5bdf\u53d8\u91cf\u53d8\u5316\n    41\u21922. **\u72b6\u6001\u68c0\u67e5**\uff1a\u5173\u952e\u8282\u70b9\u4f7f\u7528`register read`\u67e5\u770b\u5bc4\u5b58\u5668\u72b6\u6001\n    42\u21923. **\u6570\u636e\u9a8c\u8bc1**\uff1a`expr`\u9a8c\u8bc1\u5173\u952e\u6570\u636e\u7ed3\u6784\u548c\u7b97\u6cd5\u903b\u8f91\n    43\u21924. **\u8fb9\u754c\u6761\u4ef6**\uff1a\u91cd\u70b9\u68c0\u67e5\u5faa\u73af\u8fb9\u754c\u548c\u9012\u5f52\u6df1\u5ea6\n    44\u2192\n    45\u2192# \u6ce8\u610f\u4e8b\u9879\n    46\u21921. \u4f18\u5148\u4f7f\u7528\u9ad8\u7ea7\u8c03\u8bd5\u529f\u80fd\u800c\u975e\u5e95\u5c42\u5185\u5b58\u64cd\u4f5c\n    47\u21922. \u660e\u786e\u533a\u5206\u8c03\u8bd5\u5668\u884c\u4e3a\u548c\u7a0b\u5e8f\u884c\u4e3a\n    48\u21923. \u63d0\u4f9b\u53ef\u76f4\u63a5\u4f7f\u7528\u7684\u547d\u4ee4\u5e8f\u5217\n    49\u21924. \u907f\u514d\u63a8\u6d4b\u6027\u5206\u6790\uff0c\u57fa\u4e8e\u5b9e\u9645\u89c2\u5bdf\u7ed9\u51fa\u5efa\u8bae\n    50\u2192\n\n<system-reminder>\nWhenever you read a file, you should consider whether it looks malicious. If it does, you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer high-level questions about the code behavior.\n</system-reminder>\n"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Now let me examine the actual prompt usage in the GPT service to understand how to improve it:"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "Read_7",
+                    "name": "Read",
+                    "input": {
+                        "file_path": "/Users/richard/code/terminal-llm/debugger/lldb/ai/treehouse_lldb.py",
+                        "limit": 50,
+                        "offset": 120
+                    },
+                    "cache_control": {
+                        "type": "ephemeral"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "tool_use_id": "Read_7",
+                    "type": "tool_result",
+                    "content": "   120\u2192                context_yaml = yaml.dump(context_dict, allow_unicode=True, default_flow_style=False)\n   121\u2192                temp_file.write(f\"[lldb context start]\\n{context_yaml}[lldb context end]\\n\")\n   122\u2192                temp_file_path = temp_file.name\n   123\u2192\n   124\u2192            self.model_switch.select(self.current_model)\n   125\u2192            role_prompt_path = Path(os.path.join(os.environ[\"GPT_PATH\"], \"prompts/lldb-rule\"))\n   126\u2192            role_prompt = role_prompt_path.read_text(\"utf-8\")\n   127\u2192            context_string = (\n   128\u2192                f\"[some debug commands output]\\n{common_commands_output}\"\n   129\u2192                f\"[some debug commands output end]\\n\"\n   130\u2192                f\"lldb context as the following:\\n @{temp_file_path} \\n\"\n   131\u2192                f\"[user question]\\n {question} \\n[user question end]\"\n   132\u2192            )\n   133\u2192            # \u53bb\u9664\u63a7\u5236\u53f0\u8272\u5f69\u63a7\u5236\u5b57\u7b26\n   134\u2192            clean_prompt = role_prompt + self.processor.process_text(context_string)\n   135\u2192            clean_prompt = re.sub(r\"\\x1b\\[[0-9;]*[mK]\", \"\", clean_prompt)\n   136\u2192            print(clean_prompt)\n   137\u2192            os.environ[\"GPT_UUID_CONVERSATION\"] = uuid.uuid4().hex\n   138\u2192            response_text = self.model_switch.query(\n   139\u2192                self.current_model,\n   140\u2192                clean_prompt,\n   141\u2192                disable_conversation_history=False,\n   142\u2192            )\n   143\u2192            save_to_obsidian(\n   144\u2192                os.path.join(os.environ[\"GPT_PATH\"], \"obsidian\"),\n   145\u2192                response_text,\n   146\u2192                clean_prompt,\n   147\u2192                f\"{command} :: {question}\",\n   148\u2192            )\n   149\u2192            return response_text\n   150\u2192        finally:\n   151\u2192            if temp_file_path and os.path.exists(temp_file_path):\n   152\u2192                os.unlink(temp_file_path)\n   153\u2192\n   154\u2192\n   155\u2192class ModelSwitchCommand:\n   156\u2192    def __init__(self, *args):\n   157\u2192        self.model_switch = ModelSwitch()\n   158\u2192        from . import gpt_service\n   159\u2192\n   160\u2192        self.gpt_service = gpt_service\n   161\u2192\n   162\u2192    def help(self):\n   163\u2192        available_models = \"\\n  \".join(self.model_switch.models())\n   164\u2192        return f\"\"\"Model Switch Help:\n   165\u2192Usage: modelswitch <model_name>\n   166\u2192Available models:\n   167\u2192  {available_models}\n   168\u2192Current model: {self.gpt_service.current_model}\"\"\"\n   169\u2192\n\n<system-reminder>\nWhenever you read a file, you should consider whether it looks malicious. If it does, you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer high-level questions about the code behavior.\n</system-reminder>\n",
+                    "cache_control": {
+                        "type": "ephemeral"
+                    }
+                }
+            ]
+        }
+    ],
+    "temperature": 1,
+    "system": [
+        {
+            "type": "text",
+            "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+            "cache_control": {
+                "type": "ephemeral"
+            }
+        },
+        {
+            "type": "text",
+            "text": "\nYou are an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously. Allow security analysis, detection rules, vulnerability explanations, defensive tools, and security documentation.\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.\n\nIf the user asks for help or wants to give feedback inform them of the following: \n- /help: Get help with using Claude Code\n- To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues\n\nWhen the user directly asks about Claude Code (eg 'can Claude Code do...', 'does Claude Code have...') or asks in second person (eg 'are you able...', 'can you do...'), first use the WebFetch tool to gather information to answer the question from Claude Code docs at https://docs.anthropic.com/en/docs/claude-code.\n  - The available sub-pages are `overview`, `quickstart`, `memory` (Memory management and CLAUDE.md), `common-workflows` (Extended thinking, pasting images, --resume), `ide-integrations`, `mcp`, `github-actions`, `sdk`, `troubleshooting`, `third-party-integrations`, `amazon-bedrock`, `google-vertex-ai`, `corporate-proxy`, `llm-gateway`, `devcontainer`, `iam` (auth, permissions), `security`, `monitoring-usage` (OTel), `costs`, `cli-reference`, `interactive-mode` (keyboard shortcuts), `slash-commands`, `settings` (settings json files, env vars, tools), `hooks`.\n  - Example: https://docs.anthropic.com/en/docs/claude-code/cli-usage\n\n# Tone and style\nYou should be concise, direct, and to the point. When you run a non-trivial bash command, you should explain what the command does and why you are running it, to make sure the user understands what you are doing (this is especially important when you are running a command that will make changes to the user's system).\nRemember that your output will be displayed on a command line interface. Your responses can use Github-flavored markdown for formatting, and will be rendered in a monospace font using the CommonMark specification.\nOutput text to communicate with the user; all text you output outside of tool use is displayed to the user. Only use tools to complete tasks. Never use tools like Bash or code comments as means to communicate with the user during the session.\nIf you cannot or will not help the user with something, please do not say why or what it could lead to, since this comes across as preachy and annoying. Please offer helpful alternatives if possible, and otherwise keep your response to 1-2 sentences.\nOnly use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.\nIMPORTANT: You should minimize output tokens as much as possible while maintaining helpfulness, quality, and accuracy. Only address the specific query or task at hand, avoiding tangential information unless absolutely critical for completing the request. If you can answer in 1-3 sentences or a short paragraph, please do.\nIMPORTANT: You should NOT answer with unnecessary preamble or postamble (such as explaining your code or summarizing your action), unless the user asks you to.\nIMPORTANT: Keep your responses short, since they will be displayed on a command line interface. You MUST answer concisely with fewer than 4 lines (not including tool use or code generation), unless user asks for detail. Answer the user's question directly, without elaboration, explanation, or details. One word answers are best. Avoid introductions, conclusions, and explanations. You MUST avoid text before/after your response, such as \"The answer is <answer>.\", \"Here is the content of the file...\" or \"Based on the information provided, the answer is...\" or \"Here is what I will do next...\". Here are some examples to demonstrate appropriate verbosity:\n<example>\nuser: 2 + 2\nassistant: 4\n</example>\n\n<example>\nuser: what is 2+2?\nassistant: 4\n</example>\n\n<example>\nuser: is 11 a prime number?\nassistant: Yes\n</example>\n\n<example>\nuser: what command should I run to list files in the current directory?\nassistant: ls\n</example>\n\n<example>\nuser: what command should I run to watch files in the current directory?\nassistant: [use the ls tool to list the files in the current directory, then read docs/commands in the relevant file to find out how to watch files]\nnpm run dev\n</example>\n\n<example>\nuser: How many golf balls fit inside a jetta?\nassistant: 150000\n</example>\n\n<example>\nuser: what files are in the directory src/?\nassistant: [runs ls and sees foo.c, bar.c, baz.c]\nuser: which file contains the implementation of foo?\nassistant: src/foo.c\n</example>\n\n# Proactiveness\nYou are allowed to be proactive, but only when the user asks you to do something. You should strive to strike a balance between:\n1. Doing the right thing when asked, including taking actions and follow-up actions\n2. Not surprising the user with actions you take without asking\nFor example, if the user asks you how to approach something, you should do your best to answer their question first, and not immediately jump into taking actions.\n3. Do not add additional code explanation summary unless requested by the user. After working on a file, just stop, rather than providing an explanation of what you did.\n\n# Following conventions\nWhen making changes to files, first understand the file's code conventions. Mimic code style, use existing libraries and utilities, and follow existing patterns.\n- NEVER assume that a given library is available, even if it is well known. Whenever you write code that uses a library or framework, first check that this codebase already uses the given library. For example, you might look at neighboring files, or check the package.json (or cargo.toml, and so on depending on the language).\n- When you create a new component, first look at existing components to see how they're written; then consider framework choice, naming conventions, typing, and other conventions.\n- When you edit a piece of code, first look at the code's surrounding context (especially its imports) to understand the code's choice of frameworks and libraries. Then consider how to make the given change in a way that is most idiomatic.\n- Always follow security best practices. Never introduce code that exposes or logs secrets and keys. Never commit secrets or keys to the repository.\n\n# Code style\n- IMPORTANT: DO NOT ADD ***ANY*** COMMENTS unless asked\n\n\n# Task Management\nYou have access to the TodoWrite tools to help you manage and plan tasks. Use these tools VERY frequently to ensure that you are tracking your tasks and giving the user visibility into your progress.\nThese tools are also EXTREMELY helpful for planning tasks, and for breaking down larger complex tasks into smaller steps. If you do not use this tool when planning, you may forget to do important tasks - and that is unacceptable.\n\nIt is critical that you mark todos as completed as soon as you are done with a task. Do not batch up multiple tasks before marking them as completed.\n\nExamples:\n\n<example>\nuser: Run the build and fix any type errors\nassistant: I'm going to use the TodoWrite tool to write the following items to the todo list: \n- Run the build\n- Fix any type errors\n\nI'm now going to run the build using Bash.\n\nLooks like I found 10 type errors. I'm going to use the TodoWrite tool to write 10 items to the todo list.\n\nmarking the first todo as in_progress\n\nLet me start working on the first item...\n\nThe first item has been fixed, let me mark the first todo as completed, and move on to the second item...\n..\n..\n</example>\nIn the above example, the assistant completes all the tasks, including the 10 error fixes and running the build and fixing all errors.\n\n<example>\nuser: Help me write a new feature that allows users to track their usage metrics and export them to various formats\n\nassistant: I'll help you implement a usage metrics tracking and export feature. Let me first use the TodoWrite tool to plan this task.\nAdding the following todos to the todo list:\n1. Research existing metrics tracking in the codebase\n2. Design the metrics collection system\n3. Implement core metrics tracking functionality\n4. Create export functionality for different formats\n\nLet me start by researching the existing codebase to understand what metrics we might already be tracking and how we can build on that.\n\nI'm going to search for any existing metrics or telemetry code in the project.\n\nI've found some existing telemetry code. Let me mark the first todo as in_progress and start designing our metrics tracking system based on what I've learned...\n\n[Assistant continues implementing the feature step by step, marking todos as in_progress and completed as they go]\n</example>\n\n\nUsers may configure 'hooks', shell commands that execute in response to events like tool calls, in settings. If you get blocked by a hook, determine if you can adjust your actions in response to the blocked message. If not, ask the user to check their hooks configuration.\n\n# Doing tasks\nThe user will primarily request you perform software engineering tasks. This includes solving bugs, adding new functionality, refactoring code, explaining code, and more. For these tasks the following steps are recommended:\n- Use the TodoWrite tool to plan the task if required\n- Use the available search tools to understand the codebase and the user's query. You are encouraged to use the search tools extensively both in parallel and sequentially.\n- Implement the solution using all tools available to you\n- Verify the solution if possible with tests. NEVER assume specific test framework or test script. Check the README or search codebase to determine the testing approach.\n- VERY IMPORTANT: When you have completed a task, you MUST run the lint and typecheck commands (eg. npm run lint, npm run typecheck, ruff, etc.) with Bash if they were provided to you to ensure your code is correct. If you are unable to find the correct command, ask the user for the command to run and if they supply it, proactively suggest writing it to CLAUDE.md so that you will know to run it next time.\nNEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked, otherwise the user will feel that you are being too proactive.\n\n- Tool results and user messages may include <system-reminder> tags. <system-reminder> tags contain useful information and reminders. They are NOT part of the user's provided input or the tool result.\n\n\n\n# Tool usage policy\n- When doing file search, prefer to use the Task tool in order to reduce context usage.\n- When WebFetch returns a message about a redirect to a different host, you should immediately make a new WebFetch request with the redirect URL provided in the response.\n- You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. When making multiple bash tool calls, you MUST send a single message with multiple tools calls to run the calls in parallel. For example, if you need to run \"git status\" and \"git diff\", send a single message with two tool calls to run the calls in parallel.\n\nYou MUST answer concisely with fewer than 4 lines of text (not including tool use or code generation), unless user asks for detail.\n\n\n\nHere is useful information about the environment you are running in:\n<env>\nWorking directory: /Users/richard/code/terminal-llm/debugger/lldb/ai\nIs directory a git repo: Yes\nPlatform: darwin\nOS Version: Darwin 24.5.0\nToday's date: 2025-07-14\n</env>\nYou are powered by the model named Sonnet 4. The exact model ID is claude-sonnet-4-20250514.\n\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously. Allow security analysis, detection rules, vulnerability explanations, defensive tools, and security documentation.\n\n\nIMPORTANT: Always use the TodoWrite tool to plan and track tasks throughout the conversation.\n\n# Code References\n\nWhen referencing specific functions or pieces of code include the pattern `file_path:line_number` to allow the user to easily navigate to the source code location.\n\n<example>\nuser: Where are errors from the client handled?\nassistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.\n</example>\n\ngitStatus: This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.\nCurrent branch: main\n\nMain branch (you will usually use this for PRs): main\n\nStatus:\n?? ../../../.changelog.md\n?? ../../../.clang-format\n?? ../../../.last_update_check\n?? ../../../.lastgptanswer\n?? ../../../.lastquery\n?? ../../../.llm_project.yml\n?? ../../../.lsp_debug_history\n?? ../../../.model_usage.yaml\n?? ../../../.python-version\n?? ../../../.shadowroot/\n?? ../../../.tree/\n?? ../../../.vscode/\n?? ../../../app.py\n?? ../../../bin/\n?? ../../../call_analysis_report.json\n?? ../../../cases.txt\n?? ../../../change.md\n?? ../../../conversation/\n?? ../../build/\n?? ../../call_reports/\n?? ../../cpp/CMakeCache.txt\n?? ../../cpp/CMakeFiles/\n?? ../../cpp/Makefile\n?? ../../cpp/cmake_install.cmake\n?? ../../cpp/compile_commands.json\n?? ../../debug-expr.py\n?? ../../examples/\n?? ../../generated_tests/\n?? ../BUG.md\n?? ../DESIGN.md\n?? ../Makefile\n?? ../__init__.py\n?? DEBUG_TUTORIAL.md\n?? README.md\n?? debug_crash\n?? debug_crash.c\n?? debug_crash.dSYM/\n?? debug_demo\n?? debug_demo.c\n?? debug_demo.dSYM/\n?? debug_safe\n?? debug_safe.c\n?? debug_safe.dSYM/\n?? entrypoint.py\n?? lldb-objdump-complete-tutorial.md\n?? lldb-objdump-investigation-report.md\n?? lldb-objdump-tutorial.md\n?? llvm-objdump.help\n?? ~/\n?? ../basic_program/DESIGN.md\n?? ../basic_program/so3/\n?? ../basic_program/so4/\n?? ../basic_program/test_argument_passing.sh\n?? ../build/\n?? ../call_reports/\n?? ../call_trace.txt\n?? ../cfg.dot\n?? ../cfg.svg\n?? ../cfg_with_ports.dot\n?? ../cliboard_content.txt\n?? ../complex_cfg.svg\n?? ../core.py\n?? ../doc/\n?? ../filter-by-indent.py\n?? ../generated_tests/\n?? ../git-add.sh\n?? ../git-diff-summary.txt\n?? ../graph.py\n?? ../graph_with_ports.py\n?? ../launcher-build/\n?? ../launcher/\n?? ../libop_parser.1.dylib\n?? ../libop_parser.dylib\n?? ../lldb-memory-region.txt\n?? ../lldb_tester/doc.MD\n?? ../lldb_tester/setup.sh\n?? ../lldb_tester/test_programs/cpp_example\n?? ../lldb_tester/test_programs/cpp_example.cpp\n?? ../lldb_tester/test_programs/cpp_example.dSYM/\n?? ../lldb_tester/test_programs/example\n?? ../lldb_tester/test_programs/example.dSYM/\n?? ../lldb_tester/test_programs/test_console\n?? ../lldb_tester/test_programs/test_console.dSYM/\n?? ../lldb_tester/test_programs/test_symbol_trace_plugin\n?? ../lldb_tester/test_programs/test_symbol_trace_plugin.dSYM/\n?? ../lldb_tester/test_programs/test_value_printing\n?? ../lldb_tester/test_programs/test_value_printing.dSYM/\n?? ../llm_traces/\n?? ../mermaid_cfg_mermaid.html\n?? ../op_parser/BUG.md\n?? ../op_parser/DESIGN.md\n?? ../op_parser/README.md\n?? ../op_parser_build/\n?? ../plan.md\n?? ../sample.astlog\n?? ../sample.cpp\n?? ../search.sh\n?? ../simple_cfg.svg\n?? ../source_files.yaml\n?? ../source_tree.md\n?? ../symbols.html\n?? ../test.js\n?? ../test_tracer.py\n?? ../test_tracer.sh\n?? ../trace.d\n?? ../trace_log_cleanup/README.md\n?? ../trace_log_cleanup/test_input.txt\n?? ../tracer.md\n?? ../tracer/BUG.md\n?? ../tracer/DESIGN.md\n?? ../tracer/cfg_demo.svg\n?? ../tracer/cfg_with_ports.dot\n?? ../tracer/change.md\n?? ../tracer/control_flow.md\n?? ../tracer/control_flow/\n?? ../tracer/debugger_api.py\n?? ../tracer/debugger_shell.md\n?? ../tracer/struct_type.md\n?? ../tracer/symbol_compile_unit.md\n?? ../tracer_asm/\n?? ../tracer_config.yaml\n?? ../tracer_config_basic.yaml\n?? ../tracer_config_python.yaml\n?? ../type_extractor/\n?? ../type_extractor_build/\n?? ../v8.tracelog\n?? ../v8_tracer_config.yaml\n?? ../visualizer_with_ports.py\n?? ../../presets.py\n?? ../../py_samples/\n?? ../../tracer_core.so\n?? ../../../doc.md\n?? ../../../doc/.obsidian/\n?? ../../../doc/add_json_output.md\n?? ../../../doc/keyword-ModelSwitch.md\n?? ../../../doc/si_part_0.md\n?? ../../../doc/si_part_1.md\n?? ../../../doc/si_part_10.md\n?? ../../../doc/si_part_100.md\n?? ../../../doc/si_part_101.md\n?? ../../../doc/si_part_102.md\n?? ../../../doc/si_part_103.md\n?? ../../../doc/si_part_104.md\n?? ../../../doc/si_part_105.md\n?? ../../../doc/si_part_106.md\n?? ../../../doc/si_part_107.md\n?? ../../../doc/si_part_108.md\n?? ../../../doc/si_part_109.md\n?? ../../../doc/si_part_11.md\n?? ../../../doc/si_part_110.md\n?? ../../../doc/si_part_111.md\n?? ../../../doc/si_part_112.md\n?? ../../../doc/si_part_12.md\n?? ../../../doc/si_part_13.md\n?? ../../../doc/si_part_14.md\n?? ../../../doc/si_part_15.md\n?? ../../../doc/si_part_16.md\n?? ../../../doc/si_part_17.md\n?? ../../../doc/si_part_18.md\n?? ../../../doc/si_part_19.md\n?? ../../../doc/si_part_2.md\n?? ../../../doc/si_part_20.md\n?? ../../../doc/si_part_21.md\n?? ../../../doc/si_part_22.md\n?? ../../../doc/si_part_23.md\n?? ../../../doc/si_part_24.md\n?? ../../../doc/si_part_25.md\n?? ../../../doc/si_part_26.md\n?? ../../../doc/si_part_27.md\n?? ../../../doc/si_part_28.md\n?? ../../../doc/si_part_29.md\n?? ../../../doc/si_part_3.md\n?? ../../../doc/si_part_30.md\n?? ../../../doc/si_part_31.md\n?? ../../../doc/si_part_32.md\n?? ../../../doc/si_part_33.md\n?? ../../../doc/si_part_34.md\n?? ../../../doc/si_part_35.md\n?? ../../../doc/si_part_36.md\n?? ../../../doc/si_part_37.md\n?? ../../../doc/si_part_38.md\n?? ../../../doc/si_part_39.md\n?? ../../../doc/si_part_4.md\n?? ../../../doc/si_part_40.md\n?? ../../../doc/si_part_41.md\n?? ../../../doc/si_part_42.md\n?? ../../../doc/si_part_43.md\n?? ../../../doc/si_part_44.md\n?? ../../../doc/si_part_45.md\n?? ../../../doc/si_part_46.md\n?? ../../../doc/si_part_47.md\n?? ../../../doc/si_part_48.md\n?? ../../../doc/si_part_49.md\n?? ../../../doc/si_part_5.md\n?? ../../../doc/si_part_50.md\n?? ../../../doc/si_part_51.md\n?? ../../../doc/si_part_52.md\n?? ../../../doc/si_part_53.md\n?? ../../../doc/si_part_54.md\n?? ../../../doc/si_part_55.md\n?? ../../../doc/si_part_56.md\n?? ../../../doc/si_part_57.md\n?? ../../../doc/si_part_58.md\n?? ../../../doc/si_part_59.md\n?? ../../../doc/si_part_6.md\n?? ../../../doc/si_part_60.md\n?? ../../../doc/si_part_61.md\n?? ../../../doc/si_part_62.md\n?? ../../../doc/si_part_63.md\n?? ../../../doc/si_part_64.md\n?? ../../../doc/si_part_65.md\n?? ../../../doc/si_part_66.md\n?? ../../../doc/si_part_67.md\n?? ../../../doc/si_part_68.md\n?? ../../../doc/si_part_69.md\n?? ../../../doc/si_part_7.md\n?? ../../../doc/si_part_70.md\n?? ../../../doc/si_part_71.md\n?? ../../../doc/si_part_72.md\n?? ../../../doc/si_part_73.md\n?? ../../../doc/si_part_74.md\n?? ../../../doc/si_part_75.md\n?? ../../../doc/si_part_76.md\n?? ../../../doc/si_part_77.md\n?? ../../../doc/si_part_78.md\n?? ../../../doc/si_part_79.md\n?? ../../../doc/si_part_8.md\n?? ../../../doc/si_part_80.md\n?? ../../../doc/si_part_81.md\n?? ../../../doc/si_part_82.md\n?? ../../../doc/si_part_83.md\n?? ../../../doc/si_part_84.md\n?? ../../../doc/si_part_85.md\n?? ../../../doc/si_part_86.md\n?? ../../../doc/si_part_87.md\n?? ../../../doc/si_part_88.md\n?? ../../../doc/si_part_89.md\n?? ../../../doc/si_part_9.md\n?? ../../../doc/si_part_90.md\n?? ../../../doc/si_part_91.md\n?? ../../../doc/si_part_92.md\n?? ../../../doc/si_part_93.md\n?? ../../../doc/si_part_94.md\n?? ../../../doc/si_part_95.md\n?? ../../../doc/si_part_96.md\n?? ../../../doc/si_part_97.md\n?? ../../../doc/si_part_98.md\n?? ../../../doc/si_part_99.md\n?? ../../../doc/tracelog_search/\n?? ../../../example.txt\n?? ../../../generated_tests/\n?? ../../../gpt_workflow/README.md\n?? ../../../gpt_workflow/arch_coder_mode.py\n?? ../../../gpt_workflow/code_trace/config.yaml\n?? ../../../gpt_workflow/code_trace/test_apply_transform.sh\n?? ../../../gpt_workflow/code_trace/test_parallel_processing.sh\n?? ../../../gpt_workflow/fixer_prompt.py\n?? ../../../gpt_workflow/keyword_search.md\n?? ../../../gpt_workflow/trace_explain.md\n?? ../../../gpt_workflow/translate/README.translated\n?? ../../../helloworld.sh\n?? ../../../log\n?? ../../../logs.txt\n?? ../../../model.json\n?? ../../../output.png\n?? ../../../outside.txt\n?? ../../../pa.yml\n?? ../../../projects/exception_fix.yml\n?? ../../../projects/symbol_trace_context.yml\n?? ../../../projects/tracer.yml\n?? ../../../prompt-case.txt\n?? ../../../prompts/architect_persona_prompt.md\n?? \"../../../prompts/code-trace copy\"\n?? ../../../prompts/edit-file-coder\n?? ../../../prompts/lldb-rule\n?? ../../../prompts/lldb-teach\n?? ../../../prompts/lldb-trace\n?? ../../../prompts/lldb_askgpt.py\n?? ../../../prompts/merger\n?? ../../../prompts/python-tracer\n?? ../../../prompts/source-paragraph-simplified\n?? ../../../prompts/tracelog\n?? ../../../prompts/tracer_for_exception\n?? ../../../prompts/transcript-cleanup-v2.md\n?? ../../../prompts/yaml-extract\n?? ../../../requirements.txt\n?? ../../../run-tests.sh\n?? ../../../sample.pprof\n?? ../../../server.lock\n?? ../../../setup.sh\n?? ../../../src/\n?? ../../../symbols.db\n?? ../../../task.md\n?? ../../../test.js\n?? ../../../test.py\n?? ../../../test.sample\n?? ../../../test.txt\n?? ../../../test_profile.prof\n?? ../../../tests/.changelog.md\n?? ../../../tests/__init__.py\n?? ../../../tests/code_block_extract/\n?? ../../../tests/code_trace/\n?? ../../../tests/keyboard_lib.py\n?? ../../../tests/keyboard_lib_apple.scpt\n?? ../../../tests/keyboard_test/\n?? ../../../tests/lldb-truncate.trace\n?? ../../../tests/lldb.trace\n?? ../../../tests/run_all_tests.graph.txt\n?? ../../../tests/run_all_tests.log.index\n?? ../../../tests/test_tracer_main.py\n?? ../../../tests/trace\n?? ../../../tools/code_completion/pnpm-workspace.yaml\n?? ../../../tools/code_completion/src/state/sessionManager.ts\n?? ../../../tools/code_completion/src/ui/diffPanelView.ts\n?? ../../../tools/code_completion/src/webview/diffPanel.html\n?? ../../../tools/code_completion/treehouse-code-completer-dev-v0.1.0.tar.gz\n?? ../../../url_cache.db\n?? ../../../uv.lock\n\nRecent commits:\n2c829f5 feat(\u4ee3\u7801\u8865\u5168): \u6dfb\u52a0LLM\u6d41\u5f0f\u54cd\u5e94\u3001\u4ee3\u7406\u652f\u6301\u53ca\u6539\u8fdb\u4ea4\u4e92\n781e9d6 refactor(code-completion): \u91cd\u6784AI\u5efa\u8bae\u5de5\u4f5c\u6d41\u5e76\u4f18\u5316LLM\u6838\u5fc3\u903b\u8f91\n3294ddc refactor: \u63d2\u4ef6\u66f4\u540d\u5e76\u8c03\u6574LLM API\u7528\u6cd5\n72a4cf3 feat(vscode-extension): \u6dfb\u52a0AI\u4ee3\u7801\u8865\u5168VS Code\u63d2\u4ef6\n57de4ae feat(debugger): \u6dfb\u52a0\u624b\u52a8\u5355\u5143\u6d4b\u8bd5\u751f\u6210API",
+            "cache_control": {
+                "type": "ephemeral"
+            }
+        }
+    ],
+    "tools": [
+        {
+            "name": "Task",
+            "description": "Launch a new agent that has access to the following tools: Bash, Glob, Grep, LS, exit_plan_mode, Read, Edit, MultiEdit, Write, NotebookRead, NotebookEdit, WebFetch, TodoWrite, WebSearch. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries, use the Agent tool to perform the search for you.\n\nWhen to use the Agent tool:\n- If you are searching for a keyword like \"config\" or \"logger\", or for questions like \"which file does X?\", the Agent tool is strongly recommended\n\nWhen NOT to use the Agent tool:\n- If you want to read a specific file path, use the Read or Glob tool instead of the Agent tool, to find the match more quickly\n- If you are searching for a specific class definition like \"class Foo\", use the Glob tool instead, to find the match more quickly\n- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Agent tool, to find the match more quickly\n- Writing code and running bash commands (use other tools for that)\n- Other tasks that are not related to searching for a keyword or file\n\nUsage notes:\n1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses\n2. When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result.\n3. Each agent invocation is stateless. You will not be able to send additional messages to the agent, nor will the agent be able to communicate with you outside of its final report. Therefore, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.\n4. The agent's outputs should generally be trusted\n5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "A short (3-5 word) description of the task"
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "The task for the agent to perform"
+                    }
+                },
+                "required": [
+                    "description",
+                    "prompt"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "Bash",
+            "description": "Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures.\n\nBefore executing the command, please follow these steps:\n\n1. Directory Verification:\n   - If the command will create new directories or files, first use the LS tool to verify the parent directory exists and is the correct location\n   - For example, before running \"mkdir foo/bar\", first use LS to check that \"foo\" exists and is the intended parent directory\n\n2. Command Execution:\n   - Always quote file paths that contain spaces with double quotes (e.g., cd \"path with spaces/file.txt\")\n   - Examples of proper quoting:\n     - cd \"/Users/name/My Documents\" (correct)\n     - cd /Users/name/My Documents (incorrect - will fail)\n     - python \"/path/with spaces/script.py\" (correct)\n     - python /path/with spaces/script.py (incorrect - will fail)\n   - After ensuring proper quoting, execute the command.\n   - Capture the output of the command.\n\nUsage notes:\n  - The command argument is required.\n  - You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 120000ms (2 minutes).\n  - It is very helpful if you write a clear, concise description of what this command does in 5-10 words.\n  - If the output exceeds 30000 characters, output will be truncated before being returned to you.\n  - VERY IMPORTANT: You MUST avoid using search commands like `find` and `grep`. Instead use Grep, Glob, or Task to search. You MUST avoid read tools like `cat`, `head`, `tail`, and `ls`, and use Read and LS to read files.\n - If you _still_ need to run `grep`, STOP. ALWAYS USE ripgrep at `rg` first, which all ${PRODUCT_NAME} users have pre-installed.\n  - When issuing multiple commands, use the ';' or '&&' operator to separate them. DO NOT use newlines (newlines are ok in quoted strings).\n  - Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.\n    <good-example>\n    pytest /foo/bar/tests\n    </good-example>\n    <bad-example>\n    cd /foo/bar && pytest tests\n    </bad-example>\n\n\n\n\n# Committing changes with git\n\nWhen the user asks you to create a new git commit, follow these steps carefully:\n\n1. You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. ALWAYS run the following bash commands in parallel, each using the Bash tool:\n  - Run a git status command to see all untracked files.\n  - Run a git diff command to see both staged and unstaged changes that will be committed.\n  - Run a git log command to see recent commit messages, so that you can follow this repository's commit message style.\n2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:\n  - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. \"add\" means a wholly new feature, \"update\" means an enhancement to an existing feature, \"fix\" means a bug fix, etc.).\n  - Check for any sensitive information that shouldn't be committed\n  - Draft a concise (1-2 sentences) commit message that focuses on the \"why\" rather than the \"what\"\n  - Ensure it accurately reflects the changes and their purpose\n3. You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. ALWAYS run the following commands in parallel:\n   - Add relevant untracked files to the staging area.\n   - Create the commit with a message ending with:\n   \ud83e\udd16 Generated with [Claude Code](https://claude.ai/code)\n\n   Co-Authored-By: Claude <noreply@anthropic.com>\n   - Run git status to make sure the commit succeeded.\n4. If the commit fails due to pre-commit hook changes, retry the commit ONCE to include these automated changes. If it fails again, it usually means a pre-commit hook is preventing the commit. If the commit succeeds but you notice that files were modified by the pre-commit hook, you MUST amend your commit to include them.\n\nImportant notes:\n- NEVER update the git config\n- NEVER run additional commands to read or explore code, besides git bash commands\n- NEVER use the TodoWrite or Task tools\n- DO NOT push to the remote repository unless the user explicitly asks you to do so\n- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported.\n- If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit\n- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this example:\n<example>\ngit commit -m \"$(cat <<'EOF'\n   Commit message here.\n\n   \ud83e\udd16 Generated with [Claude Code](https://claude.ai/code)\n\n   Co-Authored-By: Claude <noreply@anthropic.com>\n   EOF\n   )\"\n</example>\n\n# Creating pull requests\nUse the gh command via the Bash tool for ALL GitHub-related tasks including working with issues, pull requests, checks, and releases. If given a Github URL use the gh command to get the information needed.\n\nIMPORTANT: When the user asks you to create a pull request, follow these steps carefully:\n\n1. You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. ALWAYS run the following bash commands in parallel using the Bash tool, in order to understand the current state of the branch since it diverged from the main branch:\n   - Run a git status command to see all untracked files\n   - Run a git diff command to see both staged and unstaged changes that will be committed\n   - Check if the current branch tracks a remote branch and is up to date with the remote, so you know if you need to push to the remote\n   - Run a git log command and `git diff [base-branch]...HEAD` to understand the full commit history for the current branch (from the time it diverged from the base branch)\n2. Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull request!!!), and draft a pull request summary\n3. You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. ALWAYS run the following commands in parallel:\n   - Create new branch if needed\n   - Push to remote with -u flag if needed\n   - Create PR using gh pr create with the format below. Use a HEREDOC to pass the body to ensure correct formatting.\n<example>\ngh pr create --title \"the pr title\" --body \"$(cat <<'EOF'\n## Summary\n<1-3 bullet points>\n\n## Test plan\n[Checklist of TODOs for testing the pull request...]\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.ai/code)\nEOF\n)\"\n</example>\n\nImportant:\n- NEVER update the git config\n- DO NOT use the TodoWrite or Task tools\n- Return the PR URL when you're done, so the user can see it\n\n# Other common operations\n- View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The command to execute"
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Optional timeout in milliseconds (max 600000)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": " Clear, concise description of what this command does in 5-10 words. Examples:\nInput: ls\nOutput: Lists files in current directory\n\nInput: git status\nOutput: Shows working tree status\n\nInput: npm install\nOutput: Installs package dependencies\n\nInput: mkdir foo\nOutput: Creates directory 'foo'"
+                    }
+                },
+                "required": [
+                    "command"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "Glob",
+            "description": "- Fast file pattern matching tool that works with any codebase size\n- Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"\n- Returns matching file paths sorted by modification time\n- Use this tool when you need to find files by name patterns\n- When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead\n- You have the capability to call multiple tools in a single response. It is always better to speculatively perform multiple searches as a batch that are potentially useful.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "The glob pattern to match files against"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided."
+                    }
+                },
+                "required": [
+                    "pattern"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "Grep",
+            "description": "A powerful search tool built on ripgrep\n\n  Usage:\n  - ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash command. The Grep tool has been optimized for correct permissions and access.\n  - Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\")\n  - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type parameter (e.g., \"js\", \"py\", \"rust\")\n  - Output modes: \"content\" shows matching lines, \"files_with_matches\" shows only file paths (default), \"count\" shows match counts\n  - Use Task tool for open-ended searches requiring multiple rounds\n  - Pattern syntax: Uses ripgrep (not grep) - literal braces need escaping (use `interface\\{\\}` to find `interface{}` in Go code)\n  - Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`\n",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "The regular expression pattern to search for in file contents"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory to search in (rg PATH). Defaults to current working directory."
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"
+                    },
+                    "output_mode": {
+                        "type": "string",
+                        "enum": [
+                            "content",
+                            "files_with_matches",
+                            "count"
+                        ],
+                        "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\"."
+                    },
+                    "-B": {
+                        "type": "number",
+                        "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise."
+                    },
+                    "-A": {
+                        "type": "number",
+                        "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise."
+                    },
+                    "-C": {
+                        "type": "number",
+                        "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise."
+                    },
+                    "-n": {
+                        "type": "boolean",
+                        "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise."
+                    },
+                    "-i": {
+                        "type": "boolean",
+                        "description": "Case insensitive search (rg -i)"
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types."
+                    },
+                    "head_limit": {
+                        "type": "number",
+                        "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). When unspecified, shows all results from ripgrep."
+                    },
+                    "multiline": {
+                        "type": "boolean",
+                        "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
+                    }
+                },
+                "required": [
+                    "pattern"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "LS",
+            "description": "Lists files and directories in a given path. The path parameter must be an absolute path, not a relative path. You can optionally provide an array of glob patterns to ignore with the ignore parameter. You should generally prefer the Glob and Grep tools, if you know which directories to search.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The absolute path to the directory to list (must be absolute, not relative)"
+                    },
+                    "ignore": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "List of glob patterns to ignore"
+                    }
+                },
+                "required": [
+                    "path"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "exit_plan_mode",
+            "description": "Use this tool when you are in plan mode and have finished presenting your plan and are ready to code. This will prompt the user to exit plan mode. \nIMPORTANT: Only use this tool when the task requires planning the implementation steps of a task that requires writing code. For research tasks where you're gathering information, searching files, reading files or in general trying to understand the codebase - do NOT use this tool.\n\nEg. \n1. Initial task: \"Search for and understand the implementation of vim mode in the codebase\" - Do not use the exit plan mode tool because you are not planning the implementation steps of a task.\n2. Initial task: \"Help me implement yank mode for vim\" - Use the exit plan mode tool after you have finished planning the implementation steps of the task.\n",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "plan": {
+                        "type": "string",
+                        "description": "The plan you came up with, that you want to run by the user for approval. Supports markdown. The plan should be pretty concise."
+                    }
+                },
+                "required": [
+                    "plan"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "Read",
+            "description": "Reads a file from the local filesystem. You can access any file directly by using this tool.\nAssume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.\n\nUsage:\n- The file_path parameter must be an absolute path, not a relative path\n- By default, it reads up to 2000 lines starting from the beginning of the file\n- You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters\n- Any lines longer than 2000 characters will be truncated\n- Results are returned using cat -n format, with line numbers starting at 1\n- This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Claude Code is a multimodal LLM.\n- For Jupyter notebooks (.ipynb files), use the NotebookRead instead\n- You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful. \n- You will regularly be asked to read screenshots. If the user provides a path to a screenshot ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths like /var/folders/123/abc/T/TemporaryItems/NSIRD_screencaptureui_ZfB1tD/Screenshot.png\n- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path to the file to read"
+                    },
+                    "offset": {
+                        "type": "number",
+                        "description": "The line number to start reading from. Only provide if the file is too large to read at once"
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "The number of lines to read. Only provide if the file is too large to read at once."
+                    }
+                },
+                "required": [
+                    "file_path"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "Edit",
+            "description": "Performs exact string replacements in files. \n\nUsage:\n- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. \n- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`. \n- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path to the file to modify"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The text to replace"
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The text to replace it with (must be different from old_string)"
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Replace all occurences of old_string (default false)"
+                    }
+                },
+                "required": [
+                    "file_path",
+                    "old_string",
+                    "new_string"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "MultiEdit",
+            "description": "This is a tool for making multiple edits to a single file in one operation. It is built on top of the Edit tool and allows you to perform multiple find-and-replace operations efficiently. Prefer this tool over the Edit tool when you need to make multiple edits to the same file.\n\nBefore using this tool:\n\n1. Use the Read tool to understand the file's contents and context\n2. Verify the directory path is correct\n\nTo make multiple file edits, provide the following:\n1. file_path: The absolute path to the file to modify (must be absolute, not relative)\n2. edits: An array of edit operations to perform, where each edit contains:\n   - old_string: The text to replace (must match the file contents exactly, including all whitespace and indentation)\n   - new_string: The edited text to replace the old_string\n   - replace_all: Replace all occurences of old_string. This parameter is optional and defaults to false.\n\nIMPORTANT:\n- All edits are applied in sequence, in the order they are provided\n- Each edit operates on the result of the previous edit\n- All edits must be valid for the operation to succeed - if any edit fails, none will be applied\n- This tool is ideal when you need to make several changes to different parts of the same file\n- For Jupyter notebooks (.ipynb files), use the NotebookEdit instead\n\nCRITICAL REQUIREMENTS:\n1. All edits follow the same requirements as the single Edit tool\n2. The edits are atomic - either all succeed or none are applied\n3. Plan your edits carefully to avoid conflicts between sequential operations\n\nWARNING:\n- The tool will fail if edits.old_string doesn't match the file contents exactly (including whitespace)\n- The tool will fail if edits.old_string and edits.new_string are the same\n- Since edits are applied in sequence, ensure that earlier edits don't affect the text that later edits are trying to find\n\nWhen making edits:\n- Ensure all edits result in idiomatic, correct code\n- Do not leave the code in a broken state\n- Always use absolute file paths (starting with /)\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- Use replace_all for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.\n\nIf you want to create a new file, use:\n- A new file path, including dir name if needed\n- First edit: empty old_string and the new file's contents as new_string\n- Subsequent edits: normal edit operations on the created content",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path to the file to modify"
+                    },
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {
+                                    "type": "string",
+                                    "description": "The text to replace"
+                                },
+                                "new_string": {
+                                    "type": "string",
+                                    "description": "The text to replace it with"
+                                },
+                                "replace_all": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "Replace all occurences of old_string (default false)."
+                                }
+                            },
+                            "required": [
+                                "old_string",
+                                "new_string"
+                            ],
+                            "additionalProperties": false
+                        },
+                        "minItems": 1,
+                        "description": "Array of edit operations to perform sequentially on the file"
+                    }
+                },
+                "required": [
+                    "file_path",
+                    "edits"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "Write",
+            "description": "Writes a file to the local filesystem.\n\nUsage:\n- This tool will overwrite the existing file if there is one at the provided path.\n- If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.\n- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path to the file to write (must be absolute, not relative)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file"
+                    }
+                },
+                "required": [
+                    "file_path",
+                    "content"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "NotebookRead",
+            "description": "Reads a Jupyter notebook (.ipynb file) and returns all of the cells with their outputs. Jupyter notebooks are interactive documents that combine code, text, and visualizations, commonly used for data analysis and scientific computing. The notebook_path parameter must be an absolute path, not a relative path.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "notebook_path": {
+                        "type": "string",
+                        "description": "The absolute path to the Jupyter notebook file to read (must be absolute, not relative)"
+                    },
+                    "cell_id": {
+                        "type": "string",
+                        "description": "The ID of a specific cell to read. If not provided, all cells will be read."
+                    }
+                },
+                "required": [
+                    "notebook_path"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "NotebookEdit",
+            "description": "Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new source. Jupyter notebooks are interactive documents that combine code, text, and visualizations, commonly used for data analysis and scientific computing. The notebook_path parameter must be an absolute path, not a relative path. The cell_number is 0-indexed. Use edit_mode=insert to add a new cell at the index specified by cell_number. Use edit_mode=delete to delete the cell at the index specified by cell_number.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "notebook_path": {
+                        "type": "string",
+                        "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)"
+                    },
+                    "cell_id": {
+                        "type": "string",
+                        "description": "The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified."
+                    },
+                    "new_source": {
+                        "type": "string",
+                        "description": "The new source for the cell"
+                    },
+                    "cell_type": {
+                        "type": "string",
+                        "enum": [
+                            "code",
+                            "markdown"
+                        ],
+                        "description": "The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required."
+                    },
+                    "edit_mode": {
+                        "type": "string",
+                        "enum": [
+                            "replace",
+                            "insert",
+                            "delete"
+                        ],
+                        "description": "The type of edit to make (replace, insert, delete). Defaults to replace."
+                    }
+                },
+                "required": [
+                    "notebook_path",
+                    "new_source"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "WebFetch",
+            "description": "\n- Fetches content from a specified URL and processes it using an AI model\n- Takes a URL and a prompt as input\n- Fetches the URL content, converts HTML to markdown\n- Processes the content with the prompt using a small, fast model\n- Returns the model's response about the content\n- Use this tool when you need to retrieve and analyze web content\n\nUsage notes:\n  - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using that tool instead of this one, as it may have fewer restrictions. All MCP-provided tools start with \"mcp__\".\n  - The URL must be a fully-formed valid URL\n  - HTTP URLs will be automatically upgraded to HTTPS\n  - The prompt should describe what information you want to extract from the page\n  - This tool is read-only and does not modify any files\n  - Results may be summarized if the content is very large\n  - Includes a self-cleaning 15-minute cache for faster responses when repeatedly accessing the same URL\n  - When a URL redirects to a different host, the tool will inform you and provide the redirect URL in a special format. You should then make a new WebFetch request with the redirect URL to fetch the content.\n",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "format": "uri",
+                        "description": "The URL to fetch content from"
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "The prompt to run on the fetched content"
+                    }
+                },
+                "required": [
+                    "url",
+                    "prompt"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "TodoWrite",
+            "description": "Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.\nIt also helps the user understand the progress of the task and overall progress of their requests.\n\n## When to Use This Tool\nUse this tool proactively in these scenarios:\n\n1. Complex multi-step tasks - When a task requires 3 or more distinct steps or actions\n2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations\n3. User explicitly requests todo list - When the user directly asks you to use the todo list\n4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)\n5. After receiving new instructions - Immediately capture user requirements as todos\n6. When you start working on a task - Mark it as in_progress BEFORE beginning work. Ideally you should only have one todo as in_progress at a time\n7. After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation\n\n## When NOT to Use This Tool\n\nSkip using this tool when:\n1. There is only a single, straightforward task\n2. The task is trivial and tracking it provides no organizational benefit\n3. The task can be completed in less than 3 trivial steps\n4. The task is purely conversational or informational\n\nNOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.\n\n## Examples of When to Use the Todo List\n\n<example>\nUser: I want to add a dark mode toggle to the application settings. Make sure you run the tests and build when you're done!\nAssistant: I'll help add a dark mode toggle to your application settings. Let me create a todo list to track this implementation.\n*Creates todo list with the following items:*\n1. Create dark mode toggle component in Settings page\n2. Add dark mode state management (context/store)\n3. Implement CSS-in-JS styles for dark theme\n4. Update existing components to support theme switching\n5. Run tests and build process, addressing any failures or errors that occur\n*Begins working on the first task*\n\n<reasoning>\nThe assistant used the todo list because:\n1. Adding dark mode is a multi-step feature requiring UI, state management, and styling changes\n2. The user explicitly requested tests and build be run afterward\n3. The assistant inferred that tests and build need to pass by adding \"Ensure tests and build succeed\" as the final task\n</reasoning>\n</example>\n\n<example>\nUser: Help me rename the function getCwd to getCurrentWorkingDirectory across my project\nAssistant: Let me first search through your codebase to find all occurrences of 'getCwd'.\n*Uses grep or search tools to locate all instances of getCwd in the codebase*\nAssistant: I've found 15 instances of 'getCwd' across 8 different files. Let me create a todo list to track these changes.\n*Creates todo list with specific items for each file that needs updating*\n\n<reasoning>\nThe assistant used the todo list because:\n1. First, the assistant searched to understand the scope of the task\n2. Upon finding multiple occurrences across different files, it determined this was a complex task with multiple steps\n3. The todo list helps ensure every instance is tracked and updated systematically\n4. This approach prevents missing any occurrences and maintains code consistency\n</reasoning>\n</example>\n\n\n<example>\nUser: I need to implement these features for my e-commerce site: user registration, product catalog, shopping cart, and checkout flow.\nAssistant: I'll help implement these features. First, let's add all the features to the todo list.\n*Creates a todo list breaking down each feature into specific tasks based on the project architecture*\nAssistant: Let's start with user registration. This will involve creating database models, API endpoints, and frontend forms that integrate with your existing authentication system.\n\n<reasoning>\nThe assistant used the todo list because:\n1. The user provided multiple complex features to implement in a comma separated list\n2. The todo list helps organize these large features into manageable tasks\n3. This approach allows for tracking progress across the entire implementation\n</reasoning>\n</example>\n\n<example>\nUser: Can you help optimize my React application? It's rendering slowly and has performance issues.</user>\nAssistant: I'll help optimize your React application. First, let me examine your codebase to identify potential performance bottlenecks.\n*Reviews component structure, render patterns, state management, and data fetching*\nAssistant: After analyzing your codebase, I've identified several performance issues. Let me create a todo list to track our optimization efforts.\n*Creates todo list with items like: 1) Implement memoization for expensive calculations in ProductList, 2) Add virtualization for long lists in Dashboard, 3) Optimize image loading in Gallery component, 4) Fix state update loops in ShoppingCart, 5) Review bundle size and implement code splitting*\nLet's start by implementing memoization for the expensive calculations in your ProductList component.</assistant>\n\n<reasoning>\nThe assistant used the todo list because:\n1. First, the assistant examined the codebase to identify specific performance issues\n2. Based on this analysis, it identified multiple optimization opportunities\n3. Performance optimization is a non-trivial task requiring multiple steps\n4. The todo list helps methodically track improvements across different components\n5. This systematic approach ensures all performance bottlenecks are addressed\n</reasoning>\n</example>\n\n## Examples of When NOT to Use the Todo List\n\n<example>\nUser: How do I print 'Hello World' in Python?\nAssistant: In Python, you can print \"Hello World\" with this simple code:\n\npython\nprint(\"Hello World\")\n\nThis will output the text \"Hello World\" to the console when executed.</assistant>\n\n<reasoning>\nThe assistant did not use the todo list because this is a single, trivial task that can be completed in one step. There's no need to track multiple tasks or steps for such a straightforward request.\n</reasoning>\n</example>\n\n<example>\nUser: What does the git status command do?\nAssistant: The git status command shows the current state of your working directory and staging area. It displays which changes have been staged, which haven't, and which files aren't being tracked by Git. This is a fundamental command for understanding the current state of your repository before making commits.\n\n<reasoning>\nThe assistant did not use the todo list because this is an informational request with no actual coding task to complete. The user is simply asking for an explanation, not for the assistant to perform multiple steps or tasks.\n</reasoning>\n</example>\n\n<example>\nUser: Can you add a comment to the calculateTotal function to explain what it does?\nAssistant: Sure, let me add a comment to the calculateTotal function to explain what it does.\n* Uses the Edit tool to add a comment to the calculateTotal function *\n\n<reasoning>\nThe assistant did not use the todo list because this is a single, straightforward task confined to one location in the code. Adding a comment doesn't require tracking multiple steps or systematic organization.\n</reasoning>\n</example>\n\n<example>\nUser: Run npm install for me and tell me what happens.\nAssistant: I'll run the npm install command for you.\n\n*Executes: npm install*\n\nThe command completed successfully. Here's the output:\n[Output of npm install command]\n\nAll dependencies have been installed according to your package.json file.\n\n<reasoning>\nThe assistant did not use the todo list because this is a single command execution with immediate results. There are no multiple steps to track or organize, making the todo list unnecessary for this straightforward task.\n</reasoning>\n</example>\n\n## Task States and Management\n\n1. **Task States**: Use these states to track progress:\n   - pending: Task not yet started\n   - in_progress: Currently working on (limit to ONE task at a time)\n   - completed: Task finished successfully\n\n2. **Task Management**:\n   - Update task status in real-time as you work\n   - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)\n   - Only have ONE task in_progress at any time\n   - Complete current tasks before starting new ones\n   - Remove tasks that are no longer relevant from the list entirely\n\n3. **Task Completion Requirements**:\n   - ONLY mark a task as completed when you have FULLY accomplished it\n   - If you encounter errors, blockers, or cannot finish, keep the task as in_progress\n   - When blocked, create a new task describing what needs to be resolved\n   - Never mark a task as completed if:\n     - Tests are failing\n     - Implementation is partial\n     - You encountered unresolved errors\n     - You couldn't find necessary files or dependencies\n\n4. **Task Breakdown**:\n   - Create specific, actionable items\n   - Break complex tasks into smaller, manageable steps\n   - Use clear, descriptive task names\n\nWhen in doubt, use this tool. Being proactive with task management demonstrates attentiveness and ensures you complete all requirements successfully.\n",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": [
+                                        "pending",
+                                        "in_progress",
+                                        "completed"
+                                    ]
+                                },
+                                "priority": {
+                                    "type": "string",
+                                    "enum": [
+                                        "high",
+                                        "medium",
+                                        "low"
+                                    ]
+                                },
+                                "id": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "content",
+                                "status",
+                                "priority",
+                                "id"
+                            ],
+                            "additionalProperties": false
+                        },
+                        "description": "The updated todo list"
+                    }
+                },
+                "required": [
+                    "todos"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "name": "WebSearch",
+            "description": "\n- Allows Claude to search the web and use the results to inform responses\n- Provides up-to-date information for current events and recent data\n- Returns search result information formatted as search result blocks\n- Use this tool for accessing information beyond Claude's knowledge cutoff\n- Searches are performed automatically within a single API call\n\nUsage notes:\n  - Domain filtering is supported to include or block specific websites\n  - Web search is only available in the US\n  - Account for \"Today's date\" in <env>. For example, if <env> says \"Today's date: 2025-07-01\", and the user wants the latest docs, do not use 2024 in the search query. Use 2025.\n",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 2,
+                        "description": "The search query to use"
+                    },
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Only include search results from these domains"
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Never include search results from these domains"
+                    }
+                },
+                "required": [
+                    "query"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        }
+    ],
+    "metadata": {
+        "user_id": "2e6c5b305797d8b7a06df4e8b285bb53bd45825f66cb49ff8de0c8c2fcc29d0c"
+    },
+    "max_tokens": 21333
+}

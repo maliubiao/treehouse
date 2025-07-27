@@ -1324,7 +1324,7 @@ def _handle_linux_clipboard():
     """处理Linux平台的剪贴板内容"""
     try:
         return _get_linux_text_content()
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, UnicodeDecodeError):
         return _handle_linux_image()
     except FileNotFoundError:
         return "无法获取剪贴板内容：未找到xclip或xsel"

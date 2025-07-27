@@ -68,13 +68,15 @@ jobs:
       - name: Run Unittest tests
         # tests/test_main.py exits with non-zero code on failure
         env:
-          PYTHONPATH: .
+          # Add project root, compiled C extensions, and system lldb module to Python's path
+          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages
         run: |
           xvfb-run uv run python tests/test_main.py
 
       - name: Run Pytest tests
         # tests/pytests_main.py exits with non-zero code on failure
         env:
-          PYTHONPATH: .
+          # Add project root, compiled C extensions, and system lldb module to Python's path
+          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages
         run: |
           xvfb-run uv run python tests/pytests_main.py
