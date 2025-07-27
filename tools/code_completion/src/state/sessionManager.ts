@@ -1,4 +1,3 @@
-
 import * as vscode from 'vscode';
 import { TempFileManager } from '../utils/tempFileManager';
 import { showInfoMessage } from '../ui/interactions';
@@ -31,10 +30,18 @@ class SessionManager {
   private currentSession: GenerationSession | null = null;
   private static readonly CONTEXT_KEY = 'treehouseCodeCompleter.diffViewActive';
   private endingPromise: Promise<void> | null = null;
+  private diffTabHasBeenSeen: boolean = false;
   
   public isSessionActive(): boolean {
-    const active = !!this.currentSession;
-    return active;
+    return !!this.currentSession;
+  }
+
+  public getDiffTabHasBeenSeen(): boolean {
+    return this.diffTabHasBeenSeen;
+  }
+
+  public setDiffTabHasBeenSeen(seen: boolean): void {
+    this.diffTabHasBeenSeen = seen;
   }
 
   public async start(session: GenerationSession): Promise<void> {
@@ -43,6 +50,7 @@ class SessionManager {
       this.endingPromise = null;
     }
     this.currentSession = session;
+    this.diffTabHasBeenSeen = false;
     
     await vscode.commands.executeCommand('setContext', SessionManager.CONTEXT_KEY, true);
     logger.log('Generation session started.', { originalUri: session.originalUri.toString(), newUri: session.newUri.toString() });
@@ -62,6 +70,7 @@ class SessionManager {
 
     const session = this.currentSession;
     this.currentSession = null;
+    this.diffTabHasBeenSeen = false;
 
     this.endingPromise = this.performEnd(session);
     await this.endingPromise;

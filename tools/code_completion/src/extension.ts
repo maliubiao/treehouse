@@ -62,13 +62,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Listener to clean up session if diff tab is closed manually
     const onDidChangeTabs = vscode.window.tabGroups.onDidChangeTabs(async () => {
+        // Add a small delay to give VS Code time to update its tab state,
+        // which helps prevent race conditions where the tab is not yet in the list.
+        await new Promise(resolve => setTimeout(resolve, 150));
+        
         if (!sessionManager.isSessionActive()) {
             return;
         }
         const activeUris = sessionManager.getActiveSessionUris();
         if (!activeUris) return;
-
-        // Check if any diff tab corresponding to our session is still open
+    
         const isDiffTabOpen = vscode.window.tabGroups.all.some(tg =>
             tg.tabs.some(tab =>
                 tab.input instanceof vscode.TabInputTextDiff &&
@@ -76,11 +79,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 tab.input.modified.toString() === activeUris.newUri.toString()
             )
         );
-        
-        if (!isDiffTabOpen) {
-            logger.log('Diff tab closed by user, ending session.');
-            // Using a small delay to prevent race conditions with other tab events
-            setTimeout(() => sessionManager.end(), 100);
+    
+        if (isDiffTabOpen) {
+            // We see the tab, so we mark it as seen. This happens when the tab successfully opens.
+            if (!sessionManager.getDiffTabHasBeenSeen()) {
+                logger.log('Diff tab is now visible and tracked.');
+                sessionManager.setDiffTabHasBeenSeen(true);
+            }
+        } else {
+            // The tab is not open. We only end the session if we had previously seen the tab.
+            if (sessionManager.getDiffTabHasBeenSeen()) {
+                logger.log('Tracked diff tab was closed by user, ending session.');
+                // Using a small delay to prevent race conditions with other tab events.
+                setTimeout(() => sessionManager.end(), 100);
+            } else {
+                // This case handles the race condition: a session is active,
+                // but its diff tab hasn't been registered in the UI yet. We do nothing and wait.
+                logger.log('Diff tab not yet visible, likely still opening. Waiting.');
+            }
         }
     });
 

@@ -8,7 +8,7 @@ import tempfile
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 from unittest.mock import ANY
 
 from colorama import Fore, Style
@@ -19,22 +19,13 @@ from tqdm import tqdm
 from debugger import tracer
 from llm_query import (
     GPT_FLAG_EDIT,
-    GPT_FLAG_PATCH,
     GPT_FLAGS,
-    GPT_SYMBOL_PATCH,
-    GPT_VALUE_STORAGE,
-    FileSearchResult,
-    FileSearchResults,
     GPTContextProcessor,
-    MatchResult,
     ModelSwitch,
-    PatchPromptBuilder,
     get_clipboard_content_string,
     inject_edit_prompt_if_needed,
     prepare_ask_text,
-    process_patch_response,
     process_response,
-    query_symbol_service,
     should_use_json_output,
 )
 
@@ -50,38 +41,19 @@ def extract_test_case_trace_from_log(log_file_path: str, test_id: str) -> Option
     Returns:
         Optional[int]: 如果找到对应的 frame_id，则返回其整数值；否则返回 None。
     """
-    # 定义正则表达式来捕获 frame_id
-    # r"\[frame:(\d+)\]" 解释:
-    #   \[    : 匹配字面量 '['
-    #   frame:: 匹配字面量 'frame:'
-    #   (\d+) : 捕获一个或多个数字 (这是我们想要的 frame_id)
-    #   \]    : 匹配字面量 ']'
     frame_id_pattern = re.compile(r"\[frame:(\d+)\]")
-
-    # 构建要查找的 testMethod 字符串，提高匹配效率
     target_test_method_str = f"testMethod={test_id}"
 
     try:
         with open(log_file_path, "r", encoding="utf-8") as f:
             for line in f:
-                # 1. 快速字符串查找过滤：
-                # 检查行中是否包含 "↘ CALL" 和 目标 testMethod 字符串。
-                # 这是一个高效的初步过滤，避免对不相关的行进行正则匹配。
                 if "↘ CALL" in line and target_test_method_str in line and "startTest(" in line:
-                    # 2. 进一步检查是否包含 "[frame:"，如果包含，才尝试正则匹配
-                    # 再次避免不必要的正则操作，因为有些行可能匹配前两个条件但没有 frame id
                     if "[frame:" in line:
-                        # 3. 使用正则表达式提取 frame_id
                         match = frame_id_pattern.search(line)
                         if match:
-                            # 提取捕获组1 (即括号内的数字)
                             frame_id_str = match.group(1)
-                            # 转换为整数并返回，同时及时中止循环
                             return int(frame_id_str)
-
-        # 如果循环结束仍未找到，则返回 None
         return None
-
     except FileNotFoundError:
         print(f"错误: 文件 '{log_file_path}' 未找到。")
         return None
@@ -148,7 +120,7 @@ class TestAutoFix:
         self.test_results = test_results
         self.user_requirement = user_requirement
         self.error_details = self._extract_error_details()
-        self.uniq_references = set()
+        self.uniq_references: Set[Tuple[str, int]] = set()
         self.trace_log = ""
         self.exception_location: Optional[tuple] = None  # (file_path, line_no)
         self.main_call_chain: Optional[List[Dict]] = None
@@ -423,167 +395,6 @@ class TestAutoFix:
                 print(Fore.RED + f"\nFailed to extract tracer logs: {str(e)}")
             self.exception_location = (file_path, line)  # Fallback
 
-    def get_and_prioritize_symbols(self, model_switch: ModelSwitch, silent: bool = False) -> dict:
-        """
-        Fetches symbols and prioritizes them based on the call stack at the time of the exception.
-        It uses a layered approach, adding symbols from the call stack first (deepest to shallowest),
-        and then filling any remaining context budget with other referenced symbols.
-
-        1. The call stack at the moment of exception is reconstructed from the trace.
-        2. Symbols from this stack are added, starting from the exception source (deepest) and moving up.
-        3. If context budget remains, other symbols that were called during the trace are added, smallest first.
-        """
-        if not self.uniq_references:
-            return {}
-
-        if not silent:
-            print(Fore.CYAN + "\n" + "=" * 15 + " Building Smart Context " + "=" * 15)
-
-        # 1. Get model configuration and token budget
-        config = model_switch.current_config
-        MAX_SYMBOLS_TOKENS = (config.max_context_size or 32768) - 4096
-        if not silent:
-            print(
-                Fore.BLUE
-                + f"Model context limit: {config.max_context_size}, budget for symbols: {MAX_SYMBOLS_TOKENS} tokens (estimated)."
-            )
-
-        # 2. Fetch ALL referenced symbols to get their content and size
-        file_to_lines = defaultdict(list)
-        for filename, lineno in self.uniq_references:
-            if filename and lineno:
-                file_to_lines[filename].append(lineno)
-
-        file_results = []
-        for filename, lines in file_to_lines.items():
-            matches = [MatchResult(line=lineno, column_range=(0, 0), text="") for lineno in lines]
-            file_results.append(FileSearchResult(file_path=filename, matches=matches))
-
-        all_symbols = query_symbol_service(FileSearchResults(results=file_results), 1024 * 1024)
-        if not all_symbols:
-            if not silent:
-                print(Fore.RED + "Could not retrieve any symbol information.")
-            return {}
-        if not silent:
-            for sym in all_symbols:
-                print("symbol service returns symbol: %s" % sym)
-        # 3. Create a lookup map for symbols with their approximate token counts
-        location_to_symbol_map = {}
-        total_tokens = 0  # Track total tokens of all symbols
-        for name, symbol_data in all_symbols.items():
-            content = symbol_data.get("code", "")
-            tokens = len(content) // 3
-            total_tokens += tokens
-            location_to_symbol_map[name] = {"name": name, "tokens": tokens, "data": symbol_data}
-
-        # 4. Check if all symbols fit within token budget
-        if total_tokens <= MAX_SYMBOLS_TOKENS:
-            if not silent:
-                print(Fore.CYAN + "\nAll symbols fit within token budget. Adding all without prioritization:")
-            final_symbols = {name: data["data"] for name, data in location_to_symbol_map.items()}
-            if not silent:
-                print(Fore.GREEN + f"  ✓ Added all {len(final_symbols)} symbols ({total_tokens} tokens)")
-                print(
-                    Fore.CYAN
-                    + f"\nSelected {len(final_symbols)} symbols with a total of ~{total_tokens} tokens for context."
-                )
-                print(Fore.CYAN + "=" * 54)
-            return final_symbols
-
-        # 5. Reconstruct the call stack at the point of exception
-        call_stack_at_exception = []
-        if self.main_call_chain:
-            temp_stack = []
-            for ref in self.main_call_chain:
-                ref_type = ref.get("type")
-                if ref_type == "call":
-                    temp_stack.append((ref.get("filename", "?"), ref.get("lineno", 0)))
-                elif ref_type == "return":
-                    if temp_stack:
-                        temp_stack.pop()
-                elif ref_type == "exception":
-                    call_stack_at_exception = list(temp_stack)
-                    break
-
-        if not call_stack_at_exception and self.exception_location:
-            call_stack_at_exception.append(self.exception_location)
-
-        # 6. Prioritize and build the final list of symbols
-        final_symbols = {}
-        added_symbol_names = set()
-        current_tokens = 0
-
-        # 6a. Add symbols from the call stack, deepest first
-        if call_stack_at_exception:
-            if not silent:
-                print(Fore.CYAN + "\nAdding symbols from exception call stack (deepest first):")
-            for loc in reversed(call_stack_at_exception):
-                file_path, lineno = loc
-
-                containing_symbol = None
-                smallest_size = float("inf")
-                for symbol_info in location_to_symbol_map.values():
-                    s_file = symbol_info["data"]["file_path"]
-                    s_start = symbol_info["data"]["start_line"]
-                    s_end = symbol_info["data"]["end_line"]
-                    if s_file == file_path and s_start <= lineno <= s_end:
-                        symbol_size = s_end - s_start
-                        if symbol_size < smallest_size:
-                            containing_symbol = symbol_info
-                            smallest_size = symbol_size
-
-                if containing_symbol:
-                    name = containing_symbol["name"]
-                    tokens = containing_symbol["tokens"]
-                    if name in added_symbol_names:
-                        continue
-
-                    if current_tokens + tokens <= MAX_SYMBOLS_TOKENS:
-                        final_symbols[name] = containing_symbol["data"]
-                        current_tokens += tokens
-                        added_symbol_names.add(name)
-                        if not silent:
-                            print(Fore.GREEN + f"  ✓ Added: {name} ({tokens} tokens)")
-                    else:
-                        if not silent:
-                            print(Fore.YELLOW + f"  - Skipping {name} ({tokens} tokens) to fit context. Budget full.")
-                        break
-
-        # 6b. Fill remaining budget with other referenced symbols, smallest first
-        if current_tokens < MAX_SYMBOLS_TOKENS:
-            if not silent:
-                print(Fore.CYAN + "\nFilling remaining context with other referenced symbols (smallest first):")
-
-            other_symbols = []
-            for symbol_info in location_to_symbol_map.values():
-                if symbol_info["name"] not in added_symbol_names:
-                    other_symbols.append(symbol_info)
-
-            sorted_other_symbols = sorted(other_symbols, key=lambda x: x["tokens"])
-
-            for symbol in sorted_other_symbols:
-                if current_tokens + symbol["tokens"] <= MAX_SYMBOLS_TOKENS:
-                    final_symbols[symbol["name"]] = symbol["data"]
-                    current_tokens += symbol["tokens"]
-                    added_symbol_names.add(symbol["name"])
-                    if not silent:
-                        print(Fore.GREEN + f"  ✓ Added: {symbol['name']} ({symbol['tokens']} tokens)")
-                else:
-                    break
-
-        total_symbols = len(final_symbols)
-        if not silent:
-            print(
-                Fore.CYAN + f"\nSelected {total_symbols} symbols with a total of ~{current_tokens} tokens for context."
-            )
-            print(Fore.CYAN + "=" * 54)
-
-        if not final_symbols and all_symbols:
-            if not silent:
-                print(Fore.RED + "Error: No symbols could be added. The primary exception symbol might be too large.")
-
-        return final_symbols
-
     @staticmethod
     @tracer.trace(
         target_files=["*.py"],
@@ -616,22 +427,58 @@ def _consume_stream_and_get_text(stream_generator, print_stream: bool = True) ->
     return "".join(text_chunks)
 
 
-def _interactive_patch_and_retry(fixer_model_switch: ModelSwitch, prompt: str, symbol_storage: list) -> bool:
+def _full_context_fix_and_retry(
+    prompt_content: str,
+    file_references: List[str],
+    model_switch: ModelSwitch,
+) -> bool:
     """
-    Interactively generates and applies a patch, allowing the user to retry on failure.
+    Generates and applies changes using full-context, allowing the user to retry on failure.
     Returns True on success, False on failure or user cancellation.
     """
+    ask_string = f"@edit {' '.join(file_references)} \n\n{prompt_content}"
+
+    GPT_FLAGS[GPT_FLAG_EDIT] = True
+    os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
+
+    ask_text = prepare_ask_text(ask_string)
+    context_processor = GPTContextProcessor()
+    nodes = context_processor.parse_text_into_nodes(ask_text)
+    use_json_output = should_use_json_output(nodes)
+    max_tokens = model_switch.current_config.max_context_size
+    text = context_processor.process_text(ask_text, use_json_output=use_json_output, tokens_left=max_tokens)
+    text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
+
     while True:
         try:
             print(Fore.YELLOW + "正在生成修复方案...")
-            text_stream = fixer_model_switch.query(fixer_model_switch.model_name, prompt, stream=True)
-            process_patch_response(text_stream, symbol_storage)
+            response_stream = model_switch.query(
+                model_switch.model_name, text, use_json_output=use_json_output, stream=True
+            )
+
+            print(Fore.BLUE + "--- AI Response ---" + Style.RESET_ALL)
+            response_chunks = []
+            for chunk in response_stream:
+                print(chunk, end="", flush=True)
+                response_chunks.append(chunk)
+            print("\n" + Fore.BLUE + "-------------------" + Style.RESET_ALL)
+            response_data = "".join(response_chunks)
+
+            process_response(
+                text,
+                response_data,
+                "",
+                save=False,
+                obsidian_doc=None,
+                ask_param=ask_string,
+                use_json_output=use_json_output,
+            )
             return True  # Success
-        except (ValueError, IndexError) as e:
-            print(Fore.RED + f"\nError processing AI response to generate patch: {e}")
+        except Exception as e:
+            print(Fore.RED + f"\nError processing AI response to apply changes: {e}")
             print(
                 Fore.YELLOW
-                + "This can happen if the AI's response is malformed or doesn't follow the patch format correctly."
+                + "This can happen if the AI's response is malformed or doesn't follow the edit format correctly."
             )
             retry_choice = (
                 input(Fore.YELLOW + "Would you like to try generating the fix again? (y/n): ").strip().lower()
@@ -641,22 +488,19 @@ def _interactive_patch_and_retry(fixer_model_switch: ModelSwitch, prompt: str, s
                 return False
 
 
-def _perform_direct_fix(auto_fix: TestAutoFix, symbol_result: dict, fixer_model_switch: ModelSwitch, user_req: str):
-    """Performs a direct, one-step fix by analyzing the tracer log and generating a patch."""
+def _perform_direct_fix(auto_fix: TestAutoFix, fixer_model_switch: ModelSwitch, user_req: str):
+    """Performs a direct, one-step fix by analyzing the tracer log and generating a patch using full file context."""
     print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
 
     prompt_content = FixerPromptGenerator.create_direct_fix_prompt(trace_log=auto_fix.trace_log, user_req=user_req)
 
-    GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
-    )
-    p.process_search_results(symbol_result)
-    prompt = p.build(user_requirement=prompt_content)
+    file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
+    if not file_paths:
+        print(Fore.RED + "Could not determine relevant files for the fix.")
+        return
 
-    _interactive_patch_and_retry(
-        fixer_model_switch=fixer_model_switch, prompt=prompt, symbol_storage=GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH]
-    )
+    file_refs = [f"@{path}" for path in file_paths]
+    _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch)
 
 
 def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
@@ -717,7 +561,6 @@ def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
 
 def _perform_two_step_fix(
     auto_fix: TestAutoFix,
-    symbol_result: dict,
     analyzer_model_switch: ModelSwitch,
     fixer_model_switch: ModelSwitch,
     auto_accept: bool = False,
@@ -734,14 +577,32 @@ def _perform_two_step_fix(
     print(Fore.YELLOW + "\nStep 1: Generating failure analysis...")
     print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
+    # Common context for both steps
+    file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
+    if not file_paths:
+        print(Fore.RED + "Could not determine relevant files for analysis.")
+        return False
+    file_refs = [f"@{path}" for path in file_paths]
+    ask_edit_prefix = f"@edit {' '.join(file_refs)} \n\n"
+
     # Step 1: Generate analysis prompt and query the model
     analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
-    p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
+    analysis_text = _consume_stream_and_get_text(
+        iter(["Currently not streaming analysis text in this refactored version."])
+    )  # Placeholder
+
+    # Re-implementing the call logic here for clarity
+    full_analysis_prompt = ask_edit_prefix + analyze_prompt_content
+    context_processor = GPTContextProcessor()
+    ask_text = prepare_ask_text(full_analysis_prompt)
+    nodes = context_processor.parse_text_into_nodes(ask_text)
+    use_json = should_use_json_output(nodes)
+    processed_text = context_processor.process_text(
+        ask_text, use_json_output=use_json, tokens_left=analyzer_model_switch.current_config.max_context_size
     )
-    p_explain.process_search_results(symbol_result)
-    prompt_explain = p_explain.build(user_requirement=analyze_prompt_content)
-    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, prompt_explain, stream=True)
+    processed_text = inject_edit_prompt_if_needed(processed_text, nodes, use_json)
+
+    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text, stream=True)
     analysis_text = _consume_stream_and_get_text(stream)
 
     # Step 2: Get user feedback on the analysis
@@ -754,7 +615,7 @@ def _perform_two_step_fix(
 
     if not user_directive:
         print(Fore.RED + "User aborted the fix process.")
-        return False  # Don't remember the choice if user aborts
+        return False
 
     # Step 3: Generate the fix based on analysis and user directive
     print(Fore.YELLOW + "\nStep 2: Generating fix based on analysis and user directive...")
@@ -765,25 +626,13 @@ def _perform_two_step_fix(
         user_directive=user_directive,
     )
 
-    GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p_fix = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
-    )
-    p_fix.process_search_results(symbol_result)
-    prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
-
-    _interactive_patch_and_retry(
-        fixer_model_switch=fixer_model_switch,
-        prompt=prompt_fix,
-        symbol_storage=GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH],
-    )
+    _full_context_fix_and_retry(fix_prompt_content, file_refs, fixer_model_switch)
     return remember_choice
 
 
 def _perform_automated_fix_and_report(
     auto_fix: TestAutoFix,
     selected_error: dict,
-    symbol_result: dict,
     analyzer_model_switch: ModelSwitch,
     fixer_model_switch: ModelSwitch,
     report_generator: ReportGenerator,
@@ -792,15 +641,30 @@ def _perform_automated_fix_and_report(
     print(Fore.YELLOW + "Generating problem analysis for report...")
     print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
+    # Common context for all steps
+    file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
+    if not file_paths:
+        print(Fore.RED + "Could not determine relevant files for analysis. Skipping.")
+        return
+    file_refs = [f"@{path}" for path in file_paths]
+    ask_edit_prefix = f"@edit {' '.join(file_refs)} \n\n"
+
     # Step 1: Get Explanation for the report
     explain_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
+    full_explain_prompt = ask_edit_prefix + explain_prompt_content
 
-    p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
+    context_processor = GPTContextProcessor()
+    ask_text_explain = prepare_ask_text(full_explain_prompt)
+    nodes_explain = context_processor.parse_text_into_nodes(ask_text_explain)
+    use_json_explain = should_use_json_output(nodes_explain)
+    processed_text_explain = context_processor.process_text(
+        ask_text_explain,
+        use_json_output=use_json_explain,
+        tokens_left=analyzer_model_switch.current_config.max_context_size,
     )
-    p_explain.process_search_results(symbol_result)
-    prompt_explain = p_explain.build(user_requirement=explain_prompt_content)
-    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, prompt_explain, stream=True)
+    processed_text_explain = inject_edit_prompt_if_needed(processed_text_explain, nodes_explain, use_json_explain)
+
+    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text_explain, stream=True)
     analysis_text = _consume_stream_and_get_text(stream, print_stream=True)
 
     # Step 2: Prepare the fix prompt (which will also be in the report)
@@ -810,25 +674,39 @@ def _perform_automated_fix_and_report(
         analysis_text=analysis_text,
         user_directive=user_req_for_fix,
     )
-    GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p_fix = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
-    )
-    p_fix.process_search_results(symbol_result)
-    prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
+    full_fix_prompt = ask_edit_prefix + fix_prompt_content
 
     # Step 3: Generate and save the report
-    report_path = report_generator.create_report(test_info=selected_error, analysis=analysis_text, prompt=prompt_fix)
+    report_path = report_generator.create_report(
+        test_info=selected_error, analysis=analysis_text, prompt=full_fix_prompt
+    )
     print(Fore.GREEN + f"Analysis report saved to: {report_path}")
 
     # Step 4: Generate and apply the fix
     print(Fore.YELLOW + "Generating and applying fix...")
     print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
     try:
-        text_fix = fixer_model_switch.query(fixer_model_switch.model_name, prompt_fix, stream=True)
-        process_patch_response(text_fix, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
-    except (ValueError, IndexError) as e:
-        print(Fore.RED + f"\nError processing AI response to generate patch: {e}")
+        # Re-using the same context processing logic for the fix prompt
+        ask_text_fix = prepare_ask_text(full_fix_prompt)
+        nodes_fix = context_processor.parse_text_into_nodes(ask_text_fix)
+        use_json_fix = should_use_json_output(nodes_fix)
+        processed_text_fix = context_processor.process_text(
+            ask_text_fix, use_json_output=use_json_fix, tokens_left=fixer_model_switch.current_config.max_context_size
+        )
+        processed_text_fix = inject_edit_prompt_if_needed(processed_text_fix, nodes_fix, use_json_fix)
+
+        response_data = fixer_model_switch.query(fixer_model_switch.model_name, processed_text_fix, stream=False)
+        process_response(
+            processed_text_fix,
+            response_data,
+            "",
+            save=False,
+            obsidian_doc=None,
+            ask_param=full_fix_prompt,
+            use_json_output=use_json_fix,
+        )
+    except Exception as e:
+        print(Fore.RED + f"\nError applying changes: {e}")
         print(Fore.YELLOW + "Automated fix failed. This can happen if the AI's response is malformed. Skipping.")
 
 
@@ -868,37 +746,29 @@ def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, f
             print(Fore.RED + "\n用户选择退出修复流程。")
         return
 
+    # This logic block for trying run_log_based_fix_workflow first is a bit specialized.
+    # We will keep it but refactor the 'else' part.
     auto_fix.uniq_references = set()
     auto_fix.trace_log = ""
     trace_log = auto_fix.get_error_log(selected_error)
-    if trace_log:
-        # Save the log to a temporary file
+    if trace_log and args.from_log_file:  # Only trigger if the flag is explicitly used
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".log") as f:
             f.write(trace_log)
             log_file_path = f.name
         print(Fore.GREEN + f"\n追踪日志已保存到临时文件: {log_file_path}")
 
-        # Use the existing log-based workflow function
         class MockArgs:
-            """Mocks the argparse object for handle_ask_mode."""
+            def __init__(self, log_path: str):
+                self.from_log_file = log_path
+                self.obsidian_doc: Optional[str] = None
 
-            def __init__(self, ask_text: str, obsidian_doc: Optional[str] = None):
-                self.ask = ask_text
-                self.obsidian_doc = obsidian_doc
-                self.file: Optional[str] = None
-                self.chatbot = False
-                self.project_search: Optional[List[str]] = None
-                self.from_log_file = log_file_path
-
-        mock_args = MockArgs("")
-        run_log_based_fix_workflow(mock_args, analyzer_model_switch)
-
-        # Clean up the temporary file
+        run_log_based_fix_workflow(MockArgs(log_file_path), analyzer_model_switch)
         try:
             os.unlink(log_file_path)
         except OSError:
             pass
         _restart_with_original_args(auto_accept="y")
+        return
 
     auto_fix.display_selected_error_details(selected_error)
     if not auto_fix.uniq_references:
@@ -908,18 +778,11 @@ def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, f
             _restart_with_original_args()
         return
 
-    symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch)
-
-    if not symbol_result:
-        print(Fore.RED + "无法构建修复上下文，跳过此问题。")
-        _restart_with_original_args()  # Restart to try again or select another error
-        return
-
     if fix_mode == "direct":
-        _perform_direct_fix(auto_fix, symbol_result, fixer_model_switch, args.user_requirement)
+        _perform_direct_fix(auto_fix, fixer_model_switch, args.user_requirement)
     elif fix_mode == "two_step":
         remember_choice = _perform_two_step_fix(
-            auto_fix, symbol_result, analyzer_model_switch, fixer_model_switch, auto_accept=args.auto_accept_analysis
+            auto_fix, analyzer_model_switch, fixer_model_switch, auto_accept=args.auto_accept_analysis
         )
 
     continue_choice = input(Fore.GREEN + "\n补丁已应用。是否继续修复下一个问题？ (y/n): ").strip().lower()
@@ -933,9 +796,6 @@ def run_auto_pilot_loop(args: argparse.Namespace, analyzer_model_switch: ModelSw
     """Main loop for the fully automated test fixing and reporting workflow. Runs one cycle."""
     print(Fore.MAGENTA + "🚀 " + "=" * 20 + " Auto-Pilot Mode Engaged " + "=" * 20 + " 🚀")
     report_generator = ReportGenerator(report_dir=args.report_dir)
-    # Note: FailureTracker state is lost on restart, which is acceptable.
-    # It prevents infinite loops within a single run, not across runs.
-    # A more persistent tracker (e.g., file-based) would be needed for cross-run tracking.
     failure_tracker = FailureTracker(max_attempts=2)
 
     print(Fore.CYAN + "\n" + "=" * 20 + " 开始新一轮测试 " + "=" * 20)
@@ -975,14 +835,8 @@ def run_auto_pilot_loop(args: argparse.Namespace, analyzer_model_switch: ModelSw
         _restart_with_original_args()
         return
 
-    symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch)
-    if not symbol_result:
-        print(Fore.RED + "无法构建修复上下文，跳过此问题并重启。")
-        _restart_with_original_args()
-        return
-
     _perform_automated_fix_and_report(
-        auto_fix, selected_error, symbol_result, analyzer_model_switch, fixer_model_switch, report_generator
+        auto_fix, selected_error, analyzer_model_switch, fixer_model_switch, report_generator
     )
 
     print(Fore.GREEN + "\n补丁已应用。将自动重启进程以验证修复效果...")
@@ -995,41 +849,49 @@ class AnalyzedError(NamedTuple):
     error_detail: dict
     analysis_text: str
     trace_log: str
-    symbol_result: dict
+    uniq_references: Set[Tuple[str, int]]
     success: bool
 
 
-def analyze_error_task(
-    error_detail: dict, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch
-) -> AnalyzedError:
+def analyze_error_task(error_detail: dict, analyzer_model_switch: ModelSwitch) -> AnalyzedError:
     """
     Analyzes a single test error. Designed to be run in a separate thread.
     This function is self-contained and does not print to stdout.
     """
-    # Create a temporary instance to manage state for this specific error
     auto_fix = TestAutoFix(test_results={}, user_requirement="")
-
-    # Populate internal state like trace_log, uniq_references by running analysis silently
     auto_fix.display_selected_error_details(error_detail, silent=True)
     if not auto_fix.uniq_references:
-        return AnalyzedError(error_detail, "Failed to find references in tracer logs.", "", {}, False)
+        return AnalyzedError(error_detail, "Failed to find references in tracer logs.", "", set(), False)
 
-    # Get symbol context silently
-    symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch, silent=True)
-    if not symbol_result:
-        return AnalyzedError(error_detail, "Failed to build symbol context.", auto_fix.trace_log, {}, False)
+    file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
+    if not file_paths:
+        return AnalyzedError(
+            error_detail,
+            "Failed to identify file paths from references.",
+            auto_fix.trace_log,
+            auto_fix.uniq_references,
+            False,
+        )
 
-    # Perform the analysis query (without printing stream)
+    file_refs = [f"@{path}" for path in file_paths]
+    ask_edit_prefix = f"@edit {' '.join(file_refs)} \n\n"
+
     analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
-    p_explain = PatchPromptBuilder(
-        use_patch=False, symbols=[], tokens_left=analyzer_model_switch.current_config.max_context_size * 3
+    full_analysis_prompt = ask_edit_prefix + analyze_prompt_content
+
+    context_processor = GPTContextProcessor()
+    ask_text = prepare_ask_text(full_analysis_prompt)
+    nodes = context_processor.parse_text_into_nodes(ask_text)
+    use_json = should_use_json_output(nodes)
+    processed_text = context_processor.process_text(
+        ask_text, use_json_output=use_json, tokens_left=analyzer_model_switch.current_config.max_context_size
     )
-    p_explain.process_search_results(symbol_result)
-    prompt_explain = p_explain.build(user_requirement=analyze_prompt_content)
-    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, prompt_explain, stream=True)
+    processed_text = inject_edit_prompt_if_needed(processed_text, nodes, use_json)
+
+    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text, stream=True)
     analysis_text = _consume_stream_and_get_text(stream, print_stream=False)
 
-    return AnalyzedError(error_detail, analysis_text, auto_fix.trace_log, symbol_result, True)
+    return AnalyzedError(error_detail, analysis_text, auto_fix.trace_log, auto_fix.uniq_references, True)
 
 
 def select_analysis_to_fix_interactive(analyzed_errors: List[AnalyzedError]) -> Optional[AnalyzedError]:
@@ -1078,29 +940,23 @@ def _generate_and_apply_patch_from_analysis(
     print(Fore.YELLOW + "\nGenerating fix based on analysis and user directive...")
     print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
 
+    file_paths = sorted(list(set([path for path, line in analyzed_error.uniq_references])))
+    if not file_paths:
+        print(Fore.RED + "Could not determine relevant files for the fix.")
+        return
+    file_refs = [f"@{path}" for path in file_paths]
+
     fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
         trace_log=analyzed_error.trace_log,
         analysis_text=analyzed_error.analysis_text,
         user_directive=user_directive,
     )
 
-    GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p_fix = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
-    )
-    p_fix.process_search_results(analyzed_error.symbol_result)
-    prompt_fix = p_fix.build(user_requirement=fix_prompt_content)
-
-    _interactive_patch_and_retry(
-        fixer_model_switch=fixer_model_switch,
-        prompt=prompt_fix,
-        symbol_storage=GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH],
-    )
+    _full_context_fix_and_retry(fix_prompt_content, file_refs, fixer_model_switch)
 
 
 def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_model_switch: ModelSwitch):
     """Takes a pre-analyzed error and walks the user through the fixing process."""
-    # 1. Present the pre-computed analysis and get user feedback
     print(Fore.BLUE + "\n--- AI Analysis ---" + Style.RESET_ALL)
     print(analyzed_error.analysis_text)
     print(Fore.BLUE + "-------------------" + Style.RESET_ALL)
@@ -1110,7 +966,6 @@ def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_
         print(Fore.RED + "User aborted the fix process.")
         return
 
-    # 2. Generate the fix
     _generate_and_apply_patch_from_analysis(analyzed_error, user_directive, fixer_model_switch)
 
 
@@ -1135,8 +990,7 @@ def run_parallel_analysis_workflow(
     analyzed_results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel_analysis) as executor:
         future_to_error = {
-            executor.submit(analyze_error_task, error, analyzer_model_switch, fixer_model_switch): error
-            for error in auto_fix.error_details
+            executor.submit(analyze_error_task, error, analyzer_model_switch): error for error in auto_fix.error_details
         }
         for future in tqdm(
             concurrent.futures.as_completed(future_to_error),
@@ -1159,7 +1013,6 @@ def run_parallel_analysis_workflow(
         _restart_with_original_args()
         return
 
-    # This inner loop allows fixing multiple issues from the same analysis batch.
     while successful_analyses:
         selected_analysis = select_analysis_to_fix_interactive(successful_analyses)
 
@@ -1172,7 +1025,7 @@ def run_parallel_analysis_workflow(
             )
             if user_choice == "y":
                 _restart_with_original_args()
-            return  # Exit if user says no or quits
+            return
 
         _perform_interactive_fix_from_analysis(selected_analysis, fixer_model_switch)
         successful_analyses.remove(selected_analysis)
@@ -1195,7 +1048,7 @@ def run_parallel_analysis_workflow(
                 print(Fore.RED + "Invalid choice. Please enter 1, 2, or q.")
 
         if user_choice == "1":
-            continue  # Continue with the current list of analyses
+            continue
         elif user_choice == "2":
             _restart_with_original_args()
             return
@@ -1224,7 +1077,6 @@ def run_parallel_autofix_workflow(
 
     if not errors_to_analyze:
         print(Fore.RED + "\n所有剩余错误已达到最大重试次数，无法继续自动修复。")
-        # Displaying skipped errors might be less useful now since tracker state is not persisted.
         print(Fore.MAGENTA + "Parallel Auto-Fix 退出。")
         return
 
@@ -1235,8 +1087,7 @@ def run_parallel_autofix_workflow(
     analyzed_results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel_autofix) as executor:
         future_to_error = {
-            executor.submit(analyze_error_task, error, analyzer_model_switch, fixer_model_switch): error
-            for error in errors_to_analyze
+            executor.submit(analyze_error_task, error, analyzer_model_switch): error for error in errors_to_analyze
         }
         for future in tqdm(
             concurrent.futures.as_completed(future_to_error),
@@ -1257,7 +1108,6 @@ def run_parallel_autofix_workflow(
     for i, analyzed_error in enumerate(successful_analyses):
         error_detail = analyzed_error.error_detail
         func_name = error_detail.get("function", "unknown")
-        # Failure tracking is per-run, which is fine.
         failure_tracker.record_attempt(error_detail)
         attempt_count = failure_tracker.get_attempt_count(error_detail)
 
@@ -1278,7 +1128,6 @@ def run_isolated_fix_master(args: argparse.Namespace):
     print(Fore.MAGENTA + "🚀 " + "=" * 20 + " Isolated Fix Mode Engaged " + "=" * 20 + " 🚀")
     print(Fore.CYAN + "\nRunning all tests once to find failures...")
 
-    # Run tests with low verbosity to get the list of failures
     initial_test_results = TestAutoFix.run_tests(test_patterns=args.test_patterns, verbosity=0)
     failed_test_ids = set()
     results = initial_test_results.get("results", {})
@@ -1347,7 +1196,6 @@ def run_single_test_fix_loop(args: argparse.Namespace, test_id: str):
 
     failure_tracker = FailureTracker(max_attempts=2)
 
-    # This function now represents a single attempt. It will be restarted.
     print(Fore.CYAN + "\n" + "=" * 20 + f" Running test: {test_id} " + "=" * 20)
     test_results = TestAutoFix.run_tests(test_patterns=[test_id], verbosity=args.verbosity)
     auto_fix = TestAutoFix(test_results, user_requirement=args.user_requirement)
@@ -1374,44 +1222,22 @@ def run_single_test_fix_loop(args: argparse.Namespace, test_id: str):
         print(Fore.YELLOW + "\nCould not find references in tracer log. Cannot fix automatically.")
         sys.exit(1)
 
-    symbol_result = auto_fix.get_and_prioritize_symbols(fixer_model_switch)
-    if not symbol_result:
-        print(Fore.RED + "Could not build context. Cannot fix automatically.")
-        sys.exit(1)
-
-    # Inlined logic from _perform_direct_fix for non-interactive use
     prompt_content = FixerPromptGenerator.create_direct_fix_prompt(
         trace_log=auto_fix.trace_log, user_req=args.user_requirement
     )
 
-    GPT_FLAGS[GPT_FLAG_PATCH] = True
-    p = PatchPromptBuilder(
-        use_patch=True, symbols=[], tokens_left=fixer_model_switch.current_config.max_context_size * 3
-    )
-    p.process_search_results(symbol_result)
-    prompt = p.build(user_requirement=prompt_content)
+    file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
+    if not file_paths:
+        print(Fore.RED + "Could not determine relevant files for the fix.")
+        sys.exit(1)
+    file_refs = [f"@{path}" for path in file_paths]
 
-    try:
-        print(Fore.YELLOW + "正在生成修复方案...")
-        text = fixer_model_switch.query(fixer_model_switch.model_name, prompt, stream=True)
-        process_patch_response(text, GPT_VALUE_STORAGE[GPT_SYMBOL_PATCH])
-    except (ValueError, IndexError) as e:
-        print(Fore.RED + f"\nError applying patch: {e}. Automated fix failed in isolated mode.")
+    if not _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch):
+        print(Fore.RED + "\nAutomated fix failed in isolated mode.")
         sys.exit(1)
 
     print(Fore.GREEN + "\nPatch applied. Restarting process to verify...")
     _restart_with_original_args()
-
-
-class MockArgs:
-    """Mocks the argparse object for handle_ask_mode."""
-
-    def __init__(self, ask_text: str, obsidian_doc: Optional[str] = None):
-        self.ask = ask_text
-        self.obsidian_doc = obsidian_doc
-        self.file: Optional[str] = None
-        self.chatbot = False
-        self.project_search: Optional[List[str]] = None
 
 
 def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: ModelSwitch) -> None:
@@ -1422,10 +1248,12 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
 
     log_content = ""
     log_path_ref = ""
-    if args.from_log_file is True:  # --from-log without a path
+    # This check is now more robust.
+    # The 'const=True' makes 'from_log_file' True if the flag is present without a value.
+    if args.from_log_file is True:
         print(Fore.YELLOW + "Reading trace log from clipboard...")
         log_content = get_clipboard_content_string()
-    else:  # --from-log with a path
+    elif args.from_log_file:  # It's a path string
         log_path = Path(args.from_log_file)
         log_path_ref = f"@{log_path}"
         print(f"Reading trace log from file: {log_path}")
@@ -1438,47 +1266,41 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
         print(Fore.RED + "Error: No log content found. Aborting.")
         sys.exit(1)
 
-    # Extract file paths from the log
-    # A simple regex to find python file paths
     file_path_pattern = re.compile(r"([\w/.-]+\.py)")
     extracted_paths = sorted(list(set(file_path_pattern.findall(log_content))))
 
-    # Verify paths exist and make them relative to the project root
     project_root = Path(os.getcwd())
     valid_paths = []
     for path in extracted_paths:
+        # Try to resolve path relative to project root
         abs_path = project_root / path
         if abs_path.exists():
             valid_paths.append(str(abs_path))
+        # Also check if it's an absolute path that exists
+        elif Path(path).is_absolute() and Path(path).exists():
+            valid_paths.append(path)
         else:
             print(Fore.YELLOW + f"Warning: Skipping path from log as it does not exist: {path}")
 
-    # Remove duplicates while preserving order
     unique_valid_paths = list(dict.fromkeys(valid_paths))
-    valid_paths = unique_valid_paths
 
-    if not valid_paths:
+    if not unique_valid_paths:
         print(Fore.RED + "Error: Could not find any valid source file paths in the log. Aborting.")
         sys.exit(1)
 
     print(Fore.GREEN + "\nFound the following source files in the log:")
-    for path in valid_paths:
+    for path in unique_valid_paths:
         print(f"  - {path}")
 
-    # Construct the prompt for handle_ask_mode
-    ask_prompt = "请仔细分析追踪日志，判断是原代码写错了，还是测试集写错了，根据具体使用场景做具体分析，并选择合适的修复目标进行修复。你的目标是让代码能够正确运行， 使用replace指令节省时间。"
+    ask_prompt = "请仔细分析追踪日志，判断是原代码写错了，还是测试集写错了，根据具体使用场景做具体分析，并选择合适的修复目标进行修复。你的目标是让代码能够正确运行。请使用 `[overwrite whole file]` 指令进行修复。"
 
-    # Prepend the @edit command with all file paths and the log file reference
-    # This leverages the existing file editing mechanism
-    all_file_refs = [f"@{path}" for path in valid_paths]
+    all_file_refs = [f"@{path}" for path in unique_valid_paths]
     if log_path_ref:
         all_file_refs.append(log_path_ref)
 
     ask_string = f"@edit {' '.join(all_file_refs)} \n\n{ask_prompt}"
-    GPT_FLAGS[GPT_FLAG_PATCH] = False
     GPT_FLAGS[GPT_FLAG_EDIT] = True
 
-    # Set the conversation UUID
     os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
 
     ask_text = prepare_ask_text(ask_string)
@@ -1508,10 +1330,10 @@ from tests.test_main import run_tests
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Test auto-fix tool with continuous repair workflow.")
-    group = parser.add_mutually_exclusive_group(required=False)  # Changed to False
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument(
         "test_patterns",
-        nargs="*",  # This already allows zero or more arguments
+        nargs="*",
         default=None,
         help="Test selection patterns (e.g. +test_module*, -/exclude.*/, TestCase.test_method)",
     )
@@ -1580,7 +1402,7 @@ def parse_args():
     parser.add_argument(
         "--run-single-test",
         metavar="TEST_ID",
-        help=argparse.SUPPRESS,  # Hide from help menu
+        help=argparse.SUPPRESS,
         default=None,
         dest="single_test_id",
     )
@@ -1590,9 +1412,7 @@ def parse_args():
         default=str(default_report_dir),
         help=f"Directory to save analysis reports. Defaults to: {default_report_dir}",
     )
-    parser.add_argument(
-        "--auto-accept-analysis", action="store_true", help=argparse.SUPPRESS
-    )  # Hidden arg for session state
+    parser.add_argument("--auto-accept-analysis", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -1600,7 +1420,6 @@ def main():
     """Main entry point for test auto-fix functionality."""
     args = parse_args()
 
-    # Handle the case where no arguments are provided
     if (
         not args.test_patterns
         and not args.from_log_file
@@ -1608,16 +1427,12 @@ def main():
         and not args.lookup
         and not args.single_test_id
     ):
-        # No specific action requested, run all tests by default
-        args.test_patterns = []  # Empty list means run all tests
+        args.test_patterns = []
 
-    # --- New Isolated Fix Workflow ---
     if args.single_test_id:
-        # This script is running as a child process.
         run_single_test_fix_loop(args, args.single_test_id)
         return
 
-    # Check for mutually exclusive WORKFLOW modes.
     active_workflows = [
         bool(args.auto_pilot),
         args.parallel_analysis is not None,
@@ -1626,10 +1441,12 @@ def main():
         args.from_log_file is not None,
     ]
     if sum(active_workflows) > 1:
-        print(Fore.RED + "Error: Workflow flags are mutually exclusive.")
+        print(
+            Fore.RED
+            + "Error: Workflow flags are mutually exclusive (--auto-pilot, --parallel-*, --isolated-fix, --from-log)."
+        )
         sys.exit(1)
 
-    # --- Model setup ---
     fixer_model_name = args.model
     analyzer_model_name = args.analyzer_model if args.analyzer_model else fixer_model_name
 
@@ -1644,9 +1461,8 @@ def main():
     else:
         fixer_model_switch = ModelSwitch()
         fixer_model_switch.select(fixer_model_name)
-    # --- End model setup ---
 
-    if args.from_log_file:
+    if args.from_log_file is not None:
         run_log_based_fix_workflow(args, analyzer_model_switch)
         return
 
@@ -1672,7 +1488,6 @@ def main():
         return
 
     if args.isolated_fix:
-        # This script is the parent process in isolated mode.
         run_isolated_fix_master(args)
     elif args.auto_pilot:
         run_auto_pilot_loop(args, analyzer_model_switch, fixer_model_switch)

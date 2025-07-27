@@ -68,6 +68,7 @@ describe('SessionManager', () => {
     
     (sessionManager as any).currentSession = null;
     (sessionManager as any).endingPromise = null;
+    (sessionManager as any).diffTabHasBeenSeen = false; // Reset state before each test
   });
 
   const createMockSession = (): GenerationSession => ({
@@ -79,11 +80,15 @@ describe('SessionManager', () => {
   });
 
   describe('start', () => {
-    it('should start a session and show diff view', async () => {
+    it('should start a session, show diff view, and reset seen state', async () => {
       const session = createMockSession();
+      // Set seen state to true to ensure start() resets it
+      sessionManager.setDiffTabHasBeenSeen(true);
+      
       await sessionManager.start(session);
 
       expect((sessionManager as any).currentSession).toBe(session);
+      expect(sessionManager.getDiffTabHasBeenSeen()).toBe(false); // Check that it's reset
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith('setContext', 'treehouseCodeCompleter.diffViewActive', true);
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith('vscode.diff', session.originalUri, session.newUri, expect.any(String));
       expect(showInfoMessage).toHaveBeenCalledWith('sessionManager.suggestionReady');
@@ -91,13 +96,15 @@ describe('SessionManager', () => {
   });
 
   describe('end', () => {
-    it('should end an active session and clean up', async () => {
+    it('should end an active session, clean up, and reset seen state', async () => {
       const session = createMockSession();
       (sessionManager as any).currentSession = session;
+      sessionManager.setDiffTabHasBeenSeen(true); // Set to true to test reset
       
       await sessionManager.end();
 
       expect((sessionManager as any).currentSession).toBeNull();
+      expect(sessionManager.getDiffTabHasBeenSeen()).toBe(false); // Assert reset
       expect(vscode.commands.executeCommand).toHaveBeenCalledWith('setContext', 'treehouseCodeCompleter.diffViewActive', false);
       expect(mockTempFileManager.cleanup).toHaveBeenCalled();
     });
