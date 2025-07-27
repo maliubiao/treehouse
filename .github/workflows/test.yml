@@ -30,8 +30,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # Install basic build tools, patch, xclip for clipboard tests
-          sudo apt-get install -y build-essential patch xclip
+          # Install basic build tools, patch, xclip for clipboard tests, and xvfb for headless X server
+          sudo apt-get install -y build-essential patch xclip xvfb
           # Install lldb and its Python bindings for debugger tests
           sudo apt-get install -y lldb python3-lldb
           # Install tree-sitter related development libraries if Python bindings require them for building
@@ -62,16 +62,19 @@ jobs:
           cmake --build debugger/lldb/op_parser/build
         working-directory: ${{ github.workspace }} # Ensure this runs from the repository root
 
+      - name: Copy op_parser shared library
+        run: cp debugger/lldb/op_parser/build/libop_parser.so debugger/lldb/op_parser.so
+
       - name: Run Unittest tests
         # tests/test_main.py exits with non-zero code on failure
         env:
           PYTHONPATH: .
         run: |
-          uv run python tests/test_main.py
+          xvfb-run uv run python tests/test_main.py
 
       - name: Run Pytest tests
         # tests/pytests_main.py exits with non-zero code on failure
         env:
           PYTHONPATH: .
         run: |
-          uv run python tests/pytests_main.py
+          xvfb-run uv run python tests/pytests_main.py

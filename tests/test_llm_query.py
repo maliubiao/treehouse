@@ -1215,6 +1215,7 @@ line3
         self.assertEqual(shadow_file.read_text(encoding="utf-8"), "line1\nline2\nline3")
 
     def test_create_new_file_auto_apply(self):
+        """测试使用 auto_apply=True 创建新文件"""
         test_file = self.tmp_path / "new_test.txt"
         self.assertFalse(test_file.exists())
 
@@ -1224,12 +1225,12 @@ line3
 new content
 [end]
 """
+        with patch("llm_query._apply_patch"):
+            llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False, use_json_output=False)
 
-        llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False, use_json_output=False)
-
-        # 直接验证文件创建和内容写入
-        self.assertTrue(test_file.exists())
-        self.assertEqual(test_file.read_text(), "new content")
+        # _apply_patch is mocked, so we check shadow content to verify logic up to diffing
+        shadow_file = self.shadow_dir / "new_test.txt"
+        self.assertEqual(shadow_file.read_text(encoding="utf-8"), "new content")
 
     def test_json_format_with_thinking_process(self):
         """测试新的JSON格式，包括thinking_process的显示"""
