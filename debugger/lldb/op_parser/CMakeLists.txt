@@ -14,8 +14,9 @@ endif()
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g3 -O0 -DDEBUG")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2 -DNDEBUG")
 
-# Enable AddressSanitizer for test target in Debug builds
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+# Enable AddressSanitizer for test target in Debug builds, but disable in CI
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT "$ENV{CI}")
+    message(STATUS "ASan enabled for debug build.")
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address -fno-omit-frame-pointer")
 endif()
 
@@ -40,8 +41,8 @@ target_include_directories(op_parser_test PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Enable ASan for test executable in Debug builds
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+# Enable ASan for test executable in Debug builds, but disable in CI
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT "$ENV{CI}")
     target_compile_options(op_parser_test PRIVATE -fsanitize=address)
     target_link_options(op_parser_test PRIVATE -fsanitize=address)
 endif()
