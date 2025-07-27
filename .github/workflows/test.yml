@@ -27,6 +27,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          # Install basic build tools, patch, xclip for clipboard tests
+          sudo apt-get install -y build-essential patch xclip
+          # Install lldb and its Python bindings for debugger tests
+          sudo apt-get install -y lldb python3-lldb
+          # Install tree-sitter related development libraries if Python bindings require them for building
+          # Note: uv often installs pre-built wheels, but these might be needed if source compilation occurs.
+          sudo apt-get install -y tree-sitter-cli libtree-sitter-dev
+
       - name: Install uv and create venv
         run: |
           python -m pip install uv
@@ -35,6 +46,21 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync
+
+      - name: Prepare LLM configuration
+        run: |
+          # Copy example model configuration as the default if it doesn't exist
+          if [ ! -f "model.json" ]; then
+            cp model.json.example model.json
+          fi
+
+      - name: Build op_parser shared library
+        # This step builds the C/C++ shared library required by Python modules
+        run: |
+          mkdir -p debugger/lldb/op_parser/build
+          cmake -S debugger/lldb/op_parser -B debugger/lldb/op_parser/build
+          cmake --build debugger/lldb/op_parser/build
+        working-directory: ${{ github.workspace }} # Ensure this runs from the repository root
 
       - name: Run Unittest tests
         # tests/test_main.py exits with non-zero code on failure
