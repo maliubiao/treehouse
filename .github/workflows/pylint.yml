@@ -26,6 +26,8 @@ jobs:
           uv sync
 
       - name: Analysing the code with pylint
+        env:
+          PYTHONPATH: .
         run: |
           uv run pylint \
             --max-line-length=120 \
