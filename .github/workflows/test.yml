@@ -32,10 +32,9 @@ jobs:
           sudo apt-get update
           # Install basic build tools, patch, xclip for clipboard tests, and xvfb for headless X server
           sudo apt-get install -y build-essential patch xclip xvfb
-          # Install lldb and its Python bindings for debugger tests
-          sudo apt-get install -y lldb python3-lldb
-          # Install tree-sitter related development libraries if Python bindings require them for building
-          # Note: uv often installs pre-built wheels, but these might be needed if source compilation occurs.
+          # Install a specific version of lldb and its Python bindings for compatibility with Python 3.12
+          sudo apt-get install -y lldb-17 python3-lldb-17
+          # Install tree-sitter related development libraries
           sudo apt-get install -y tree-sitter-cli libtree-sitter-dev
 
       - name: Install uv and create venv
@@ -68,15 +67,15 @@ jobs:
       - name: Run Unittest tests
         # tests/test_main.py exits with non-zero code on failure
         env:
-          # Add project root, compiled C extensions, and system lldb module to Python's path
-          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages
+          # Add project root, compiled C extensions, and the correct system lldb module to Python's path
+          PYTHONPATH: .:debugger/lldb:/usr/lib/llvm-17/lib/python3.12/dist-packages
         run: |
           xvfb-run uv run python tests/test_main.py
 
       - name: Run Pytest tests
         # tests/pytests_main.py exits with non-zero code on failure
         env:
-          # Add project root, compiled C extensions, and system lldb module to Python's path
-          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages
+          # Add project root, compiled C extensions, and the correct system lldb module to Python's path
+          PYTHONPATH: .:debugger/lldb:/usr/lib/llvm-17/lib/python3.12/dist-packages
         run: |
           xvfb-run uv run python tests/pytests_main.py
