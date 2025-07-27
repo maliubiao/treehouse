@@ -1,7 +1,7 @@
 import { sessionManager, GenerationSession } from '../../state/sessionManager';
 import { TempFileManager } from '../../utils/tempFileManager';
 import * as vscode from 'vscode';
-import { showInfoMessage } from '../../ui/interactions';
+import { showInfoMessage, showErrorMessage } from '../../ui/interactions';
 import { TextEncoder } from 'util';
 
 // Mock dependencies
@@ -14,6 +14,7 @@ jest.mock('../../util/i18n', () => ({ t: (key: string) => key }));
 jest.mock('vscode', () => ({
     window: {
         showInformationMessage: jest.fn(),
+        showErrorMessage: jest.fn(),
         showTextDocument: jest.fn().mockResolvedValue({
             document: {
                 lineAt: (i: number) => ({ range: { start: { line: i, character: 0 }, end: { line: i, character: 10 } } }),
@@ -125,6 +126,73 @@ describe('SessionManager', () => {
       expect(vscode.workspace.applyEdit).toHaveBeenCalled();
       expect(showInfoMessage).toHaveBeenCalledWith('sessionManager.changesApplied');
       expect(sessionManager.isSessionActive()).toBe(false);
+    });
+
+    it('should handle error when restoring selection and fallback to top of file', async () => {
+        const session = createMockSession();
+        (sessionManager as any).currentSession = session;
+
+        const newContent = 'const newCode = "accepted";';
+        const newContentBytes = new TextEncoder().encode(newContent);
+        (vscode.workspace.fs.readFile as jest.Mock).mockResolvedValue(newContentBytes);
+
+        const mockEditor = {
+            document: {
+                lineAt: (i: number) => ({ range: { start: { line: i, character: 0 }, end: { line: i, character: 10 } } }),
+                lineCount: 2,
+            },
+            selection: {},
+            revealRange: jest.fn(),
+        };
+
+        const selectionSetter = jest.fn()
+            .mockImplementationOnce(() => { throw new Error('Invalid range'); }) // First call fails
+            .mockImplementationOnce(() => { /* Second call succeeds */ }); // Fallback call
+
+        Object.defineProperty(mockEditor, 'selection', {
+            get: () => ({}),
+            set: selectionSetter,
+            configurable: true,
+        });
+
+        (vscode.window.showTextDocument as jest.Mock).mockResolvedValue(mockEditor);
+
+        await sessionManager.accept();
+
+        expect(vscode.workspace.applyEdit).toHaveBeenCalled();
+        expect(showInfoMessage).toHaveBeenCalledWith('sessionManager.changesApplied');
+
+        // Verify selection was attempted twice
+        expect(selectionSetter).toHaveBeenCalledTimes(2);
+
+        // Verify first attempt was with targetSelection
+        const originalSelection = new (vscode.Selection as any)(session.targetSelection.start, session.targetSelection.start);
+        expect(selectionSetter).toHaveBeenNthCalledWith(1, originalSelection);
+
+        // Verify second attempt was with fallback position
+        const fallbackPosition = new (vscode.Position as any)(0, 0);
+        const fallbackSelection = new (vscode.Selection as any)(fallbackPosition, fallbackPosition);
+        expect(selectionSetter).toHaveBeenNthCalledWith(2, fallbackSelection);
+
+        // Verify logger was called
+        const { logger } = require('../../utils/logger');
+        expect(logger.warn).toHaveBeenCalledWith(
+            expect.stringContaining('Could not restore selection'),
+            expect.any(Error)
+        );
+
+        expect(sessionManager.isSessionActive()).toBe(false);
+    });
+
+    it('should show error message if applying edit fails', async () => {
+        const session = createMockSession();
+        (sessionManager as any).currentSession = session;
+        (vscode.workspace.applyEdit as jest.Mock).mockResolvedValue(false); // Simulate failure
+
+        await sessionManager.accept();
+
+        expect(showErrorMessage).toHaveBeenCalledWith("sessionManager.applyFailedError");
+        expect(sessionManager.isSessionActive()).toBe(false);
     });
   });
 

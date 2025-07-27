@@ -36,11 +36,7 @@ function hello() {
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-function hello() {
-  console.log("Hello, world!");
-}
-`);
+      expect(result.newCode).toBe(`function hello() {\n  console.log("Hello, world!");\n}`);
       expect(result.newImports).toBeNull();
     });
 
@@ -58,16 +54,8 @@ const Component = () => {
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-const Component = () => {
-  const [count, setCount] = useState(0);
-  return <div>{count}</div>;
-};
-`);
-      expect(result.newImports).toBe(`
-import React from 'react';
-import { useState } from 'react';
-`);
+      expect(result.newCode).toBe(`const Component = () => {\n  const [count, setCount] = useState(0);\n  return <div>{count}</div>;\n};`);
+      expect(result.newImports).toBe(`import React from 'react';\nimport { useState } from 'react';`);
     });
 
     it('应该正确处理标签周围有额外空格的情况', () => {
@@ -77,7 +65,7 @@ import { useState } from 'react';
   </UPDATED_CODE>  
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe('\n    const x = 1;\n  ');
+      expect(result.newCode).toBe('    const x = 1;');
     });
 
     it('应该正确处理代码中包含标签字符串的情况', () => {
@@ -88,10 +76,7 @@ console.log(html);
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-const html = '<UPDATED_CODE>test</UPDATED_CODE>';
-console.log(html);
-`);
+      expect(result.newCode).toBe(`const html = '<UPDATED_CODE>test</UPDATED_CODE>';\nconsole.log(html);`);
     });
   });
 
@@ -110,16 +95,7 @@ function outer() {
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-function outer() {
-  <UPDATED_CODE>
-  function inner() {
-    return "nested";
-  }
-  </UPDATED_CODE>
-  return inner();
-}
-`);
+      expect(result.newCode).toBe(`function outer() {\n  <UPDATED_CODE>\n  function inner() {\n    return "nested";\n  }\n  </UPDATED_CODE>\n  return inner();\n}`);
     });
 
     it('应该正确处理多个嵌套层级', () => {
@@ -139,32 +115,19 @@ function test() {
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-function test() {
-  <UPDATED_CODE>
-  return true;
-  </UPDATED_CODE>
-}
-`);
-      expect(result.newImports).toBe(`
-import { a } from 'a';
-<UPDATED_IMPORTS>
-import { b } from 'b';
-</UPDATED_IMPORTS>
-`);
+      expect(result.newCode).toBe(`function test() {\n  <UPDATED_CODE>\n  return true;\n  </UPDATED_CODE>\n}`);
+      expect(result.newImports).toBe(`import { a } from 'a';\n<UPDATED_IMPORTS>\nimport { b } from 'b';\n</UPDATED_IMPORTS>`);
     });
   });
 
-  describe('边界情况', () => {
+  describe('边界与清理情况', () => {
     it('应该处理空的代码块', () => {
-      const response = `
-<UPDATED_CODE></UPDATED_CODE>
-`;
+      const response = `<UPDATED_CODE></UPDATED_CODE>`;
       const result = parseLLMResponse(response);
       expect(result.newCode).toBe('');
     });
 
-    it('应该处理只包含空白字符的代码块', () => {
+    it('应该处理只包含空白字符的代码块并返回空字符串', () => {
       const response = `
 <UPDATED_CODE>
   
@@ -172,7 +135,7 @@ import { b } from 'b';
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe('\n  \n  \n');
+      expect(result.newCode).toBe('');
     });
 
     it('应该处理没有换行的单行代码', () => {
@@ -188,9 +151,46 @@ const special = '测试字符 \n \t "quoted" \\escaped\\';
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-const special = '测试字符 \n \t "quoted" \\escaped\\';
-`);
+      expect(result.newCode).toBe(`const special = '测试字符 \n \t "quoted" \\escaped\\';`);
+    });
+    
+    it('应该当没有标签时，将整个响应作为代码并修剪', () => {
+      const response = `
+
+function untagged() {
+  return "hello";
+}
+
+`;
+      const result = parseLLMResponse(response);
+      expect(result.newCode).toBe('function untagged() {\n  return "hello";\n}');
+      expect(result.newImports).toBeNull();
+    });
+
+    it('应该返回一个空字符串对于只包含空白的响应', () => {
+      const response = ' \n \t \n ';
+      // The initial check for empty/whitespace response will catch this
+      expect(() => parseLLMResponse(response)).toThrow('AI response was empty.');
+    });
+    
+    it('应该返回一个空字符串对于只包含空白的响应 (带标签)', () => {
+        const response = '<UPDATED_CODE> \n \t \n </UPDATED_CODE>';
+        const result = parseLLMResponse(response);
+        expect(result.newCode).toBe('');
+        expect(result.newImports).toBeNull();
+    });
+
+    it('应该在只有 imports 标签时正常解析并修剪', () => {
+      const response = `
+<UPDATED_IMPORTS>
+
+import a from 'a';
+
+</UPDATED_IMPORTS>
+`;
+      const result = parseLLMResponse(response);
+      expect(result.newCode).toBe('');
+      expect(result.newImports).toBe("import a from 'a';");
     });
   });
 
@@ -205,12 +205,8 @@ const b = 1;
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newImports).toBe(`
-import a from 'a';
-`);
-      expect(result.newCode).toBe(`
-const b = 1;
-`);
+      expect(result.newImports).toBe(`import a from 'a';`);
+      expect(result.newCode).toBe(`const b = 1;`);
     });
 
     it('应该正确处理 code 在 imports 之前的顺序', () => {
@@ -223,12 +219,8 @@ import a from 'a';
 </UPDATED_IMPORTS>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newImports).toBe(`
-import a from 'a';
-`);
-      expect(result.newCode).toBe(`
-const b = 1;
-`);
+      expect(result.newImports).toBe(`import a from 'a';`);
+      expect(result.newCode).toBe(`const b = 1;`);
     });
   });
 
@@ -245,19 +237,6 @@ const b = 1;
       expect(() => parseLLMResponse(undefined as any)).toThrow('AI response was empty.');
     });
 
-    it('应该在只包含 imports 标签时正常解析', () => {
-      const response = `
-<UPDATED_IMPORTS>
-import a from 'a';
-</UPDATED_IMPORTS>
-`;
-      const result = parseLLMResponse(response);
-      expect(result.newCode).toBe('');
-      expect(result.newImports).toBe(`
-import a from 'a';
-`);
-    });
-
     it('应该在缺少结束标签时记录警告但继续处理', () => {
       const response = `
 <UPDATED_CODE>
@@ -270,9 +249,7 @@ import a from 'a';
       // newCode should be empty because its tag is unclosed
       expect(result.newCode).toBe('');
       // newImports should be parsed correctly as it is a complete block
-      expect(result.newImports).toBe(`
-import a from 'a';
-`);
+      expect(result.newImports).toBe(`import a from 'a';`);
       expect(logger.warn).toHaveBeenCalledWith(
         'Unclosed tags found in LLM response:',
         expect.arrayContaining(['<UPDATED_CODE>'])
@@ -287,9 +264,7 @@ const x = 1;
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-const x = 1;
-`);
+      expect(result.newCode).toBe(`const x = 1;`);
       expect(logger.warn).toHaveBeenCalledWith(
         'Found end tag </UPDATED_CODE> without matching start tag.'
       );
@@ -325,12 +300,7 @@ this should be ignored
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-function outer() {
-  <UPDATED_CODE>inner content</UPDATED_CODE>
-  return "outer";
-}
-`);
+      expect(result.newCode).toBe(`function outer() {\n  <UPDATED_CODE>inner content</UPDATED_CODE>\n  return "outer";\n}`);
     });
 
     it('应该处理标签内包含其他XML标签', () => {
@@ -343,12 +313,7 @@ const xml = \`<root>
 </UPDATED_CODE>
 `;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe(`
-const xml = \`<root>
-  <item id="1">First</item>
-  <item id="2">Second</item>
-</root>\`;
-`);
+      expect(result.newCode).toBe(`const xml = \`<root>\n  <item id="1">First</item>\n  <item id="2">Second</item>\n</root>\`;`);
     });
 
 

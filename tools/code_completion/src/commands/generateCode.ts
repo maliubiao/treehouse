@@ -12,6 +12,36 @@ import { t } from '../util/i18n';
 import { sessionManager } from '../state/sessionManager';
 
 /**
+ * Trims leading and trailing blank lines from a string.
+ * A line is considered blank if it contains only whitespace.
+ * This function preserves indentation of the first and last non-blank lines.
+ * Returns null if the input is null.
+ * Returns an empty string if the input is empty or contains only whitespace.
+ */
+function trimBlankLines(str: string | null): string | null {
+    if (str === null) {
+        return null;
+    }
+    if (str.trim() === '') {
+        return '';
+    }
+
+    const lines = str.split('\n');
+    let start = 0;
+    while (start < lines.length && lines[start].trim() === '') {
+        start++;
+    }
+
+    let end = lines.length - 1;
+    while (end >= start && lines[end].trim() === '') {
+        end--;
+    }
+
+    return lines.slice(start, end + 1).join('\n');
+}
+
+
+/**
  * Parses the raw LLM response to extract code and imports from tagged sections.
  *
  * This function uses a single-pass, stack-based parser to robustly handle
@@ -24,9 +54,10 @@ import { sessionManager } from '../state/sessionManager';
  *     - It captures the content of the **first** complete, outermost block for
  *       each tag type (`<UPDATED_CODE>`, `<UPDATED_IMPORTS>`).
  *     - It correctly handles nested tags, ignoring inner blocks.
- *     - It does NOT trim whitespace from the extracted content, preserving formatting.
  *     - For malformed tags (e.g., unclosed tags, or an end tag without a start tag),
  *       it logs a warning and ignores the content, ensuring predictable output.
+ * 4.  **Cleaning:** All extracted content and fallback responses are cleaned of
+ *     leading/trailing blank lines using `trimBlankLines`.
  *
  * @param responseText The full string response from the LLM.
  * @returns An object with the new code and optionally new imports.
@@ -41,22 +72,20 @@ export function parseLLMResponse(responseText: string): { newCode: string; newIm
     const IMPORTS_TAG = 'UPDATED_IMPORTS';
 
     if (!/<UPDATED_(CODE|IMPORTS)>/.test(responseText)) {
-        return { newCode: responseText, newImports: null };
+        // No tags found, treat the whole response as code and trim it.
+        return { newCode: trimBlankLines(responseText) ?? '', newImports: null };
     }
-
+    
     const tagRegex = /<(\/)?(UPDATED_CODE|UPDATED_IMPORTS)>/g;
     let match;
-
     const codeStack: number[] = [];
     const importsStack: number[] = [];
-
     let codeContent: string | null = null;
     let importsContent: string | null = null;
 
     while ((match = tagRegex.exec(responseText)) !== null) {
         const [fullMatch, slash, tagName] = match;
         const isEndTag = slash === '/';
-
         const stack = tagName === CODE_TAG ? codeStack : importsStack;
         
         if (isEndTag) {
@@ -86,9 +115,13 @@ export function parseLLMResponse(responseText: string): { newCode: string; newIm
         logger.warn('Unclosed tags found in LLM response:', unclosed);
     }
     
+    // Apply trimming to the extracted content
+    const finalCode = trimBlankLines(codeContent);
+    const finalImports = trimBlankLines(importsContent);
+    
     return {
-        newCode: codeContent ?? '',
-        newImports: importsContent
+        newCode: finalCode ?? '',
+        newImports: finalImports
     };
 }
 

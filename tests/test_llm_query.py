@@ -29,7 +29,6 @@ from gpt_workflow import ArchitectMode, ChangelogMarkdown, CoverageTestPlan, Lin
 # 假设这些是你代码中实际的导入
 from llm_query import (
     GPT_FLAG_PATCH,
-    AutoGitCommit,
     BlockPatchResponse,
     CmdNode,
     DiffBlockFilter,
@@ -493,10 +492,10 @@ class TestFileRange(unittest.TestCase):
         response = dedent(
             """
 [overwrite whole block]: example.py:10-20
-[start.84]
+[start]
 def new_function():
     print("Added by patch")
-[end.84]
+[end]
         """
         )
         parser = BlockPatchResponse(use_json=False)
@@ -509,19 +508,19 @@ def new_function():
         """测试从旧版（非JSON）响应中提取符号路径"""
         response = """
 [overwrite whole symbol]: path/to/file1.py/symbol1
-[start.84]
+[start]
 code1
-[end.84]
+[end]
 
 [overwrite whole symbol]: path/to/file2.py/symbol2
-[start.84]
+[start]
 code2
-[end.84]
+[end]
 
 [overwrite whole symbol]: path/to/file1.py/symbol3
-[start.84]
+[start]
 code3
-[end.84]
+[end]
         """
         parser = BlockPatchResponse(use_json=False)
         result = parser.extract_symbol_paths(response, use_json=False)
@@ -555,19 +554,19 @@ code3
         remaining = dedent(
             f'''
         [overwrite whole symbol]: {tmp_path}/func1
-        [start.84]
+        [start]
         def func1():
             """修改后的函数1"""
             return 42
-        [end.84]
+        [end]
 
         [overwrite whole symbol]: {tmp_path}/TestClass
-        [start.84]
+        [start]
         class TestClass:
             """修改后的类"""
             def method1(self):
                 return "modified"
-        [end.84]
+        [end]
         '''
         )
         try:
@@ -685,9 +684,9 @@ code3
             remaining = dedent(
                 f"""
             [overwrite whole symbol]: {tmp_path}/new_symbol
-            [start.84]
+            [start]
             new_code = 42
-            [end.84]
+            [end]
             """
             )
 
@@ -812,11 +811,11 @@ code3
         # 2. 测试无效JSON，回退到旧格式解析
         legacy_response_with_invalid_json_chars = """
 [overwrite whole symbol]: valid_symbol
-[start.84]
+[start]
 { "incomplete_json": "value"
 def valid_func():
     pass
-[end.84]
+[end]
         """
         parser_fallback = BlockPatchResponse(symbol_names=["valid_symbol"], use_json=False)
         results_fallback = parser_fallback.parse(legacy_response_with_invalid_json_chars)
@@ -931,14 +930,14 @@ def valid_func():
         """测试当use_json=False时，正确使用legacy解析提取符号路径"""
         response = """
 [overwrite whole symbol]: path/to/file1.py/symbolA
-[start.84]
+[start]
 codeA
-[end.84]
+[end]
 
 [overwrite whole symbol]: path/to/file1.py/symbolB
-[start.84]
+[start]
 codeB
-[end.84]
+[end]
         """
         result = BlockPatchResponse.extract_symbol_paths(response, use_json=False)
         expected = {
@@ -956,10 +955,10 @@ codeB
         """测试当use_json=False时，正确解析legacy格式响应"""
         legacy_response = """
 [overwrite whole symbol]: file.py/my_func
-[start.84]
+[start]
 def my_func():
     pass
-[end.84]
+[end]
         """
         parser = BlockPatchResponse(use_json=False)
         results = parser.parse(legacy_response)
@@ -1015,10 +1014,10 @@ def my_func():
         remaining = dedent(
             f"""
         [overwrite whole symbol]: {tmp_path}/func1
-        [start.84]
+        [start]
         def func1():
             return 1
-        [end.84]
+        [end]
         """
         )
 
@@ -1200,11 +1199,11 @@ class TestExtractAndDiffFiles(unittest.TestCase):
         # 测试内容
         test_content = """
 [overwrite whole file]: test.txt
-[start.58]
+[start]
 line1
 line2
 line3
-[end.58]
+[end]
 """
         # 执行处理
         with patch("llm_query._apply_patch"):
@@ -1221,9 +1220,9 @@ line3
 
         test_content = """
 [overwrite whole file]: new_test.txt
-[start.60]
+[start]
 new content
-[end.60]
+[end]
 """
 
         llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False, use_json_output=False)
@@ -1263,10 +1262,10 @@ new content
         # 测试内容
         test_content = """
 [project setup script]
-[start.58]
+[start]
 #!/bin/bash
 echo 'setup'
-[end.58]
+[end]
 """
         # 执行处理
         llm_query.extract_and_diff_files(test_content, save=False, use_json_output=False)
@@ -1284,14 +1283,14 @@ echo 'setup'
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start.58]
+[start]
 new content 1
-[end.58]
+[end]
 
 [overwrite whole file]: test2.txt
-[start.58]
+[start]
 new content 2
-[end.58]
+[end]
 """
         with patch("builtins.input", return_value="all") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
@@ -1305,14 +1304,14 @@ new content 2
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start.58]
+[start]
 new content 1
-[end.58]
+[end]
 
 [overwrite whole file]: test2.txt
-[start.58]
+[start]
 new content 2
-[end.58]
+[end]
 """
         with patch("builtins.input", return_value="1") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             # 文件按路径排序，因此 test1.txt 将是 1，test2.txt 将是 2。
@@ -1327,14 +1326,14 @@ new content 2
 
         test_content = """
 [overwrite whole file]: test1.txt
-[start.58]
+[start]
 new content 1
-[end.58]
+[end]
 
 [overwrite whole file]: test2.txt
-[start.58]
+[start]
 new content 2
-[end.58]
+[end]
 """
         with patch("builtins.input", return_value="") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
@@ -1348,9 +1347,9 @@ new content 2
 
         test_content = f"""
 [overwrite whole file]: test.txt
-[start.58]
+[start]
 {original_content}
-[end.58]
+[end]
 """
         with patch("llm_query._apply_patch") as mock_apply:
             llm_query.extract_and_diff_files(test_content, auto_apply=True, save=False, use_json_output=False)
@@ -1363,9 +1362,9 @@ new content 2
 
         test_content = f"""
 [overwrite whole file]: {new_file_rel_path}
-[start.58]
+[start]
 new content
-[end.58]
+[end]
 """
 
         with (
@@ -1386,9 +1385,9 @@ new content
 
         test_content = f"""
 [overwrite whole file]: {new_file_rel_path}
-[start.58]
+[start]
 new content
-[end.58]
+[end]
 """
         with patch("builtins.input", return_value="n") as mock_input, patch("llm_query._apply_patch") as mock_apply:
             llm_query.extract_and_diff_files(test_content, auto_apply=False, save=False, use_json_output=False)
@@ -2167,79 +2166,6 @@ class TestArchitectMode(unittest.TestCase):
         """参数化测试各种异常场景"""
         with self.assertRaises((ValueError, RuntimeError)):
             ArchitectMode.parse_response(invalid_response)
-
-
-class TestAutoGitCommit(unittest.TestCase):
-    def test_commit_message_extraction(self):
-        sample_response = dedent(
-            """
-        [git commit message start]
-        feat: add new authentication module
-        - implement JWT token handling
-        - add user model
-        [git commit message end]
-        """
-        )
-        instance = AutoGitCommit(sample_response)
-        self.assertEqual(
-            instance.commit_message,
-            "feat: add new authentication module\n- implement JWT token handling\n- add user model",
-        )
-
-    def test_empty_commit_message(self):
-        instance = AutoGitCommit("No commit message here")
-        self.assertEqual(instance.commit_message, "")
-
-    @patch.object(AutoGitCommit, "_execute_git_commands")
-    def test_commit_flow(self, mock_execute):
-        instance = AutoGitCommit(
-            "[git commit message start]test commit[git commit message end]",
-            auto_commit=True,
-        )
-        instance.do_commit()
-        mock_execute.assert_called_once()
-
-    @patch("subprocess.run")
-    def test_git_commands_execution(self, mock_run):
-        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
-        instance.commit_message = "test"
-        instance._execute_git_commands()
-        mock_run.assert_has_calls(
-            [
-                call(["git", "add", "."], check=True),
-                call(["git", "commit", "-m", "test"], check=True),
-            ]
-        )
-
-    @patch("subprocess.run")
-    def test_specified_files_add(self, mock_run):
-        instance = AutoGitCommit(
-            "[git commit message start]test[git commit message end]",
-            files_to_add=["src/main.py", "src/utils.py"],
-        )
-        instance.commit_message = "test"
-        instance._execute_git_commands()
-        mock_run.assert_has_calls(
-            [
-                call(["git", "add", "src/main.py"], check=True),
-                call(["git", "add", "src/utils.py"], check=True),
-                call(["git", "commit", "-m", "test"], check=True),
-            ]
-        )
-
-    @patch("builtins.input")
-    def test_confirm_message(self, mock_input):
-        mock_input.return_value = "y"
-        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
-        self.assertTrue(instance._confirm_message())
-
-        mock_input.return_value = "n"
-        self.assertFalse(instance._confirm_message())
-
-        mock_input.side_effect = ["edit", "new message", "y"]
-        instance = AutoGitCommit("[git commit message start]test[git commit message end]")
-        self.assertTrue(instance._confirm_message())
-        self.assertEqual(instance.commit_message, "new message")
 
 
 class TestFormatAndLint(unittest.TestCase):

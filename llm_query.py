@@ -41,6 +41,7 @@ from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.diff import DiffLexer
 
 from debugger.tracer import trace
+from tools.git_commit_helper import GitCommitHelper
 from tools.replace_engine import LLMInstructionParser, ReplaceEngine, TagRandomizer
 from tree import (
     BINARY_MAGIC_NUMBERS,
@@ -2045,60 +2046,6 @@ class FormatAndLint:
         return results
 
 
-class AutoGitCommit:
-    def __init__(
-        self,
-        gpt_response=None,
-        files_to_add=None,
-        commit_message=None,
-        auto_commit=False,
-    ):
-        self.gpt_response = gpt_response
-        self.commit_message = commit_message if commit_message is not None else self._extract_commit_message()
-        self.files_to_add = files_to_add or []
-        self.auto_commit = auto_commit
-
-    def _extract_commit_message(self) -> str:
-        if self.gpt_response is None:
-            return ""
-        pattern = r"\[git commit message start\](.*?)\[git commit message end\]"
-        match = re.search(pattern, self.gpt_response, re.DOTALL)
-        return match.group(1).strip() if match else ""
-
-    def _confirm_message(self) -> bool:
-        if self.auto_commit:
-            return True
-        print(f"\n提取到的提交信息:\n{self.commit_message}")
-        choice = input("是否使用此提交信息？(y/n/edit): ").lower()
-        if choice == "edit":
-            self.commit_message = input("请输入新的提交信息: ")
-            choice = input("是否使用此提交信息？(y/n/edit): ").lower()
-            return choice == "y"
-        return choice == "y"
-
-    def _execute_git_commands(self):
-        if self.files_to_add:
-            for file_path in self.files_to_add:
-                subprocess.run(["git", "add", str(file_path)], check=True)
-        else:
-            subprocess.run(["git", "add", "."], check=True)
-        subprocess.run(["git", "commit", "-m", self.commit_message], check=True)
-
-    def do_commit(self):
-        if not self.commit_message:
-            print("未找到提交信息")
-            return
-
-        if self.auto_commit or self._confirm_message():
-            try:
-                self._execute_git_commands()
-                print("代码变更已成功提交")
-            except subprocess.CalledProcessError as e:
-                print(f"Git操作失败: {e}")
-        else:
-            print("提交已取消")
-
-
 class BlockPatchResponse:
     """
     Large Language Model response parser with support for both JSON format (including markdown blocks)
@@ -2240,20 +2187,20 @@ class BlockPatchResponse:
 
                 if start_re.fullmatch(current_line_stripped):
                     if nesting_level == 0:
-                        block_start_line = j + 1  # Content starts after [start.93]
+                        block_start_line = j + 1  # Content starts after [start]
                     nesting_level += 1
                     block_started = True
                 elif end_re.fullmatch(current_line_stripped):
                     if nesting_level > 0:
                         nesting_level -= 1
                         if nesting_level == 0:
-                            block_end_line = j  # End before [end.93]
+                            block_end_line = j  # End before [end]
                             break
 
                 j += 1
 
             if block_start_line != -1 and block_end_line != -1 and block_start_line < block_end_line:
-                # Extract content (excluding [start.93] and [end.93] lines)
+                # Extract content (excluding [start] and [end] lines)
                 content_lines = lines[block_start_line:block_end_line]
                 block_content = "\n".join(content_lines)
 
@@ -2765,7 +2712,7 @@ def process_patch_response(
     if auto_lint:
         FormatAndLint(verbose=True).run_checks(modified_files, fix=True)
     if auto_commit:
-        AutoGitCommit(gpt_response=remaining, files_to_add=modified_files, auto_commit=False).do_commit()
+        GitCommitHelper(response_text=remaining, files_to_add=modified_files, auto_approve=False).run()
     if change_log:
         find_changelog().use_diff(response_text, "\n".join(diff_per_file.values()))
     return modified_files

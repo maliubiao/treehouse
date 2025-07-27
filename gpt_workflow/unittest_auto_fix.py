@@ -19,6 +19,7 @@ from tqdm import tqdm
 from debugger import tracer
 from llm_query import (
     GPT_FLAG_EDIT,
+    GPT_FLAG_PATCH,
     GPT_FLAGS,
     GPTContextProcessor,
     ModelSwitch,
@@ -437,7 +438,7 @@ def _full_context_fix_and_retry(
     Returns True on success, False on failure or user cancellation.
     """
     ask_string = f"@edit {' '.join(file_references)} \n\n{prompt_content}"
-
+    GPT_FLAGS[GPT_FLAG_PATCH] = False
     GPT_FLAGS[GPT_FLAG_EDIT] = True
     os.environ["GPT_UUID_CONVERSATION"] = uuid.uuid4().hex
 
@@ -448,6 +449,9 @@ def _full_context_fix_and_retry(
     max_tokens = model_switch.current_config.max_context_size
     text = context_processor.process_text(ask_text, use_json_output=use_json_output, tokens_left=max_tokens)
     text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
+
+    # Print the final prompt text length
+    print(Fore.CYAN + f"Final prompt text length: {len(text)} characters" + Style.RESET_ALL)
 
     while True:
         try:
@@ -476,6 +480,9 @@ def _full_context_fix_and_retry(
             return True  # Success
         except Exception as e:
             print(Fore.RED + f"\nError processing AI response to apply changes: {e}")
+            import traceback
+
+            traceback.print_exc()
             print(
                 Fore.YELLOW
                 + "This can happen if the AI's response is malformed or doesn't follow the edit format correctly."
@@ -492,15 +499,21 @@ def _perform_direct_fix(auto_fix: TestAutoFix, fixer_model_switch: ModelSwitch, 
     """Performs a direct, one-step fix by analyzing the tracer log and generating a patch using full file context."""
     print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
 
-    prompt_content = FixerPromptGenerator.create_direct_fix_prompt(trace_log=auto_fix.trace_log, user_req=user_req)
-
     file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
     if not file_paths:
         print(Fore.RED + "Could not determine relevant files for the fix.")
         return
 
-    file_refs = [f"@{path}" for path in file_paths]
-    _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch)
+    with tempfile.NamedTemporaryFile(mode="w", delete=True, suffix=".log", encoding="utf-8") as tmp_log_file:
+        tmp_log_file.write(auto_fix.trace_log)
+        tmp_log_file.flush()
+
+        prompt_content = FixerPromptGenerator.create_direct_fix_prompt(
+            trace_log_path=tmp_log_file.name, user_req=user_req
+        )
+
+        file_refs = [f"@{path}" for path in file_paths]
+        _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch)
 
 
 def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
@@ -577,7 +590,6 @@ def _perform_two_step_fix(
     print(Fore.YELLOW + "\nStep 1: Generating failure analysis...")
     print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
-    # Common context for both steps
     file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
     if not file_paths:
         print(Fore.RED + "Could not determine relevant files for analysis.")
@@ -585,49 +597,50 @@ def _perform_two_step_fix(
     file_refs = [f"@{path}" for path in file_paths]
     ask_edit_prefix = f"@edit {' '.join(file_refs)} \n\n"
 
-    # Step 1: Generate analysis prompt and query the model
-    analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
-    analysis_text = _consume_stream_and_get_text(
-        iter(["Currently not streaming analysis text in this refactored version."])
-    )  # Placeholder
+    with tempfile.NamedTemporaryFile(mode="w", delete=True, suffix=".log", encoding="utf-8") as tmp_log_file:
+        tmp_log_file.write(auto_fix.trace_log)
+        tmp_log_file.flush()
+        tmp_log_path = tmp_log_file.name
 
-    # Re-implementing the call logic here for clarity
-    full_analysis_prompt = ask_edit_prefix + analyze_prompt_content
-    context_processor = GPTContextProcessor()
-    ask_text = prepare_ask_text(full_analysis_prompt)
-    nodes = context_processor.parse_text_into_nodes(ask_text)
-    use_json = should_use_json_output(nodes)
-    processed_text = context_processor.process_text(
-        ask_text, use_json_output=use_json, tokens_left=analyzer_model_switch.current_config.max_context_size
-    )
-    processed_text = inject_edit_prompt_if_needed(processed_text, nodes, use_json)
+        # Step 1: Generate analysis prompt and query the model
+        analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log_path=tmp_log_path)
+        full_analysis_prompt = ask_edit_prefix + analyze_prompt_content
 
-    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text, stream=True)
-    analysis_text = _consume_stream_and_get_text(stream)
+        context_processor = GPTContextProcessor()
+        ask_text = prepare_ask_text(full_analysis_prompt)
+        nodes = context_processor.parse_text_into_nodes(ask_text)
+        use_json = should_use_json_output(nodes)
+        processed_text = context_processor.process_text(
+            ask_text, use_json_output=use_json, tokens_left=analyzer_model_switch.current_config.max_context_size
+        )
+        processed_text = inject_edit_prompt_if_needed(processed_text, nodes, use_json)
 
-    # Step 2: Get user feedback on the analysis
-    remember_choice = auto_accept
-    if auto_accept:
-        print(Fore.GREEN + "\nAuto-accepting analysis based on previous choice.")
-        user_directive = "按照上述技术专家的分析，解决用户遇到的问题，修复单元测试中的错误，使其能够成功通过。"
-    else:
-        user_directive, remember_choice = _get_user_feedback_on_analysis(analysis_text)
+        stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text, stream=True)
+        analysis_text = _consume_stream_and_get_text(stream)
 
-    if not user_directive:
-        print(Fore.RED + "User aborted the fix process.")
-        return False
+        # Step 2: Get user feedback on the analysis
+        remember_choice = auto_accept
+        if auto_accept:
+            print(Fore.GREEN + "\nAuto-accepting analysis based on previous choice.")
+            user_directive = "按照上述技术专家的分析，解决用户遇到的问题，修复单元测试中的错误，使其能够成功通过。"
+        else:
+            user_directive, remember_choice = _get_user_feedback_on_analysis(analysis_text)
 
-    # Step 3: Generate the fix based on analysis and user directive
-    print(Fore.YELLOW + "\nStep 2: Generating fix based on analysis and user directive...")
-    print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
-    fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
-        trace_log=auto_fix.trace_log,
-        analysis_text=analysis_text,
-        user_directive=user_directive,
-    )
+        if not user_directive:
+            print(Fore.RED + "User aborted the fix process.")
+            return False
 
-    _full_context_fix_and_retry(fix_prompt_content, file_refs, fixer_model_switch)
-    return remember_choice
+        # Step 3: Generate the fix based on analysis and user directive
+        print(Fore.YELLOW + "\nStep 2: Generating fix based on analysis and user directive...")
+        print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
+        fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
+            trace_log_path=tmp_log_path,
+            analysis_text=analysis_text,
+            user_directive=user_directive,
+        )
+
+        _full_context_fix_and_retry(fix_prompt_content, file_refs, fixer_model_switch)
+        return remember_choice
 
 
 def _perform_automated_fix_and_report(
@@ -641,7 +654,6 @@ def _perform_automated_fix_and_report(
     print(Fore.YELLOW + "Generating problem analysis for report...")
     print(Fore.CYAN + f"(Using Analyzer: {analyzer_model_switch.model_name})")
 
-    # Common context for all steps
     file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
     if not file_paths:
         print(Fore.RED + "Could not determine relevant files for analysis. Skipping.")
@@ -649,65 +661,72 @@ def _perform_automated_fix_and_report(
     file_refs = [f"@{path}" for path in file_paths]
     ask_edit_prefix = f"@edit {' '.join(file_refs)} \n\n"
 
-    # Step 1: Get Explanation for the report
-    explain_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
-    full_explain_prompt = ask_edit_prefix + explain_prompt_content
+    with tempfile.NamedTemporaryFile(mode="w", delete=True, suffix=".log", encoding="utf-8") as tmp_log_file:
+        tmp_log_file.write(auto_fix.trace_log)
+        tmp_log_file.flush()
+        tmp_log_path = tmp_log_file.name
 
-    context_processor = GPTContextProcessor()
-    ask_text_explain = prepare_ask_text(full_explain_prompt)
-    nodes_explain = context_processor.parse_text_into_nodes(ask_text_explain)
-    use_json_explain = should_use_json_output(nodes_explain)
-    processed_text_explain = context_processor.process_text(
-        ask_text_explain,
-        use_json_output=use_json_explain,
-        tokens_left=analyzer_model_switch.current_config.max_context_size,
-    )
-    processed_text_explain = inject_edit_prompt_if_needed(processed_text_explain, nodes_explain, use_json_explain)
+        # Step 1: Get Explanation for the report
+        explain_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log_path=tmp_log_path)
+        full_explain_prompt = ask_edit_prefix + explain_prompt_content
 
-    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text_explain, stream=True)
-    analysis_text = _consume_stream_and_get_text(stream, print_stream=True)
-
-    # Step 2: Prepare the fix prompt (which will also be in the report)
-    user_req_for_fix = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
-    fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
-        trace_log=auto_fix.trace_log,
-        analysis_text=analysis_text,
-        user_directive=user_req_for_fix,
-    )
-    full_fix_prompt = ask_edit_prefix + fix_prompt_content
-
-    # Step 3: Generate and save the report
-    report_path = report_generator.create_report(
-        test_info=selected_error, analysis=analysis_text, prompt=full_fix_prompt
-    )
-    print(Fore.GREEN + f"Analysis report saved to: {report_path}")
-
-    # Step 4: Generate and apply the fix
-    print(Fore.YELLOW + "Generating and applying fix...")
-    print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
-    try:
-        # Re-using the same context processing logic for the fix prompt
-        ask_text_fix = prepare_ask_text(full_fix_prompt)
-        nodes_fix = context_processor.parse_text_into_nodes(ask_text_fix)
-        use_json_fix = should_use_json_output(nodes_fix)
-        processed_text_fix = context_processor.process_text(
-            ask_text_fix, use_json_output=use_json_fix, tokens_left=fixer_model_switch.current_config.max_context_size
+        context_processor = GPTContextProcessor()
+        ask_text_explain = prepare_ask_text(full_explain_prompt)
+        nodes_explain = context_processor.parse_text_into_nodes(ask_text_explain)
+        use_json_explain = should_use_json_output(nodes_explain)
+        processed_text_explain = context_processor.process_text(
+            ask_text_explain,
+            use_json_output=use_json_explain,
+            tokens_left=analyzer_model_switch.current_config.max_context_size,
         )
-        processed_text_fix = inject_edit_prompt_if_needed(processed_text_fix, nodes_fix, use_json_fix)
+        processed_text_explain = inject_edit_prompt_if_needed(processed_text_explain, nodes_explain, use_json_explain)
 
-        response_data = fixer_model_switch.query(fixer_model_switch.model_name, processed_text_fix, stream=False)
-        process_response(
-            processed_text_fix,
-            response_data,
-            "",
-            save=False,
-            obsidian_doc=None,
-            ask_param=full_fix_prompt,
-            use_json_output=use_json_fix,
+        stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text_explain, stream=True)
+        analysis_text = _consume_stream_and_get_text(stream, print_stream=True)
+
+        # Step 2: Prepare the fix prompt (which will also be in the report)
+        user_req_for_fix = "按照专家建议，解决用户遇到的问题，修复test_*符号中的错误"
+        fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
+            trace_log_path=tmp_log_path,
+            analysis_text=analysis_text,
+            user_directive=user_req_for_fix,
         )
-    except Exception as e:
-        print(Fore.RED + f"\nError applying changes: {e}")
-        print(Fore.YELLOW + "Automated fix failed. This can happen if the AI's response is malformed. Skipping.")
+        full_fix_prompt = ask_edit_prefix + fix_prompt_content
+
+        # Step 3: Generate and save the report
+        report_path = report_generator.create_report(
+            test_info=selected_error, analysis=analysis_text, prompt=full_fix_prompt
+        )
+        print(Fore.GREEN + f"Analysis report saved to: {report_path}")
+
+        # Step 4: Generate and apply the fix
+        print(Fore.YELLOW + "Generating and applying fix...")
+        print(Fore.CYAN + f"(Using Fixer: {fixer_model_switch.model_name})")
+        try:
+            # Re-using the same context processing logic for the fix prompt
+            ask_text_fix = prepare_ask_text(full_fix_prompt)
+            nodes_fix = context_processor.parse_text_into_nodes(ask_text_fix)
+            use_json_fix = should_use_json_output(nodes_fix)
+            processed_text_fix = context_processor.process_text(
+                ask_text_fix,
+                use_json_output=use_json_fix,
+                tokens_left=fixer_model_switch.current_config.max_context_size,
+            )
+            processed_text_fix = inject_edit_prompt_if_needed(processed_text_fix, nodes_fix, use_json_fix)
+
+            response_data = fixer_model_switch.query(fixer_model_switch.model_name, processed_text_fix, stream=False)
+            process_response(
+                processed_text_fix,
+                response_data,
+                "",
+                save=False,
+                obsidian_doc=None,
+                ask_param=full_fix_prompt,
+                use_json_output=use_json_fix,
+            )
+        except Exception as e:
+            print(Fore.RED + f"\nError applying changes: {e}")
+            print(Fore.YELLOW + "Automated fix failed. This can happen if the AI's response is malformed. Skipping.")
 
 
 def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, fixer_model_switch: ModelSwitch):
@@ -876,20 +895,25 @@ def analyze_error_task(error_detail: dict, analyzer_model_switch: ModelSwitch) -
     file_refs = [f"@{path}" for path in file_paths]
     ask_edit_prefix = f"@edit {' '.join(file_refs)} \n\n"
 
-    analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log=auto_fix.trace_log)
-    full_analysis_prompt = ask_edit_prefix + analyze_prompt_content
+    with tempfile.NamedTemporaryFile(mode="w", delete=True, suffix=".log", encoding="utf-8") as tmp_log_file:
+        tmp_log_file.write(auto_fix.trace_log)
+        tmp_log_file.flush()
+        tmp_log_path = tmp_log_file.name
 
-    context_processor = GPTContextProcessor()
-    ask_text = prepare_ask_text(full_analysis_prompt)
-    nodes = context_processor.parse_text_into_nodes(ask_text)
-    use_json = should_use_json_output(nodes)
-    processed_text = context_processor.process_text(
-        ask_text, use_json_output=use_json, tokens_left=analyzer_model_switch.current_config.max_context_size
-    )
-    processed_text = inject_edit_prompt_if_needed(processed_text, nodes, use_json)
+        analyze_prompt_content = FixerPromptGenerator.create_analysis_prompt(trace_log_path=tmp_log_path)
+        full_analysis_prompt = ask_edit_prefix + analyze_prompt_content
 
-    stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text, stream=True)
-    analysis_text = _consume_stream_and_get_text(stream, print_stream=False)
+        context_processor = GPTContextProcessor()
+        ask_text = prepare_ask_text(full_analysis_prompt)
+        nodes = context_processor.parse_text_into_nodes(ask_text)
+        use_json = should_use_json_output(nodes)
+        processed_text = context_processor.process_text(
+            ask_text, use_json_output=use_json, tokens_left=analyzer_model_switch.current_config.max_context_size
+        )
+        processed_text = inject_edit_prompt_if_needed(processed_text, nodes, use_json)
+
+        stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text, stream=True)
+        analysis_text = _consume_stream_and_get_text(stream, print_stream=False)
 
     return AnalyzedError(error_detail, analysis_text, auto_fix.trace_log, auto_fix.uniq_references, True)
 
@@ -946,13 +970,18 @@ def _generate_and_apply_patch_from_analysis(
         return
     file_refs = [f"@{path}" for path in file_paths]
 
-    fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
-        trace_log=analyzed_error.trace_log,
-        analysis_text=analyzed_error.analysis_text,
-        user_directive=user_directive,
-    )
+    with tempfile.NamedTemporaryFile(mode="w", delete=True, suffix=".log", encoding="utf-8") as tmp_log_file:
+        tmp_log_file.write(analyzed_error.trace_log)
+        tmp_log_file.flush()
+        tmp_log_path = tmp_log_file.name
 
-    _full_context_fix_and_retry(fix_prompt_content, file_refs, fixer_model_switch)
+        fix_prompt_content = FixerPromptGenerator.create_fix_from_analysis_prompt(
+            trace_log_path=tmp_log_path,
+            analysis_text=analyzed_error.analysis_text,
+            user_directive=user_directive,
+        )
+
+        _full_context_fix_and_retry(fix_prompt_content, file_refs, fixer_model_switch)
 
 
 def _perform_interactive_fix_from_analysis(analyzed_error: AnalyzedError, fixer_model_switch: ModelSwitch):
@@ -1222,19 +1251,24 @@ def run_single_test_fix_loop(args: argparse.Namespace, test_id: str):
         print(Fore.YELLOW + "\nCould not find references in tracer log. Cannot fix automatically.")
         sys.exit(1)
 
-    prompt_content = FixerPromptGenerator.create_direct_fix_prompt(
-        trace_log=auto_fix.trace_log, user_req=args.user_requirement
-    )
-
     file_paths = sorted(list(set([path for path, line in auto_fix.uniq_references])))
     if not file_paths:
         print(Fore.RED + "Could not determine relevant files for the fix.")
         sys.exit(1)
-    file_refs = [f"@{path}" for path in file_paths]
 
-    if not _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch):
-        print(Fore.RED + "\nAutomated fix failed in isolated mode.")
-        sys.exit(1)
+    with tempfile.NamedTemporaryFile(mode="w", delete=True, suffix=".log", encoding="utf-8") as tmp_log_file:
+        tmp_log_file.write(auto_fix.trace_log)
+        tmp_log_file.flush()
+
+        prompt_content = FixerPromptGenerator.create_direct_fix_prompt(
+            trace_log_path=tmp_log_file.name, user_req=args.user_requirement
+        )
+
+        file_refs = [f"@{path}" for path in file_paths]
+
+        if not _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch):
+            print(Fore.RED + "\nAutomated fix failed in isolated mode.")
+            sys.exit(1)
 
     print(Fore.GREEN + "\nPatch applied. Restarting process to verify...")
     _restart_with_original_args()
@@ -1292,7 +1326,7 @@ def run_log_based_fix_workflow(args: argparse.Namespace, analyzer_model_switch: 
     for path in unique_valid_paths:
         print(f"  - {path}")
 
-    ask_prompt = "请仔细分析追踪日志，判断是原代码写错了，还是测试集写错了，根据具体使用场景做具体分析，并选择合适的修复目标进行修复。你的目标是让代码能够正确运行。请使用 `[overwrite whole file]` 指令进行修复。"
+    ask_prompt = "请仔细分析追踪日志，判断是原代码写错了，还是测试集写错了，根据具体使用场景做具体分析，并选择合适的修复目标进行修复。你的目标是让代码能够正确运行。请使用 `[replace]` 指令进行修复。"
 
     all_file_refs = [f"@{path}" for path in unique_valid_paths]
     if log_path_ref:

@@ -91,42 +91,53 @@ class SessionManager {
 
   public async accept(): Promise<void> {
     if (!this.currentSession) {
-      return;
+        return;
     }
 
     const { newUri, targetEditorUri, targetSelection } = this.currentSession;
 
     try {
-      const newContentBytes = await vscode.workspace.fs.readFile(newUri);
-      const newFullContent = new TextDecoder().decode(newContentBytes);
+        const newContentBytes = await vscode.workspace.fs.readFile(newUri);
+        const newFullContent = new TextDecoder().decode(newContentBytes);
 
-      const editor = await vscode.window.showTextDocument(targetEditorUri);
-      const document = editor.document;
+        const editor = await vscode.window.showTextDocument(targetEditorUri);
+        const document = editor.document;
 
-      const fullRange = new vscode.Range(
-        document.lineAt(0).range.start,
-        document.lineAt(document.lineCount - 1).range.end
-      );
+        const fullRange = new vscode.Range(
+            document.lineAt(0).range.start,
+            document.lineAt(document.lineCount - 1).range.end
+        );
 
-      const workspaceEdit = new vscode.WorkspaceEdit();
-      workspaceEdit.replace(targetEditorUri, fullRange, newFullContent);
-      const success = await vscode.workspace.applyEdit(workspaceEdit);
+        const workspaceEdit = new vscode.WorkspaceEdit();
+        workspaceEdit.replace(targetEditorUri, fullRange, newFullContent);
+        const success = await vscode.workspace.applyEdit(workspaceEdit);
 
-      if (success) {
-          const newSelection = new vscode.Selection(targetSelection.start, targetSelection.start);
-          editor.selection = newSelection;
-          editor.revealRange(newSelection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-          showInfoMessage(t('sessionManager.changesApplied'));
-      } else {
-          throw new Error(t('sessionManager.applyFailed'));
-      }
+        if (success) {
+            try {
+                // Try to restore the selection to the original position. This might fail if the
+                // document has changed so much that the position is no longer valid.
+                const newSelection = new vscode.Selection(targetSelection.start, targetSelection.start);
+                editor.selection = newSelection;
+                editor.revealRange(newSelection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+            } catch (e) {
+                logger.warn('Could not restore selection after applying changes. The document structure may have changed significantly.', e);
+                // Fallback: gracefully move cursor to the top of the file.
+                const topPosition = new vscode.Position(0, 0);
+                editor.selection = new vscode.Selection(topPosition, topPosition);
+                editor.revealRange(new vscode.Range(topPosition, topPosition));
+            }
+
+            showInfoMessage(t('sessionManager.changesApplied'));
+        } else {
+            throw new Error(t('sessionManager.applyFailed'));
+        }
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.error(t('sessionManager.applyFailedError', {error: errorMessage}), error);
-      showErrorMessage(t('sessionManager.applyFailedError', { error: errorMessage}));
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error(t('sessionManager.applyFailedError', { error: errorMessage }), error);
+        showErrorMessage(t('sessionManager.applyFailedError', { error: errorMessage }));
     } finally {
-      await this.end();
+        await this.end();
     }
   }
 

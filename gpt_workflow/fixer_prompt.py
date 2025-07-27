@@ -49,12 +49,12 @@ class FixerPromptGenerator:
         return cls._generate_fix_template
 
     @classmethod
-    def create_direct_fix_prompt(cls, trace_log: str, user_req: str) -> str:
+    def create_direct_fix_prompt(cls, trace_log_path: str, user_req: str) -> str:
         """
         Generates a prompt for a direct, one-step fix.
 
         Args:
-            trace_log: The detailed trace log of the failed test run.
+            trace_log_path: The path to the file containing the trace log.
             user_req: The user's specific requirement for the fix.
 
         Returns:
@@ -64,23 +64,22 @@ class FixerPromptGenerator:
             user_req = "分析并解决用户遇到的问题，修复test_*符号中的错误"
 
         return f"""
-请根据以下tracer的报告, 分析问题原因并直接修复testcase相关问题。请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据。
+请根据以下引用的tracer日志文件, 分析问题原因并直接修复testcase相关问题。请以中文回复, 需要注意# Debug 后的取值反映了真实的运行数据。
 
 **重要指令**：在修复代码时，请不要在代码中添加任何解释性注释。只提供纯粹的代码修改，不要在代码中包含分析或理由。
 
 用户的要求: {user_req}
-[trace log start]
-{trace_log}
-[trace log end]
+
+[trace log file]: @{trace_log_path}
 """
 
     @classmethod
-    def create_analysis_prompt(cls, trace_log: str) -> str:
+    def create_analysis_prompt(cls, trace_log_path: str) -> str:
         """
         Generates a prompt for the failure analysis step (Step 1 of a two-step fix).
 
         Args:
-            trace_log: The detailed trace log of the failed test run.
+            trace_log_path: The path to the file containing the trace log.
 
         Returns:
             A formatted prompt string for the LLM.
@@ -88,20 +87,20 @@ class FixerPromptGenerator:
         analyze_prompt_template = cls._get_analyze_failure_template()
         return f"""
 {analyze_prompt_template}
-[trace log start]
-{trace_log}
-[trace log end]
+
+The full trace log is available in the referenced file.
+[trace log file]: @{trace_log_path}
 """
 
     @classmethod
-    def create_fix_from_analysis_prompt(cls, trace_log: str, analysis_text: str, user_directive: str) -> str:
+    def create_fix_from_analysis_prompt(cls, trace_log_path: str, analysis_text: str, user_directive: str) -> str:
         """
         Generates a prompt for the fix generation step (Step 2 of a two-step fix).
 
         This prompt includes the original analysis to provide context for the fix.
 
         Args:
-            trace_log: The detailed trace log of the failed test run.
+            trace_log_path: The path to the file containing the trace log.
             analysis_text: The AI-generated analysis of the failure.
             user_directive: The final command from the user on how to proceed with the fix.
 
@@ -119,7 +118,6 @@ class FixerPromptGenerator:
 
 **重要指令**：在修复代码时，请不要在代码中添加任何解释性注释。只提供纯粹的代码修改，不要在代码中包含分析或理由。
 
-[trace log start]
-{trace_log}
-[trace log end]
+The full trace log is available in the referenced file.
+[trace log file]: @{trace_log_path}
 """
