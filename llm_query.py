@@ -33,8 +33,7 @@ from urllib.parse import urlparse
 
 import requests
 import yaml
-from colorama import Fore, just_fix_windows_console
-from colorama import Style as ColorStyle
+from colorama import Fore, Style, just_fix_windows_console
 from openai import OpenAI
 from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
@@ -2478,18 +2477,18 @@ def interactive_symbol_location(file, path, parent_symbol=None, parent_symbol_in
     highlighted_lines = highlighted_content.splitlines()
 
     for i, line in enumerate(highlighted_lines):
-        print(f"{Fore.YELLOW}{start_line + i:4d}{ColorStyle.RESET_ALL} | {line}")
-    print(f"{Fore.YELLOW}{start_line + len(highlighted_lines):4d}{ColorStyle.RESET_ALL} |")
+        print(f"{Fore.YELLOW}{start_line + i:4d}{Style.RESET_ALL} | {line}")
+    print(f"{Fore.YELLOW}{start_line + len(highlighted_lines):4d}{Style.RESET_ALL} |")
     while True:
         try:
             selected_line = int(input("\nEnter insert line number for new symbol location: "))
             if start_line <= selected_line <= start_line + len(lines) + 1:  # 允许插入到文件末尾
                 break
             print(
-                f"{Fore.RED}Line number must be between {start_line} and {start_line + len(lines) + 1}{ColorStyle.RESET_ALL}"
+                f"{Fore.RED}Line number must be between {start_line} and {start_line + len(lines) + 1}{Style.RESET_ALL}"
             )
         except ValueError:
-            print(f"{Fore.RED}Please enter a valid integer{ColorStyle.RESET_ALL}")
+            print(f"{Fore.RED}Please enter a valid integer{Style.RESET_ALL}")
 
     parent_content = parent_symbol_info["block_content"]
     line_offsets = [0]
@@ -2552,14 +2551,14 @@ def _display_thought_and_summary(response_text: str):
         thought = data.get("thought")
         patches = data.get("patches")
         if thought:
-            print(Fore.BLUE + "━━━━━━━━━━ AI's Thought Process ━━━━━━━━━━" + ColorStyle.RESET_ALL)
+            print(Fore.BLUE + "━━━━━━━━━━ AI's Thought Process ━━━━━━━━━━" + Style.RESET_ALL)
             # 使用textwrap填充文本，使其更易于阅读
             wrapped_thought = textwrap.fill(thought, width=100, initial_indent="  ", subsequent_indent="  ")
-            print(Fore.CYAN + wrapped_thought + ColorStyle.RESET_ALL)
-            print(Fore.BLUE + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ColorStyle.RESET_ALL)
+            print(Fore.CYAN + wrapped_thought + Style.RESET_ALL)
+            print(Fore.BLUE + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + Style.RESET_ALL)
 
         if patches and isinstance(patches, list):
-            print(Fore.BLUE + "\nSummary of Planned Changes:" + ColorStyle.RESET_ALL)
+            print(Fore.BLUE + "\nSummary of Planned Changes:" + Style.RESET_ALL)
             for i, patch in enumerate(patches):
                 action = patch.get("action", "UNKNOWN").upper().replace("_", " ")
                 path = patch.get("path", "N/A")
@@ -2568,7 +2567,7 @@ def _display_thought_and_summary(response_text: str):
                     action_color = Fore.RED
                 elif "FILE" in action:
                     action_color = Fore.MAGENTA
-                print(f"  - {action_color}{action:<20}{ColorStyle.RESET_ALL} {path}")
+                print(f"  - {action_color}{action:<20}{Style.RESET_ALL} {path}")
             print()
 
     except (json.JSONDecodeError, TypeError):
@@ -2613,7 +2612,7 @@ def process_patch_response(
 
     results = parse_llm_response(remaining, symbol_names=None, use_json_output=use_json_output)  # 总是解析所有符号
     if not results:
-        print(Fore.YELLOW + "未从模型响应中解析出任何有效补丁。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "未从模型响应中解析出任何有效补丁。" + Style.RESET_ALL)
         return None
 
     # 处理新符号：对于不在symbol_detail中的符号，提供UI选择插入位置
@@ -2633,7 +2632,7 @@ def process_patch_response(
     patch_items = []
     for symbol_name, source_code in results:
         if symbol_name not in symbol_detail:
-            print(Fore.RED + f"错误：在symbol_detail中未找到符号 '{symbol_name}'，跳过此补丁。" + ColorStyle.RESET_ALL)
+            print(Fore.RED + f"错误：在symbol_detail中未找到符号 '{symbol_name}'，跳过此补丁。" + Style.RESET_ALL)
             continue
 
         if relative_to_root:
@@ -2656,7 +2655,7 @@ def process_patch_response(
         )
 
     if not patch_items:
-        print(Fore.YELLOW + "所有解析出的补丁均无效，操作终止。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "所有解析出的补丁均无效，操作终止。" + Style.RESET_ALL)
         return None
 
     patch = BlockPatch(
@@ -2674,17 +2673,17 @@ def process_patch_response(
 
     # 添加模式选择
     print("\n请选择补丁应用模式:")
-    print(Fore.CYAN + "i - 交互式选择 (默认)" + ColorStyle.RESET_ALL)
-    print(Fore.GREEN + "y - 全部应用" + ColorStyle.RESET_ALL)
-    print(Fore.YELLOW + "m - 手动合并" + ColorStyle.RESET_ALL)
-    print(Fore.RED + "n - 退出" + ColorStyle.RESET_ALL)
+    print(Fore.CYAN + "i - 交互式选择 (默认)" + Style.RESET_ALL)
+    print(Fore.GREEN + "y - 全部应用" + Style.RESET_ALL)
+    print(Fore.YELLOW + "m - 手动合并" + Style.RESET_ALL)
+    print(Fore.RED + "n - 退出" + Style.RESET_ALL)
     if confirm:
         choice = confirm.lower()
     else:
         choice = input("请输入选择 [i/y/m/n]: ").lower().strip() or "i"
 
     if choice == "n":
-        print(Fore.RED + "操作已取消" + ColorStyle.RESET_ALL)
+        print(Fore.RED + "操作已取消" + Style.RESET_ALL)
         return None
     if choice == "m":
         patch.manual_merge = True
@@ -2692,7 +2691,7 @@ def process_patch_response(
     if choice == "i":
         diff_per_file = DiffBlockFilter(diff).interactive_filter()
         if not diff_per_file:
-            print(Fore.YELLOW + "没有选择任何diff块" + ColorStyle.RESET_ALL)
+            print(Fore.YELLOW + "没有选择任何diff块" + Style.RESET_ALL)
             return None
     else:
         diff_per_file = diff
@@ -2707,7 +2706,7 @@ def process_patch_response(
         temp_file.unlink()
         modified_files.append(file)
 
-    print(Fore.GREEN + "补丁已成功应用" + ColorStyle.RESET_ALL)
+    print(Fore.GREEN + "补丁已成功应用" + Style.RESET_ALL)
 
     if auto_lint:
         FormatAndLint(verbose=True).run_checks(modified_files, fix=True)
@@ -3750,7 +3749,7 @@ def _approve_new_files(new_file_paths: list, project_root: Path, auto_apply: boo
         print(f"  [{i + 1}] {f}")
 
     if new_dirs_to_create:
-        print(Fore.YELLOW + "\n注意：创建这些文件将创建以下新目录：" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "\n注意：创建这些文件将创建以下新目录：" + Style.RESET_ALL)
         for d in sorted(list(new_dirs_to_create)):
             print(f"  - {d}/")
 
@@ -3759,7 +3758,7 @@ def _approve_new_files(new_file_paths: list, project_root: Path, auto_apply: boo
 
     selected_relative_paths = []
     if not user_input:
-        print(Fore.YELLOW + "操作已取消，将跳过创建新文件。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "操作已取消，将跳过创建新文件。" + Style.RESET_ALL)
     elif user_input == "all":
         selected_relative_paths = relative_new_paths
     else:
@@ -3767,14 +3766,14 @@ def _approve_new_files(new_file_paths: list, project_root: Path, auto_apply: boo
             indices = [int(i.strip()) - 1 for i in user_input.split(",")]
             selected_relative_paths = [relative_new_paths[i] for i in indices if 0 <= i < len(relative_new_paths)]
         except ValueError:
-            print(Fore.RED + "无效输入，将跳过创建新文件。" + ColorStyle.RESET_ALL)
+            print(Fore.RED + "无效输入，将跳过创建新文件。" + Style.RESET_ALL)
 
     if selected_relative_paths:
         approved_new_file_paths = [project_root / p for p in selected_relative_paths]
-        print(Fore.GREEN + f"已批准创建 {len(approved_new_file_paths)} 个新文件。" + ColorStyle.RESET_ALL)
+        print(Fore.GREEN + f"已批准创建 {len(approved_new_file_paths)} 个新文件。" + Style.RESET_ALL)
         return approved_new_file_paths
     elif user_input:
-        print(Fore.YELLOW + "未选择任何新文件进行创建。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "未选择任何新文件进行创建。" + Style.RESET_ALL)
 
     return []
 
@@ -3789,7 +3788,7 @@ def _create_file_stubs(approved_new_file_paths: list):
             new_file_path.touch()
         except Exception as e:
             print(
-                Fore.RED + f"创建文件存根时出错 {new_file_path}: {e}" + ColorStyle.RESET_ALL,
+                Fore.RED + f"创建文件存根时出错 {new_file_path}: {e}" + Style.RESET_ALL,
                 file=sys.stderr,
             )
 
@@ -3821,10 +3820,9 @@ def _apply_changes_to_shadow_files(valid_file_instructions: list, path_mapping: 
         original_path = Path(instr["path"])
         shadow_path = path_mapping.get(original_path)
         if shadow_path:
-            # 如果指令类型以 "replace" 开头，则先将原始文件内容复制到影子文件
-            if instr.get("type", "").startswith("replace"):
-                if original_path.exists():
-                    shadow_path.write_bytes(original_path.read_bytes())
+            # # 如果指令类型以 "replace" 开头，则先将原始文件内容复制到影子文件
+            # if instr.get("type", "").startswith("replace"):
+            #     shadow_path = original_path
 
             new_instr = instr.copy()
             new_instr["path"] = str(shadow_path)
@@ -3891,7 +3889,7 @@ def _apply_multiple_file_changes(diffs_by_file: dict, project_root: Path):
         return
 
     applied_count = _apply_selected_patches(selected_paths, diffs_by_file, project_root)
-    print(Fore.GREEN + f"已成功应用对 {applied_count} 个文件的补丁。" + ColorStyle.RESET_ALL)
+    print(Fore.GREEN + f"已成功应用对 {applied_count} 个文件的补丁。" + Style.RESET_ALL)
 
 
 def _prompt_user_for_files(diffs_by_file: dict) -> list[str]:
@@ -3904,7 +3902,7 @@ def _prompt_user_for_files(diffs_by_file: dict) -> list[str]:
 
     user_input = input("> ").strip().lower()
     if not user_input:
-        print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "操作已取消。" + Style.RESET_ALL)
         return []
 
     if user_input == "all":
@@ -3914,11 +3912,11 @@ def _prompt_user_for_files(diffs_by_file: dict) -> list[str]:
         indices = [int(i.strip()) - 1 for i in user_input.split(",")]
         selected_paths = [file_list[i] for i in indices if 0 <= i < len(file_list)]
     except ValueError:
-        print(Fore.RED + "无效输入，操作已取消。" + ColorStyle.RESET_ALL)
+        print(Fore.RED + "无效输入，操作已取消。" + Style.RESET_ALL)
         return []
 
     if not selected_paths:
-        print(Fore.YELLOW + "未选择任何文件。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "未选择任何文件。" + Style.RESET_ALL)
     return selected_paths
 
 
@@ -3971,9 +3969,9 @@ def _apply_single_file_change(relative_path: str, diff_content: str, project_roo
             f.write(diff_content)
         _apply_patch(temp_file)
         temp_file.unlink()
-        print(Fore.GREEN + f"已成功应用对 {relative_path} 的补丁。" + ColorStyle.RESET_ALL)
+        print(Fore.GREEN + f"已成功应用对 {relative_path} 的补丁。" + Style.RESET_ALL)
     else:
-        print(Fore.YELLOW + "操作已取消。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "操作已取消。" + Style.RESET_ALL)
 
 
 def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output: bool = False):
@@ -3988,6 +3986,13 @@ def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output
         except (json.JSONDecodeError, TypeError):
             # 不是有效的JSON格式，静默处理，后续解析器会处理旧格式
             pass
+
+    # 提取git commit消息
+    commit_message = None
+    commit_pattern = r"\[git commit message\]\n\[start\]\n(.*?)\n\[end\]"
+    commit_match = re.search(commit_pattern, content, re.DOTALL)
+    if commit_match:
+        commit_message = commit_match.group(1).strip()
 
     try:
         instructions = LLMInstructionParser.parse(content, use_json=use_json_output)
@@ -4025,7 +4030,7 @@ def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output
         ]
 
     if not valid_file_instructions and not setup_script:
-        print(Fore.YELLOW + "没有文件被选中进行处理，且没有设置脚本。" + ColorStyle.RESET_ALL)
+        print(Fore.YELLOW + "没有文件被选中进行处理，且没有设置脚本。" + Style.RESET_ALL)
         return
 
     # 3. 在沙箱中准备影子文件
@@ -4054,6 +4059,14 @@ def extract_and_diff_files(content, auto_apply=False, save=True, use_json_output
         for relative_path, diff_content in diffs_by_file.items():
             _apply_single_file_change(relative_path, diff_content, project_root, auto_apply)
 
+    # 8. 如果有commit消息，执行git提交
+    if commit_message and diffs_by_file:
+        from tools.git_commit_helper import GitCommitHelper
+
+        modified_files = list(diffs_by_file.keys())
+        helper = GitCommitHelper(commit_message=commit_message, files_to_add=modified_files, auto_approve=auto_apply)
+        helper.run()
+
 
 def display_llm_plan(thinking_process: dict):
     """
@@ -4072,8 +4085,8 @@ def display_llm_plan(thinking_process: dict):
     ):
         return
 
-    print(Fore.CYAN + ColorStyle.BRIGHT + "\n💡 AI Architect's Plan & Rationale" + ColorStyle.RESET_ALL)
-    print(Fore.CYAN + "------------------------------------" + ColorStyle.RESET_ALL)
+    print(Fore.CYAN + Style.BRIGHT + "\n💡 AI Architect's Plan & Rationale" + Style.RESET_ALL)
+    print(Fore.CYAN + "------------------------------------" + Style.RESET_ALL)
 
     key_mapping = {
         "requirement_analysis": "Requirement Analysis",
@@ -4085,11 +4098,11 @@ def display_llm_plan(thinking_process: dict):
     for key, title in key_mapping.items():
         content = thinking_process.get(key)
         if content and content.strip():
-            print(ColorStyle.BRIGHT + Fore.YELLOW + f"\n▶ {title}:" + ColorStyle.RESET_ALL)
+            print(Style.BRIGHT + Fore.YELLOW + f"\n▶ {title}:" + Style.RESET_ALL)
             indented_content = "\n".join([f"  {line}" for line in content.splitlines()])
             print(f"{indented_content}")
 
-    print("\n" + Fore.CYAN + "------------------------------------" + ColorStyle.RESET_ALL)
+    print("\n" + Fore.CYAN + "------------------------------------" + Style.RESET_ALL)
     print("Now, reviewing the proposed code changes...\n")
 
 
@@ -4290,10 +4303,10 @@ def prompt_words_search(words: List[str], args):
             for match in result.matches:
                 highlighted = (
                     match.text[: match.column_range[0]]
-                    + ColorStyle.BRIGHT
+                    + Style.BRIGHT
                     + Fore.RED
                     + match.text[match.column_range[0] : match.column_range[1]]
-                    + ColorStyle.RESET_ALL
+                    + Style.RESET_ALL
                     + match.text[match.column_range[1] :]
                 )
                 print(f"  L{match.line}: {highlighted.strip()}")
@@ -4743,11 +4756,11 @@ class ModelSwitch:
         # 显示消费信息
         cost_message = (
             f"{Fore.CYAN}API调用消费: "
-            f"{ColorStyle.BRIGHT}${cost:.6f}{ColorStyle.RESET_ALL}{Fore.CYAN} "
+            f"{Style.BRIGHT}${cost:.6f}{Style.RESET_ALL}{Fore.CYAN} "
             f"(≈¥{cost_cny:.2f}) | "
             f"输入Token: {Fore.GREEN}{input_tokens}{Fore.CYAN} | "
             f"输出Token: {Fore.GREEN}{output_tokens}{Fore.CYAN} | "
-            f"模型: {Fore.YELLOW}{model_name}{ColorStyle.RESET_ALL} | "
+            f"模型: {Fore.YELLOW}{model_name}{Style.RESET_ALL} | "
             f"今天累计: ${accumulated_cost:.6f}"
         )
         print(cost_message)
@@ -4755,11 +4768,10 @@ class ModelSwitch:
         # 单次请求费用超过5元人民币警告
         if not self.test_mode and cost_cny > 5.0:
             warning_msg = (
-                f"{Fore.RED}{ColorStyle.BRIGHT}警告：单次请求费用超过5元人民币！"
-                f"({cost_cny:.2f}元){ColorStyle.RESET_ALL}"
+                f"{Fore.RED}{Style.BRIGHT}警告：单次请求费用超过5元人民币！({cost_cny:.2f}元){Style.RESET_ALL}"
             )
             print(warning_msg)
-            print(f"{Fore.RED}请确认是否继续执行大模型请求{ColorStyle.RESET_ALL}")
+            print(f"{Fore.RED}请确认是否继续执行大模型请求{Style.RESET_ALL}")
 
     def _execute_query(self, config: ModelConfig, prompt: str, **kwargs) -> dict:
         """执行单次API查询"""
