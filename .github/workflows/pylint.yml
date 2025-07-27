@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --ci
+          uv sync
 
       - name: Analysing the code with pylint
         run: |

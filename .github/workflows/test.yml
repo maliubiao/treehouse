@@ -34,7 +34,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --ci
+          uv sync
 
       - name: Run Unittest tests
         # tests/test_main.py exits with non-zero code on failure
