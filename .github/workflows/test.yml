@@ -62,13 +62,13 @@ jobs:
         working-directory: ${{ github.workspace }} # Ensure this runs from the repository root
 
       - name: Copy op_parser shared library
-        run: cp debugger/lldb/op_parser/build/libop_parser.so debugger/lldb/op_parser.so
+        run: cp debugger/lldb/op_parser/build/libop_parser.so debugger/lldb/libop_parser.so
 
       - name: Run Unittest tests
         # tests/test_main.py exits with non-zero code on failure
         env:
           # Add project root, compiled C extensions, and the correct system lldb module to Python's path
-          PYTHONPATH: .:debugger/lldb:/usr/lib/llvm-17/lib/python3.12/dist-packages
+          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages/lldb
         run: |
           xvfb-run uv run python tests/test_main.py
 
@@ -76,6 +76,6 @@ jobs:
         # tests/pytests_main.py exits with non-zero code on failure
         env:
           # Add project root, compiled C extensions, and the correct system lldb module to Python's path
-          PYTHONPATH: .:debugger/lldb:/usr/lib/llvm-17/lib/python3.12/dist-packages
+          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages/lldb
         run: |
           xvfb-run uv run python tests/pytests_main.py
