@@ -115,15 +115,23 @@ class GitCommitHelper:
             bool: 命令成功执行返回True，否则返回False。
         """
         try:
+            # 获取git根目录
+            git_root_result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"], check=True, capture_output=True, text=True
+            )
+            git_root = Path(git_root_result.stdout.strip())
+
             # 添加文件到暂存区
             if self.files_to_add:
-                add_command = ["git", "add"] + self.files_to_add
+                # 将相对路径转换为相对于git根目录的绝对路径
+                absolute_files = [str(git_root / f) for f in self.files_to_add]
+                add_command = ["git", "add"] + absolute_files
                 subprocess.run(add_command, check=True, capture_output=True, text=True)
                 print(Fore.GREEN + f"已添加 {len(self.files_to_add)} 个文件到暂存区。" + Style.RESET_ALL)
             else:
-                # 如果没有指定文件，则添加所有更改
-                subprocess.run(["git", "add", "."], check=True, capture_output=True, text=True)
-                print(Fore.GREEN + "已添加所有更改到暂存区。" + Style.RESET_ALL)
+                # 如果没有指定文件，则不执行任何操作
+                print(Fore.YELLOW + "未指定文件，跳过添加到暂存区。" + Style.RESET_ALL)
+                return False
 
             # 执行提交
             if not self.commit_message:
