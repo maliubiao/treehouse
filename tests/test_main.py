@@ -428,6 +428,10 @@ def run_tests(
             start_dir = "tests"
             for path, _, files in os.walk(start_dir):
                 for file in fnmatch.filter(files, "test*.py"):
+                    # Exclude the test runner scripts themselves from being collected as tests
+                    if file in ["test_main.py", "pytests_main.py"]:
+                        continue
+
                     module_name = os.path.splitext(file)[0]
                     if module_name in lldb_test_modules:
                         if verbosity > 1:
