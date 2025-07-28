@@ -44,7 +44,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync\
+          uv sync
+          source .venv/bin/activate
 
       - name: Prepare LLM configuration
         run: |
@@ -70,6 +71,7 @@ jobs:
           # Add project root, compiled C extensions, and the correct system lldb module to Python's path
           PYTHONPATH: .:debugger/lldb
         run: |
+          source .venv/bin/activate
           xvfb-run uv run python tests/test_main.py
 
       - name: Run Pytest tests
@@ -78,4 +80,5 @@ jobs:
           # Add project root, compiled C extensions, and the correct system lldb module to Python's path
           PYTHONPATH: .:debugger/lldb
         run: |
+          source .venv/bin/activate
           xvfb-run uv run python tests/pytests_main.py
