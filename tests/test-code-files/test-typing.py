@@ -1,5 +1,5 @@
 # pylint: skip-file
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 
 class MyType:
@@ -14,6 +14,6 @@ def example(
     e: "Optional[MyType]",
     f: dict[str, MyType],
     g: tuple[MyType, int],
-    h: typing.Sequence[MyType],
+    h: Sequence[MyType],
 ):
     pass
