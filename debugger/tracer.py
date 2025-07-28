@@ -52,10 +52,15 @@ if TYPE_CHECKING:
         PY_THROW: int
         STOP_ITERATION: int
         NO_EVENTS: int
+        CALL: int
+        C_RETURN: int
+        C_RAISE: int
+        MISSING: Any
 
     class MonitoringModule:
         events: MonitoringEvents
         DISABLE: Any
+        MISSING: Any
 
         def get_tool(self, _tool_id: int) -> Optional[str]: ...
         def use_tool_id(self, _tool_id: int, _tool_name: str) -> None: ...
@@ -103,6 +108,7 @@ class TraceConfig:
         source_base_dir: Optional[Path] = None,
         disable_html: bool = False,
         include_stdlibs: Optional[List[str]] = None,
+        trace_c_calls: bool = False,
     ):
         """
         初始化跟踪配置
@@ -121,6 +127,7 @@ class TraceConfig:
             source_base_dir: 源代码根目录，用于在报告中显示相对路径
             disable_html: 是否禁用HTML报告生成
             include_stdlibs: 特别包含的标准库模块列表（即使ignore_system_paths=True）
+            trace_c_calls: 是否启用C函数调用跟踪
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
@@ -136,7 +143,8 @@ class TraceConfig:
         self.start_function = start_function
         self.source_base_dir = source_base_dir
         self.disable_html = disable_html
-        self.include_stdlibs = include_stdlibs or []  # 初始化包含的标准库模块列表
+        self.include_stdlibs = include_stdlibs or []
+        self.trace_c_calls = trace_c_calls
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -230,8 +238,9 @@ class TraceConfig:
             exclude_functions=config_data.get("exclude_functions", []),
             ignore_system_paths=config_data.get("ignore_system_paths", True),
             source_base_dir=config_data.get("source_base_dir", None),
-            include_stdlibs=config_data.get("include_stdlibs", []),  # 新增配置项
+            include_stdlibs=config_data.get("include_stdlibs", []),
             disable_html=config_data.get("disable_html", False),
+            trace_c_calls=config_data.get("trace_c_calls", False),
         )
 
     @staticmethod
@@ -493,6 +502,12 @@ class SysMonitoringTraceDispatcher:
                 | self.monitoring_module.events.PY_RESUME
                 | self.monitoring_module.events.PY_THROW
             )
+            if self.config.trace_c_calls:
+                events |= (
+                    self.monitoring_module.events.CALL
+                    | self.monitoring_module.events.C_RETURN
+                    | self.monitoring_module.events.C_RAISE
+                )
 
             self.monitoring_module.set_events(self._tool_id, events)
 
@@ -544,6 +559,16 @@ class SysMonitoringTraceDispatcher:
                 self.monitoring_module.events.PY_RESUME,
                 self.handle_py_resume,
             )
+            if self.config.trace_c_calls:
+                self.monitoring_module.register_callback(
+                    self._tool_id, self.monitoring_module.events.CALL, self.handle_call
+                )
+                self.monitoring_module.register_callback(
+                    self._tool_id, self.monitoring_module.events.C_RETURN, self.handle_c_return
+                )
+                self.monitoring_module.register_callback(
+                    self._tool_id, self.monitoring_module.events.C_RAISE, self.handle_c_raise
+                )
 
         except (RuntimeError, ValueError) as e:
             logging.error("Failed to register monitoring tool: %s", str(e))
@@ -567,6 +592,10 @@ class SysMonitoringTraceDispatcher:
             self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_UNWIND, None)
             self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.PY_THROW, None)
             self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.RERAISE, None)
+            if self.config.trace_c_calls:
+                self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.CALL, None)
+                self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.C_RETURN, None)
+                self.monitoring_module.register_callback(self._tool_id, self.monitoring_module.events.C_RAISE, None)
 
             # Disable all events
             self.monitoring_module.set_events(self._tool_id, self.monitoring_module.events.NO_EVENTS)
@@ -672,6 +701,30 @@ class SysMonitoringTraceDispatcher:
         if frame in self.active_frames:
             if not self._logic.inside_unwanted_frame(frame):
                 self._logic.handle_exception(type(exc), exc, frame)
+
+    def handle_call(self, code: Any, offset: int, callable_obj: object, arg0: object) -> None:
+        """Handles the CALL event, filtering for C-function calls."""
+        # Python functions have a __code__ object, C functions/builtins do not.
+        if hasattr(callable_obj, "__code__"):
+            return  # This is a Python function, PY_START will handle it.
+
+        # It's a C-call
+        frame = sys._getframe(1)  # Caller's frame
+        if not self.is_target_frame(frame):
+            return
+
+        self._logic.handle_c_call(frame, callable_obj, arg0)
+
+    def handle_c_return(self, code: Any, offset: int, callable_obj: object, retval: object) -> None:
+        """Handles the C_RETURN event."""
+        frame = sys._getframe(1)  # Caller's frame
+        # No need to check is_target_frame, assume we trace return if we trace call.
+        self._logic.handle_c_return(frame, callable_obj, retval)
+
+    def handle_c_raise(self, code: Any, offset: int, callable_obj: object, exception: BaseException) -> None:
+        """Handles the C_RAISE event."""
+        frame = sys._getframe(1)  # Caller's frame
+        self._logic.handle_c_raise(frame, callable_obj, exception)
 
     def is_target_frame(self, frame):
         """Check if frame matches target files"""
@@ -1496,6 +1549,88 @@ class TraceLogic:
             self.exception_chain.pop()
         # 不再恢复堆栈深度，因为异常被捕获时不减少
 
+    def handle_c_call(self, frame: Any, callable_obj: object, arg0: object) -> None:
+        """Handles a call to a C function."""
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+
+        try:
+            func_name = callable_obj.__name__
+        except AttributeError:
+            func_name = repr(callable_obj)
+
+        self._add_to_buffer(
+            {
+                "template": "{indent}↘ C-CALL {func_name} at {filename}:{lineno} [frame:{frame_id}][thread:{thread_id}]",
+                "data": {
+                    "indent": _INDENT * self._local.stack_depth,
+                    "func_name": func_name,
+                    "filename": self._get_formatted_filename(frame.f_code.co_filename),
+                    "lineno": frame.f_lineno,
+                    "original_filename": frame.f_code.co_filename,
+                    "frame_id": self.get_or_reuse_frame_id(frame),
+                    "thread_id": threading.get_native_id(),
+                },
+            },
+            TraceTypes.COLOR_TRACE,
+        )
+        self._local.stack_depth += 1
+
+    def handle_c_return(self, frame: Any, callable_obj: object, retval: object) -> None:
+        """Handles the return from a C function."""
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+        self._local.stack_depth = max(0, self._local.stack_depth - 1)
+
+        try:
+            func_name = callable_obj.__name__
+        except AttributeError:
+            func_name = repr(callable_obj)
+
+        self._add_to_buffer(
+            {
+                "template": "{indent}↗ C-RETURN from {func_name} -> {return_value} [frame:{frame_id}][thread:{thread_id}]",
+                "data": {
+                    "indent": _INDENT * self._local.stack_depth,
+                    "func_name": func_name,
+                    "return_value": truncate_repr_value(retval),
+                    "original_filename": frame.f_code.co_filename,
+                    "lineno": frame.f_lineno,
+                    "frame_id": self.get_or_reuse_frame_id(frame),
+                    "thread_id": threading.get_native_id(),
+                },
+            },
+            TraceTypes.COLOR_TRACE,
+        )
+
+    def handle_c_raise(self, frame: Any, callable_obj: object, exception: BaseException) -> None:
+        """Handles an exception raised from a C function."""
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+        self._local.stack_depth = max(0, self._local.stack_depth - 1)
+
+        try:
+            func_name = callable_obj.__name__
+        except AttributeError:
+            func_name = repr(callable_obj)
+
+        self._add_to_buffer(
+            {
+                "template": "{indent}⚠ C-RAISE from {func_name} -> {exc_type}: {exc_value} [frame:{frame_id}][thread:{thread_id}]",
+                "data": {
+                    "indent": _INDENT * self._local.stack_depth,
+                    "func_name": func_name,
+                    "exc_type": type(exception).__name__,
+                    "exc_value": str(exception),
+                    "original_filename": frame.f_code.co_filename,
+                    "lineno": frame.f_lineno,
+                    "frame_id": self.get_or_reuse_frame_id(frame),
+                    "thread_id": threading.get_native_id(),
+                },
+            },
+            TraceTypes.COLOR_EXCEPTION,
+        )
+
     def capture_variables(self, frame):
         """捕获并计算变量表达式"""
         if not self.config.capture_vars:
@@ -1688,6 +1823,7 @@ def trace(
     source_base_dir: Optional[Path] = None,
     disable_html: bool = False,
     include_stdlibs: Optional[List[str]] = None,
+    trace_c_calls: bool = False,
 ):
     """函数跟踪装饰器
 
@@ -1705,6 +1841,7 @@ def trace(
         source_base_dir: 源代码根目录，用于在报告中显示相对路径
         disable_html: 是否禁用HTML报告
         include_stdlibs: 同时trace一些标准库模块 ["unittest"] 比如
+        trace_c_calls: 是否启用C函数调用跟踪
     """
     if not target_files:
         try:
@@ -1728,6 +1865,7 @@ def trace(
             source_base_dir=source_base_dir,
             disable_html=disable_html,
             include_stdlibs=include_stdlibs,
+            trace_c_calls=trace_c_calls,
         )
         # 您在文件中添加的 pdb.set_trace()，保留它以便您调试，生产时可移除
 

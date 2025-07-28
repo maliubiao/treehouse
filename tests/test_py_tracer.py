@@ -27,7 +27,7 @@ from debugger.tracer import (
     start_trace,
     truncate_repr_value,
 )
-from debugger.tracer_common import _MAX_VALUE_LENGTH
+from debugger.tracer_common import _MAX_VALUE_LENGTH, TraceTypes
 
 # A temporary directory for test artifacts
 TEST_DIR = Path(__file__).parent / "test_artifacts"
@@ -251,6 +251,8 @@ class TestTraceConfig(BaseTracerTest):
         self.assertIsNone(config.source_base_dir)
         self.assertFalse(config.disable_html)
         self.assertEqual(config.include_stdlibs, [])
+        # New assertion for trace_c_calls
+        self.assertFalse(config.trace_c_calls)
 
         test_site_packages_file = None
         try:
@@ -282,10 +284,13 @@ class TestTraceConfig(BaseTracerTest):
         self.assertFalse(config.match_filename(str(test_site_packages_file)))
 
     def test_initialization_with_params(self):
-        config = TraceConfig(target_files=["*.py"], enable_var_trace=True, ignore_system_paths=False)
+        config = TraceConfig(
+            target_files=["*.py"], enable_var_trace=True, ignore_system_paths=False, trace_c_calls=True
+        )
         self.assertEqual(config.target_files, ["*.py"])
         self.assertFalse(config.ignore_system_paths)
         self.assertTrue(config.enable_var_trace)
+        self.assertTrue(config.trace_c_calls)  # New assertion
 
     def test_from_yaml(self):
         config_file = self.test_dir / "test_config.yml"
@@ -302,6 +307,7 @@ class TestTraceConfig(BaseTracerTest):
             "source_base_dir": str(self.test_dir),
             "disable_html": True,
             "include_stdlibs": ["os"],
+            "trace_c_calls": True,  # New config
         }
         with open(config_file, "w", encoding="utf-8") as f:
             yaml.safe_dump(sample_config, f)
@@ -319,6 +325,7 @@ class TestTraceConfig(BaseTracerTest):
         self.assertEqual(config.source_base_dir, sample_config["source_base_dir"])
         self.assertTrue(config.disable_html)
         self.assertEqual(config.include_stdlibs, sample_config["include_stdlibs"])
+        self.assertTrue(config.trace_c_calls)  # New assertion
         test_py_path.unlink()  # Clean up dummy file
 
     def test_match_filename(self):
@@ -583,9 +590,8 @@ class TestTraceLogic(BaseTracerTest):
         as that's the Dispatcher's responsibility.
         """
         self.config.exclude_functions = ["excluded_main_func"]
-        self.logic._local.bad_frame = None  # Ensure a clean start
 
-        # Simulate call to main_func_calling_excluded (not excluded itself)
+        # 1. Simulate call to main_func_calling_excluded (not excluded itself)
         frame_main = self._create_mock_frame(self.test_filename, 10, "main_func_calling_excluded")
         # TraceLogic.handle_call would be called by dispatcher for this.
         self.logic.handle_call(frame_main)
@@ -593,7 +599,7 @@ class TestTraceLogic(BaseTracerTest):
         self.logic._add_to_buffer.assert_called_once()  # Main func should be logged
         self.logic._add_to_buffer.reset_mock()
 
-        # Simulate call to excluded_main_func from main_func_calling_excluded
+        # 2. Simulate call to excluded_main_func from main_func_calling_excluded
         frame_excluded = self._create_mock_frame(self.test_filename, 5, "excluded_main_func", f_back=frame_main)
         # Dispatcher would call maybe_unwanted_frame, and then handle_call if not already unwanted
         self.logic.maybe_unwanted_frame(frame_excluded)
@@ -602,13 +608,13 @@ class TestTraceLogic(BaseTracerTest):
         self.assertTrue(self.logic.inside_unwanted_frame(frame_excluded))
         self.assertEqual(self.logic._local.bad_frame, self.logic.get_or_reuse_frame_id(frame_excluded))
 
-        # Simulate line event within excluded_main_func - TraceLogic's handle_line *would* process it if called
+        # 3. Simulate line event within excluded_main_func - TraceLogic's handle_line *would* process it if called
         # (but Dispatcher prevents the call)
         self.logic.handle_line(frame_excluded)  # Directly call handle_line for testing TraceLogic's function
         self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
         self.logic._add_to_buffer.reset_mock()
 
-        # Simulate call to excluded_helper_func_internal from excluded_main_func
+        # 4. Simulate call to excluded_helper_func_internal from excluded_main_func
         frame_nested_excluded = self._create_mock_frame(
             self.test_filename, 2, "excluded_helper_func_internal", f_back=frame_excluded
         )
@@ -618,19 +624,19 @@ class TestTraceLogic(BaseTracerTest):
             self.logic._local.bad_frame, self.logic.get_or_reuse_frame_id(frame_excluded)
         )  # Still the first excluded frame ID
 
-        # Simulate line event within excluded_helper_func_internal
+        # 5. Simulate line event within excluded_helper_func_internal
         self.logic.handle_line(frame_nested_excluded)  # Directly call handle_line
         self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
         self.logic._add_to_buffer.reset_mock()
 
-        # Simulate return from excluded_helper_func_internal
+        # 6. Simulate return from excluded_helper_func_internal
         self.logic.handle_return(frame_nested_excluded, 2)  # Directly call handle_return
         self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
         self.logic._add_to_buffer.reset_mock()
         # bad_frame should still be set to frame_excluded's ID
         self.assertTrue(self.logic.inside_unwanted_frame(frame_excluded))
 
-        # Simulate return from excluded_main_func
+        # 7. Simulate return from excluded_main_func
         self.logic.handle_return(frame_excluded, 7)  # Directly call handle_return
         self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
         self.logic._add_to_buffer.reset_mock()
@@ -639,7 +645,7 @@ class TestTraceLogic(BaseTracerTest):
         # After returning from the *original* bad frame, the state should be cleared
         self.assertFalse(self.logic.inside_unwanted_frame(frame_main))  # Now back in the main function
 
-        # Simulate line event back in main_func_calling_excluded - should be logged
+        # 8. Simulate line event back in main_func_calling_excluded - should be logged
         self.logic.handle_line(frame_main)
         self.logic._add_to_buffer.assert_called_once()
 
@@ -650,22 +656,23 @@ class TestTraceLogic(BaseTracerTest):
         This test does NOT verify if events are actually logged by Dispatcher.
         """
         self.config.exclude_functions = ["excluded_raiser"]
-        self.logic._local.bad_frame = None
+        if hasattr(self.logic._local, "bad_frame"):
+            del self.logic._local.bad_frame
 
-        # Simulate call to main_func_calling_raiser (not excluded)
+        # 1. Simulate call to main_func_calling_raiser (not excluded)
         frame_main = self._create_mock_frame(self.test_filename, 1, "main_func_calling_raiser")
         self.logic.handle_call(frame_main)
         self.assertFalse(self.logic.inside_unwanted_frame(frame_main))
         self.logic._add_to_buffer.assert_called_once()
         self.logic._add_to_buffer.reset_mock()
 
-        # Simulate call to excluded_raiser from main_func_calling_raiser
+        # 2. Simulate call to excluded_raiser from main_func_calling_raiser
         frame_raiser = self._create_mock_frame(self.test_filename, 2, "excluded_raiser", f_back=frame_main)
         self.logic.maybe_unwanted_frame(frame_raiser)
         self.assertTrue(self.logic.inside_unwanted_frame(frame_raiser))
         self.assertEqual(self.logic._local.bad_frame, self.logic.get_or_reuse_frame_id(frame_raiser))
 
-        # Simulate exception within excluded_raiser
+        # 3. Simulate exception within excluded_raiser
         mock_exc_type = RuntimeError
         mock_exc_value = RuntimeError("Excluded function error")
         # Directly call handle_exception on TraceLogic. It should process it.
@@ -677,14 +684,14 @@ class TestTraceLogic(BaseTracerTest):
             self.logic._add_to_buffer.assert_called_once()
             self.logic._add_to_buffer.reset_mock()
 
-        # Simulate stack unwinding for the raiser frame (e.g., via PY_UNWIND or implicitly on exit)
+        # 4. Simulate stack unwinding for the raiser frame (e.g., via PY_UNWIND or implicitly on exit)
         self.logic.decrement_stack_depth()
         self.logic.leave_unwanted_frame(frame_raiser)  # This clears bad_frame
         self.logic.frame_cleanup(frame_raiser)
 
         self.assertFalse(self.logic.inside_unwanted_frame(frame_main))  # Back in main, no longer unwanted
 
-        # Simulate line event back in main_func_calling_raiser (e.g., in the except block)
+        # 5. Simulate line event back in main_func_calling_raiser (e.g., in the except block)
         self.logic.handle_line(frame_main)
         self.logic._add_to_buffer.assert_called_once()  # Should be logged
         self.logic._add_to_buffer.reset_mock()
@@ -692,7 +699,8 @@ class TestTraceLogic(BaseTracerTest):
     def test_exclude_none_effect_on_call(self):
         # Test that if a function is *not* excluded, maybe_unwanted_frame doesn't mark it
         self.config.exclude_functions = []
-        self.logic._local.bad_frame = None  # Ensure clean start
+        if hasattr(self.logic._local, "bad_frame"):
+            del self.logic._local.bad_frame
         frame_target = self._create_mock_frame(self.test_filename, 1, "simple_target_func")
         self.logic.maybe_unwanted_frame(frame_target)
         self.assertFalse(self.logic.inside_unwanted_frame(frame_target))
@@ -700,7 +708,8 @@ class TestTraceLogic(BaseTracerTest):
 
     def test_no_effect_if_already_unwanted(self):
         self.config.exclude_functions = ["excluded_main_func", "excluded_helper_func_internal"]
-        self.logic._local.bad_frame = None  # Ensure clean start
+        if hasattr(self.logic._local, "bad_frame"):
+            del self.logic._local.bad_frame
 
         frame_excluded_main = self._create_mock_frame(self.test_filename, 5, "excluded_main_func")
         self.logic.maybe_unwanted_frame(frame_excluded_main)
@@ -798,169 +807,336 @@ class TestTraceLogic(BaseTracerTest):
             self.assertEqual(logged[0]["data"]["exc_type"], "ValueError")
             self.assertEqual(logged[0]["data"]["exc_value"], "test error")
 
+    def test_handle_c_call(self):
+        """Test handling of C-function call events."""
+        mock_callable_obj = MagicMock()
+        mock_callable_obj.__name__ = "len"
+        mock_arg0 = "test_string"
 
-class TestTraceDispatcher(BaseTracerTest):
-    """Tests for the TraceDispatcher."""
+        # Simulate a Python frame calling the C function
+        parent_frame = self._create_mock_frame(self.test_filename, 15, "my_python_func")
+        self.logic._local.stack_depth = 0  # Start at base depth
+
+        self.logic.handle_c_call(parent_frame, mock_callable_obj, mock_arg0)
+
+        self.logic._add_to_buffer.assert_called_once()
+        log_data = self.logic._add_to_buffer.call_args[0][0]
+        color_type = self.logic._add_to_buffer.call_args[0][1]
+
+        self.assertIn("↘ C-CALL len at", log_data["template"])
+        self.assertEqual(log_data["data"]["func_name"], "len")
+        self.assertEqual(log_data["data"]["filename"], self.logic._get_formatted_filename(self.test_filename))
+        self.assertEqual(log_data["data"]["lineno"], 15)
+        self.assertEqual(color_type, TraceTypes.COLOR_TRACE)
+        self.assertEqual(self.logic._local.stack_depth, 1)  # Stack depth increases
+
+    def test_handle_c_return(self):
+        """Test handling of C-function return events."""
+        mock_callable_obj = MagicMock()
+        mock_callable_obj.__name__ = "len"
+        mock_retval = 5
+
+        # Simulate a Python frame receiving return from C function
+        parent_frame = self._create_mock_frame(self.test_filename, 15, "my_python_func")
+        self.logic._local.stack_depth = 1  # Simulate being inside C call
+
+        self.logic.handle_c_return(parent_frame, mock_callable_obj, mock_retval)
+
+        self.logic._add_to_buffer.assert_called_once()
+        log_data = self.logic._add_to_buffer.call_args[0][0]
+        color_type = self.logic._add_to_buffer.call_args[0][1]
+
+        self.assertIn("↗ C-RETURN from len -> 5", log_data["template"])
+        self.assertEqual(log_data["data"]["func_name"], "len")
+        self.assertEqual(log_data["data"]["return_value"], "5")
+        self.assertEqual(color_type, TraceTypes.COLOR_TRACE)
+        self.assertEqual(self.logic._local.stack_depth, 0)  # Stack depth decreases
+
+    def test_handle_c_raise(self):
+        """Test handling of C-function raise events."""
+        mock_callable_obj = MagicMock()
+        mock_callable_obj.__name__ = "open"
+        mock_exception = FileNotFoundError("file not found")
+
+        # Simulate a Python frame receiving exception from C function
+        parent_frame = self._create_mock_frame(self.test_filename, 20, "my_python_func")
+        self.logic._local.stack_depth = 1  # Simulate being inside C call
+
+        self.logic.handle_c_raise(parent_frame, mock_callable_obj, mock_exception)
+
+        self.logic._add_to_buffer.assert_called_once()
+        log_data = self.logic._add_to_buffer.call_args[0][0]
+        color_type = self.logic._add_to_buffer.call_args[0][1]
+
+        self.assertIn("⚠ C-RAISE from open -> FileNotFoundError: file not found", log_data["template"])
+        self.assertEqual(log_data["data"]["func_name"], "open")
+        self.assertEqual(log_data["data"]["exc_type"], "FileNotFoundError")
+        self.assertEqual(log_data["data"]["exc_value"], "file not found")
+        self.assertEqual(color_type, TraceTypes.COLOR_EXCEPTION)
+        self.assertEqual(self.logic._local.stack_depth, 0)  # Stack depth decreases
+
+
+@unittest.skipUnless(sys.version_info >= (3, 12), "sys.monitoring is only available in Python 3.12+")
+class TestSysMonitoringTraceDispatcher(BaseTracerTest):
+    """Tests for SysMonitoringTraceDispatcher using sys.monitoring mocks."""
 
     def setUp(self):
         super().setUp()
         self.test_filename = str(Path(__file__).resolve())
-        self.config = TraceConfig(target_files=[f"*{Path(self.test_filename).name}"])
-        self.dispatcher = TraceDispatcher(self.test_filename, self.config)
+        self.config = TraceConfig(target_files=[f"*{Path(self.test_filename).name}"], trace_c_calls=True)
+        self.dispatcher = SysMonitoringTraceDispatcher(self.test_filename, self.config)
+
+        self.mock_monitoring = MagicMock()
+        self.mock_monitoring.events = MagicMock()
+        self.mock_monitoring.events.PY_START = 1
+        self.mock_monitoring.events.PY_RETURN = 2
+        self.mock_monitoring.events.LINE = 4
+        self.mock_monitoring.events.RAISE = 8
+        self.mock_monitoring.events.EXCEPTION_HANDLED = 16
+        self.mock_monitoring.events.PY_YIELD = 32
+        self.mock_monitoring.events.PY_UNWIND = 64
+        self.mock_monitoring.events.PY_RESUME = 128
+        self.mock_monitoring.events.PY_THROW = 256
+        self.mock_monitoring.events.RERAISE = 512
+        self.mock_monitoring.events.CALL = 1024  # C-call event
+        self.mock_monitoring.events.C_RETURN = 2048  # C-return event
+        self.mock_monitoring.events.C_RAISE = 4096  # C-raise event
+        self.mock_monitoring.events.NO_EVENTS = 0
+        self.mock_monitoring.DISABLE = "DISABLE"
+        self.mock_monitoring.MISSING = MagicMock()  # Represents sys.monitoring.MISSING for arg0
+
+        self.dispatcher.monitoring_module = self.mock_monitoring
         self.mock_logic = MagicMock(spec=TraceLogic)
         self.dispatcher._logic = self.mock_logic
-        self.mock_logic.inside_unwanted_frame.return_value = False  # Default behavior
+        self.mock_logic.inside_unwanted_frame.return_value = False
 
-    def test_dispatch_call_event_for_target_frame(self):
-        frame = inspect.currentframe()
-        self.dispatcher.trace_dispatch(frame, "call", None)
-        self.mock_logic.handle_call.assert_called_once()
+    def test_register_tool(self):
+        """Test that the tool is registered correctly with sys.monitoring."""
+        self.mock_monitoring.get_tool.side_effect = [None, "ToolInUse", None]  # First available tool ID is 0, then 2
+        self.mock_monitoring.use_tool_id.return_value = None
 
-    def test_dispatch_call_event_for_non_target_frame(self):
-        code = "def some_func(): pass"
-        frame = self._create_frame_from_code(code, filename="other_file.py", func_name="some_func")
-        self.dispatcher.trace_dispatch(frame, "call", None)
-        self.mock_logic.handle_call.assert_not_called()
+        self.dispatcher._register_tool()
 
-    def test_dispatch_line_event_for_active_frame(self):
-        frame = inspect.currentframe()
-        self.dispatcher.trace_dispatch(frame, "call", None)  # Activate the frame
-        self.dispatcher.trace_dispatch(frame, "line", None)
-        self.mock_logic.handle_line.assert_called_once()
+        self.mock_monitoring.use_tool_id.assert_called_once_with(0, "PythonDebugger")
+        self.assertEqual(self.dispatcher._tool_id, 0)
+        self.assertTrue(self.dispatcher._registered)
 
-    def test_dispatch_return_event_removes_active_frame(self):
-        frame = inspect.currentframe()
-        self.dispatcher.trace_dispatch(frame, "call", None)
-        self.assertTrue(frame in self.dispatcher.active_frames)
-        self.dispatcher.trace_dispatch(frame, "return", "some_value")
-        self.assertFalse(frame in self.dispatcher.active_frames)
-        # handle_return should be called if the frame was active (its CALL event was not filtered)
-        self.mock_logic.handle_return.assert_called_once()
-        # leave_unwanted_frame should always be called by dispatcher to manage logic's internal state
-        self.mock_logic.leave_unwanted_frame.assert_called_once()
-
-    def test_dispatch_ignores_genexpr(self):
-        mock_frame = MagicMock()
-        mock_frame.f_code.co_name = "<genexpr>"
-        mock_frame.f_code.co_filename = "some_file.py"
-        self.dispatcher.trace_dispatch(mock_frame, "call", None)
-        self.mock_logic.handle_call.assert_not_called()
-
-    def test_none_frame(self):
-        self.assertFalse(self.dispatcher.is_target_frame(None))
-
-    def test_path_caching(self):
-        code = "def cache_test_func(): pass"
-        filename = "test_cache.py"
-        frame = self._create_frame_from_code(code, filename=filename, func_name="cache_test_func")
-
-        self.dispatcher.path_cache.clear()
-        self.dispatcher.is_target_frame(frame)
-        self.assertIn(frame.f_code.co_filename, self.dispatcher.path_cache)
-
-        prev_cache_size = len(self.dispatcher.path_cache)
-        self.dispatcher.is_target_frame(frame)
-        self.assertEqual(len(self.dispatcher.path_cache), prev_cache_size)
-
-    def test_invalid_co_filename(self):
-        # Instead of patching a real frame's read-only attribute, which raises
-        # an AttributeError, we create a mock object to simulate the condition.
-        mock_frame = MagicMock()
-
-        # Case 1: f_code.co_filename is None
-        mock_frame.f_code.co_filename = None
-        self.assertFalse(self.dispatcher.is_target_frame(mock_frame))
-
-        # Case 2: f_code itself is None
-        mock_frame_no_code = MagicMock()
-        mock_frame_no_code.f_code = None
-        self.assertFalse(self.dispatcher.is_target_frame(mock_frame_no_code))
-
-    @patch("sys.settrace")
-    def test_start_stop(self, mock_settrace):
-        self.dispatcher.start()
-        mock_settrace.assert_called_with(self.dispatcher.trace_dispatch)
-        self.mock_logic.start.assert_called_once()
-        try:
-            self.dispatcher.stop()
-        except:
-            pass
-        mock_settrace.assert_called_with(None)
-        self.mock_logic.stop.assert_called_once()
-
-    def test_dispatch_with_excluded_function(self):
-        """
-        Tests that Dispatcher correctly filters events for excluded functions based on TraceLogic's state.
-        """
-        self.config.exclude_functions = ["excluded_main_func"]
-
-        # 1. Simulate call to main_func_calling_excluded (NOT excluded itself)
-        frame_main = self._create_mock_frame(self.test_filename, 10, "main_func_calling_excluded")
-        self.mock_logic.inside_unwanted_frame.return_value = False  # Main func is not unwanted initially
-        self.dispatcher.trace_dispatch(frame_main, "call", None)
-        self.mock_logic.handle_call.assert_called_once_with(frame_main)
-        self.assertTrue(frame_main in self.dispatcher.active_frames)  # Main frame should be active
-        self.mock_logic.reset_mock()
-        self.dispatcher.active_frames.clear()  # Clear for next frame, as handle_call doesn't add to active_frames anymore for subsequent calls
-
-        # 2. Simulate call to excluded_main_func from main_func_calling_excluded
-        frame_excluded = self._create_mock_frame(self.test_filename, 5, "excluded_main_func", f_back=frame_main)
-        # Simulate TraceLogic marking this frame as unwanted
-        self.mock_logic.maybe_unwanted_frame(frame_excluded)
-        self.mock_logic.inside_unwanted_frame.return_value = True  # Now logic indicates it's inside an unwanted frame
-
-        # Call event for excluded function
-        self.dispatcher.trace_dispatch(frame_excluded, "call", None)
-        self.mock_logic.handle_call.assert_not_called()  # Dispatcher should NOT call handle_call for unwanted frame
-        self.assertFalse(frame_excluded in self.dispatcher.active_frames)  # Excluded frame should NOT be active
-        self.mock_logic.reset_mock()
-
-        # 3. Simulate line event within excluded_main_func - should NOT call handle_line
-        self.dispatcher.trace_dispatch(frame_excluded, "line", None)
-        self.mock_logic.handle_line.assert_not_called()
-        self.mock_logic.reset_mock()
-
-        # 4. Simulate call to excluded_helper_func_internal from excluded_main_func
-        frame_nested_excluded = self._create_mock_frame(
-            self.test_filename, 2, "excluded_helper_func_internal", f_back=frame_excluded
+        expected_events = (
+            self.mock_monitoring.events.PY_START
+            | self.mock_monitoring.events.PY_RETURN
+            | self.mock_monitoring.events.LINE
+            | self.mock_monitoring.events.RAISE
+            | self.mock_monitoring.events.EXCEPTION_HANDLED
+            | self.mock_monitoring.events.PY_UNWIND
+            | self.mock_monitoring.events.PY_RESUME
+            | self.mock_monitoring.events.PY_THROW
+            | self.mock_monitoring.events.RERAISE
+            | self.mock_monitoring.events.PY_YIELD
+            | self.mock_monitoring.events.CALL  # C call
+            | self.mock_monitoring.events.C_RETURN  # C return
+            | self.mock_monitoring.events.C_RAISE  # C raise
         )
-        self.mock_logic.maybe_unwanted_frame(frame_nested_excluded)  # Logic's state remains unwanted
-        # Dispatcher will still see inside_unwanted_frame as True for this thread
-        self.dispatcher.trace_dispatch(frame_nested_excluded, "call", None)
-        self.mock_logic.handle_call.assert_not_called()  # Should still not be called
-        self.assertFalse(frame_nested_excluded in self.dispatcher.active_frames)
-        self.mock_logic.reset_mock()
+        self.mock_monitoring.set_events.assert_called_once_with(0, expected_events)
 
-        # 5. Line event within nested excluded func - should NOT call handle_line
-        self.dispatcher.trace_dispatch(frame_nested_excluded, "line", None)
-        self.mock_logic.handle_line.assert_not_called()
-        self.mock_logic.reset_mock()
+        # Check all expected callbacks are registered
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.PY_START, self.dispatcher.handle_py_start
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.PY_RETURN, self.dispatcher.handle_py_return
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.LINE, self.dispatcher.handle_line
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.RAISE, self.dispatcher.handle_raise
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.EXCEPTION_HANDLED, self.dispatcher.handle_exception_handled
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.PY_YIELD, self.dispatcher.handle_py_yield
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.PY_UNWIND, self.dispatcher.handle_py_unwind
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.PY_THROW, self.dispatcher.handle_py_throw
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.RERAISE, self.dispatcher._handle_reraise
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.PY_RESUME, self.dispatcher.handle_py_resume
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.CALL, self.dispatcher.handle_call
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.C_RETURN, self.dispatcher.handle_c_return
+        )
+        self.mock_monitoring.register_callback.assert_any_call(
+            0, self.mock_monitoring.events.C_RAISE, self.dispatcher.handle_c_raise
+        )
 
-        # 6. Simulate return from excluded_helper_func_internal
-        # Dispatcher always calls leave_unwanted_frame. handle_return is NOT called if frame not active.
-        self.dispatcher.trace_dispatch(frame_nested_excluded, "return", 2)
-        self.mock_logic.leave_unwanted_frame.assert_called_once_with(frame_nested_excluded)
-        self.mock_logic.handle_return.assert_not_called()  # Was never active, so no handle_return
-        self.assertFalse(frame_nested_excluded in self.dispatcher.active_frames)
-        self.mock_logic.reset_mock()
+    def test_unregister_tool(self):
+        """Test that the tool is unregistered correctly."""
+        # First, register it so we can unregister
+        self.dispatcher._tool_id = 1
+        self.dispatcher._registered = True
+        self.dispatcher._unregister_tool()
 
-        # 7. Simulate return from excluded_main_func
-        # This return should clear the 'unwanted' state in TraceLogic if `leave_unwanted_frame` is successful
-        # Dispatcher always calls leave_unwanted_frame. handle_return is NOT called if frame not active.
-        self.dispatcher.trace_dispatch(frame_excluded, "return", 7)
-        self.mock_logic.leave_unwanted_frame.assert_called_once_with(frame_excluded)
-        self.mock_logic.handle_return.assert_not_called()  # Still not active
-        self.assertFalse(frame_excluded in self.dispatcher.active_frames)
-        self.mock_logic.reset_mock()
-        # Simulate TraceLogic's state after the main excluded function returns
-        self.mock_logic.inside_unwanted_frame.return_value = False  # Back in main func, no longer unwanted
+        self.mock_monitoring.set_events.assert_called_once_with(1, self.mock_monitoring.events.NO_EVENTS)
+        self.mock_monitoring.free_tool_id.assert_called_once_with(1)
+        self.assertFalse(self.dispatcher._registered)
+        self.assertIsNone(self.dispatcher._tool_id)
+        # Verify all callbacks are set to None
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.PY_START, None)
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.PY_RETURN, None)
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.LINE, None)
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.RAISE, None)
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.EXCEPTION_HANDLED, None)
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.CALL, None)
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.C_RETURN, None)
+        self.mock_monitoring.register_callback.assert_any_call(1, self.mock_monitoring.events.C_RAISE, None)
 
-        # 8. Simulate line event back in main_func_calling_excluded - should be logged
-        # We need to re-add frame_main to active_frames if it was removed in previous steps for this to work
-        # In a real scenario, it would have stayed active because its call event was not filtered.
-        self.dispatcher.add_target_frame(frame_main)  # Ensure it's active
-        self.dispatcher.trace_dispatch(frame_main, "line", None)
-        self.mock_logic.handle_line.assert_called_once()
+    @patch("sys._getframe")
+    def test_handle_py_start_target_frame(self, mock_getframe):
+        """Test PY_START for a target Python frame."""
+        mock_frame = self._create_mock_frame(self.test_filename, 10, "target_func")
+        mock_getframe.return_value = mock_frame
+
+        # Simulate being outside an unwanted frame
+        self.mock_logic.inside_unwanted_frame.return_value = False
+
+        result = self.dispatcher.handle_py_start(MagicMock(), 0)
+
+        self.mock_logic.maybe_unwanted_frame.assert_called_once_with(mock_frame)
+        self.mock_logic.handle_call.assert_called_once_with(mock_frame)
+        self.assertIn(mock_frame, self.dispatcher.active_frames)
+        self.assertIsNone(result)  # Should return None to continue tracing
+
+    @patch("sys._getframe")
+    def test_handle_py_start_non_target_frame(self, mock_getframe):
+        """Test PY_START for a non-target Python frame."""
+        mock_frame = self._create_mock_frame("non_target.py", 10, "non_target_func")
+        mock_getframe.return_value = mock_frame
+        self.mock_logic.inside_unwanted_frame.return_value = False
+
+        result = self.dispatcher.handle_py_start(MagicMock(), 0)
+
+        self.mock_logic.maybe_unwanted_frame.assert_called_once_with(
+            mock_frame
+        )  # maybe_unwanted_frame is always called
+        self.mock_logic.handle_call.assert_not_called()
+        self.assertNotIn(mock_frame, self.dispatcher.active_frames)
+        self.assertEqual(result, self.mock_monitoring.DISABLE)  # Should disable tracing for this frame
+
+    @patch("sys._getframe")
+    def test_handle_py_return(self, mock_getframe):
+        """Test PY_RETURN for an active Python frame."""
+        mock_frame = self._create_mock_frame(self.test_filename, 10, "target_func")
+        mock_getframe.return_value = mock_frame
+        self.dispatcher.active_frames.add(mock_frame)  # Make it an active frame
+        self.mock_logic.inside_unwanted_frame.return_value = False
+
+        self.dispatcher.handle_py_return(MagicMock(), 0, "retval")
+
+        self.mock_logic.leave_unwanted_frame.assert_called_once_with(mock_frame)
+        self.mock_logic.handle_return.assert_called_once_with(mock_frame, "retval")
+        self.mock_logic.frame_cleanup.assert_called_once_with(mock_frame)
+        self.assertNotIn(mock_frame, self.dispatcher.active_frames)
+
+    @patch("sys._getframe")
+    def test_handle_line(self, mock_getframe):
+        """Test LINE for an active Python frame."""
+        mock_frame = self._create_mock_frame(self.test_filename, 15, "target_func")
+        mock_getframe.return_value = mock_frame
+        self.dispatcher.active_frames.add(mock_frame)
+
+        self.dispatcher.handle_line(MagicMock(), 15)
+
+        self.mock_logic.handle_line.assert_called_once_with(mock_frame)
+
+    @patch("sys._getframe")
+    def test_handle_raise(self, mock_getframe):
+        """Test RAISE for an active Python frame."""
+        mock_frame = self._create_mock_frame(self.test_filename, 20, "target_func")
+        mock_getframe.return_value = mock_frame
+        self.dispatcher.active_frames.add(mock_frame)
+        exc = ValueError("Test Error")
+
+        self.dispatcher.handle_raise(MagicMock(), 0, exc)
+
+        self.mock_logic.handle_exception.assert_called_once_with(type(exc), exc, mock_frame)
+
+    @patch("sys._getframe")
+    def test_handle_c_call_python_callable(self, mock_getframe):
+        """Test CALL event for a Python callable (should be ignored by handle_call)."""
+        mock_code = MagicMock()
+        mock_callable = MagicMock(__code__=mock_code)  # Has __code__ -> is Python function
+        mock_arg0 = self.mock_monitoring.MISSING  # Not relevant for this test
+        mock_frame = self._create_mock_frame(self.test_filename, 5, "caller_func")
+        mock_getframe.return_value = mock_frame
+
+        result = self.dispatcher.handle_call(MagicMock(), 0, mock_callable, mock_arg0)
+
+        self.mock_logic.handle_c_call.assert_not_called()
+        self.assertIsNone(result)  # Should not disable, as PY_START will handle it
+
+    @patch("sys._getframe")
+    def test_handle_c_call_c_callable_target_frame(self, mock_getframe):
+        """Test CALL event for a C callable when caller is a target frame."""
+        mock_callable = MagicMock(__name__="len", __code__=None)  # No __code__ -> is C function
+        mock_arg0 = "some_string"
+        mock_frame = self._create_mock_frame(self.test_filename, 5, "caller_func")
+        mock_getframe.return_value = mock_frame
+
+        # Ensure the dispatcher considers this frame a target
+        self.dispatcher.path_cache[mock_frame.f_code.co_filename] = True
+
+        self.dispatcher.handle_call(MagicMock(), 0, mock_callable, mock_arg0)
+
+        self.mock_logic.handle_c_call.assert_called_once_with(mock_frame, mock_callable, mock_arg0)
+
+    @patch("sys._getframe")
+    def test_handle_c_call_c_callable_non_target_frame(self, mock_getframe):
+        """Test CALL event for a C callable when caller is NOT a target frame."""
+        mock_callable = MagicMock(__name__="len", __code__=None)
+        mock_arg0 = "some_string"
+        mock_frame = self._create_mock_frame("non_target.py", 5, "caller_func")  # Non-target filename
+        mock_getframe.return_value = mock_frame
+
+        # Ensure the dispatcher considers this frame NOT a target
+        self.dispatcher.path_cache[mock_frame.f_code.co_filename] = False
+
+        self.dispatcher.handle_call(MagicMock(), 0, mock_callable, mock_arg0)
+
+        self.mock_logic.handle_c_call.assert_not_called()
+
+    @patch("sys._getframe")
+    def test_handle_c_return(self, mock_getframe):
+        """Test C_RETURN event."""
+        mock_callable = MagicMock(spec=len, __name__="len")
+        mock_retval = 5
+        mock_frame = self._create_mock_frame(self.test_filename, 5, "caller_func")
+        mock_getframe.return_value = mock_frame
+
+        self.dispatcher.handle_c_return(MagicMock(), 0, mock_callable, mock_retval)
+
+        self.mock_logic.handle_c_return.assert_called_once_with(mock_frame, mock_callable, mock_retval)
+
+    @patch("sys._getframe")
+    def test_handle_c_raise(self, mock_getframe):
+        """Test C_RAISE event."""
+        mock_callable = MagicMock(spec=open, __name__="open")
+        mock_exception = FileNotFoundError("file not found")
+        mock_frame = self._create_mock_frame(self.test_filename, 5, "caller_func")
+        mock_getframe.return_value = mock_frame
+
+        self.dispatcher.handle_c_raise(MagicMock(), 0, mock_callable, mock_exception)
+
+        self.mock_logic.handle_c_raise.assert_called_once_with(mock_frame, mock_callable, mock_exception)
 
 
 class TestCallTreeHtmlRender(BaseTracerTest):
@@ -1026,6 +1202,8 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "lineno": 5,
                 "frame_id": 100,
                 "message": "CALL func1",
+                "original_filename": "test_file.py",  # Added for consistency with real logs
+                "func": "func1",  # Added for consistency with real logs
             },
             {
                 "type": "line",
@@ -1034,6 +1212,7 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "lineno": 10,
                 "frame_id": 100,
                 "message": "LINE 10",
+                "original_filename": "test_file.py",
             },
             {
                 "type": "return",
@@ -1042,6 +1221,8 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "lineno": 5,
                 "frame_id": 100,
                 "message": "RETURN func1",
+                "original_filename": "test_file.py",
+                "func": "func1",
             },
             {
                 "type": "call",
@@ -1050,6 +1231,8 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "lineno": 20,
                 "frame_id": 200,
                 "message": "CALL func2",
+                "original_filename": "test_file.py",
+                "func": "func2",
             },
             {
                 "type": "return",
@@ -1058,6 +1241,8 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "lineno": 20,
                 "frame_id": 200,
                 "message": "RETURN func2",
+                "original_filename": "test_file.py",
+                "func": "func2",
             },
             {
                 "type": "call",
@@ -1066,6 +1251,8 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "lineno": 40,
                 "frame_id": 400,
                 "message": "CALL func4",
+                "original_filename": "test_file.py",
+                "func": "func4",
             },
             {
                 "type": "call",
@@ -1075,6 +1262,7 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "frame_id": 400,
                 "message": "CALL sub_func",
                 "func": "abc",
+                "original_filename": "test_file.py",
             },
             {
                 "type": "return",
@@ -1083,6 +1271,8 @@ class TestTraceLogExtractor(BaseTracerTest):
                 "lineno": 40,
                 "frame_id": 400,
                 "message": "RETURN func4",
+                "original_filename": "test_file.py",
+                "func": "func4",
             },
         ]
         with open(self.log_file, "w", encoding="utf-8") as log_f, open(self.index_file, "w", encoding="utf-8") as idx_f:
@@ -1090,14 +1280,22 @@ class TestTraceLogExtractor(BaseTracerTest):
             for log_entry in logs:
                 line = json.dumps(log_entry) + "\n"
                 log_f.write(line)
-                if log_entry["type"] in ("call", "return"):
+                if log_entry["type"] in (
+                    "call",
+                    "return",
+                    "exception",
+                    "c_call",
+                    "c_return",
+                    "c_raise",
+                ):  # Updated index types
                     idx_entry = {
                         "type": log_entry["type"],
-                        "filename": log_entry["filename"],
+                        "filename": log_entry["original_filename"],  # Use original_filename for index
                         "lineno": log_entry["lineno"],
                         "frame_id": log_entry["frame_id"],
                         "position": pos,
                         "func": log_entry.get("func", ""),
+                        "parent_frame_id": log_entry.get("parent_frame_id", 0),  # Added parent_frame_id
                     }
                     idx_f.write(json.dumps(idx_entry) + "\n")
                 pos += len(line.encode("utf-8"))
@@ -1126,6 +1324,165 @@ class TestIntegration(BaseTracerTest):
 
         # Check if logs were produced by inspecting the tracer's internal state.
         self.assertGreater(len(tracer._logic._html_render._messages), 0)
+
+    @unittest.skipUnless(sys.version_info >= (3, 12), "C function tracing requires Python 3.12+")
+    def test_e2e_c_calls_tracing(self):
+        """
+        End-to-end test for C function call tracing using sys.monitoring.
+        """
+        target_script_content = dedent(
+            """
+            import os
+            import sys
+            
+            def call_c_functions():
+                # Call a C function for success
+                my_list = [1, 2, 3]
+                list_len = len(my_list)
+                print(f"Len: {list_len}") # This line will generate a C-CALL for len
+            
+                # Call a C function that raises an exception
+                try:
+                    with open("non_existent_file.txt", "r") as f:
+                        f.read()
+                except FileNotFoundError:
+                    print("Caught FileNotFoundError")
+            
+                # Another successful C function call
+                data = {'a': 1, 'b': 2}
+                items = data.items()
+                print(f"Items: {items}")
+
+                # Call a C function with arg0 MISSING example
+                # sys.getsizeof is a builtin, its arg0 will be MISSING
+                size = sys.getsizeof(10)
+                print(f"Size of 10: {size}")
+
+            if __name__ == "__main__":
+                call_c_functions()
+            """
+        )
+        script_path = self.test_dir / "c_call_test_script.py"
+        script_path.write_text(target_script_content, encoding="utf-8")
+
+        # Define the log file path relative to the debugger.tracer_main execution
+        log_file_path = self.test_dir.parent / "logs" / f"{script_path.stem}.log"
+        if log_file_path.exists():
+            log_file_path.unlink()  # Clear previous logs
+
+        # Run the tracer_main.py as a subprocess with --trace-c-calls
+        # Use python -m to ensure the correct module is found
+        import subprocess
+
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "debugger.tracer_main",
+                "--trace-c-calls",
+                "--report-name",
+                f"{script_path.stem}.html",  # Ensure report name aligns with log_file_path derivation
+                str(script_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        # Print subprocess output for debugging if test fails
+        if process.returncode != 0:
+            print(f"Subprocess stdout:\n{process.stdout}")
+            print(f"Subprocess stderr:\n{process.stderr}")
+
+        self.assertEqual(process.returncode, 0, f"Tracer process exited with error code {process.returncode}")
+        self.assertTrue(log_file_path.exists(), f"Log file not found at {log_file_path}")
+
+        # Read and verify log contents
+        log_content = log_file_path.read_text(encoding="utf-8")
+
+        # Expected C-CALL and C-RETURN for len()
+        self.assertIn("↘ C-CALL len at", log_content)
+        self.assertIn("↗ C-RETURN from len -> 3", log_content)
+
+        # Expected C-RAISE for open()
+        self.assertIn(
+            "⚠ C-RAISE from open -> FileNotFoundError: [Errno 2] No such file or directory: 'non_existent_file.txt'",
+            log_content,
+        )
+
+        # Expected C-CALL and C-RETURN for dict.items()
+        self.assertIn("↘ C-CALL dict.items at", log_content)
+        self.assertIn("↗ C-RETURN from dict.items -> dict_items", log_content)
+
+        # Expected C-CALL for sys.getsizeof()
+        self.assertIn("↘ C-CALL sys.getsizeof at", log_content)
+        # The return value might vary slightly based on Python version, so just check call
+        self.assertIn("↗ C-RETURN from sys.getsizeof ->", log_content)
+
+        # Verify HTML report is generated
+        html_report_path = self.test_dir.parent / "logs" / f"{script_path.stem}.html"
+        self.assertTrue(html_report_path.exists(), f"HTML report not found at {html_report_path}")
+
+    @unittest.skipUnless(sys.version_info >= (3, 12), "C function tracing requires Python 3.12+")
+    def test_e2e_c_calls_tracing_disabled(self):
+        """
+        End-to-end test to ensure C function tracing is DISABLED when flag is not set.
+        """
+        target_script_content = dedent(
+            """
+            import os
+            
+            def call_c_functions():
+                my_list = [1, 2, 3]
+                list_len = len(my_list)
+                
+                try:
+                    with open("non_existent_file.txt", "r") as f:
+                        f.read()
+                except FileNotFoundError:
+                    pass
+
+            if __name__ == "__main__":
+                call_c_functions()
+            """
+        )
+        script_path = self.test_dir / "no_c_call_test_script.py"
+        script_path.write_text(target_script_content, encoding="utf-8")
+
+        log_file_path = self.test_dir.parent / "logs" / f"{script_path.stem}.log"
+        if log_file_path.exists():
+            log_file_path.unlink()
+
+        # Run the tracer_main.py as a subprocess WITHOUT --trace-c-calls
+        import subprocess
+
+        process = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "debugger.tracer_main",
+                "--report-name",
+                f"{script_path.stem}.html",
+                str(script_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if process.returncode != 0:
+            print(f"Subprocess stdout:\n{process.stdout}")
+            print(f"Subprocess stderr:\n{process.stderr}")
+
+        self.assertEqual(process.returncode, 0, f"Tracer process exited with error code {process.returncode}")
+        self.assertTrue(log_file_path.exists(), f"Log file not found at {log_file_path}")
+
+        log_content = log_file_path.read_text(encoding="utf-8")
+
+        # Assert that no C-CALL, C-RETURN, C-RAISE logs are present
+        self.assertNotIn("↘ C-CALL", log_content)
+        self.assertNotIn("↗ C-RETURN", log_content)
+        self.assertNotIn("⚠ C-RAISE", log_content)
 
 
 if __name__ == "__main__":

@@ -65,7 +65,8 @@ def create_parser() -> ArgumentParser:
         "  python -m debugger.tracer_main --capture-vars='x' --capture-vars='y.z' script.py\n"
         "  python -m debugger.tracer_main --line-ranges='test.py:10-20' script.py\n"
         "  python -m debugger.tracer_main --start-function='main.py:5' script.py arg1 --arg2\n"
-        "  python -m debugger.tracer_main --include-stdlibs=json --include-stdlibs=re script.py"
+        "  python -m debugger.tracer_main --include-stdlibs=json --include-stdlibs=re script.py\n"
+        "  python -m debugger.tracer_main --trace-c-calls script.py"
     )
     parser = ArgumentParser(
         description="Python脚本/模块调试跟踪工具",
@@ -146,6 +147,11 @@ def create_parser() -> ArgumentParser:
         "--trace-self",
         action="store_true",
         help="包含跟踪器自身的代码执行 (用于调试跟踪器)",
+    )
+    parser.add_argument(
+        "--trace-c-calls",
+        action="store_true",
+        help="启用对C函数的调用跟踪 (可能显著影响性能和输出量)",
     )
     parser.add_argument(
         "--start-function",
@@ -245,6 +251,7 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "start_function": args.start_function,
         "source_base_dir": args.source_base_dir,
         "include_stdlibs": args.include_stdlibs or [],
+        "trace_c_calls": args.trace_c_calls,
     }
 
 
@@ -353,6 +360,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             start_function=args["start_function"],
             source_base_dir=args["source_base_dir"],
             include_stdlibs=args["include_stdlibs"],
+            trace_c_calls=args["trace_c_calls"],
         )
 
         log_dir = Path(__file__).parent / "logs"
@@ -365,6 +373,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         print(color_wrap(f"  ✓ {'包含' if not config.ignore_self else '跳过'}跟踪器自身的代码", "call"))
         if config.enable_var_trace:
             print(color_wrap("  ✓ 变量变化检测", "var"))
+        if config.trace_c_calls and sys.version_info >= (3, 12):
+            print(color_wrap("  ✓ C函数调用跟踪 (sys.monitoring)", "var"))
         print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
         print(color_wrap("  ✓ 多线程跟踪支持", "return"))
         print(color_wrap(f"\n📂 调试日志路径: {log_dir / 'debug.log'}", "line"))
@@ -414,6 +424,8 @@ def print_debug_summary(report_path: Path) -> None:
     print(color_wrap("\n调试日志包含以下信息类型：", "line"))
     print(color_wrap("  ↘ CALL     - 函数调用及参数", "call"))
     print(color_wrap("  ↗ RETURN   - 函数返回值及耗时", "return"))
+    print(color_wrap("  ↘ C-CALL   - C函数调用", "trace"))
+    print(color_wrap("  ↗ C-RETURN - C函数返回", "trace"))
     print(color_wrap("  Δ VARIABLES - 变量创建/修改/删除", "var"))
     print(color_wrap("  ▷ LINE     - 执行的源代码行", "line"))
     print(color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
