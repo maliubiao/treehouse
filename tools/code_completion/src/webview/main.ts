@@ -132,7 +132,7 @@ class ConfigApp {
             resources: {
                 en: {
                     common: {
-                        "common": {
+                        "ui": {
                             "retry": "Retry",
                             "saveButton": "Save",
                             "cancelButton": "Cancel",
@@ -263,7 +263,7 @@ class ConfigApp {
 
     /**
      * A translation function that uses i18next.
-     * @param key The i18n key (e.g., 'webview.mainTitle' or 'common.retry').
+     * @param key The i18n key (e.g., 'webview.mainTitle' or 'ui.retry').
      * @param options An object with placeholder values.
      */
     private t(key: string, options?: { [key: string]: string | number }): string {
@@ -399,8 +399,8 @@ class ConfigApp {
                         <div id="test-status-modal" style="height: 20px;"></div>
                         <div class="button-group">
                             <button id="test-connection-modal">${this.t('webview.testConnectionButton')}</button>
-                            <button id="save-service-modal">${this.t('common.saveButton')}</button>
-                            <button id="cancel-modal" style="background-color: var(--vscode-button-secondaryBackground);">${this.t('common.cancelButton')}</button>
+                            <button id="save-service-modal">${this.t('ui.saveButton')}</button>
+                            <button id="cancel-modal" style="background-color: var(--vscode-button-secondaryBackground);">${this.t('ui.cancelButton')}</button>
                         </div>
                     </div>
                 </div>
@@ -471,9 +471,9 @@ class ConfigApp {
                     ${isActive ? `<span class="active-badge">${this.t('webview.activeBadge')}</span>` : ''}
                 </div>
                 <div class="button-group">
-                    ${!isActive ? `<button class="select-btn">${this.t('common.selectButton')}</button>` : ''}
-                    <button class="edit-btn">${this.t('common.editButton')}</button>
-                    <button class="delete-btn">${this.t('common.deleteButton')}</button>
+                    ${!isActive ? `<button class="select-btn">${this.t('ui.selectButton')}</button>` : ''}
+                    <button class="edit-btn">${this.t('ui.editButton')}</button>
+                    <button class="delete-btn">${this.t('ui.deleteButton')}</button>
                 </div>`;
             
             if (!isActive) {

@@ -76,7 +76,7 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                     }
                     await saveAiServiceConfigs(services);
                     sendConfigsToWebview();
-                    showInfoMessage(t("Service '{{name}}' saved.", { name: message.service.name }));
+                    showInfoMessage(t('webview.serviceSaved', { name: message.service.name }));
                     return;
                 }
                 case 'deleteService': {
@@ -84,18 +84,18 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                     currentServices = currentServices.filter(s => s.name !== message.name);
                     await saveAiServiceConfigs(currentServices);
                     sendConfigsToWebview();
-                    showInfoMessage(t("Service '{{name}}' deleted.", { name: message.name }));
+                    showInfoMessage(t('webview.serviceDeleted', { name: message.name }));
                     return;
                 }
                 case 'setActive':
                     await setActiveAiService(message.name);
                     sendConfigsToWebview();
-                    showInfoMessage(t("Service '{{name}}' is now active.", { name: message.name }));
+                    showInfoMessage(t('webview.serviceActivated', { name: message.name }));
                     return;
                 case 'importServices':
                     await saveAiServiceConfigs(message.services);
                     sendConfigsToWebview();
-                    showInfoMessage(t("Imported {{count}} services.", { count: message.services.length }));
+                    showInfoMessage(t('webview.servicesImported', { count: message.services.length }));
                     return;
                 case 'testConnection': {
                     const testResult = await testApiConnection(message.service as AiServiceConfig);
@@ -104,11 +104,11 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
                 }
                 case 'saveSystemPrompt':
                     await config.update('prompt.systemMessage', message.text, vscode.ConfigurationTarget.Global);
-                    showInfoMessage(t('System prompt saved.'));
+                    showInfoMessage(t('webview.systemPromptSaved'));
                     return;
                 case 'saveRule':
                     await config.update('prompt.rule', message.text, vscode.ConfigurationTarget.Global);
-                    showInfoMessage(t('Prompt rule saved.'));
+                    showInfoMessage(t('webview.promptRuleSaved'));
                     return;
                 case 'playgroundRequest': {
                     const allServices = getAiServiceConfigs();

@@ -21,7 +21,7 @@ jest.mock('../../util/i18n', () => ({
     if (key === 'interactions.showErrorMessage_prefix' && options?.message) {
       return `Treehouse Completer Error: ${options.message}`;
     }
-    if (key === 'common.retry') {
+    if (key === 'ui.retry') {
         return 'Retry';
     }
     return key;

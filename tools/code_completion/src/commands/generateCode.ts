@@ -322,7 +322,7 @@ export async function generateCodeCommand(
             return;
         }
 
-        const retryOption = t('common.retry');
+        const retryOption = t('ui.retry');
         const selection = await showErrorMessage(errorMessage, () => {
              vscode.commands.executeCommand('treehouse-code-completer.generateCode');
         });

@@ -29,7 +29,7 @@ export function showInfoMessage(message: string): void {
  */
 export async function showErrorMessage(message: string, onRetry?: () => void): Promise<string | undefined> {
     const options: string[] = [];
-    const retryOption = t('common.retry');
+    const retryOption = t('ui.retry');
     if (onRetry) {
         options.push(retryOption);
     }

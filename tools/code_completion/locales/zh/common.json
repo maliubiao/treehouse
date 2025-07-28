@@ -1,0 +1,124 @@
+{
+  "ui": {
+    "retry": "重试",
+    "saveButton": "保存",
+    "cancelButton": "取消",
+    "editButton": "编辑",
+    "deleteButton": "删除",
+    "selectButton": "选择"
+  },
+  "extension": {
+    "activated": "Treehouse 代码补全插件已激活。",
+    "noActiveWebview": "没有活动的Webview可以打开开发者工具。"
+  },
+  "interactions": {
+    "getInstruction": {
+      "prompt": "请输入您对AI的指令",
+      "placeholder": "例如，“重构此函数以提高效率”或“添加JSDoc注释”"
+    },
+    "showInfoMessage_prefix": "Treehouse 补全: {{message}}",
+    "showErrorMessage_prefix": "Treehouse 补全错误: {{message}}"
+  },
+  "undoManager": {
+    "nothingToUndo": "没有可撤销的AI生成内容。",
+    "reverted": "上次AI生成的内容已被撤销。",
+    "revertFailed": "撤销上次编辑失败: {{error}}"
+  },
+  "sessionManager": {
+    "suggestionReady": "AI建议已准备好。使用 {{acceptKey}} 接受，使用 {{rejectKey}} 拒绝。",
+    "changesApplied": "变更已应用。",
+    "applyFailed": "应用变更失败。",
+    "applyFailedError": "应用变更失败: {{error}}",
+    "changesRejected": "变更已拒绝。"
+  },
+  "generateCode": {
+    "noActiveService": "未配置活动的AI服务。请在设置中配置一个。",
+    "openSettings": "打开设置",
+    "notAvailableInSpecialEditor": "此命令在此类编辑器（例如，终端、调试控制台）中不可用。",
+    "noFileSelected": "未选择活动的代码文件。请打开一个文件以使用此命令。",
+    "timeout": "代码生成请求在120秒后超时。",
+    "cancelled": "操作被用户取消。",
+    "progress": {
+      "working": "Treehouse AI 正在工作中...",
+      "initializing": "正在初始化...",
+      "finalizing": "正在完成..."
+    },
+    "success": "AI生成成功。使用的Token数: {{totalTokens}}{{costDisplay}}。",
+    "error": "代码生成期间发生错误: {{errorMessage}}",
+    "showDetails": "显示详情",
+    "emptyResponse": "AI响应为空。"
+  },
+  "llmClient": {
+    "apiKeyRequired": "需要当前服务的API密钥。",
+    "defaultSystemPrompt": "你是一个有用的AI助手。",
+    "requestTimeout": "请求在 {{seconds}} 秒后超时。\n堆栈: {{stack}}",
+    "apiError": "API 错误 ({{status}}): {{message}}\n堆栈: {{stack}}",
+    "communicationError": "与API通信失败: {{message}}\n堆栈: {{stack}}",
+    "testConnection": {
+      "prompt": "test",
+      "success": "连接成功。",
+      "unexpectedResponse": "从API收到意外的响应: {{response}}",
+      "timeout": "连接测试在 {{seconds}} 秒后超时。\n堆栈: {{stack}}",
+      "apiError": "API 错误 ({{status}}): {{name}} - {{message}}\n堆栈: {{stack}}",
+      "unknownError": "连接测试期间发生未知错误: {{message}}\n堆栈: {{stack}}"
+    },
+    "playground": {
+      "timeout": "Playground 请求在 {{seconds}} 秒后超时。\n堆栈: {{stack}}",
+      "apiError": "Playground API 错误 ({{status}}): {{name}} - {{message}}\n堆栈: {{stack}}",
+      "communicationError": "与API通信失败(Playground): {{message}}\n堆栈: {{stack}}"
+    }
+  },
+  "webview": {
+    "mainTitle": "Treehouse AI 设置",
+    "servicesTitle": "AI 服务",
+    "addNewService": "添加新服务",
+    "importExportTitle": "导入 / 导出",
+    "importExportPlaceholder": "在此处粘贴要导入的服务的JSON数组，或导出所有服务。",
+    "importAll": "全部导入",
+    "exportAll": "全部导出",
+    "promptsTitle": "提示",
+    "systemPromptLabel": "系统提示",
+    "saveSystemPrompt": "保存系统提示",
+    "customRuleLabel": "自定义规则",
+    "saveCustomRule": "保存自定义规则",
+    "playgroundTitle": "演练场",
+    "playgroundServiceLabel": "要使用的服务:",
+    "playgroundPromptLabel": "提示:",
+    "playgroundPromptPlaceholder": "输入您的提示以测试服务...",
+    "playgroundSend": "发送",
+    "playgroundResponseLabel": "响应:",
+    "noServicesConfigured": "未配置AI服务。",
+    "activeBadge": "当前",
+    "noServicesAvailable": "无可用服务",
+    "thinking": "思考中...",
+    "invalidJsonServices": "服务数组的JSON格式无效。",
+    "invalidJsonService": "服务对象的JSON格式无效。",
+    "serviceNotFound": "未找到服务 '{{serviceName}}'。",
+    "playgroundError": "Playground 请求失败: {{message}}",
+    "editModalTitle": "编辑 AI 服务",
+    "addModalTitle": "添加新的 AI 服务",
+    "modalImportLabel": "从JSON导入服务",
+    "modalImportPlaceholder": "在此处粘贴单个服务配置对象...",
+    "modalImportButton": "从JSON导入",
+    "serviceNameLabel": "服务名称",
+    "modelNameLabel": "模型名称",
+    "baseUrlLabel": "Base URL",
+    "apiKeyLabel": "API Key",
+    "temperatureLabel": "温度",
+    "maxTokensLabel": "最大Token数",
+    "maxContextSizeLabel": "最大上下文大小",
+    "timeoutLabel": "超时(秒)",
+    "priceInputLabel": "价格/1M 输入 ($)",
+    "priceOutputLabel": "价格/1M 输出 ($)",
+    "supportsJsonLabel": "支持JSON输出",
+    "testConnectionButton": "测试连接",
+    "connectionSuccessful": "连接成功！",
+    "connectionFailed": "连接失败: {{message}}",
+    "serviceSaved": "服务 '{{name}}' 已保存。",
+    "serviceDeleted": "服务 '{{name}}' 已删除。",
+    "serviceActivated": "服务 '{{name}}' 已激活。",
+    "servicesImported": "已导入 {{count}} 个服务。",
+    "systemPromptSaved": "系统提示已保存。",
+    "promptRuleSaved": "提示规则已保存。"
+  }
+}
