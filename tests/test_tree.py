@@ -2406,14 +2406,16 @@ int main() {
         """测试代码分割功能"""
         # 解析代码文件
         parsed_tree = parse_code_file(self.tmp_file_path, self.lang_parser)
-        captures = self.query.matches(parsed_tree.root_node)
+        captures = self.query.captures(parsed_tree.root_node)
 
         # 验证是否找到return语句
         self.assertGreater(len(captures), 0, "未找到return语句")
 
         # 获取第一个return语句的节点
-        _, capture = captures[0]
-        return_node = capture["return"][0]
+        # The log indicates `captures` is a dict: {'return': [node, ...]}
+        return_nodes = captures.get("return", [])
+        self.assertGreater(len(return_nodes), 0, "Capture 'return' not found or empty")
+        return_node = return_nodes[0]
         # 使用split_source提取代码
         start_row, start_col = return_node.start_point
         end_row, end_col = return_node.end_point
@@ -2433,13 +2435,6 @@ int main() {
         self.assertEqual(after, "\n}", "后段内容不匹配")
 
         # 测试代码补丁功能
-        parsed_tree = parse_code_file(self.tmp_file_path, self.lang_parser)
-        captures = self.query.matches(parsed_tree.root_node)  # trace dump_tree(tree.root_node)
-
-        _, capture = captures[0]
-        return_node = capture["return"][0]
-
-        # 测试BlockPatch功能
         code_patch = BlockPatch(
             file_paths=[self.tmp_file_path],
             patch_ranges=[(return_node.start_byte, return_node.end_byte)],
