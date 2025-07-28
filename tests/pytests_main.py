@@ -12,6 +12,17 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def is_lldb_available() -> bool:
+    """Check if the lldb module is available."""
+    try:
+        import lldb  # type: ignore
+
+        # A simple check to see if it's a real lldb, not a mock
+        return hasattr(lldb, "SBDebugger")
+    except (ImportError, ModuleNotFoundError):
+        return False
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run pytest tests with flexible selection")
     parser.add_argument(
@@ -227,6 +238,26 @@ def run_tests(
     elif verbosity == 2:
         pytest_args.append("-v")
 
+    if not is_lldb_available():
+        if verbosity > 0:
+            print(
+                "WARNING: 'lldb' module not found. Skipping lldb-dependent tests.",
+                file=sys.stderr,
+            )
+        lldb_test_modules = [
+            "test_core",
+            "test_debug_info_handler",
+            "test_event_loop",
+            "test_lldb_tracer",
+            "test_source_handler",
+            "test_source_ranges",
+            "test_step_handler",
+            "test_symbol_trace_plugin",
+            "test_tracer_main",
+        ]
+        k_expr = "not (" + " or ".join(lldb_test_modules) + ")"
+        pytest_args.extend(["-k", k_expr])
+
     if test_name:
         pytest_args.extend(["-k", test_name])
 
@@ -234,11 +265,12 @@ def run_tests(
         pytest_args.extend(["--collect-only", "-q"])
         collected = []
 
-        def pytest_collection_modifyitems(items):
-            for item in items:
-                collected.append(item.nodeid)
+        class TestCollector:
+            def pytest_collection_modifyitems(self, items: List[Any]) -> None:
+                for item in items:
+                    collected.append(item.nodeid)
 
-        pytest.main(pytest_args, plugins=[pytest_collection_modifyitems])
+        pytest.main(pytest_args, plugins=[TestCollector()])
         return {"test_cases": sorted(collected)}
 
     reporter = PytestJSONReporter()
@@ -268,7 +300,6 @@ def main():
         )
 
         if args.json:
-            print("capture error_details:")
             print(json.dumps(result, indent=2))
 
         sys.exit(result if isinstance(result, int) else 0)

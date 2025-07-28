@@ -28,6 +28,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 TEST_SOURCE_INFO_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
+def is_lldb_available() -> bool:
+    """Check if the lldb module is available."""
+    try:
+        import lldb  # type: ignore
+
+        # A simple check to see if it's a real lldb, not a mock
+        return hasattr(lldb, "SBDebugger")
+    except (ImportError, ModuleNotFoundError):
+        return False
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run unit tests with flexible selection")
     parser.add_argument(
@@ -391,6 +402,29 @@ def run_tests(
     extract_errors: bool = False,
     list_mode: bool = False,
 ) -> Union[unittest.TestResult, Dict[str, Any], List[Dict[str, Any]]]:
+    # Check for LLDB availability and adjust test patterns
+    if not is_lldb_available():
+        if verbosity > 0:
+            print(
+                "WARNING: 'lldb' module not found. Skipping lldb-dependent tests.",
+                file=sys.stderr,
+            )
+        lldb_test_modules = [
+            "test_core",
+            "test_debug_info_handler",
+            "test_event_loop",
+            "test_lldb_tracer",
+            "test_source_handler",
+            "test_source_ranges",
+            "test_step_handler",
+            "test_symbol_trace_plugin",
+            "test_tracer_main",
+        ]
+        effective_patterns = list(test_patterns) if test_patterns else []
+        for module in lldb_test_modules:
+            effective_patterns.append(f"-{module}.*")
+        test_patterns = effective_patterns
+
     loader = unittest.TestLoader()
     suite: unittest.TestSuite
     try:

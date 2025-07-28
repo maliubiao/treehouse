@@ -44,7 +44,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync
+          uv sync\
 
       - name: Prepare LLM configuration
         run: |
@@ -68,7 +68,7 @@ jobs:
         # tests/test_main.py exits with non-zero code on failure
         env:
           # Add project root, compiled C extensions, and the correct system lldb module to Python's path
-          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages
+          PYTHONPATH: .:debugger/lldb
         run: |
           xvfb-run uv run python tests/test_main.py
 
@@ -76,6 +76,6 @@ jobs:
         # tests/pytests_main.py exits with non-zero code on failure
         env:
           # Add project root, compiled C extensions, and the correct system lldb module to Python's path
-          PYTHONPATH: .:debugger/lldb:/usr/lib/python3/dist-packages/
+          PYTHONPATH: .:debugger/lldb
         run: |
           xvfb-run uv run python tests/pytests_main.py
