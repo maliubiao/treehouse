@@ -29,6 +29,16 @@ export function showSettingsView(context: vscode.ExtensionContext): void {
     const htmlPath = path.join(context.extensionPath, 'dist', 'webview.html');
     let htmlContent = fs.readFileSync(htmlPath, 'utf8');
 
+    // Convert the path for the i18next library to a webview-safe URI
+    const i18nextScriptPath = vscode.Uri.joinPath(context.extensionUri, 'dist', 'lib', 'i18next', 'i18next.min.js');
+    const i18nextScriptUri = panel.webview.asWebviewUri(i18nextScriptPath);
+
+    // Replace the hardcoded relative path with the secure URI to comply with VS Code's CSP
+    htmlContent = htmlContent.replace(
+        'src="lib/i18next/i18next.min.js"',
+        `src="${i18nextScriptUri}"`
+    );
+
     // Inject i18n configuration for Webview
     const i18nConfig = getI18nConfigForWebview();
     htmlContent = htmlContent.replace(
