@@ -322,7 +322,7 @@ class TestTraceConfig(BaseTracerTest):
         self.assertEqual(config.capture_vars, sample_config["capture_vars"])
         self.assertEqual(config.exclude_functions, sample_config["exclude_functions"])
         self.assertFalse(config.ignore_system_paths)
-        self.assertEqual(config.source_base_dir, sample_config["source_base_dir"])
+        self.assertEqual(config.source_base_dir, Path(sample_config["source_base_dir"]))  # Ensure Path object
         self.assertTrue(config.disable_html)
         self.assertEqual(config.include_stdlibs, sample_config["include_stdlibs"])
         self.assertTrue(config.trace_c_calls)  # New assertion
@@ -416,10 +416,7 @@ class TestTraceLogic(BaseTracerTest):
 
         pass
 
-    # Patch inspect.getargvalues for all tests in this class
-    # The patch target is where inspect is used in tracer.py, not the global inspect module
-    # @patch('debugger.tracer.inspect.getargvalues')
-    def setUp(self):  # mock_getargvalues will be passed by the patch decorator
+    def setUp(self):
         super().setUp()
         self.test_filename = str(Path(__file__).resolve())
         self.config = TraceConfig(target_files=[self.test_filename])
@@ -427,11 +424,22 @@ class TestTraceLogic(BaseTracerTest):
         # Mock the internal _add_to_buffer for easier assertion
         self.logic._add_to_buffer = MagicMock()
 
+        # Ensure thread-local state is clean for each test
         if hasattr(self.logic, "_local"):
+            # Explicitly reset stack_depth and bad_frame if they exist
+            # This handles cases where a previous test might have left them in a non-default state
             if hasattr(self.logic._local, "bad_frame"):
                 del self.logic._local.bad_frame
             if hasattr(self.logic._local, "stack_depth"):
                 del self.logic._local.stack_depth
+            # Initialize them to default expected values for the start of a test
+            self.logic._local.stack_depth = 0
+            self.logic._local.bad_frame = None
+        else:
+            # If _local doesn't exist, create it and initialize its attributes
+            self.logic._local = threading.local()
+            self.logic._local.stack_depth = 0
+            self.logic._local.bad_frame = None
 
     def _get_frame_at(self, func, *args, event_type="call", lineno=None, **kwargs):
         """
@@ -467,6 +475,34 @@ class TestTraceLogic(BaseTracerTest):
             self.fail(f"Failed to capture frame for {func.__name__} at event '{event_type}', line {lineno}")
         return frame
 
+    def _get_python_frame_for_c_call(self, python_func_calling_c):
+        """
+        Executes a Python function that calls a C function and captures the Python frame
+        at the point of the C call (or the line where it's initiated).
+        """
+        frame = None
+
+        def trace_hook(f, event, arg):
+            nonlocal frame
+            # We are interested in the 'line' event right before or during the C call.
+            if f.f_code is python_func_calling_c.__code__ and event == "line":
+                frame = f
+                raise self._StopTracing  # Stop immediately after getting the frame
+            return trace_hook
+
+        # Temporarily enable sys.settrace to capture the frame
+        sys.settrace(trace_hook)
+        try:
+            python_func_calling_c()
+        except self._StopTracing:
+            pass
+        finally:
+            sys.settrace(None)
+
+        if frame is None:
+            self.fail(f"Failed to capture Python frame for C call in {python_func_calling_c.__name__}")
+        return frame
+
     def test_handle_call(self):
         frame = self._get_frame_at(sample_function, 5, 3, event_type="call")
 
@@ -476,24 +512,34 @@ class TestTraceLogic(BaseTracerTest):
         call_args = self.logic._add_to_buffer.call_args[0]
         log_data = call_args[0]
 
-        # 格式化消息以进行断言，因为模板使用了 {prefix} 占位符
-        formatted_message = log_data["template"].format(**log_data["data"])
-        self.assertIn("↘ CALL", formatted_message)
-        self.assertIn("sample_function(x=5, y=3)", formatted_message)
+        # Assert against specific data fields and formatted message
+        self.assertEqual(log_data["data"]["prefix"], TraceTypes.PREFIX_CALL)
+        self.assertEqual(log_data["data"]["func"], "sample_function")
+        self.assertEqual(log_data["data"]["args"], "x=5, y=3")
+        self.assertEqual(log_data["data"]["lineno"], frame.f_lineno)
+        self.assertIn(
+            "↘ CALL tests/test_py_tracer.py:40 sample_function(x=5, y=3)", self.logic._format_log_message(log_data)
+        )
         self.assertEqual(self.logic._local.stack_depth, 1)
 
     def test_handle_return(self):
         frame = self._get_frame_at(sample_function, 5, 3, event_type="return")
-        # Simulate being inside a call
+        # Simulate being inside a call by setting stack depth
         self.logic._local.stack_depth = 1
-        self.logic.handle_return(frame, (16, "large"))
+        return_value = (16, "large")
+        self.logic.handle_return(frame, return_value)
 
         self.logic._add_to_buffer.assert_called_once()
         call_args = self.logic._add_to_buffer.call_args[0]
         log_data = call_args[0]
 
-        self.assertIn("↗ RETURN", log_data["template"])
-        self.assertIn("→ (16, 'large')", log_data["template"].format(**log_data["data"]))
+        self.assertEqual(log_data["data"]["func"], "sample_function")
+        self.assertEqual(log_data["data"]["return_value"], truncate_repr_value(return_value))
+        self.assertEqual(log_data["data"]["lineno"], frame.f_lineno)
+        self.assertIn(
+            "↗ RETURN tests/test_py_tracer.py sample_function() → (16, 'large')",
+            self.logic._format_log_message(log_data),
+        )
         self.assertEqual(self.logic._local.stack_depth, 0)
 
     def test_handle_line_with_trace_comment(self):
@@ -524,7 +570,7 @@ class TestTraceLogic(BaseTracerTest):
         self.assertEqual(self.logic._add_to_buffer.call_count, 2)
         last_call_args = self.logic._add_to_buffer.call_args_list[1][0]
         log_data = last_call_args[0]
-        self.assertIn("↳ Debug Statement c=small", log_data["template"].format(**log_data["data"]))
+        self.assertIn("↳ Debug Statement c=small", self.logic._format_log_message(log_data))
         self.assertEqual(frame.f_locals.get("c"), "small")
 
     def test_handle_exception(self):
@@ -540,7 +586,8 @@ class TestTraceLogic(BaseTracerTest):
 
         if sys.version_info >= (3, 12):
             self.assertEqual(len(self.logic.exception_chain), 1)
-            self.logic._add_to_buffer.assert_not_called()  # Handled by py_unwind later
+            # In 3.12+, exceptions are buffered and flushed later, not directly added to buffer by handle_exception
+            self.logic._add_to_buffer.assert_not_called()
             log_data, _ = self.logic.exception_chain[0]
         else:
             self.logic._add_to_buffer.assert_called_once()
@@ -548,7 +595,7 @@ class TestTraceLogic(BaseTracerTest):
             log_data, _ = self.logic._add_to_buffer.call_args[0]
 
         self.assertIn("⚠ EXCEPTION", log_data["template"])
-        self.assertIn("ValueError: x cannot be zero", log_data["template"].format(**log_data["data"]))
+        self.assertIn("ValueError: x cannot be zero", self.logic._format_log_message(log_data))
         # Assert that stack depth is NOT decremented by handle_exception
         self.assertEqual(self.logic._local.stack_depth, 1)
 
@@ -576,7 +623,7 @@ class TestTraceLogic(BaseTracerTest):
 
         log_file = self.test_dir / "handler_test.log"
         self.logic.enable_output("file", filename=str(log_file))
-        self.logic._file_output(test_msg, None)
+        self.logic._file_output(test_msg, TraceTypes.CALL)  # Pass a type for logging
         self.logic.disable_output("file")
         with open(log_file, encoding="utf-8") as f:
             content = f.read()
@@ -756,8 +803,7 @@ class TestTraceLogic(BaseTracerTest):
             self.logic.handle_exception(StopIteration, StopIteration(), frame)
             # Should not add anything to buffer or exception_chain
             self.assertEqual(len(self.logic.exception_chain), 0)
-            if sys.version_info >= (3, 12):
-                self.assertEqual(len(self.logic.exception_chain), 0)
+            self.logic._add_to_buffer.assert_not_called()
         finally:
             dis.get_instructions = original_get_instructions
 
@@ -781,8 +827,7 @@ class TestTraceLogic(BaseTracerTest):
         try:
             self.logic.handle_exception(StopAsyncIteration, StopAsyncIteration(), frame)
             self.assertEqual(len(self.logic.exception_chain), 0)
-            if sys.version_info >= (3, 12):
-                self.assertEqual(len(self.logic.exception_chain), 0)
+            self.logic._add_to_buffer.assert_not_called()
         finally:
             dis.get_instructions = original_get_instructions
 
@@ -802,78 +847,101 @@ class TestTraceLogic(BaseTracerTest):
             self.assertEqual(logged[0]["data"]["exc_type"], "ValueError")
             self.assertEqual(logged[0]["data"]["exc_value"], "test error")
         else:
-            self.assertEqual(len(self.logic._buffer), 1)
-            logged = self.logic._buffer[0]
+            # For older Python versions, handle_exception logs directly
+            self.assertEqual(self.logic._add_to_buffer.call_count, 1)
+            logged = self.logic._add_to_buffer.call_args[0]
             self.assertEqual(logged[0]["data"]["exc_type"], "ValueError")
             self.assertEqual(logged[0]["data"]["exc_value"], "test error")
 
     def test_handle_c_call(self):
-        """Test handling of C-function call events."""
-        mock_callable_obj = MagicMock()
-        mock_callable_obj.__name__ = "len"
-        mock_arg0 = "test_string"
+        """Test handling of C-function call events using a real Python frame."""
 
-        # Simulate a Python frame calling the C function
-        parent_frame = self._create_mock_frame(self.test_filename, 15, "my_python_func")
+        def _dummy_caller():
+            lst = [1, 2, 3]  # This line number will be captured in the frame
+            _ = len(lst)  # C call happens on this line
+
+        # Get a real Python frame from a function that calls a C function
+        python_caller_frame = self._get_python_frame_for_c_call(_dummy_caller)
+
+        # The C callable object itself (real built-in function)
+        c_callable_obj = len
+        # For len(lst), arg0 in sys.monitoring.events.CALL is 'lst'
+        arg0_value = [1, 2, 3]
+
         self.logic._local.stack_depth = 0  # Start at base depth
 
-        self.logic.handle_c_call(parent_frame, mock_callable_obj, mock_arg0)
+        # Simulate the call to handle_c_call with the real Python frame and C callable
+        self.logic.handle_c_call(python_caller_frame, c_callable_obj, arg0_value)
 
         self.logic._add_to_buffer.assert_called_once()
         log_data = self.logic._add_to_buffer.call_args[0][0]
         color_type = self.logic._add_to_buffer.call_args[0][1]
 
-        self.assertIn("↘ C-CALL len at", log_data["template"])
+        # Assertions
         self.assertEqual(log_data["data"]["func_name"], "len")
-        self.assertEqual(log_data["data"]["filename"], self.logic._get_formatted_filename(self.test_filename))
-        self.assertEqual(log_data["data"]["lineno"], 15)
+        self.assertEqual(
+            log_data["data"]["filename"], self.logic._get_formatted_filename(python_caller_frame.f_code.co_filename)
+        )
+        self.assertEqual(log_data["data"]["lineno"], python_caller_frame.f_lineno)
         self.assertEqual(color_type, TraceTypes.COLOR_TRACE)
         self.assertEqual(self.logic._local.stack_depth, 1)  # Stack depth increases
+        self.assertIn("C-CALL len at", self.logic._format_log_message(log_data))
 
     def test_handle_c_return(self):
-        """Test handling of C-function return events."""
-        mock_callable_obj = MagicMock()
-        mock_callable_obj.__name__ = "len"
-        mock_retval = 5
+        """Test handling of C-function return events using a real Python frame."""
 
-        # Simulate a Python frame receiving return from C function
-        parent_frame = self._create_mock_frame(self.test_filename, 15, "my_python_func")
+        def _dummy_caller():
+            _ = sum([1, 2, 3])  # This line number will be captured in the frame
+
+        python_caller_frame = self._get_python_frame_for_c_call(_dummy_caller)
+        c_callable_obj = sum
+        mock_retval = 6
+
         self.logic._local.stack_depth = 1  # Simulate being inside C call
 
-        self.logic.handle_c_return(parent_frame, mock_callable_obj, mock_retval)
+        self.logic.handle_c_return(python_caller_frame, c_callable_obj, mock_retval)
 
         self.logic._add_to_buffer.assert_called_once()
         log_data = self.logic._add_to_buffer.call_args[0][0]
         color_type = self.logic._add_to_buffer.call_args[0][1]
 
-        self.assertIn("↗ C-RETURN from len -> 5", log_data["template"])
-        self.assertEqual(log_data["data"]["func_name"], "len")
-        self.assertEqual(log_data["data"]["return_value"], "5")
+        self.assertEqual(log_data["data"]["func_name"], "sum")
+        self.assertEqual(log_data["data"]["return_value"], str(mock_retval))
         self.assertEqual(color_type, TraceTypes.COLOR_TRACE)
         self.assertEqual(self.logic._local.stack_depth, 0)  # Stack depth decreases
+        self.assertIn(f"C-RETURN from sum -> {mock_retval}", self.logic._format_log_message(log_data))
 
     def test_handle_c_raise(self):
-        """Test handling of C-function raise events."""
-        mock_callable_obj = MagicMock()
-        mock_callable_obj.__name__ = "open"
+        """Test handling of C-function raise events using a real Python frame."""
+
+        def _dummy_caller():
+            try:
+                # This line number will be captured in the frame
+                with open("non_existent_file.txt", "r") as f:
+                    _ = f.read()
+            except FileNotFoundError:
+                pass
+
+        python_caller_frame = self._get_python_frame_for_c_call(_dummy_caller)
+        c_callable_obj = open  # The C function that would raise
         mock_exception = FileNotFoundError("file not found")
 
-        # Simulate a Python frame receiving exception from C function
-        parent_frame = self._create_mock_frame(self.test_filename, 20, "my_python_func")
         self.logic._local.stack_depth = 1  # Simulate being inside C call
 
-        self.logic.handle_c_raise(parent_frame, mock_callable_obj, mock_exception)
+        self.logic.handle_c_raise(python_caller_frame, c_callable_obj, mock_exception)
 
         self.logic._add_to_buffer.assert_called_once()
         log_data = self.logic._add_to_buffer.call_args[0][0]
         color_type = self.logic._add_to_buffer.call_args[0][1]
 
-        self.assertIn("⚠ C-RAISE from open -> FileNotFoundError: file not found", log_data["template"])
         self.assertEqual(log_data["data"]["func_name"], "open")
         self.assertEqual(log_data["data"]["exc_type"], "FileNotFoundError")
         self.assertEqual(log_data["data"]["exc_value"], "file not found")
         self.assertEqual(color_type, TraceTypes.COLOR_EXCEPTION)
         self.assertEqual(self.logic._local.stack_depth, 0)  # Stack depth decreases
+        self.assertIn(
+            "C-RAISE from open -> FileNotFoundError: file not found", self.logic._format_log_message(log_data)
+        )
 
 
 @unittest.skipUnless(sys.version_info >= (3, 12), "sys.monitoring is only available in Python 3.12+")
@@ -1130,6 +1198,7 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
     def test_handle_c_raise(self, mock_getframe):
         """Test C_RAISE event."""
         mock_callable = MagicMock(spec=open, __name__="open")
+        mock_callable.__code__ = None  # Ensure __code__ is None to avoid AttributeError
         mock_exception = FileNotFoundError("file not found")
         mock_frame = self._create_mock_frame(self.test_filename, 5, "caller_func")
         mock_getframe.return_value = mock_frame
