@@ -255,8 +255,8 @@ def run_tests(
             "test_symbol_trace_plugin",
             "test_tracer_main",
         ]
-        k_expr = "not (" + " or ".join(lldb_test_modules) + ")"
-        pytest_args.extend(["-k", k_expr])
+        for module_name in lldb_test_modules:
+            pytest_args.append(f"--ignore=tests/{module_name}.py")
 
     if test_name:
         pytest_args.extend(["-k", test_name])
