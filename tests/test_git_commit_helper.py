@@ -346,9 +346,10 @@ class TestMainFunction(unittest.TestCase):
         self.original_argv = sys.argv
         sys.argv = ["git_commit_helper.py", "--response-file", str(self.response_file), "--auto-approve"]
 
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout, patch("sys.exit") as mock_exit:
             main()
             self.assertIn("未指定文件，跳过添加到暂存区。", mock_stdout.getvalue())
+            mock_exit.assert_called_once_with(1)
 
         # Verify no new commit was made
         self.assertEqual(self._get_commit_count(), initial_commit_count)
