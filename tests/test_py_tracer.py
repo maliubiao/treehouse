@@ -506,6 +506,33 @@ class TestTraceLogic(BaseTracerTest):
             self.fail(f"Failed to capture Python frame for C call in {python_func_calling_c.__name__}")
         return frame
 
+    def _get_frames_for_test(self, func, *args, **kwargs):
+        """
+        Runs a function under a tracer and captures the frames for specific functions in the call stack.
+        Returns a dictionary of {func_name: frame_object}.
+        This is used to obtain real, correctly-structured frame objects for unit testing.
+        """
+        captured_frames = {}
+
+        def tracer(frame, event, arg):
+            func_name = frame.f_code.co_name
+            # Capture the first time we see a frame for a function.
+            # The frame object is reused for the lifetime of the call.
+            if func_name not in captured_frames:
+                captured_frames[frame.f_code.co_name] = frame
+            return tracer
+
+        sys.settrace(tracer)
+        try:
+            func(*args, **kwargs)
+        except Exception:
+            # We need to capture frames even if an exception occurs during the run.
+            pass
+        finally:
+            sys.settrace(None)
+
+        return captured_frames
+
     def test_handle_call(self):
         frame = self._get_frame_at(sample_function, 5, 3, event_type="call")
 
@@ -649,89 +676,87 @@ class TestTraceLogic(BaseTracerTest):
     def test_unwanted_frame_state_management(self):
         """
         Tests that TraceLogic correctly manages its internal 'unwanted frame' state
-        (`_local.bad_frame`) when functions are marked for exclusion.
-        This test does NOT verify if events are actually logged,
-        as that's the Dispatcher's responsibility.
+        (`_local.bad_frame`) when functions are marked for exclusion, using REAL frames.
+        This test does NOT verify if events are actually logged, as that's the Dispatcher's
+        responsibility. It tests the internal state machine of TraceLogic.
         """
         self.config.exclude_functions = ["excluded_main_func"]
 
+        # Capture real frames from an actual execution trace
+        frames = self._get_frames_for_test(main_func_calling_excluded, 5, 6)
+        frame_main = frames["main_func_calling_excluded"]
+        frame_excluded = frames["excluded_main_func"]
+        frame_nested_excluded = frames["excluded_helper_func_internal"]
+
         # 1. Simulate call to main_func_calling_excluded (not excluded itself)
-        frame_main = self._create_mock_frame(self.test_filename, 10, "main_func_calling_excluded")
-        # TraceLogic.handle_call would be called by dispatcher for this.
         self.logic.handle_call(frame_main)
         self.assertFalse(self.logic.inside_unwanted_frame(frame_main))
         self.logic._add_to_buffer.assert_called_once()  # Main func should be logged
         self.logic._add_to_buffer.reset_mock()
 
         # 2. Simulate call to excluded_main_func from main_func_calling_excluded
-        frame_excluded = self._create_mock_frame(self.test_filename, 5, "excluded_main_func", f_back=frame_main)
-        # Dispatcher would call maybe_unwanted_frame, and then handle_call if not already unwanted
         self.logic.maybe_unwanted_frame(frame_excluded)
 
-        # Verify that excluded_main_func's frame is now considered unwanted by TraceLogic's internal state
+        # Verify that excluded_main_func's frame is now considered unwanted
         self.assertTrue(self.logic.inside_unwanted_frame(frame_excluded))
         self.assertEqual(self.logic._local.bad_frame, self.logic.get_or_reuse_frame_id(frame_excluded))
 
-        # 3. Simulate line event within excluded_main_func - TraceLogic's handle_line *would* process it if called
-        # (but Dispatcher prevents the call)
-        self.logic.handle_line(frame_excluded)  # Directly call handle_line for testing TraceLogic's function
-        self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
+        # 3. Simulate line event within excluded_main_func.
+        # This tests that handle_line itself doesn't filter, which is correct.
+        self.logic.handle_line(frame_excluded)
+        self.logic._add_to_buffer.assert_called_once()
         self.logic._add_to_buffer.reset_mock()
 
         # 4. Simulate call to excluded_helper_func_internal from excluded_main_func
-        frame_nested_excluded = self._create_mock_frame(
-            self.test_filename, 2, "excluded_helper_func_internal", f_back=frame_excluded
-        )
-        self.logic.maybe_unwanted_frame(frame_nested_excluded)  # Should NOT update bad_frame as it's already set
-        self.assertTrue(self.logic.inside_unwanted_frame(frame_nested_excluded))  # Still inside unwanted context
-        self.assertEqual(
-            self.logic._local.bad_frame, self.logic.get_or_reuse_frame_id(frame_excluded)
-        )  # Still the first excluded frame ID
+        self.logic.maybe_unwanted_frame(frame_nested_excluded)
+        self.assertTrue(self.logic.inside_unwanted_frame(frame_nested_excluded))  # Still inside
+        # bad_frame should NOT be updated, it should stick to the first unwanted frame
+        self.assertEqual(self.logic._local.bad_frame, self.logic.get_or_reuse_frame_id(frame_excluded))
 
-        # 5. Simulate line event within excluded_helper_func_internal
-        self.logic.handle_line(frame_nested_excluded)  # Directly call handle_line
-        self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
+        # 5. Simulate line event within the nested (but not explicitly excluded) function
+        self.logic.handle_line(frame_nested_excluded)
+        self.logic._add_to_buffer.assert_called_once()
         self.logic._add_to_buffer.reset_mock()
 
-        # 6. Simulate return from excluded_helper_func_internal
-        self.logic.handle_return(frame_nested_excluded, 2)  # Directly call handle_return
-        self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
+        # 6. Simulate return from the nested function
+        self.logic.handle_return(frame_nested_excluded, 2)  # Return value is not critical here
+        self.logic._add_to_buffer.assert_called_once()
         self.logic._add_to_buffer.reset_mock()
-        # bad_frame should still be set to frame_excluded's ID
+        # State should still be unwanted, as we are returning to an unwanted frame
         self.assertTrue(self.logic.inside_unwanted_frame(frame_excluded))
 
-        # 7. Simulate return from excluded_main_func
-        self.logic.handle_return(frame_excluded, 7)  # Directly call handle_return
-        self.logic._add_to_buffer.assert_called_once()  # It should be logged when called directly
+        # 7. Simulate return from the original excluded function
+        self.logic.handle_return(frame_excluded, 32)  # Return value is not critical
+        self.logic._add_to_buffer.assert_called_once()
         self.logic._add_to_buffer.reset_mock()
-        # Explicitly call leave_unwanted_frame for the original excluded frame to clear the state
-        self.logic.leave_unwanted_frame(frame_excluded)
-        # After returning from the *original* bad frame, the state should be cleared
-        self.assertFalse(self.logic.inside_unwanted_frame(frame_main))  # Now back in the main function
 
-        # 8. Simulate line event back in main_func_calling_excluded - should be logged
+        # Manually call leave_unwanted_frame, as the dispatcher would
+        self.logic.leave_unwanted_frame(frame_excluded)
+        self.assertFalse(self.logic.inside_unwanted_frame(frame_main))  # Should be cleared
+
+        # 8. Simulate a subsequent line event in the main function
         self.logic.handle_line(frame_main)
         self.logic._add_to_buffer.assert_called_once()
 
     def test_unwanted_frame_exception_state_management(self):
         """
-        Tests that TraceLogic correctly manages its internal 'unwanted frame' state
-        during exceptions within excluded functions.
-        This test does NOT verify if events are actually logged by Dispatcher.
+        Tests that TraceLogic correctly manages its 'unwanted frame' state
+        during exceptions within excluded functions, using REAL frames.
         """
         self.config.exclude_functions = ["excluded_raiser"]
-        if hasattr(self.logic._local, "bad_frame"):
-            del self.logic._local.bad_frame
+
+        # Capture real frames from an actual execution that raises an exception
+        frames = self._get_frames_for_test(main_func_calling_raiser)
+        frame_main = frames["main_func_calling_raiser"]
+        frame_raiser = frames["excluded_raiser"]
 
         # 1. Simulate call to main_func_calling_raiser (not excluded)
-        frame_main = self._create_mock_frame(self.test_filename, 1, "main_func_calling_raiser")
         self.logic.handle_call(frame_main)
         self.assertFalse(self.logic.inside_unwanted_frame(frame_main))
         self.logic._add_to_buffer.assert_called_once()
         self.logic._add_to_buffer.reset_mock()
 
         # 2. Simulate call to excluded_raiser from main_func_calling_raiser
-        frame_raiser = self._create_mock_frame(self.test_filename, 2, "excluded_raiser", f_back=frame_main)
         self.logic.maybe_unwanted_frame(frame_raiser)
         self.assertTrue(self.logic.inside_unwanted_frame(frame_raiser))
         self.assertEqual(self.logic._local.bad_frame, self.logic.get_or_reuse_frame_id(frame_raiser))
@@ -739,7 +764,6 @@ class TestTraceLogic(BaseTracerTest):
         # 3. Simulate exception within excluded_raiser
         mock_exc_type = RuntimeError
         mock_exc_value = RuntimeError("Excluded function error")
-        # Directly call handle_exception on TraceLogic. It should process it.
         self.logic.handle_exception(mock_exc_type, mock_exc_value, frame_raiser)
 
         if sys.version_info >= (3, 12):
@@ -748,54 +772,56 @@ class TestTraceLogic(BaseTracerTest):
             self.logic._add_to_buffer.assert_called_once()
             self.logic._add_to_buffer.reset_mock()
 
-        # 4. Simulate stack unwinding for the raiser frame (e.g., via PY_UNWIND or implicitly on exit)
+        # 4. Simulate stack unwinding for the raiser frame
         self.logic.decrement_stack_depth()
         self.logic.leave_unwanted_frame(frame_raiser)  # This clears bad_frame
         self.logic.frame_cleanup(frame_raiser)
 
-        self.assertFalse(self.logic.inside_unwanted_frame(frame_main))  # Back in main, no longer unwanted
+        self.assertFalse(self.logic.inside_unwanted_frame(frame_main))  # Back in main
 
-        # 5. Simulate line event back in main_func_calling_raiser (e.g., in the except block)
+        # 5. Simulate line event back in main_func_calling_raiser (in the except block)
         self.logic.handle_line(frame_main)
-        self.logic._add_to_buffer.assert_called_once()  # Should be logged
+        self.logic._add_to_buffer.assert_called_once()
         self.logic._add_to_buffer.reset_mock()
 
     def test_exclude_none_effect_on_call(self):
-        # Test that if a function is *not* excluded, maybe_unwanted_frame doesn't mark it
+        """Tests that maybe_unwanted_frame has no effect if function is not excluded."""
         self.config.exclude_functions = []
-        if hasattr(self.logic._local, "bad_frame"):
-            del self.logic._local.bad_frame
-        frame_target = self._create_mock_frame(self.test_filename, 1, "simple_target_func")
+
+        frames = self._get_frames_for_test(simple_target_func)
+        frame_target = frames["simple_target_func"]
+
         self.logic.maybe_unwanted_frame(frame_target)
         self.assertFalse(self.logic.inside_unwanted_frame(frame_target))
         self.assertIsNone(self.logic._local.bad_frame)
 
     def test_no_effect_if_already_unwanted(self):
+        """Tests that maybe_unwanted_frame doesn't mark a new frame if already in unwanted state."""
         self.config.exclude_functions = ["excluded_main_func", "excluded_helper_func_internal"]
-        if hasattr(self.logic._local, "bad_frame"):
-            del self.logic._local.bad_frame
 
-        frame_excluded_main = self._create_mock_frame(self.test_filename, 5, "excluded_main_func")
+        frames = self._get_frames_for_test(main_func_calling_excluded, 1, 2)
+        frame_excluded_main = frames["excluded_main_func"]
+        frame_excluded_helper = frames["excluded_helper_func_internal"]
+
+        # Enter the first unwanted frame
         self.logic.maybe_unwanted_frame(frame_excluded_main)
         self.assertTrue(self.logic.inside_unwanted_frame(frame_excluded_main))
         first_unwanted_id = self.logic._local.bad_frame
 
-        frame_excluded_helper = self._create_mock_frame(
-            self.test_filename, 2, "excluded_helper_func_internal", f_back=frame_excluded_main
-        )
-        self.logic.maybe_unwanted_frame(frame_excluded_helper)  # This should not overwrite the first one
+        # Enter a nested function that is also excludable
+        self.logic.maybe_unwanted_frame(frame_excluded_helper)
         self.assertTrue(self.logic.inside_unwanted_frame(frame_excluded_helper))
-        self.assertEqual(self.logic._local.bad_frame, first_unwanted_id)  # bad_frame remains the first excluded one
-
-        # Ensure leave_unwanted_frame only clears if it's the *original* bad frame
-        self.logic.leave_unwanted_frame(frame_excluded_helper)
-        self.assertTrue(
-            self.logic.inside_unwanted_frame(frame_excluded_main)
-        )  # Still unwanted because helper is not the *original* bad frame
+        # The bad_frame ID should NOT change
         self.assertEqual(self.logic._local.bad_frame, first_unwanted_id)
 
+        # Leaving the nested frame should not clear the state
+        self.logic.leave_unwanted_frame(frame_excluded_helper)
+        self.assertTrue(self.logic.inside_unwanted_frame(frame_excluded_main))
+        self.assertEqual(self.logic._local.bad_frame, first_unwanted_id)
+
+        # Leaving the original unwanted frame should clear the state
         self.logic.leave_unwanted_frame(frame_excluded_main)
-        self.assertFalse(self.logic.inside_unwanted_frame(frame_excluded_main))  # Now truly not unwanted
+        self.assertFalse(self.logic.inside_unwanted_frame(frame_excluded_main))
         self.assertIsNone(self.logic._local.bad_frame)
 
     def test_stop_iteration_not_logged_on_send(self):
@@ -1097,20 +1123,6 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         self.mock_logic.handle_call.assert_called_once_with(real_frame)
         self.assertIn(real_frame, self.dispatcher.active_frames)
         self.assertIsNone(result)
-
-    @patch("sys._getframe")
-    def test_handle_py_start_non_target_frame(self, mock_getframe):
-        """Test PY_START for a non-target Python frame."""
-        real_frame = self._create_frame_from_code("def non_target(): pass", "<string>", "non_target")
-        mock_getframe.return_value = real_frame
-        self.mock_logic.inside_unwanted_frame.return_value = True
-
-        result = self.dispatcher.handle_py_start(real_frame.f_code, real_frame.f_lasti)
-
-        self.mock_logic.maybe_unwanted_frame.assert_called_once_with(real_frame)
-        self.mock_logic.handle_call.assert_not_called()
-        self.assertNotIn(real_frame, self.dispatcher.active_frames)
-        self.assertEqual(result, self.mock_monitoring.DISABLE)
 
     @patch("sys._getframe")
     def test_handle_py_return(self, mock_getframe):

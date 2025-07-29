@@ -105,7 +105,7 @@ class TraceConfig:
         ignore_self: bool = True,
         ignore_system_paths: bool = True,
         start_function: Optional[List[str]] = None,
-        source_base_dir: Optional[Path] = None,
+        source_base_dir: Optional[Union[str, Path]] = None,  # Changed type hint
         disable_html: bool = False,
         include_stdlibs: Optional[List[str]] = None,
         trace_c_calls: bool = False,
@@ -141,7 +141,8 @@ class TraceConfig:
         self._compiled_patterns = [fnmatch.translate(pattern) for pattern in self.target_files]
         self._system_paths = self._get_system_paths() if ignore_system_paths else set()
         self.start_function = start_function
-        self.source_base_dir = source_base_dir
+        # Convert source_base_dir to Path object
+        self.source_base_dir: Optional[Path] = Path(source_base_dir) if source_base_dir else None
         self.disable_html = disable_html
         self.include_stdlibs = include_stdlibs or []
         self.trace_c_calls = trace_c_calls
@@ -716,13 +717,21 @@ class SysMonitoringTraceDispatcher:
         self._logic.handle_c_call(frame, callable_obj, arg0)
 
     def handle_c_return(self, code: Any, offset: int, callable_obj: object, retval: object) -> None:
-        """Handles the C_RETURN event."""
+        """Handles the return from a C function."""
+        # Python functions have a __code__ object, C functions/builtins do not.
+        if hasattr(callable_obj, "__code__"):
+            return  # This is a Python function, PY_START will handle it.
+
         frame = sys._getframe(1)  # Caller's frame
         # No need to check is_target_frame, assume we trace return if we trace call.
         self._logic.handle_c_return(frame, callable_obj, retval)
 
     def handle_c_raise(self, code: Any, offset: int, callable_obj: object, exception: BaseException) -> None:
-        """Handles the C_RAISE event."""
+        """Handles an exception raised from a C function."""
+        # Python functions have a __code__ object, C functions/builtins do not.
+        if hasattr(callable_obj, "__code__"):
+            return  # This is a Python function, PY_START will handle it.
+
         frame = sys._getframe(1)  # Caller's frame
         self._logic.handle_c_raise(frame, callable_obj, exception)
 
@@ -976,11 +985,12 @@ class TraceLogic:
         self._output = self._OutputHandlers(self)
         self.last_statement_vars = None
         self._last_vars_by_frame = {}  # Cache for tracking variable changes
-        self._local = threading.local()  # 线程本地存储
-        self._local.bad_frame = None
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         if self.config.disable_html:
             self.disable_output("html")
+        self._local = threading.local()
+        self._local.stack_depth = 0
+        self._local.bad_frame = None
 
     def maybe_unwanted_frame(self, frame):
         if frame.f_code.co_name in self.config.exclude_functions and self._local.bad_frame is None:
@@ -1561,10 +1571,11 @@ class TraceLogic:
 
         self._add_to_buffer(
             {
-                "template": "{indent}↘ C-CALL {func_name} at {filename}:{lineno} [frame:{frame_id}][thread:{thread_id}]",
+                "template": "{indent}↘ C-CALL {func_name}({arg0}) at {filename}:{lineno} [frame:{frame_id}][thread:{thread_id}]",
                 "data": {
                     "indent": _INDENT * self._local.stack_depth,
                     "func_name": func_name,
+                    "arg0": truncate_repr_value(arg0),
                     "filename": self._get_formatted_filename(frame.f_code.co_filename),
                     "lineno": frame.f_lineno,
                     "original_filename": frame.f_code.co_filename,
@@ -1576,7 +1587,7 @@ class TraceLogic:
         )
         self._local.stack_depth += 1
 
-    def handle_c_return(self, frame: Any, callable_obj: object, retval: object) -> None:
+    def handle_c_return(self, frame: Any, callable_obj: object, arg0: object) -> None:
         """Handles the return from a C function."""
         if not hasattr(self._local, "stack_depth"):
             self._local.stack_depth = 0
@@ -1589,11 +1600,10 @@ class TraceLogic:
 
         self._add_to_buffer(
             {
-                "template": "{indent}↗ C-RETURN from {func_name} -> {return_value} [frame:{frame_id}][thread:{thread_id}]",
+                "template": "{indent}↗ C-RETURN from {func_name} [frame:{frame_id}][thread:{thread_id}]",
                 "data": {
                     "indent": _INDENT * self._local.stack_depth,
                     "func_name": func_name,
-                    "return_value": truncate_repr_value(retval),
                     "original_filename": frame.f_code.co_filename,
                     "lineno": frame.f_lineno,
                     "frame_id": self.get_or_reuse_frame_id(frame),
@@ -1603,7 +1613,7 @@ class TraceLogic:
             TraceTypes.COLOR_TRACE,
         )
 
-    def handle_c_raise(self, frame: Any, callable_obj: object, exception: BaseException) -> None:
+    def handle_c_raise(self, frame: Any, callable_obj: object, arg0: object) -> None:
         """Handles an exception raised from a C function."""
         if not hasattr(self._local, "stack_depth"):
             self._local.stack_depth = 0
@@ -1613,15 +1623,12 @@ class TraceLogic:
             func_name = callable_obj.__name__
         except AttributeError:
             func_name = repr(callable_obj)
-
         self._add_to_buffer(
             {
-                "template": "{indent}⚠ C-RAISE from {func_name} -> {exc_type}: {exc_value} [frame:{frame_id}][thread:{thread_id}]",
+                "template": "{indent}⚠ C-RAISE from {func_name} [frame:{frame_id}][thread:{thread_id}]",
                 "data": {
                     "indent": _INDENT * self._local.stack_depth,
                     "func_name": func_name,
-                    "exc_type": type(exception).__name__,
-                    "exc_value": str(exception),
                     "original_filename": frame.f_code.co_filename,
                     "lineno": frame.f_lineno,
                     "frame_id": self.get_or_reuse_frame_id(frame),
@@ -1710,7 +1717,7 @@ def get_tracer(module_path, config: TraceConfig):
     #         trace_dispatcher = tracer_core.TraceDispatcher
     #         return trace_dispatcher(str(module_path), TraceLogic(config), config)
     #     except Exception as e:
-    #         logging.error("💥 DEBUGGER IMPORT ERROR: %s\n%s", str(e), traceback.format_exc())
+    #         logging.error("💥 DEBUGGER IMPORT ERROR: %s", str(e))
     #         print(
     #             color_wrap(
     #                 f"❌ 调试器导入错误: {str(e)}\n{traceback.format_exc()}",
@@ -1851,8 +1858,16 @@ def trace(
 
     def decorator(func):
         # 创建通用的配置
+        # 防御性处理：某些函数对象可能没有 __code__ 属性（如 C 扩展函数）
+        target_file = getattr(func, "__code__", None)
+        if target_file is not None:
+            target_file = target_file.co_filename
+        else:
+            # 如果无法获取源文件名，则使用模块名或者默认值
+            target_file = getattr(func, "__file__", "<unknown>")
+
         config = TraceConfig(
-            target_files=target_files or [func.__code__.co_filename],
+            target_files=target_files or [target_file],
             line_ranges=line_ranges,
             capture_vars=capture_vars,
             callback=callback,
