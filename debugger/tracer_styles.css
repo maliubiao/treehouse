@@ -415,8 +415,8 @@ button:hover {
     font-size: 0.8em;
 }
 
-/* Action Buttons: Copy Subtree, Focus Subtree */
-.copy-subtree-btn, .focus-subtree-btn {
+/* Action Buttons: Copy Subtree, Focus Subtree, Toggle Details */
+.copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn {
     display: none;
     margin-left: 8px;
     cursor: pointer;
@@ -424,8 +424,14 @@ button:hover {
     user-select: none; /* Prevent text selection */
 }
 
+/* General action buttons appear on hover */
 .foldable:hover .copy-subtree-btn,
 .foldable:hover .focus-subtree-btn {
+    display: inline-block;
+}
+
+/* Toggle Details button appears on hover only when in skeleton mode */
+body.skeleton-mode .foldable:hover .toggle-details-btn {
     display: inline-block;
 }
 
@@ -649,4 +655,11 @@ body.skeleton-mode #content .line,
 body.skeleton-mode #content .trace,
 body.skeleton-mode #content .var {
     display: none;
+}
+
+/* Override for local detail view in skeleton mode */
+body.skeleton-mode .call-group.show-details .line,
+body.skeleton-mode .call-group.show-details .trace,
+body.skeleton-mode .call-group.show-details .var {
+    display: block;
 }

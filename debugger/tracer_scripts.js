@@ -64,6 +64,7 @@ const TraceViewer = {
         this.initCopySubtree();
         this.initFocusSubtree();
         this.initSkeletonView();
+        this.initToggleDetails();
     },
 
     // Initialize folding functionality
@@ -281,6 +282,7 @@ const TraceViewer = {
                 clone.querySelector('.view-source-btn')?.remove();
                 clone.querySelector('.copy-subtree-btn')?.remove();
                 clone.querySelector('.focus-subtree-btn')?.remove();
+                clone.querySelector('.toggle-details-btn')?.remove();
                 clone.querySelector('.comment')?.remove();
 
                 const text = clone.textContent.trim().replace(/\s+/g, ' ');
@@ -478,6 +480,39 @@ const TraceViewer = {
         });
     },
     
+    // Initialize local detail toggle for skeleton mode
+    initToggleDetails() {
+        this.elements.content.addEventListener('click', e => {
+            if (!e.target.classList.contains('toggle-details-btn')) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const toggleBtn = e.target;
+            const foldable = toggleBtn.closest('.foldable.call');
+            if (!foldable) return;
+
+            const callGroup = foldable.nextElementSibling;
+            if (!callGroup || !callGroup.classList.contains('call-group')) {
+                return;
+            }
+
+            // Toggle the class that overrides skeleton mode locally
+            callGroup.classList.toggle('show-details');
+
+            // Update button appearance to reflect state
+            if (callGroup.classList.contains('show-details')) {
+                toggleBtn.textContent = '📦';
+                toggleBtn.title = 'Hide details for this subtree';
+            } else {
+                toggleBtn.textContent = '👁️';
+                toggleBtn.title = 'Show details for this subtree';
+            }
+        });
+    },
+
     // Adjust line number styles based on theme
     adjustLineNumberStyles(isDark) {
         const lineNumbers = document.querySelectorAll('.line-number');

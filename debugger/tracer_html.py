@@ -60,7 +60,7 @@ class CallTreeHtmlRender:
         self._stack_variables: Dict[int, List[Tuple[int, Any, Any]]] = {}
         self._comments_data: DefaultDict[str, DefaultDict[int, List[str]]] = defaultdict(lambda: defaultdict(list))
         self.current_message_id: int = 0
-        self._size_limit: int = 100 * 1024 * 1024  # 100 MB
+        self._size_limit: int = 1024 * 1024 * 1024  # 100 MB
         self._current_size: int = 0
         self._size_exceeded: bool = False
         self._html_template: str = """
@@ -202,7 +202,8 @@ class CallTreeHtmlRender:
         if msg_type == TraceTypes.COLOR_CALL:
             copy_subtree_html = ' <span class="copy-subtree-btn" title="Copy subtree as text">📋</span>'
             focus_subtree_html = ' <span class="focus-subtree-btn" title="Focus on this subtree (crop)">🔍</span>'
-            actions_html = copy_subtree_html + focus_subtree_html
+            toggle_details_html = ' <span class="toggle-details-btn" title="Show details for this subtree">👁️</span>'
+            actions_html = copy_subtree_html + focus_subtree_html + toggle_details_html
 
         html_parts: List[str] = []
         if msg_type == TraceTypes.COLOR_CALL:
