@@ -38,14 +38,12 @@ class LLDBCompleter(Completer):
         for i in range(matches.GetSize()):
             match_text = matches.GetStringAtIndex(i)
             desc_text = descriptions.GetStringAtIndex(i) if i < descriptions.GetSize() else ""
-            # Add a space for commands to allow for faster argument typing
-            display_text = match_text + " " if "command" in desc_text.lower() else match_text
-            yield Completion(display_text, start_position=-len(match_start_point), display_meta=desc_text or "Argument")
+            yield Completion(match_text, start_position=-len(match_start_point), display_meta=desc_text or "Argument")
 
         # Yield custom command completions
         for cmd in self.custom_commands:
             if cmd.startswith(match_start_point):
-                yield Completion(cmd + " ", start_position=-len(match_start_point), display_meta="Shell Command")
+                yield Completion(cmd, start_position=-len(match_start_point), display_meta="Shell Command")
 
 
 def show_console(debugger: lldb.SBDebugger):

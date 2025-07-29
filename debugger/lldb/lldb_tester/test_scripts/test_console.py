@@ -63,45 +63,44 @@ def test_console_completions(context):
     object with a live debugger session stopped at the 'main' function
     of the test program.
 
-    Note: Command completions include trailing space for better UX
+    Note: Command completions no longer include a trailing space.
     """
     ci = context.debugger.GetCommandInterpreter()
     if not ci.IsValid():
         raise RuntimeError("Could not get a valid LLDB command interpreter.")
 
     # The custom commands are hardcoded in lldb_console.py's show_console
-    custom_commands = ["q", "exit", "clear"]
+    custom_commands = ["quit", "exit", "clear"]
     completer = LLDBCompleter(ci, custom_commands)
 
     print("\n--- Running lldb_console.py completion tests ---")
 
     # --- Test Case 1: Base command completion ---
-    # Commands include trailing space for better UX
     doc = Document("hel", cursor_position=3)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["help "], None)  # Note trailing space
-    print("[+] PASSED: Base command completion ('hel' -> 'help ')")
+    _assert_completions_contain(completions, ["help"], None)
+    print("[+] PASSED: Base command completion ('hel' -> 'help')")
 
     # --- Test Case 2: Sub-command completion ---
-    # Subcommands include trailing space
     doc = Document("breakpoint ", cursor_position=11)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["set ", "delete ", "list "])
-    print("[+] PASSED: Sub-command completion ('breakpoint ' -> multiple options with spaces)")
+    _assert_completions_contain(completions, ["set", "delete", "list"])
+    print("[+] PASSED: Sub-command completion ('breakpoint ' -> multiple options without spaces)")
 
     # --- Test Case 3: Custom command completion ---
-    # Custom commands include trailing space
     doc = Document("cle", cursor_position=3)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["clear "], "Custom Command")
-    print("[+] PASSED: Custom command completion ('cle' -> 'clear ')")
+    _assert_completions_contain(completions, ["clear"], "Shell Command")
+    print("[+] PASSED: Custom command completion ('cle' -> 'clear')")
 
-    # --- Test Case 4: Alias completion ---
-    # Aliases include trailing space
-    doc = Document("q", cursor_position=1)
+    # --- Test Case 4: Alias/Custom command completion ---
+    # Test completion for 'quit' which is a custom command.
+    doc = Document("qu", cursor_position=2)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["q "], None)  # Note trailing space
-    print("[+] PASSED: Alias completion ('q' -> 'q ')")
+    # LLDB's own `quit` and our custom `quit` might both be suggested.
+    # We assert our custom one is present, without a space.
+    _assert_completions_contain(completions, ["quit"], "Shell Command")
+    print("[+] PASSED: Custom command completion ('qu' -> 'quit')")
 
     # --- Test Case 5: Variable completion (if context available) ---
     try:
@@ -114,10 +113,9 @@ def test_console_completions(context):
         print("[-] SKIPPED: Function name completion (no debug context available)")
 
     # --- Test Case 6: Multiple command matches ---
-    # Commands include trailing space
     doc = Document("br", cursor_position=2)
     completions = completer.get_completions(doc, None)
-    _assert_completions_contain(completions, ["breakpoint "], None)  # Note trailing space
-    print("[+] PASSED: Multiple command matches ('br' -> 'breakpoint ')")
+    _assert_completions_contain(completions, ["breakpoint"], None)
+    print("[+] PASSED: Multiple command matches ('br' -> 'breakpoint')")
 
     print("\nAll console completion tests passed!")
