@@ -68,7 +68,7 @@ class CallTreeHtmlRender:
         <html>
         <head>
             <meta charset="UTF-8">
-            <title>Python Trace Report</title>
+            <title>{title}</title>
             <link rel="stylesheet" href="../tracer_styles.css">
             <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css"
                 rel="stylesheet" id="prism-theme">
@@ -391,6 +391,23 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             if msg_type in (TraceTypes.ERROR, TraceTypes.EXCEPTION, TraceTypes.COLOR_EXCEPTION):
                 error_count += 1
 
+        title: str
+        try:
+            # Defensively access config attributes to create a dynamic title
+            config = getattr(self.trace_logic, "config", None)
+            target_script: Optional[Path] = getattr(config, "target_script", None)
+            target_module: Optional[str] = getattr(config, "target_module", None)
+
+            if target_script and isinstance(target_script, Path):
+                title = f"Trace Report for {target_script.name}"
+            elif target_module:
+                title = f"Trace Report for module {target_module}"
+            else:
+                title = "Python Trace Report"
+        except Exception:
+            # Ultimate fallback in case of any unexpected errors
+            title = "Python Trace Report"
+
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         executed_lines_data: Dict[str, Dict[int, List[int]]] = {
             filename: {frame_id: list(lines) for frame_id, lines in frames.items()}
@@ -401,6 +418,7 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
         comments_json: str = json.dumps(self._comments_data)
 
         return self._html_template.format(
+            title=title,
             generation_time=generation_time,
             message_count=len(self._messages),
             error_count=error_count,

@@ -197,7 +197,6 @@ const TraceViewer = {
     changeTheme(theme) {
         const themeLink = document.getElementById('prism-theme');
         themeLink.href = `https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/${theme}.min.css`;
-        document.body.className = theme.includes('dark') ? 'dark-theme' : '';
         this.updateLineHighlights();
     },
 

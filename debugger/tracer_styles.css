@@ -658,8 +658,8 @@ body.skeleton-mode #content .var {
 }
 
 /* Override for local detail view in skeleton mode */
-body.skeleton-mode .call-group.show-details .line,
-body.skeleton-mode .call-group.show-details .trace,
-body.skeleton-mode .call-group.show-details .var {
+body.skeleton-mode #content .call-group.show-details .line,
+body.skeleton-mode #content .call-group.show-details .trace,
+body.skeleton-mode #content .call-group.show-details .var {
     display: block;
 }
