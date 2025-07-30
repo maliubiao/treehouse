@@ -120,7 +120,7 @@ class SessionManager {
                 editor.selection = newSelection;
                 editor.revealRange(newSelection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
             } catch (e) {
-                logger.warn('Could not restore selection after applying changes. The document structure may have changed significantly.');
+                logger.warn('Could not restore selection after applying changes. The document structure may have changed significantly.', e);
                 // Fallback: gracefully move cursor to the top of the file.
                 const topPosition = new vscode.Position(0, 0);
                 editor.selection = new vscode.Selection(topPosition, topPosition);

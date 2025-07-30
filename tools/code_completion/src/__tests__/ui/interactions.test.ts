@@ -85,7 +85,7 @@ describe('interactions', () => {
 
       await showErrorMessage('Test error', retryFn);
       
-      expect(t).toHaveBeenCalledWith('common.retry');
+      expect(t).toHaveBeenCalledWith('ui.retry');
       expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(
         'Treehouse Completer Error: Test error',
         'Retry'

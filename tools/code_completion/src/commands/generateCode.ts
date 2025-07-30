@@ -119,9 +119,10 @@ export function parseLLMResponse(responseText: string): { newCode: string; newIm
     const finalCode = trimBlankLines(codeContent);
     const finalImports = trimBlankLines(importsContent);
     
+    // If imports are empty after trimming, return null instead of empty string
     return {
         newCode: finalCode ?? '',
-        newImports: finalImports
+        newImports: finalImports?.trim() === '' ? null : finalImports
     };
 }
 
@@ -161,6 +162,7 @@ export function stitchNewFileContent(
     
     let finalImportText = importBlock.text;
     if (newImports !== null) {
+        // newImports is guaranteed to be non-empty here because empty imports are returned as null
         finalImportText = newImports;
     }
     

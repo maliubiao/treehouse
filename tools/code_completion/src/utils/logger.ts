@@ -15,7 +15,7 @@ class Logger {
         return Logger._instance;
     }
 
-    public log(message: string, data?: object) {
+    public log(message: string, data?: object): void {
         const logMessage = `[INFO] ${new Date().toISOString()} - ${message}`;
         this._outputChannel.appendLine(logMessage);
         if (data) {
@@ -23,23 +23,31 @@ class Logger {
         }
     }
 
-    public warn(message: string, data?: object) {
+    public warn(message: string, data?: unknown): void {
         const logMessage = `[WARN] ${new Date().toISOString()} - ${message}`;
         this._outputChannel.appendLine(logMessage);
         if (data) {
-            this._outputChannel.appendLine(JSON.stringify(data, null, 2));
+            if (data instanceof Error) {
+                this._outputChannel.appendLine(JSON.stringify(data, Object.getOwnPropertyNames(data), 2));
+            } else {
+                this._outputChannel.appendLine(JSON.stringify(data, null, 2));
+            }
         }
     }
 
-    public error(message: string, error?: any) {
+    public error(message: string, error?: unknown): void {
         const logMessage = `[ERROR] ${new Date().toISOString()} - ${message}`;
         this._outputChannel.appendLine(logMessage);
         if (error) {
-            this._outputChannel.appendLine(JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+            if (error instanceof Error) {
+                this._outputChannel.appendLine(JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+            } else {
+                this._outputChannel.appendLine(JSON.stringify({ error }, null, 2));
+            }
         }
     }
 
-    public show() {
+    public show(): void {
         this._outputChannel.show();
     }
 }

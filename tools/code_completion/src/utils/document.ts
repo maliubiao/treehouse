@@ -11,10 +11,12 @@ const MAX_FILE_SIZE_FOR_FULL_CONTEXT = 32 * 1024; // 32KB
  * @returns An object containing the import text and its range, or null if no imports are found.
  */
 export function extractImportBlock(document: vscode.TextDocument): ImportBlock | null {
-    let importText = '';
+    const importLines: string[] = [];
     let endLine = -1;
     let inBlock = false;
     let startLine = -1;
+    let inMultiLineImport = false;
+    let braceDepth = 0;
 
     // Skip shebang line if present
     let currentLine = 0;
@@ -55,19 +57,79 @@ export function extractImportBlock(document: vscode.TextDocument): ImportBlock |
 
         if (line.isEmptyOrWhitespace) {
             if (inBlock) {
-                importText += line.text + '\n'; // Preserve empty lines within the block
+                importLines.push(line.text); // Preserve empty lines within the block
             }
             continue;
         }
 
-        // A common pattern for imports/requires
-        if (line.text.match(/^\s*(import|from|const .* = require|require)/)) {
-            importText += line.text + '\n';
+        // Check if we're in a multi-line import (Python with parentheses, JavaScript with curly braces)
+        if (inMultiLineImport) {
+            importLines.push(line.text);
+            endLine = i;
+            
+            // Track both parentheses and curly braces
+            const openParens = (line.text.match(/\(/g) || []).length;
+            const closeParens = (line.text.match(/\)/g) || []).length;
+            const openBraces = (line.text.match(/\{/g) || []).length;
+            const closeBraces = (line.text.match(/\}/g) || []).length;
+            braceDepth += (openParens + openBraces) - (closeParens + closeBraces);
+            
+            // End of multi-line import when all parentheses/braces are closed
+            // OR when we hit a line that doesn't end with a comma or backslash (for Python trailing comma style)
+            const endsWithComma = line.text.match(/,\s*(?:\\\s*)?$/);
+            const endsWithBackslash = line.text.match(/\\\s*$/);
+            
+            // For comma-based continuation (braceDepth = -1), end when no comma
+            if (braceDepth === -1) {
+                if (!endsWithComma && !endsWithBackslash) {
+                    inMultiLineImport = false;
+                }
+            } else {
+                // For brace-based continuation, end when braces are balanced
+                if (braceDepth === 0 && !endsWithComma && !endsWithBackslash) {
+                    inMultiLineImport = false;
+                }
+            }
+            continue;
+        }
+
+        // Check for import patterns including Python's #import and #from
+        const isImportLine = line.text.match(/^\s*(import|from|const .* = require|require|\#?import|\# from)/);
+        if (isImportLine) {
+            importLines.push(line.text);
             endLine = i;
             if (startLine === -1) {
                 startLine = i; // Mark the start of the import block
             }
             inBlock = true;
+            
+            // Check if this is a multi-line import (Python or JavaScript)
+            let isTrailingCommaImport = line.text.match(/^\s*\#?\s*import\s+.+,\s*(?:\\\s*)?$/);
+            
+            if (
+                // Python: from ... import ( or import (
+                line.text.match(/(?:\#?\s*from\s+[^\s]+\s+\#?\s*import|\#?\s*import)\s*\(/) ||
+                // JavaScript: import {
+                line.text.match(/import\s*\{/) ||
+                // Python multi-line imports with trailing comma (including backslash continuation)
+                isTrailingCommaImport ||
+                // JavaScript dynamic import with opening brace
+                line.text.match(/const\s+\w+\s*=\s*.*\{\s*$/) ||
+                // JavaScript import * as with opening brace
+                line.text.match(/import\s+\*\s+as\s+\w+\s+from\s+['"][^'"]+['"]\s*,\s*$/)
+            ) {
+                inMultiLineImport = true;
+                // Initialize brace depth with current line's parentheses and braces
+                braceDepth = (line.text.match(/\(/g) || []).length;
+                braceDepth += (line.text.match(/\{/g) || []).length;
+                braceDepth -= (line.text.match(/\)/g) || []).length;
+                braceDepth -= (line.text.match(/\}/g) || []).length;
+                
+                // For trailing comma imports, don't track brace depth - track comma presence instead
+                if (isTrailingCommaImport) {
+                    braceDepth = -1; // Special marker for comma-based continuation
+                }
+            }
         } else {
             // The first non-import line signifies the end of the block
             if (inBlock) {
@@ -77,6 +139,9 @@ export function extractImportBlock(document: vscode.TextDocument): ImportBlock |
     }
 
     if (endLine > -1 && startLine > -1) {
+        // Join lines with newlines
+        const importText = importLines.join('\n') + '\n';
+        
         // Create a range for the import block
         const range = new vscode.Range(
             new vscode.Position(startLine, 0),

@@ -176,6 +176,7 @@ describe('SessionManager', () => {
 
         // Verify logger was called
         const { logger } = require('../../utils/logger');
+        console.log('Logger warn mock:', logger.warn.mock.calls);
         expect(logger.warn).toHaveBeenCalledWith(
             expect.stringContaining('Could not restore selection'),
             expect.any(Error)

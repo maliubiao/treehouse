@@ -78,8 +78,22 @@ describe('generateCode command and helpers', () => {
     it('should parse response with both imports and code blocks', () => {
       const response = `<UPDATED_IMPORTS>\nimport { useState } from 'react';\n</UPDATED_IMPORTS>\n<UPDATED_CODE>\nconst [count, setCount] = useState(0);\n</UPDATED_CODE>`;
       const result = parseLLMResponse(response);
-      expect(result.newCode).toBe('\nconst [count, setCount] = useState(0);\n');
-      expect(result.newImports).toBe("\nimport { useState } from 'react';\n");
+      expect(result.newCode).toBe('const [count, setCount] = useState(0);');
+      expect(result.newImports).toBe("import { useState } from 'react';");
+    });
+
+    it('should return null for imports when UPDATED_IMPORTS contains only whitespace', () => {
+      const response = `<UPDATED_IMPORTS>\n\n</UPDATED_IMPORTS>\n<UPDATED_CODE>\nconst [count, setCount] = useState(0);\n</UPDATED_CODE>`;
+      const result = parseLLMResponse(response);
+      expect(result.newCode).toBe('const [count, setCount] = useState(0);');
+      expect(result.newImports).toBeNull();
+    });
+
+    it('should return null for imports when UPDATED_IMPORTS is empty', () => {
+      const response = `<UPDATED_IMPORTS></UPDATED_IMPORTS>\n<UPDATED_CODE>\nconst [count, setCount] = useState(0);\n</UPDATED_CODE>`;
+      const result = parseLLMResponse(response);
+      expect(result.newCode).toBe('const [count, setCount] = useState(0);');
+      expect(result.newImports).toBeNull();
     });
 
   });
@@ -127,6 +141,45 @@ describe('generateCode command and helpers', () => {
         const newCode = 'const b = 3;';
         const result = stitchNewFileContent(originalContent, context, newCode, null);
         expect(result).toBe(`const a = 1;\nconst b = 3;\nconsole.log(a + b);`);
+    });
+
+    it('should not modify import block when newImports is null', () => {
+        const originalContent = `import { useState } from 'react';\n\nconst App = () => {\n  return <div>Hello</div>;\n};`;
+        const mockDocument = createMockDocument(originalContent);
+        const importText = `import { useState } from 'react';\n`;
+        const selectedText = `const App = () => {\n  return <div>Hello</div>;\n};`;
+        const context: GenerationContext = {
+            editor: { document: mockDocument } as any,
+            selection: getRangeFromSubstring(mockDocument, originalContent, selectedText),
+            fullFileContent: originalContent,
+            importBlock: {
+                text: importText,
+                range: getRangeFromSubstring(mockDocument, originalContent, importText)
+            }
+        } as any;
+        const newCode = `const App = () => {\n  return <div>Updated Hello</div>;\n};`;
+        const result = stitchNewFileContent(originalContent, context, newCode, null);
+        expect(result).toBe(`import { useState } from 'react';\nconst App = () => {\n  return <div>Updated Hello</div>;\n};`);
+    });
+
+    it('should replace import block when newImports is not null', () => {
+        const originalContent = `import { useState } from 'react';\n\nconst App = () => {\n  return <div>Hello</div>;\n};`;
+        const mockDocument = createMockDocument(originalContent);
+        const importText = `import { useState } from 'react';\n`;
+        const selectedText = `const App = () => {\n  return <div>Hello</div>;\n};`;
+        const context: GenerationContext = {
+            editor: { document: mockDocument } as any,
+            selection: getRangeFromSubstring(mockDocument, originalContent, selectedText),
+            fullFileContent: originalContent,
+            importBlock: {
+                text: importText,
+                range: getRangeFromSubstring(mockDocument, originalContent, importText)
+            }
+        } as any;
+        const newCode = `const App = () => {\n  return <div>Updated Hello</div>;\n};`;
+        const newImports = `import { useState, useEffect } from 'react';\n`;
+        const result = stitchNewFileContent(originalContent, context, newCode, newImports);
+        expect(result).toBe(`import { useState, useEffect } from 'react';\nconst App = () => {\n  return <div>Updated Hello</div>;\n};`);
     });
   });
 
