@@ -1292,13 +1292,26 @@ def _handle_macos_clipboard():
     """处理macOS平台的剪贴板内容"""
     try:
         AppKit = __import__("AppKit")
-
         pasteboard = AppKit.NSPasteboard.generalPasteboard()
-        if pasteboard.types().containsObject_(AppKit.NSPasteboardTypePNG):
+        types = pasteboard.types()
+
+        # 优先处理文本内容.
+        # AppKit.NSPasteboardTypeString 是用于纯文本的常量.
+        if types.containsObject_(AppKit.NSPasteboardTypeString):
+            # 如果存在文本格式，我们就使用它，即使内容为空.
+            return _get_macos_text_content()
+
+        # 如果没有文本, 再检查图片.
+        if types.containsObject_(AppKit.NSPasteboardTypePNG):
             return _handle_macos_image(pasteboard)
-    except ImportError:
+
+    except (ImportError, AttributeError):
+        # 如果 AppKit 不可用或出现问题, 我们只能尝试用 pbpaste 获取文本.
         pass
 
+    # 最后回退到用 pbpaste 获取文本. 这种方式能处理 AppKit 不可用
+    # 或剪贴板内容为其他可转换为文本的格式 (如 RTF) 的情况.
+    # 如果 pbpaste 失败, 异常由调用方捕获.
     return _get_macos_text_content()
 
 
