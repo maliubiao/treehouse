@@ -8,6 +8,7 @@
 - 护眼主题配色
 """
 
+import argparse
 import os
 import sys
 import traceback
@@ -99,6 +100,7 @@ class ChatbotUI:
         """初始化UI组件和配置
         Args:
             gpt_processor: GPT上下文处理器实例，允许依赖注入便于测试
+            model: 要使用的语言模型名称
         """
         self.style = self._configure_style()
         self.session = PromptSession(style=self.style)
@@ -252,7 +254,7 @@ class ChatbotUI:
     def run(self):
         """启动聊天机器人主循环"""
         self.console.print(
-            "欢迎使用终端聊天机器人！输入您的问题，按回车发送。按ESC退出",
+            f"欢迎使用终端聊天机器人！模型: [bold]{self.model}[/bold]. 输入您的问题，按回车发送。按ESC退出",
             style="#4CAF50",
         )
 
@@ -264,7 +266,7 @@ class ChatbotUI:
                     completer=self.get_completer(),
                     complete_while_typing=True,
                     bottom_toolbar=lambda: (
-                        f"状态: 就绪 [Ctrl+L 清屏] [@ 触发补全] [/ 触发命令] | temperature: {self.temperature}"
+                        f"状态: 就绪 | 模型: {self.model} | Temp: {self.temperature} | [Ctrl+L 清屏] [@ 补全] [/ 命令]"
                     ),
                     lexer=PygmentsLexer(MarkdownLexer),
                 )
@@ -304,4 +306,13 @@ class ChatbotUI:
 
 
 if __name__ == "__main__":
-    ChatbotUI().run()
+    parser = argparse.ArgumentParser(description="Terminal Chatbot UI")
+    parser.add_argument(
+        "-m",
+        "--model",
+        type=str,
+        default="architect",
+        help="The model to use for the chatbot (e.g., 'architect', 'gpt-4', 'deepseek').",
+    )
+    args = parser.parse_args()
+    ChatbotUI(model=args.model).run()

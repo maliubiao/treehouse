@@ -205,8 +205,19 @@ explaingpt() {
 
 chat() {
   _check_gpt_env || return 1
-  [[ "$1" == "new" ]] && export GPT_UUID_CONVERSATION=$(uuidgen)
-  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --chatbot
+  local model_arg=""
+
+  # 支持 chat new, chat <model_name>, chat new <model_name>
+  if [[ "$1" == "new" ]]; then
+    export GPT_UUID_CONVERSATION=$(uuidgen)
+    shift
+  fi
+
+  if [[ -n "$1" ]]; then
+    model_arg="--model $1"
+  fi
+
+  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --chatbot $model_arg
 }
 
 askgpt() {
@@ -405,7 +416,7 @@ function commitgpt() {
   fi
 }
 
-function chatbot() { chat "new"; }
+function chatbot() { chat "new" "$@"; }
 function chatagain() { chat; }
 function naskgpt() {
   local original_session=$GPT_SESSION_ID
