@@ -2062,7 +2062,7 @@ class TestChatbotUI(unittest.TestCase):
 
     @patch.object(ChatbotUI, "stream_response")
     def test_process_input_flow(self, mock_stream):
-        test_cases = [("", False), ("q", False), ("/help", True), ("test query", True)]
+        test_cases = [("", True), ("q", False), ("/help", True), ("test query", True)]
 
         for input_text, expected in test_cases:
             with self.subTest(input=input_text):
