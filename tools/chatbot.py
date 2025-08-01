@@ -285,22 +285,32 @@ class ChatbotUI:
                 self.console.print(f"\n[red]发生错误: {str(e)}[/]\n")
 
     def _process_input(self, text: str) -> bool:
-        """处理用户输入
+        """处理用户输入，决定是否继续主循环。
+
+        - 空输入或仅含空格的输入将被忽略。
+        - 输入 'q' (不区分大小写) 将退出程序。
+        - 以 '/' 开头的输入被视作命令处理。
+        - 其他输入将作为提问发送给模型。
+
         Returns:
-            bool: 是否继续运行主循环
+            bool: 返回 `True` 继续运行主循环, `False` 则退出。
         """
-        if not text:
-            return False
-        if text.strip().lower() == "q":
+        stripped_text = text.strip()
+
+        if not stripped_text:
+            # 忽略空输入或纯空格输入，继续循环
+            return True
+
+        if stripped_text.lower() == "q":
             self.console.print("已退出聊天。", style="#4CAF50")
             return False
-        if not text.strip():
-            return True
-        if text.startswith("/"):
-            self.handle_command(text[1:])
+
+        if stripped_text.startswith("/"):
+            self.handle_command(stripped_text[1:])
             return True
 
         self.console.print("BOT:", style="#4CAF50 bold")
+        # 传递原始text，保留用户可能输入的特殊格式（如缩进）
         self.stream_response(text)
         return True
 
