@@ -12,10 +12,12 @@ import argparse
 import os
 import sys
 import traceback
+from typing import Optional
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.bindings.named_commands import kill_line
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.styles import Style
 from pygments.lexers.markup import MarkdownLexer
@@ -129,6 +131,8 @@ class ChatbotUI:
         bindings.add("escape")(self._exit_handler)
         bindings.add("c-c")(self._exit_handler)
         bindings.add("c-l")(self._clear_screen_handler)
+        # c-k: 删除光标到行尾的内容
+        bindings.add("c-k")(kill_line)
         return bindings
 
     def _exit_handler(self, event):
@@ -284,9 +288,10 @@ class ChatbotUI:
                 traceback.print_exc()
                 self.console.print(f"\n[red]发生错误: {str(e)}[/]\n")
 
-    def _process_input(self, text: str) -> bool:
+    def _process_input(self, text: Optional[str]) -> bool:
         """处理用户输入，决定是否继续主循环。
 
+        - None输入 (通常由Ctrl+C/D触发) 将退出程序。
         - 空输入或仅含空格的输入将被忽略。
         - 输入 'q' (不区分大小写) 将退出程序。
         - 以 '/' 开头的输入被视作命令处理。
@@ -295,6 +300,11 @@ class ChatbotUI:
         Returns:
             bool: 返回 `True` 继续运行主循环, `False` 则退出。
         """
+        # prompt_toolkit 可能会在中断时返回 None (例如 Ctrl-C)
+        # 这是一个安全的保护措施，用于优雅地退出循环。
+        if text is None:
+            return False
+
         stripped_text = text.strip()
 
         if not stripped_text:
