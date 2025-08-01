@@ -335,6 +335,11 @@ def parse_arguments():
     )
     parser.add_argument("--trace", action="store_true", help="启用详细的执行跟踪")
     parser.add_argument(
+        "--model",
+        default=os.environ.get("GPT_MODEL_KEY", "architect"),
+        help="要使用的模型名称 (例如 'architect', 'coder')",
+    )
+    parser.add_argument(
         "--architect",
         required="--workflow" in sys.argv,
         help="架构师模型名称（工作流模式必需）",
@@ -4234,16 +4239,14 @@ def handle_ask_mode(program_args, proxies):
     """处理--ask模式"""
     ask_text = prepare_ask_text(program_args.ask)
     model_switch = ModelSwitch()
-    model_switch.select(os.environ["GPT_MODEL_KEY"])
+    model_switch.select(program_args.model)
     context_processor = GPTContextProcessor()
     nodes = context_processor.parse_text_into_nodes(ask_text)
     use_json_output = should_use_json_output(nodes)
     text = context_processor.process_text(ask_text, use_json_output=use_json_output)
     text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
     print(text)
-    response_data = model_switch.query(
-        os.environ["GPT_MODEL_KEY"], text, proxies=proxies, use_json_output=use_json_output
-    )
+    response_data = model_switch.query(program_args.model, text, proxies=proxies, use_json_output=use_json_output)
     process_response(
         text,
         response_data,
@@ -4883,14 +4886,14 @@ def import_relative(module):
     return __import__(module)
 
 
-def start_chatbot():
+def start_chatbot(model_name: str):
     from typing import TYPE_CHECKING
 
     if TYPE_CHECKING:
         import tools.chatbot
     else:
         tools = import_relative("tools.chatbot")
-    tools.chatbot.ChatbotUI().run()
+    tools.chatbot.ChatbotUI(model=model_name).run()
 
 
 def find_changelog():
@@ -4930,7 +4933,7 @@ def main(input_args):
         input_args.ask = Path(input_args.file).read_text("utf8")
         handle_ask_mode(input_args, proxies)
     elif input_args.chatbot:
-        start_chatbot()
+        start_chatbot(input_args.model)
     elif input_args.project_search:
         prompt_words_search(input_args.project_search, input_args)
         symbols = perform_search(input_args.project_search, input_args.config)
