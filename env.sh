@@ -205,7 +205,7 @@ explaingpt() {
 
 chat() {
   _check_gpt_env || return 1
-  local model_arg=""
+  local model_arg=()
 
   # 支持 chat new, chat <model_name>, chat new <model_name>
   if [[ "$1" == "new" ]]; then
@@ -214,10 +214,10 @@ chat() {
   fi
 
   if [[ -n "$1" ]]; then
-    model_arg="--model $1"
+    model_arg=(--model "$1")
   fi
 
-  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --chatbot $model_arg
+  "$GPT_PYTHON_BIN" "$GPT_PATH/llm_query.py" --chatbot "${model_arg[@]}"
 }
 
 askgpt() {
@@ -351,7 +351,7 @@ _zsh_completion_setup() {
   }
 
   compdef _zsh_at_complete askgpt naskgpt codegpt patchgpt archgpt
-  compdef _zsh_usegpt_complete usegpt
+  compdef _zsh_usegpt_complete usegpt chat
 }
 
 _bash_completion_setup() {
@@ -381,7 +381,7 @@ _bash_completion_setup() {
   }
 
   complete -F _bash_at_complete askgpt naskgpt codegpt patchgpt archgpt
-  complete -F _bash_usegpt_complete usegpt
+  complete -F _bash_usegpt_complete usegpt chat
 }
 
 # 设置补全
