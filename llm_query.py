@@ -4216,65 +4216,130 @@ def extract_code_blocks(text: str) -> List[Dict[str, Any]]:
 
 
 def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
-    """将内容保存到Obsidian文档系统
+    """将内容保存到Obsidian文档系统，并对LLM指令进行Markdown格式化。
 
     Args:
         obsidian_doc: Obsidian文档目录路径
-        content: 要保存的内容
-        prompt: 可选的问题提示
-        ask_param: 可选的参数用于生成链接名称
+        content: 要保存的LLM原始响应内容
+        prompt: 可选的原始问题提示
+        ask_param: 可选的参数，用于生成更具可读性的链接名称
     """
+
+    def _format_for_obsidian(text: str) -> str:
+        """将原始LLM响应文本格式化为适合Obsidian的Markdown。"""
+
+        # 辅助函数，用于消费一个完整的[start]...[end]块，能正确处理嵌套。
+        def consume_block(lines: list[str], start_index: int) -> tuple[str, int]:
+            i = start_index
+            while i < len(lines) and not lines[i].strip().startswith("[start"):
+                i += 1
+            if i >= len(lines):
+                return "", start_index  # 未找到起始标签
+
+            start_block_index = i + 1
+            i += 1
+            nesting_level = 1
+            while i < len(lines):
+                line = lines[i].strip()
+                if line.startswith("[start"):
+                    nesting_level += 1
+                elif line.startswith("[end"):
+                    nesting_level -= 1
+
+                if nesting_level == 0:
+                    content = "\n".join(lines[start_block_index:i])
+                    return content, i + 1
+                i += 1
+            # 如果循环结束但块未关闭，返回已消费部分
+            return "\n".join(lines[start_block_index:]), i
+
+        lines = text.splitlines()
+        result_md = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped_line = line.strip()
+
+            # 处理 <think>...</think> 块
+            if stripped_line == "<think>":
+                think_content = []
+                i += 1
+                while i < len(lines) and lines[i].strip() != "</think>":
+                    think_content.append(lines[i])
+                    i += 1
+                result_md.append("\n> ### 🤔 AI's Thought Process\n" + "\n".join([f"> {l}" for l in think_content]))
+                if i < len(lines):
+                    i += 1  # 跳过 </think>
+                continue
+
+            # 处理 [git commit message] 块
+            if stripped_line == "[git commit message]":
+                content_block, next_i = consume_block(lines, i + 1)
+                result_md.append(f"\n### 📝 Git Commit Message\n\n```\n{content_block}\n```\n")
+                i = next_i
+                continue
+
+            # 处理文件操作指令
+            op_match = re.match(r"\[(created file|overwrite whole file|replace)\]:\s*(.*)", stripped_line)
+            if op_match:
+                op_type, path = op_match.groups()
+                lang = Path(path).suffix.lstrip(".") if Path(path).suffix else ""
+
+                if op_type == "created file":
+                    result_md.append(f"\n### ✨ Created File: `{path}`\n")
+                    content_block, next_i = consume_block(lines, i + 1)
+                    result_md.append(f"```{lang}\n{content_block}\n```\n")
+                    i = next_i
+                elif op_type == "overwrite whole file":
+                    result_md.append(f"\n### 🔄 Overwrote File: `{path}`\n")
+                    content_block, next_i = consume_block(lines, i + 1)
+                    result_md.append(f"```{lang}\n{content_block}\n```\n")
+                    i = next_i
+                elif op_type == "replace":
+                    result_md.append(f"\n### 🔁 Replace in File: `{path}`\n")
+                    old_content, next_i_after_old = consume_block(lines, i + 1)
+                    result_md.append("#### --- From\n\n```diff\n")
+                    for l in old_content.splitlines():
+                        result_md.append(f"- {l}")
+                    result_md.append("```\n")
+
+                    new_content, next_i_after_new = consume_block(lines, next_i_after_old)
+                    result_md.append(f"#### +++ To\n\n```{lang}\n{new_content}\n```\n")
+                    i = next_i_after_new
+                continue
+
+            # 捕获并保留不属于任何已知指令的纯文本行
+            result_md.append(line)
+            i += 1
+
+        return "\n".join(result_md)
+
     obsidian_dir = Path(obsidian_doc)
     obsidian_dir.mkdir(parents=True, exist_ok=True)
 
-    # 创建按年月分组的子目录
+    # 创建带0填充的日期和时间戳，以保证文件排序正确
     now = time.localtime()
-    month_dir = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}"
+    month_dir = obsidian_dir / f"{now.tm_year}-{now.tm_mon:02d}-{now.tm_mday:02d}"
     month_dir.mkdir(exist_ok=True)
-
-    # 生成时间戳文件名
-    timestamp = f"{now.tm_hour}-{now.tm_min}-{now.tm_sec}.md"
+    timestamp = f"{now.tm_hour:02d}-{now.tm_min:02d}-{now.tm_sec:02d}.md"
     obsidian_file = month_dir / timestamp
 
-    # 处理代码块：将[start]...[end]标记替换为Markdown代码块
-    code_blocks = extract_code_blocks(content)
-    formatted_content = content
+    # 使用新的格式化函数处理内容
+    formatted_content = _format_for_obsidian(content)
 
-    # 从后往前替换，避免位置变化
-    for block in sorted(code_blocks, key=lambda x: x["start_line"], reverse=True):
-        # 计算字符位置
-        start_idx = content.find(block["full_match"])
-        if start_idx == -1:
-            continue
-
-        end_idx = start_idx + len(block["full_match"])
-        markdown_block = f"```\n{block['content']}\n```"
-        formatted_content = formatted_content[:start_idx] + markdown_block + formatted_content[end_idx:]
-
-    # 格式化思维过程
-    formatted_content = re.sub(
-        r"<think>\n*([\s\S]*?)\n*</think>",
-        lambda match: '<div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">'
-        + match.group(1).replace("\n", "<br>")
-        + "</div>",
-        formatted_content,
-        flags=re.DOTALL,
-    )
-
-    # 构建最终内容：先放答案，再放问题
+    # 构建最终内容
     final_content = f"### 回答\n{formatted_content}"
-
     if prompt:
-        final_content += f"\n\n### 问题\n\n````\n{prompt}\n````"
+        final_content += f"\n\n### 问题\n\n```\n{prompt}\n```"
 
     # 写入响应内容
     with open(obsidian_file, "w", encoding="utf-8") as f:
         f.write(final_content)
 
-    # 更新main.md
-    main_file = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}-索引.md"
+    # 更新索引文件
+    main_file = obsidian_dir / f"{now.tm_year}-{now.tm_mon:02d}-{now.tm_mday:02d}-索引.md"
     link_name = re.sub(r"[{}]", "", ask_param[:256]) if ask_param else timestamp
-    link = f"[[{month_dir.name}/{timestamp}|{link_name}]]\n"
+    link = f"- [[{month_dir.name}/{timestamp}|{link_name}]]\n"
 
     with open(main_file, "a", encoding="utf-8") as f:
         f.write(link)
