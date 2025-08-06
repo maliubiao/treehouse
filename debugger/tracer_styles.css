@@ -408,11 +408,16 @@ button:hover {
 
 /* Source view buttons */
 .view-source-btn {
+    display: none; /* Hidden by default, shown on hover */
     cursor: pointer;
     color: var(--call-color);
     text-decoration: underline;
     margin-left: 10px;
     font-size: 0.8em;
+}
+
+div[data-indent]:hover > .view-source-btn {
+    display: inline;
 }
 
 /* Action Buttons: Copy Subtree, Focus Subtree, Toggle Details */
