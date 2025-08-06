@@ -4236,18 +4236,21 @@ def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
     timestamp = f"{now.tm_hour}-{now.tm_min}-{now.tm_sec}.md"
     obsidian_file = month_dir / timestamp
 
-    # 处理代码块
+    # 处理代码块：将[start]...[end]标记替换为Markdown代码块
     code_blocks = extract_code_blocks(content)
+    formatted_content = content
 
-    # 移除所有[start]...[end]的原始标记
-    cleaned_content = content
-    for block in sorted(code_blocks, key=lambda x: x["start"], reverse=True):
-        cleaned_content = cleaned_content[: block["start"]] + cleaned_content[block["end"] :]
+    # 从后往前替换，避免位置变化
+    for block in sorted(code_blocks, key=lambda x: x["start_line"], reverse=True):
+        # 计算字符位置
+        start_idx = content.find(block["full_match"])
+        if start_idx == -1:
+            continue
 
-    # 格式化代码块为markdown代码块语法
-    formatted_content = cleaned_content
-    for block in code_blocks:
-        formatted_content += f"\n\n```\n{block['content']}\n```"
+        end_idx = start_idx + len(block["full_match"])
+        markdown_block = f"```\n{block['content']}\n```"
+        formatted_content = formatted_content[:start_idx] + markdown_block + formatted_content[end_idx:]
+
     # 格式化思维过程
     formatted_content = re.sub(
         r"<think>\n*([\s\S]*?)\n*</think>",
