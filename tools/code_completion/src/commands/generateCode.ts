@@ -149,6 +149,7 @@ export function stitchNewFileContent(
     const selectionEndOffset = document.offsetAt(selection.end);
     
     if (!importBlock) {
+        logger.log('stitchNewFileContent: No import block found - performing simple replacement');
         return originalContent.slice(0, selectionStartOffset) + newCode + originalContent.slice(selectionEndOffset);
     }
     
@@ -156,35 +157,43 @@ export function stitchNewFileContent(
     const importEndOffset = document.offsetAt(importBlock.range.end);
     
     if (importEndOffset >= selectionStartOffset) {
-        logger.warn('Selection is within or before the import block. Performing a simple replacement.');
+        logger.log('stitchNewFileContent: Selection is within or before import block - performing simple replacement');
         return originalContent.slice(0, selectionStartOffset) + newCode + originalContent.slice(selectionEndOffset);
     }
     
     let finalImportText = importBlock.text;
     if (newImports !== null) {
-        // newImports is guaranteed to be non-empty here because empty imports are returned as null
+        logger.log('stitchNewFileContent: Using new import block from LLM response');
         finalImportText = newImports;
+    } else {
+        logger.log('stitchNewFileContent: Keeping existing import block');
     }
     
     const beforeImports = originalContent.slice(0, importStartOffset);
     let betweenImportsAndCode = originalContent.slice(importEndOffset, selectionStartOffset);
     const afterCode = originalContent.slice(selectionEndOffset);
     
+    logger.log('stitchNewFileContent: Processing import text formatting');
     if (finalImportText.trim().length > 0 && !finalImportText.endsWith('\n') && !finalImportText.endsWith('\r\n')) {
+        logger.log('stitchNewFileContent: Adding newline to import block');
         finalImportText += '\n';
     }
 
+    if (finalImportText.trim().length === 0) {
+        finalImportText = '';
+    }
+
     if (finalImportText.endsWith('\n') || finalImportText.endsWith('\r\n')) {
+        logger.log('stitchNewFileContent: Removing duplicate newline between imports and code');
         if (betweenImportsAndCode.startsWith('\r\n')) {
             betweenImportsAndCode = betweenImportsAndCode.substring(2);
         } else if (betweenImportsAndCode.startsWith('\n')) {
             betweenImportsAndCode = betweenImportsAndCode.substring(1);
         }
     }
-    
+    logger.log('stitchNewFileContent: Successfully stitched new file content');
     return beforeImports + finalImportText + betweenImportsAndCode + newCode + afterCode;
 }
-
 async function callLLMWithTimeout(
     instruction: string,
     generationContext: GenerationContext,

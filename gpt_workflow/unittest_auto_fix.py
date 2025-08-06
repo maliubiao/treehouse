@@ -256,6 +256,74 @@ class TestAutoFix:
                 frame_ref_lines=selected_error.get("frame_ref_lines", []),
             )
 
+    def get_error_description_string(self, selected_error: Dict) -> str:
+        """
+        Return a detailed textual description of the selected test error.
+        This includes the same information as display_selected_error_details but formatted
+        as a single string suitable for LLM consumption.
+        """
+        lines = []
+        lines.append("=== Test Error Details ===")
+        lines.append(f"Issue Type: {selected_error.get('issue_type', 'unknown')}")
+        lines.append(f"Test ID: {selected_error.get('test_id', 'unknown')}")
+        lines.append(f"File: {selected_error.get('file_path', 'unknown')}")
+        lines.append(f"Line: {selected_error.get('line', 'unknown')}")
+        lines.append(f"Function: {selected_error.get('function', 'unknown')}")
+        lines.append(f"Error Type: {selected_error.get('error_type', 'UnknownError')}")
+        lines.append(f"Error Message: {selected_error.get('error_message', 'Unknown error')}")
+
+        if selected_error.get("traceback"):
+            lines.append("\nTraceback:")
+            lines.append(selected_error["traceback"])
+
+        # Populate internal state for tracer logs
+        self.uniq_references = set()
+        self.trace_log = ""
+        self.exception_location = None
+        self.main_call_chain = None
+
+        if selected_error.get("file_path") and selected_error.get("line"):
+            self._display_tracer_logs(
+                selected_error["file_path"],
+                selected_error["line"],
+                silent=True,
+                test_id=selected_error["test_id"],
+                frame_ref_lines=selected_error.get("frame_ref_lines", []),
+            )
+
+        if self.trace_log:
+            lines.append("\nTracer Log:")
+            lines.append(self.trace_log)
+
+        if self.main_call_chain:
+            lines.append("\nCall Chain:")
+            indent = 0
+            for ref in self.main_call_chain:
+                ref_type = ref.get("type")
+                func_name = ref.get("func", "?")
+                filename = ref.get("filename", "?")
+                lineno = ref.get("lineno", "?")
+
+                if ref_type == "call":
+                    lines.append("  " * indent + f"→ {func_name}() at {filename}:{lineno}")
+                    indent += 1
+                elif ref_type == "return":
+                    indent = max(0, indent - 1)
+                    lines.append("  " * indent + f"← {func_name}() returned")
+                elif ref_type == "exception":
+                    indent = max(0, indent - 1)
+                    lines.append("  " * indent + f"✗ {func_name}() raised exception")
+
+        if self.exception_location:
+            lines.append(f"\nException Location: {self.exception_location[0]}:{self.exception_location[1]}")
+
+        if self.uniq_references:
+            lines.append("\nUnique References:")
+            for file_path, line_no in sorted(self.uniq_references):
+                lines.append(f"  {file_path}:{line_no}")
+
+        return "\n".join(lines)
+
     def lookup_reference(self, file_path: str, lineno: int) -> None:
         """Display reference information for a specific file and line."""
         self._display_tracer_logs(file_path, lineno)
@@ -429,9 +497,7 @@ def _consume_stream_and_get_text(stream_generator, print_stream: bool = True) ->
 
 
 def _full_context_fix_and_retry(
-    prompt_content: str,
-    file_references: List[str],
-    model_switch: ModelSwitch,
+    prompt_content: str, file_references: List[str], model_switch: ModelSwitch, error_desc: str = ""
 ) -> bool:
     """
     Generates and applies changes using full-context, allowing the user to retry on failure.
@@ -448,6 +514,7 @@ def _full_context_fix_and_retry(
     use_json_output = should_use_json_output(nodes)
     max_tokens = model_switch.current_config.max_context_size
     text = context_processor.process_text(ask_text, use_json_output=use_json_output, tokens_left=max_tokens)
+    text = f"\n\n{error_desc}\n\n{text}"
     text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
 
     # Print the final prompt text length
@@ -495,7 +562,7 @@ def _full_context_fix_and_retry(
                 return False
 
 
-def _perform_direct_fix(auto_fix: TestAutoFix, fixer_model_switch: ModelSwitch, user_req: str):
+def _perform_direct_fix(auto_fix: TestAutoFix, fixer_model_switch: ModelSwitch, user_req: str, error_desc: str):
     """Performs a direct, one-step fix by analyzing the tracer log and generating a patch using full file context."""
     print(Fore.YELLOW + "\nAttempting to generate a fix directly...")
 
@@ -511,9 +578,8 @@ def _perform_direct_fix(auto_fix: TestAutoFix, fixer_model_switch: ModelSwitch, 
         prompt_content = FixerPromptGenerator.create_direct_fix_prompt(
             trace_log_path=tmp_log_file.name, user_req=user_req
         )
-
         file_refs = [f"@{path}" for path in file_paths]
-        _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch)
+        _full_context_fix_and_retry(prompt_content, file_refs, fixer_model_switch, error_desc=error_desc)
 
 
 def _get_user_feedback_on_analysis(analysis_text: str) -> tuple[str, bool]:
@@ -577,6 +643,7 @@ def _perform_two_step_fix(
     analyzer_model_switch: ModelSwitch,
     fixer_model_switch: ModelSwitch,
     auto_accept: bool = False,
+    error_desc: str = "",
 ) -> bool:
     """
     Performs an interactive, two-step fix and returns whether the choice should be remembered.
@@ -614,7 +681,7 @@ def _perform_two_step_fix(
             ask_text, use_json_output=use_json, tokens_left=analyzer_model_switch.current_config.max_context_size
         )
         processed_text = inject_edit_prompt_if_needed(processed_text, nodes, use_json)
-
+        processed_text = f"{error_desc}\n{processed_text}"
         stream = analyzer_model_switch.query(analyzer_model_switch.model_name, processed_text, stream=True)
         analysis_text = _consume_stream_and_get_text(stream)
 
@@ -796,12 +863,16 @@ def run_fix_loop(args: argparse.Namespace, analyzer_model_switch: ModelSwitch, f
         if continue_choice == "y":
             _restart_with_original_args()
         return
-
+    error_desc = auto_fix.get_error_description_string(selected_error)
     if fix_mode == "direct":
-        _perform_direct_fix(auto_fix, fixer_model_switch, args.user_requirement)
+        _perform_direct_fix(auto_fix, fixer_model_switch, args.user_requirement, error_desc)
     elif fix_mode == "two_step":
         remember_choice = _perform_two_step_fix(
-            auto_fix, analyzer_model_switch, fixer_model_switch, auto_accept=args.auto_accept_analysis
+            auto_fix,
+            analyzer_model_switch,
+            fixer_model_switch,
+            auto_accept=args.auto_accept_analysis,
+            error_desc=error_desc,
         )
 
     continue_choice = input(Fore.GREEN + "\n补丁已应用。是否继续修复下一个问题？ (y/n): ").strip().lower()

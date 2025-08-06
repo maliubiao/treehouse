@@ -371,7 +371,7 @@ export async function testApiConnection(apiConfig: AiServiceConfig): Promise<{ s
         const client = initializeClient(apiConfig);
         
         const timeoutMs = (apiConfig.timeout_seconds || 15) * 1000;
-        const testPrompt = t("llmClient.testConnection.prompt");
+        const testPrompt = "Say the word 'test' and nothing else";
         logger.log(`Sending test prompt: "${testPrompt}" to model: ${apiConfig.model_name}`);
 
         const messages: ChatCompletionMessageParam[] = [{ role: 'user', content: testPrompt }];

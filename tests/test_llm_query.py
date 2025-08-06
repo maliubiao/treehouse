@@ -41,6 +41,7 @@ from llm_query import (
     _fetch_symbol_data,
     _find_gitignore,
     _handle_local_file,
+    extract_code_blocks,
     get_symbol_detail,
     interactive_symbol_location,
     process_file_change,
@@ -1103,6 +1104,148 @@ class TestGitignoreFunctions(unittest.TestCase):
         with patch("llm_query.os.path.dirname", side_effect=mock_dirname):
             found_path = _find_gitignore(self.subdir)
             self.assertIsNone(found_path)
+
+
+class TestExtractCodeBlocks(unittest.TestCase):
+    def test_single_code_block(self):
+        text = """Some text before
+[start]
+def hello():
+    print("world")
+[end]
+Some text after"""
+
+        blocks = extract_code_blocks(text)
+        self.assertEqual(len(blocks), 1)
+
+        start_pos = text.find("[start]")
+        lines = text.splitlines(keepends=True)
+        start_line = text[:start_pos].count("\n")
+
+        # 正确计算结束行：找到[end]所在行
+        end_line = text[: text.find("[end]")].count("\n") + 1
+
+        self.assertEqual(blocks[0]["start_line"], start_line + 1)
+        self.assertEqual(blocks[0]["end_line"], end_line)
+        content_start = start_pos + len("[start]\n")
+        content_end = text.find("[end]")
+        self.assertEqual(blocks[0]["content"], text[content_start:content_end].strip("\n"))
+        self.assertEqual(blocks[0]["full_match"], text[start_pos : content_end + len("[end]")].strip())
+
+    def test_multiple_code_blocks(self):
+        text = """First block:
+        [start]
+        print("block 1")
+        [end]
+        Second block:
+        [start]
+        x = 1
+        y = 2
+        [end]"""
+
+        blocks = extract_code_blocks(text)
+        self.assertEqual(len(blocks), 2)
+
+        lines = text.splitlines(keepends=True)
+
+        # First block
+        first_start = text.find("[start]")
+        first_end = text.find("[end]") + len("[end]")
+        first_start_line = text[:first_start].count("\n")
+        first_end_line = text[:first_end].count("\n")
+
+        self.assertEqual(blocks[0]["start_line"], first_start_line + 1)
+        self.assertEqual(blocks[0]["end_line"], first_end_line + 1)  # 修正行号计算
+
+        # Second block
+        second_start = text.find("[start]", first_end)
+        second_end = text.find("[end]", second_start) + len("[end]")
+        second_start_line = text[:second_start].count("\n")
+        second_end_line = text[:second_end].count("\n")
+
+        self.assertEqual(blocks[1]["start_line"], second_start_line + 1)
+        self.assertEqual(blocks[1]["end_line"], second_end_line + 1)  # 修正行号计算
+
+    def test_nested_code_blocks(self):
+        """测试处理嵌套代码块"""
+        text = dedent("""[start]
+        Outer block
+        [start]
+        Inner block
+        [end]
+        Still outer block
+        [end]""")
+
+        blocks = extract_code_blocks(text)
+        self.assertEqual(len(blocks), 1)
+
+        expected_content = (
+            "        Outer block\n        [start]\n        Inner block\n        [end]\n        Still outer block"
+        )
+
+        self.assertEqual(blocks[0]["content"], expected_content)
+        self.assertEqual(blocks[0]["full_match"], text.strip())
+
+    def test_empty_code_block(self):
+        text = """[start]
+[end]"""
+
+        blocks = extract_code_blocks(text)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0]["content"], "")
+
+    def test_no_code_blocks(self):
+        text = """Just some regular text
+without any code blocks
+that should be ignored"""
+
+        blocks = extract_code_blocks(text)
+        self.assertEqual(len(blocks), 0)
+
+    def test_malformed_nested_blocks(self):
+        text = """[start]
+Block 1
+[start]
+Block 2
+[end]
+[start]
+Block 3
+[end]
+[end]"""
+
+        blocks = extract_code_blocks(text)
+        self.assertEqual(len(blocks), 1)
+
+        start_pos = text.find("[start]")
+        end_pos = text.rfind("[end]") + len("[end]")
+
+        lines = text.splitlines(keepends=True)
+        start_line = text[:start_pos].count("\n")
+        end_line = text[:end_pos].count("\n")
+
+        self.assertEqual(blocks[0]["start_line"], start_line + 1)
+        self.assertEqual(blocks[0]["end_line"], end_line + 1)
+
+    def test_leading_trailing_whitespace(self):
+        text = dedent("""  
+  [start]  
+code line 1
+code line 2
+  [end]  """)
+
+        blocks = extract_code_blocks(text)
+        self.assertEqual(len(blocks), 1)
+
+        start_pos = text.find("[start]")
+        end_pos = text.find("[end]") + len("[end]")
+
+        content_start = start_pos + len("[start]")
+        content_end = text.find("[end]")
+        content = text[content_start:content_end]
+
+        expected_content = content.strip()
+
+        self.assertEqual(blocks[0]["content"], expected_content)
 
 
 class TestFileHandling(unittest.TestCase):

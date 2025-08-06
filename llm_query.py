@@ -28,7 +28,7 @@ import traceback
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -4165,6 +4165,56 @@ def process_response(prompt, content, file_path, save=True, obsidian_doc=None, a
         )
 
 
+def extract_code_blocks(text: str) -> List[Dict[str, Any]]:
+    """
+    从文本中提取所有被 [start] 和 [end] 包裹的代码块。
+    支持嵌套结构，返回每个块的起始行、结束行、内容和完整匹配文本。
+    """
+    blocks = []
+    balance = 0  # 用于跟踪嵌套深度
+    start_line = None
+    content_lines = []
+    current_block_start = None  # 当前块的起始位置
+
+    lines = text.splitlines(keepends=True)
+
+    for line_no, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        if stripped == "[start]":
+            if balance == 0:
+                start_line = line_no
+                content_lines = []
+                current_block_start = line_no
+            balance += 1
+            # 将[start]标记添加到内容中
+            if balance > 1:
+                content_lines.append(line)
+        elif stripped == "[end]":
+            if balance > 0:
+                # 将[end]标记添加到内容中（除非是结束最外层块）
+                if balance > 1:
+                    content_lines.append(line)
+                balance -= 1
+                if balance == 0 and start_line is not None:
+                    content = "".join(content_lines).rstrip()
+                    full_match = "".join(lines[current_block_start - 1 : line_no]).rstrip("\n")
+                    blocks.append(
+                        {
+                            "start_line": start_line,
+                            "end_line": line_no,  # 使用[end]所在行作为结束行
+                            "content": content,
+                            "full_match": full_match,
+                        }
+                    )
+                    start_line = None
+                    content_lines = []
+        elif balance > 0:
+            content_lines.append(line)
+
+    return blocks
+
+
 def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
     """将内容保存到Obsidian文档系统
 
@@ -4186,23 +4236,37 @@ def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
     timestamp = f"{now.tm_hour}-{now.tm_min}-{now.tm_sec}.md"
     obsidian_file = month_dir / timestamp
 
-    # 格式化内容：将非空思维过程渲染为绿色，去除背景色
+    # 处理代码块
+    code_blocks = extract_code_blocks(content)
+
+    # 移除所有[start]...[end]的原始标记
+    cleaned_content = content
+    for block in sorted(code_blocks, key=lambda x: x["start"], reverse=True):
+        cleaned_content = cleaned_content[: block["start"]] + cleaned_content[block["end"] :]
+
+    # 格式化代码块为markdown代码块语法
+    formatted_content = cleaned_content
+    for block in code_blocks:
+        formatted_content += f"\n\n```\n{block['content']}\n```"
+    # 格式化思维过程
     formatted_content = re.sub(
         r"<think>\n*([\s\S]*?)\n*</think>",
         lambda match: '<div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">'
         + match.group(1).replace("\n", "<br>")
         + "</div>",
-        content,
+        formatted_content,
         flags=re.DOTALL,
     )
 
-    # 添加提示词
+    # 构建最终内容：先放答案，再放问题
+    final_content = f"### 回答\n{formatted_content}"
+
     if prompt:
-        formatted_content = f"### 问题\n\n````\n{prompt}\n````\n\n### 回答\n{formatted_content}"
+        final_content += f"\n\n### 问题\n\n````\n{prompt}\n````"
 
     # 写入响应内容
     with open(obsidian_file, "w", encoding="utf-8") as f:
-        f.write(formatted_content)
+        f.write(final_content)
 
     # 更新main.md
     main_file = obsidian_dir / f"{now.tm_year}-{now.tm_mon}-{now.tm_mday}-索引.md"
