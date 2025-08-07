@@ -4267,7 +4267,9 @@ def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
                 while i < len(lines) and lines[i].strip() != "</think>":
                     think_content.append(lines[i])
                     i += 1
-                result_md.append("\n> ### 🤔 AI's Thought Process\n" + "\n".join([f"> {l}" for l in think_content]))
+                result_md.append(
+                    "\n> ### 🤔 AI's Thought Process\n" + "\n".join([f"> {l}" for l in think_content]) + "\n"
+                )
                 if i < len(lines):
                     i += 1  # 跳过 </think>
                 continue
@@ -4283,7 +4285,12 @@ def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
             op_match = re.match(r"\[(created file|overwrite whole file|replace)\]:\s*(.*)", stripped_line)
             if op_match:
                 op_type, path = op_match.groups()
-                lang = Path(path).suffix.lstrip(".") if Path(path).suffix else ""
+                suffix = Path(path).suffix.lstrip(".").lower()
+                lang_map = {
+                    "py": "python",
+                    "txt": "",
+                }
+                lang = lang_map.get(suffix, suffix)
 
                 if op_type == "created file":
                     result_md.append(f"\n### ✨ Created File: `{path}`\n")

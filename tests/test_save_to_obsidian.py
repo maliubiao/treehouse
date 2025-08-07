@@ -1,4 +1,3 @@
-import os
 import sys
 import tempfile
 import time
@@ -37,23 +36,21 @@ class TestSaveToObsidian(unittest.TestCase):
     def _get_expected_paths(self) -> Tuple[Path, Path]:
         """Get the expected paths for the note and index files based on mock time."""
         obsidian_root = Path(self.temp_dir)
-        date_dir = obsidian_root / "2023-10-26"
-        note_file = date_dir / "12-30-5.md"
-        index_file = obsidian_root / "2023-10-26-索引.md"
+        date_dir = obsidian_root / f"{MOCK_TIME.tm_year}-{MOCK_TIME.tm_mon:02d}-{MOCK_TIME.tm_mday:02d}"
+        note_file = date_dir / f"{MOCK_TIME.tm_hour:02d}-{MOCK_TIME.tm_min:02d}-{MOCK_TIME.tm_sec:02d}.md"
+        index_file = obsidian_root / f"{MOCK_TIME.tm_year}-{MOCK_TIME.tm_mon:02d}-{MOCK_TIME.tm_mday:02d}-索引.md"
         return note_file, index_file
 
-    def test_basic_conversion_and_file_structure(self) -> None:
-        """Test basic code block conversion and correct file/directory creation."""
+    def test_created_file_formatting(self) -> None:
+        """Test formatting for [created file] instruction."""
         content = dedent("""\
-            Some text before.
+            [created file]: /path/to/new/file.py
             [start]
-            def hello():
-                print("hello")
+            def main():
+                print("Hello")
             [end]
-            Some text after.
         """)
         save_to_obsidian(self.temp_dir, content)
-
         note_file, index_file = self._get_expected_paths()
 
         self.assertTrue(note_file.exists())
@@ -61,28 +58,25 @@ class TestSaveToObsidian(unittest.TestCase):
 
         expected_note_content = dedent("""\
             ### 回答
-            Some text before.
-            ```
-            def hello():
-                print("hello")
-            ```
-            Some text after.
-        """)
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
 
-        expected_index_content = "[[2023-10-26/12-30-5.md|12-30-5.md]]\n"
+            ### ✨ Created File: `/path/to/new/file.py`
+
+            ```python
+            def main():
+                print("Hello")
+            ```
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
+
+        expected_index_content = "- [[2023-10-26/12-30-05.md|12-30-05.md]]\n"
         self.assertEqual(index_file.read_text("utf-8"), expected_index_content)
 
-    def test_multiple_code_blocks(self) -> None:
-        """Test correct handling of multiple code blocks in order."""
+    def test_overwrite_file_formatting(self) -> None:
+        """Test formatting for [overwrite whole file] instruction."""
         content = dedent("""\
-            Block 1:
+            [overwrite whole file]: /path/to/existing/file.js
             [start]
-            code 1
-            [end]
-            Block 2:
-            [start]
-            code 2
+            console.log("overwritten");
             [end]
         """)
         save_to_obsidian(self.temp_dir, content)
@@ -90,26 +84,24 @@ class TestSaveToObsidian(unittest.TestCase):
 
         expected_note_content = dedent("""\
             ### 回答
-            Block 1:
-            ```
-            code 1
-            ```
-            Block 2:
-            ```
-            code 2
-            ```
-        """)
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
 
-    def test_nested_blocks_are_preserved(self) -> None:
-        """Test that nested [start]/[end] tags are preserved as text content."""
+            ### 🔄 Overwrote File: `/path/to/existing/file.js`
+
+            ```js
+            console.log("overwritten");
+            ```
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
+
+    def test_replace_formatting(self) -> None:
+        """Test formatting for [replace] instruction."""
         content = dedent("""\
+            [replace]: /path/to/replace.txt
             [start]
-            outer code
-            [start]
-            inner content
+            old line
             [end]
-            more outer code
+            [start]
+            new line
             [end]
         """)
         save_to_obsidian(self.temp_dir, content)
@@ -117,26 +109,54 @@ class TestSaveToObsidian(unittest.TestCase):
 
         expected_note_content = dedent("""\
             ### 回答
+
+            ### 🔁 Replace in File: `/path/to/replace.txt`
+
+            #### --- From
+
+            ```diff
+
+            - old line
             ```
-            outer code
-            [start]
-            inner content
-            [end]
-            more outer code
+
+            #### +++ To
+
             ```
-        """)
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
+            new line
+            ```
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
 
     def test_think_block_formatting(self) -> None:
-        """Test the HTML formatting of <think> blocks."""
+        """Test the formatting of <think> blocks."""
         content = dedent("""\
             <think>
             This is a thought.
             With multiple lines.
             </think>
-            And some code.
+            And some other text.
+        """)
+        save_to_obsidian(self.temp_dir, content)
+        note_file, _ = self._get_expected_paths()
+
+        expected_note_content = dedent("""\
+            ### 回答
+
+            > ### 🤔 AI's Thought Process
+            > This is a thought.
+            > With multiple lines.
+
+            And some other text.
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
+
+    def test_git_commit_message_formatting(self) -> None:
+        """Test formatting for [git commit message] instruction."""
+        content = dedent("""\
+            [git commit message]
             [start]
-            print("done")
+            feat: improve obsidian formatting
+            - Add tests for new instruction types.
             [end]
         """)
         save_to_obsidian(self.temp_dir, content)
@@ -144,17 +164,112 @@ class TestSaveToObsidian(unittest.TestCase):
 
         expected_note_content = dedent("""\
             ### 回答
-            <div style="color: #228B22; padding: 10px; border-radius: 5px; margin: 10px 0;">This is a thought.<br>With multiple lines.</div>
-            And some code.
+
+            ### 📝 Git Commit Message
+
             ```
-            print("done")
+            feat: improve obsidian formatting
+            - Add tests for new instruction types.
             ```
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
+
+    def test_nested_blocks_are_preserved(self) -> None:
+        """Test that nested [start]/[end] tags are preserved inside a content block."""
+        content = dedent("""\
+            [created file]: /path/to/nested.txt
+            [start]
+            outer code
+            [start]
+            inner content
+            [end]
+            more outer code
+            [end]
         """)
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
+        save_to_obsidian(self.temp_dir, content)
+        note_file, _ = self._get_expected_paths()
+
+        expected_note_content = dedent("""\
+            ### 回答
+
+            ### ✨ Created File: `/path/to/nested.txt`
+
+            ```
+            outer code
+            [start]
+            inner content
+            [end]
+            more outer code
+            ```
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
+
+    def test_mixed_instructions(self) -> None:
+        """Test a mix of instructions are handled correctly."""
+        content = dedent("""\
+            Here is the plan.
+            <think>
+            First, I will create a file.
+            Then, I will replace content in another.
+            </think>
+            Okay, let's do it.
+            [created file]: new.py
+            [start]
+            print("new")
+            [end]
+            Some explanatory text.
+            [replace]: old.txt
+            [start]
+            old
+            [end]
+            [start]
+            new
+            [end]
+            Final text.
+        """)
+        save_to_obsidian(self.temp_dir, content)
+        note_file, _ = self._get_expected_paths()
+
+        expected_note_content = dedent("""\
+            ### 回答
+            Here is the plan.
+
+            > ### 🤔 AI's Thought Process
+            > First, I will create a file.
+            > Then, I will replace content in another.
+
+            Okay, let's do it.
+
+            ### ✨ Created File: `new.py`
+
+            ```python
+            print("new")
+            ```
+
+            Some explanatory text.
+
+            ### 🔁 Replace in File: `old.txt`
+
+            #### --- From
+
+            ```diff
+
+            - old
+            ```
+
+            #### +++ To
+
+            ```
+            new
+            ```
+
+            Final text.
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
 
     def test_prompt_and_ask_param_usage(self) -> None:
         """Test the usage of 'prompt' and 'ask_param' arguments."""
-        content = "Some content."
+        content = "Some content without instructions."
         prompt = "What is the meaning of life?"
         ask_param = "philosophy_question"
 
@@ -164,35 +279,35 @@ class TestSaveToObsidian(unittest.TestCase):
 
         expected_note_content = dedent("""\
             ### 回答
-            Some content.
+            Some content without instructions.
 
             ### 问题
 
-            ````
+            ```
             What is the meaning of life?
-            ````
-        """)
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
+            ```
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
 
-        expected_index_content = "[[2023-10-26/12-30-5.md|philosophy_question]]\n"
+        expected_index_content = "- [[2023-10-26/12-30-05.md|philosophy_question]]\n"
         self.assertEqual(index_file.read_text("utf-8"), expected_index_content)
 
-    def test_no_code_blocks(self) -> None:
-        """Test behavior with content that has no code blocks."""
-        content = "Just simple text. No code blocks here."
+    def test_plain_text(self) -> None:
+        """Test behavior with content that has no instructions."""
+        content = "Just simple text. No instructions here."
         save_to_obsidian(self.temp_dir, content)
 
         note_file, _ = self._get_expected_paths()
 
         expected_note_content = dedent("""\
             ### 回答
-            Just simple text. No code blocks here.
-        """)
+            Just simple text. No instructions here.
+            """).strip()
         self.assertTrue(note_file.exists())
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
 
-    def test_unclosed_block(self) -> None:
-        """Test that an unclosed block is treated as plain text."""
+    def test_unrecognized_instruction_is_plain_text(self) -> None:
+        """Test that an instruction not in the recognized list is treated as plain text."""
         content = "Text with [start] but no end."
         save_to_obsidian(self.temp_dir, content)
 
@@ -201,27 +316,26 @@ class TestSaveToObsidian(unittest.TestCase):
         expected_note_content = dedent("""\
             ### 回答
             Text with [start] but no end.
-        """)
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
 
-    def test_empty_block(self) -> None:
-        """Test that an empty block '[start][end]' is handled correctly."""
-        content = dedent("""\
-            An empty block:
-            [start]
-            [end]
-        """)
+    def test_unclosed_block(self) -> None:
+        """Test that an unclosed block is consumed to the end of the content."""
+        content = "[created file]: /foo\n[start]\ncontent"
         save_to_obsidian(self.temp_dir, content)
+
         note_file, _ = self._get_expected_paths()
 
         expected_note_content = dedent("""\
             ### 回答
-            An empty block:
-            ```
+
+            ### ✨ Created File: `/foo`
 
             ```
-        """)
-        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content.strip())
+            content
+            ```
+            """).strip()
+        self.assertEqual(note_file.read_text("utf-8").strip(), expected_note_content)
 
 
 if __name__ == "__main__":
