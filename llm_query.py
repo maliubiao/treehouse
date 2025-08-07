@@ -4305,13 +4305,15 @@ def save_to_obsidian(obsidian_doc, content, prompt=None, ask_param=None):
                 elif op_type == "replace":
                     result_md.append(f"\n### 🔁 Replace in File: `{path}`\n")
                     old_content, next_i_after_old = consume_block(lines, i + 1)
-                    result_md.append("#### --- From\n\n```diff\n")
+                    result_md.append("#### --- From\n\n```diff")
                     for l in old_content.splitlines():
                         result_md.append(f"- {l}")
                     result_md.append("```\n")
 
                     new_content, next_i_after_new = consume_block(lines, next_i_after_old)
-                    result_md.append(f"#### +++ To\n\n```{lang}\n{new_content}\n```\n")
+                    result_md.append(f"#### +++ To\n\n```{lang}")
+                    result_md.append(new_content)
+                    result_md.append("```\n")
                     i = next_i_after_new
                 continue
 
