@@ -3,7 +3,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/maliubiao/treehouse)  
 [English users please view README.en.md](README.en.md)
 
-一个基于openai兼容接口的代码辅助工具，提供便捷的命令行交互和上下文感知功能, 目标是命令行版本的cursor, windsurf, 推荐使用deepseek R1跟V3。
+一个基于openai兼容接口的代码辅助工具，提供便捷的命令行交互和上下文感知功能, 目标是对齐claude code, 推荐使用gemini-2.5-pro, deepseek R1, kimi k2, glm 4.5。
 
 ## 使用场景
 
@@ -205,8 +205,8 @@ notepad $PROFILE
 ```
 
 ### R1 api提供商
-[字节火山方舟](https://www.volcengine.com/experience/ark?utm_term=202502dsinvite&ac=DSASUQY5&rc=FNTDEYLA) 目前api响应最快，资费最低，半价，注册就送3000万token    
-[硅基流动](https://cloud.siliconflow.cn/i/BofVjNGq) 提供高性能API服务，但是厂小资源有限，容易堵，注册送2000万token，运行在华为昇腾全国产化平台上，安全可靠。  
+[字节火山方舟](https://www.volcengine.com/experience/ark?utm_term=202502dsinvite&ac=DSASUQY5&rc=FNTDEYLA) 目前api响应最快，资费最低.    
+[硅基流动](https://cloud.siliconflow.cn/i/BofVjNGq) 提供高性能API服务，但是厂小资源有限，容易堵，运行在华为昇腾全国产化平台上，安全可靠。  
 附教程，[硅基云API使用教程](https://docs.siliconflow.cn/usercases/use-siliconcloud-in-chatbox)  
 
 
