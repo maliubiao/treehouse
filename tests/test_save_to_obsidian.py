@@ -115,7 +115,6 @@ class TestSaveToObsidian(unittest.TestCase):
             #### --- From
 
             ```diff
-
             - old line
             ```
 
@@ -253,7 +252,6 @@ class TestSaveToObsidian(unittest.TestCase):
             #### --- From
 
             ```diff
-
             - old
             ```
 
