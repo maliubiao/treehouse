@@ -54,22 +54,22 @@ def create_parser() -> ArgumentParser:
     epilog = (
         "示例:\n"
         "  # 跟踪脚本\n"
-        "  python -m debugger.tracer_main script.py arg1\n\n"
+        "  context-tracer script.py arg1\n\n"
         "  # 跟踪模块 (注意用 -- 分隔模块参数)\n"
-        "  python -m debugger.tracer_main -m my_package.main -- --user=test\n\n"
+        "  context-tracer -m my_package.main -- --user=test\n\n"
         "  # 使用配置文件\n"
-        "  python -m debugger.tracer_main --config my_config.yaml script.py\n\n"
+        "  context-tracer --config my_config.yaml script.py\n\n"
         "  # 其他常用选项\n"
-        "  python -m debugger.tracer_main --watch-files='src/*.py' script.py\n"
-        "  python -m debugger.tracer_main --capture-vars='x' --capture-vars='y.z' script.py\n"
-        "  python -m debugger.tracer_main --line-ranges='test.py:10-20' script.py\n"
-        "  python -m debugger.tracer_main --start-function='main.py:5' script.py arg1 --arg2\n"
-        "  python -m debugger.tracer_main --include-stdlibs=json --include-stdlibs=re script.py\n"
-        "  python -m debugger.tracer_main --trace-c-calls script.py"
+        "  context-tracer --watch-files='src/*.py' script.py\n"
+        "  context-tracer --capture-vars='x' --capture-vars='y.z' script.py\n"
+        "  context-tracer --line-ranges='test.py:10-20' script.py\n"
+        "  context-tracer --start-function='main.py:5' script.py arg1 --arg2\n"
+        "  context-tracer --include-stdlibs=json --include-stdlibs=re script.py\n"
+        "  context-tracer --trace-c-calls script.py"
     )
     parser = ArgumentParser(
         description="Python脚本/模块调试跟踪工具",
-        usage="python -m debugger.tracer_main [选项] (<脚本> | -m <模块>) [参数]",
+        usage="context-tracer [选项] (<脚本> | -m <模块>) [参数]",
         formatter_class=RawDescriptionHelpFormatter,
         epilog=epilog,
         add_help=False,  # We add our own help argument for custom text
