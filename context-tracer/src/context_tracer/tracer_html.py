@@ -434,7 +434,7 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
 
         If the trace was multi-threaded, it creates a self-contained directory
         with the HTML report and its CSS/JS assets. Otherwise, it saves a single
-        HTML file and assumes assets are in a relative parent directory.
+        HTML file and its assets to the main log directory, making it self-contained.
 
         Args:
             filename: The base name for the report file (e.g., "report.html").
@@ -443,10 +443,11 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
         Returns:
             The Path object pointing to the final saved HTML file.
         """
-        report_dir: Path = Path(__file__).parent / "logs"
+        report_dir: Path = Path.cwd() / "tracer-logs"
         report_dir.mkdir(exist_ok=True)
         html_content: str = self.generate_html()
 
+        output_dir: Path
         final_report_path: Path
         if is_multi_threaded:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -454,25 +455,26 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             output_dir = report_dir / dir_name
             output_dir.mkdir(exist_ok=True)
             final_report_path = output_dir / "report.html"
-
-            # Copy asset files
-            try:
-                asset_dir: Path = Path(__file__).parent
-                assets: List[str] = ["tracer_styles.css", "tracer_scripts.js"]
-                for asset in assets:
-                    source_asset = asset_dir / asset
-                    if source_asset.exists():
-                        shutil.copy(source_asset, output_dir / asset)
-
-                # Adjust asset paths in HTML to be relative to the new directory
-                html_content = html_content.replace('href="../tracer_styles.css"', 'href="tracer_styles.css"')
-                html_content = html_content.replace('src="../tracer_scripts.js"', 'src="tracer_scripts.js"')
-            except Exception as e:
-                logging.error(f"无法复制资源文件: {e}")
-                print(f"ERROR: 无法复制资源文件: {e}")
-
         else:
-            final_report_path = report_dir / filename
+            output_dir = report_dir
+            final_report_path = output_dir / filename
+
+        # Copy asset files to the output directory
+        try:
+            asset_dir: Path = Path(__file__).parent
+            assets: List[str] = ["tracer_styles.css", "tracer_scripts.js"]
+            for asset in assets:
+                source_asset = asset_dir / asset
+                if source_asset.exists():
+                    shutil.copy(source_asset, output_dir / asset)
+
+            # Adjust asset paths in HTML to be relative to the output directory
+            # This makes the report self-contained.
+            html_content = html_content.replace('href="../tracer_styles.css"', 'href="tracer_styles.css"')
+            html_content = html_content.replace('src="../tracer_scripts.js"', 'src="tracer_scripts.js"')
+        except Exception as e:
+            logging.error(f"无法复制资源文件: {e}")
+            print(f"ERROR: 无法复制资源文件: {e}")
 
         final_report_path.write_text(html_content, encoding="utf-8")
         print(f"正在生成HTML报告 {final_report_path} ...")

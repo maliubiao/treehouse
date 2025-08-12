@@ -362,9 +362,11 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             trace_c_calls=args["trace_c_calls"],
         )
 
-        log_dir = Path(__file__).parent / "logs"
+        log_dir = Path.cwd() / "tracer-logs"
+        log_dir.mkdir(exist_ok=True)
         # 报告路径将在 `tracer.stop()` 后确定
-        report_path = log_dir / config.report_name
+        report_name = config.report_name
+        trace_log_name = Path(report_name).stem + ".log"
 
         print(color_wrap("\n📝 调试功能:", "line"))
         print(color_wrap("  ✓ 仅追踪目标模块内的代码执行", "call"))
@@ -377,7 +379,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
         print(color_wrap("  ✓ 彩色终端输出 (日志文件无颜色)", "return"))
         print(color_wrap("  ✓ 多线程跟踪支持", "return"))
         print(color_wrap(f"\n📂 调试日志路径: {log_dir / 'debug.log'}", "line"))
-        print(color_wrap(f"📂 报告文件路径: {report_path.parent / Path(report_path.stem + '.log')}\n", "line"))
+        print(color_wrap(f"📂 跟踪日志路径: {log_dir / trace_log_name}\n", "line"))
 
         original_argv = sys.argv.copy()
         exit_code = 0
@@ -429,7 +431,7 @@ def print_debug_summary(report_path: Path) -> None:
     print(color_wrap("  ▷ LINE     - 执行的源代码行", "line"))
     print(color_wrap("  ⚠ WARNING  - 异常或限制提示", "error"))
     print(color_wrap("\n调试功能说明:", "line"))
-    print(color_wrap(f"{Path(__file__).parent}/logs/debug.log 查看日志", "line"))
+    print(color_wrap(f"{report_path.parent / 'debug.log'} 查看日志", "line"))
     print(color_wrap(f"{report_path} 查看网页报告", "line"))
 
 

@@ -68,3 +68,5 @@ tools/claude_code_proxy/*.env
 tools/claude_code_proxy/config.yml
 .shadowroot
 conversation
+context-tracer/dist/
+context-tracer/src/context_tracer.egg-info/

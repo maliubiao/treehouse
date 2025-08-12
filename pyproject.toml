@@ -68,8 +68,7 @@ profile = "black"
 [tool.ruff]
 exclude = [
     "tests/test-code-files/**",
-    ".*/*",
-    "debugger/*"
+    ".*/*"
 ]
 line-length = 120
 target-version = "py311"

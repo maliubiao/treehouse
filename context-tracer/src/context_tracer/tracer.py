@@ -71,7 +71,7 @@ if TYPE_CHECKING:
 
 # Constants
 _INDENT = "  "
-_LOG_DIR = Path(__file__).parent / "logs"
+_LOG_DIR = Path.cwd() / "tracer-logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 TRACE_LOG_NAME = _LOG_DIR / "trace.log"
 LOG_NAME = _LOG_DIR / "debug.log"
