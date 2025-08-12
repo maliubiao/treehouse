@@ -1,0 +1,670 @@
+:root {
+    /* Light theme variables */
+    --bg-color: #f5f5f5;
+    --text-color: #333;
+    --card-bg: white;
+    --border-color: #ddd;
+    --shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    --highlight-bg: #fffacd;
+    --hover-darken: 10%;
+
+    /* Call types colors */
+    --call-color: #3498db;
+    --return-color: #2ecc71;
+    --line-color: #7f8c8d;
+    --trace-color: #e67e22;
+    --var-color: #9b59b6;
+    --error-color: #e74c3c;
+    --timestamp-color: #95a5a6;
+
+    /* Dialog colors */
+    --dialog-bg: white;
+    --dialog-border: #ccc;
+    --dialog-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    --close-btn-bg: #e74c3c;
+    --close-btn-hover: #c0392b;
+
+    /* Source viewer */
+    --linenumber-bg: #f8f8f8;
+    --executed-bg: rgba(243, 222, 34, 0.5);
+    --current-bg: rgba(255, 235, 153, 0.6);
+    --executed-border: gold;
+    --current-border: orange;
+
+    /* Scroll colors */
+    --scrollbar-thumb: #ccc;
+    --scrollbar-track: transparent;
+    --scrollbar-width: 8px;
+
+    /* Control elements */
+    --btn-bg: #3498db;
+    --btn-hover: #2980b9;
+
+    /* New comment colors */
+    --comment-color: #6a9955;
+    --comment-hover: #4d7b3a;
+}
+
+/* Dark theme variables */
+.dark-theme {
+    --bg-color: #1e1e1e;
+    --text-color: #d4d4d4;
+    --card-bg: #252526;
+    --border-color: #444;
+    --shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    --highlight-bg: #5c5c00;
+    --hover-darken: 5%;
+
+    /* Call types colors - dark theme */
+    --call-color: #4fc3f7;
+    --return-color: #81c784;
+    --line-color: #9e9e9e;
+    --trace-color: #ffb74d;
+    --var-color: #ba68c8;
+    --error-color: #f44336;
+    --timestamp-color: #95a5a6;
+
+    /* Dialog colors - dark theme */
+    --dialog-bg: #252526;
+    --dialog-border: #555;
+    --dialog-shadow: 0 0 20px rgba(0, 0, 0, 0.7);
+
+    /* Source viewer - dark theme */
+    --linenumber-bg: #2d2d2d;
+    --linenumber-text: #aaa;
+    --executed-bg: rgba(58, 58, 0, 0.5);
+    --current-bg: rgba(92, 92, 0, 0.6);
+    --executed-border: #b58900;
+    --current-border: #cb4b16;
+
+    /* Scroll colors - dark theme */
+    --scrollbar-thumb: #666;
+    --scrollbar-track: #333;
+
+    /* Control elements - dark theme */
+    --btn-bg: #0d47a1;
+    --btn-hover: #1565c0;
+}
+
+/* ===== Base Styles ===== */
+body {
+    font-family: 'Menlo', 'Consolas', monospace;
+    line-height: 1.6;
+    margin: 0;
+    padding: 20px;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+}
+
+/* ===== Call Type Styles ===== */
+.call,
+.return,
+.line,
+.trace,
+.var,
+.error {
+    font-weight: normal;
+}
+
+.call {
+    color: var(--call-color);
+    font-weight: bold;
+}
+
+.return {
+    color: var(--return-color);
+    font-weight: bold;
+}
+
+.line {
+    color: var(--line-color);
+}
+
+.trace {
+    color: var(--trace-color);
+}
+
+.var {
+    color: var(--var-color);
+}
+
+.error {
+    color: var(--error-color);
+    font-weight: bold;
+}
+
+.timestamp {
+    color: var(--timestamp-color);
+    font-size: 0.8em;
+    margin-right: 10px;
+}
+
+/* ===== Thread Badge ===== */
+.thread-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-right: 8px;
+    font-size: 0.75em;
+    font-weight: bold;
+    color: #fff;
+    background-color: #6c757d; /* A neutral gray */
+    border-radius: 4px;
+    vertical-align: middle;
+    line-height: 1.5;
+}
+
+.dark-theme .thread-badge {
+    background-color: #5a6268;
+}
+
+
+/* ===== Folding Functionality ===== */
+.foldable {
+    cursor: pointer;
+    position: relative;
+    padding-left: 20px;
+    margin: 5px 0;
+}
+
+.foldable::before {
+    content: '▶';
+    position: absolute;
+    left: 0;
+    color: var(--text-color);
+}
+
+.foldable.expanded::before {
+    content: '▼';
+}
+
+.collapsed {
+    display: none;
+}
+
+.call-group {
+    margin-left: 20px;
+    border-left: 1px dashed var(--border-color);
+    padding-left: 10px;
+}
+
+/* ===== Controls and Search ===== */
+#controls {
+    margin: 10px 0;
+    padding: 10px;
+    background: var(--card-bg);
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+}
+
+#search {
+    margin: 10px;
+    padding: 8px;
+    width: 300px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--card-bg);
+    color: var(--text-color);
+}
+
+button {
+    padding: 8px 12px;
+    margin-right: 5px;
+    background: var(--btn-bg);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+button:hover {
+    background: var(--btn-hover);
+}
+
+.highlight {
+    background-color: var(--highlight-bg);
+}
+
+/* ===== Main Content ===== */
+#content {
+    background: var(--card-bg);
+    padding: 15px;
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+}
+
+.section {
+    margin-bottom: 20px;
+}
+
+.summary {
+    background: var(--bg-color);
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+/* ===== Theme Selector ===== */
+.theme-selector {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+}
+
+.theme-selector label {
+    margin-right: 10px;
+    font-weight: bold;
+}
+
+.theme-selector select {
+    padding: 6px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background-color: var(--card-bg);
+    color: var(--text-color);
+    min-width: 180px;
+}
+
+/* ===== Source Dialog ===== */
+.source-dialog {
+    display: none;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    height: 80%;
+    background: var(--dialog-bg);
+    border: 1px solid var(--dialog-border);
+    box-shadow: var(--dialog-shadow);
+    z-index: 1000;
+    padding: 20px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    isolation: isolate;
+}
+
+.source-dialog.visible {
+    display: flex;
+}
+
+.source-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.source-title {
+    font-weight: bold;
+    font-size: 1.2em;
+    flex-shrink: 0;
+}
+
+.source-content {
+    font-family: monospace;
+    white-space: pre;
+    line-height: 1.5;
+    position: relative;
+    flex: 1;
+    overflow: auto; /* This element will now scroll if content is too large */
+    max-height: 100%; /* Add this to fix flexbox scrolling issue */
+}
+
+/* Source container layout */
+.source-container {
+    display: flex;
+    /* height: 100% removed to allow it to grow with content */
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 14px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    /* overflow-y: auto removed, parent .source-content handles scrolling */
+}
+
+/* Line numbers column */
+.line-numbers {
+    padding-right: 10px;
+    text-align: right;
+    user-select: none;
+    border-right: 1px solid var(--border-color);
+    margin-right: 10px;
+    min-width: 40px;
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    background-color: var(--linenumber-bg);
+    overflow-y: hidden;
+    color: var(--linenumber-text, var(--text-color));
+}
+
+.line-number {
+    padding: 0 5px;
+    display: block;
+    white-space: nowrap;
+    height: 1.5em;
+    line-height: 1.5;
+    box-sizing: border-box;
+}
+
+/* Code content area */
+.code-content {
+    flex: 1;
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre;
+}
+
+.code-content pre {
+    margin: 0;
+    padding: 0;
+}
+
+.code-content code {
+    display: block;
+    line-height: 1.5;
+}
+
+/* Line highlighting */
+.executed-line-light {
+    background-color: var(--executed-bg);
+    border-left: 2px solid var(--executed-border);
+}
+
+.current-line-light {
+    background-color: var(--current-bg);
+    border-left: 2px solid var(--current-border);
+    font-weight: bold;
+}
+
+.executed-line-dark {
+    background-color: var(--executed-bg);
+    border-left: 2px solid var(--executed-border);
+}
+
+.current-line-dark {
+    background-color: var(--current-bg);
+    border-left: 2px solid var(--current-border);
+    font-weight: bold;
+}
+
+/* Simplified legacy classes for compatibility */
+.executed-line {
+    background-color: var(--executed-bg);
+    border-left: 2px solid var(--executed-border);
+}
+
+.current-line {
+    background-color: var(--current-bg);
+    border-left: 2px solid var(--current-border);
+    font-weight: bold;
+}
+
+/* Source view buttons */
+.view-source-btn {
+    display: none; /* Hidden by default, shown on hover */
+    cursor: pointer;
+    color: var(--call-color);
+    text-decoration: underline;
+    margin-left: 10px;
+    font-size: 0.8em;
+}
+
+div[data-indent]:hover > .view-source-btn {
+    display: inline;
+}
+
+/* Action Buttons: Copy Subtree, Focus Subtree, Toggle Details */
+.copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn {
+    display: none;
+    margin-left: 8px;
+    cursor: pointer;
+    font-size: 0.9em;
+    user-select: none; /* Prevent text selection */
+}
+
+/* General action buttons appear on hover */
+.foldable:hover .copy-subtree-btn,
+.foldable:hover .focus-subtree-btn {
+    display: inline-block;
+}
+
+/* Toggle Details button appears on hover only when in skeleton mode */
+body.skeleton-mode .foldable:hover .toggle-details-btn {
+    display: inline-block;
+}
+
+
+/* Enhanced close buttons */
+.close-btn {
+    cursor: pointer;
+    padding: 5px 10px;
+    background: var(--close-btn-bg);
+    color: white;
+    border: none;
+    border-radius: 3px;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1001;
+}
+
+.floating-close-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 36px;
+    height: 36px;
+    background: var(--close-btn-bg);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    cursor: pointer;
+    z-index: 1002;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    user-select: none;
+    transition: background-color 0.2s, transform 0.2s;
+}
+
+.floating-close-btn:hover {
+    background: var(--close-btn-hover);
+    transform: scale(1.1);
+}
+
+.close-overlay {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 60px;
+    height: 60px;
+    cursor: pointer;
+    z-index: 1001;
+    opacity: 0;
+}
+
+/* Ensure dialog elements capture events */
+.source-dialog * {
+    pointer-events: auto;
+}
+
+/* ===== Syntax Highlighting Styles ===== */
+.source-content pre[class*="language-"] {
+    margin: 0;
+    padding: 0;
+    background: none;
+    border-radius: 0;
+    line-height: 1.5;
+}
+
+.source-content code[class*="language-"] {
+    font-family: 'Menlo', 'Consolas', monospace;
+    white-space: pre;
+    line-height: 1.5;
+}
+
+/* ===== Scrollbar Styling ===== */
+.source-content::-webkit-scrollbar {
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+}
+
+.source-content::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+}
+
+.source-content::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    border-radius: 4px;
+}
+
+/* Firefox scrollbar compatibility */
+.source-content {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* New comment styles - improved */
+.comment {
+    color: var(--comment-color);
+    margin-left: 10px;
+    font-style: italic;
+    cursor: pointer;
+    display: inline-block; /* Ensure it stays as a block */
+    padding: 2px 4px;
+    border-radius: 3px;
+    background-color: rgba(106, 153, 85, 0.1);
+    transition: all 0.2s ease;
+    user-select: none;
+    position: relative; /* 添加定位上下文 */
+    max-width: 500px; /* 限制宽度 */
+    vertical-align: middle;
+}
+
+.comment:hover {
+    color: var(--comment-hover);
+    background-color: rgba(106, 153, 85, 0.2);
+}
+
+.comment::before {
+    content: "💬 ";
+    opacity: 0.7;
+}
+
+.comment-preview {
+    display: inline-block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    vertical-align: middle;
+}
+
+.comment-full {
+    display: none;
+    white-space: pre-wrap; /* Handle line breaks properly */
+    word-break: break-word; /* Prevent overflow for long unbroken text */
+}
+
+.comment.expanded {
+    display: block;
+    max-width: 100%;
+    background-color: rgba(106, 153, 85, 0.15);
+    padding: 4px 6px;
+    margin-top: 5px;
+    margin-bottom: 5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.comment.expanded .comment-preview {
+    display: none !important;
+}
+
+.comment.expanded .comment-full {
+    display: block !important;
+}
+
+/* 确保黑暗主题下评论可见 */
+.dark-theme .comment {
+    background-color: rgba(106, 153, 85, 0.2);
+    color: #9fca82;
+}
+
+.dark-theme .comment:hover,
+.dark-theme .comment.expanded {
+    background-color: rgba(106, 153, 85, 0.3);
+    color: #b5e6a1;
+}
+
+/* ===== Overlay and modal isolation ===== */
+.source-dialog {
+    /* Existing properties */
+    z-index: 1000;
+    isolation: isolate;
+}
+
+/* Source preview code - prevent comment styles from affecting code highlighting */
+.source-container .code-content pre,
+.source-container .code-content code {
+    /* Ensure syntax highlighting is not affected by comment styles */
+    position: relative;
+    z-index: 1;
+}
+
+.source-container .code-content pre *,
+.source-container .code-content code * {
+    /* Prevent comment hover behaviors in code preview */
+    cursor: text;
+}
+
+/* Ensure comment styles don't affect syntax highlighting elements */
+.source-container .comment,
+.source-container [class*="comment"],
+.source-container [class*="token-comment"] {
+    /* Reset any styles that might interfere with syntax highlighting */
+    all: revert;
+    /* Use syntax highlighter's styles */
+    color: inherit;
+    background-color: transparent;
+    font-style: inherit;
+    cursor: text;
+    display: inline;
+    max-width: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+}
+
+.source-container .comment::before {
+    content: none;
+}
+
+.source-container .comment-preview,
+.source-container .comment-full {
+    display: inline;
+    white-space: inherit;
+    overflow: auto;
+}
+
+/* ===== Skeleton View Mode ===== */
+body.skeleton-mode #content .line,
+body.skeleton-mode #content .trace,
+body.skeleton-mode #content .var {
+    display: none;
+}
+
+/* Override for local detail view in skeleton mode */
+body.skeleton-mode #content .call-group.show-details .line,
+body.skeleton-mode #content .call-group.show-details .trace,
+body.skeleton-mode #content .call-group.show-details .var {
+    display: block;
+}

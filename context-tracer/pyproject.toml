@@ -1,0 +1,43 @@
+[project]
+name = "context-tracer"
+version = "0.1.0"
+description = "A powerful Python execution tracer for debugging and analysis, with an interactive HTML report."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "maliubiao", email = "maliubiao@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: System :: Monitoring",
+]
+
+dependencies = [
+    "pyyaml>=6.0.0",
+    "colorama>=0.4.6",
+    "pygments>=2.15.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=0.10.0",
+    "twine>=4.0.0",
+    "wheel"
+]
+
+[project.scripts]
+context-tracer = "context_tracer.tracer_main:debug_main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["context_tracer"]
+
+[tool.setuptools.package-data]
+context_tracer = ["*.js", "*.css"]
