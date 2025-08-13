@@ -63,6 +63,7 @@ class CallTreeHtmlRender:
         self._size_limit: int = 1024 * 1024 * 1024  # 100 MB
         self._current_size: int = 0
         self._size_exceeded: bool = False
+        self.line_comment: DefaultDict[str, List[Any]] = defaultdict(lambda: list())
         self._html_template: str = """
         <!DOCTYPE html>
         <html>
@@ -116,6 +117,7 @@ class CallTreeHtmlRender:
                 window.executedLines = {executed_lines_data};
                 window.sourceFiles = {source_files_data};
                 window.commentsData = {comments_data};
+                window.lineComment = {line_comment};
             </script>
         </body>
         </html>
@@ -355,12 +357,15 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
         else:
             # Pre-format the message to avoid duplicate formatting.
             message = log_data["template"].format(**log_data["data"])
-
         if color_type == TraceTypes.COLOR_LINE and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
             data: Dict[str, Any] = log_data["data"]
             original_filename: Optional[str] = data.get("original_filename")
             lineno: Optional[int] = data.get("lineno")
             frame_id: Optional[int] = data.get("frame_id")
+            if data.get("vars"):
+                self.line_comment[f"{frame_id}-{original_filename}-{lineno}"] = " # Debug: {vars}".format(
+                    vars=data["vars"]
+                )
             if original_filename and lineno is not None and frame_id is not None:
                 self._executed_lines[original_filename][frame_id].add(lineno)
                 self._load_source_file(original_filename)
@@ -416,6 +421,7 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
         executed_lines_json: str = json.dumps(executed_lines_data)
         source_files_json: str = json.dumps(self._source_files)
         comments_json: str = json.dumps(self._comments_data)
+        line_comment_json: str = json.dumps(self.line_comment)
 
         return self._html_template.format(
             title=title,
@@ -426,6 +432,7 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             executed_lines_data=executed_lines_json,
             source_files_data=source_files_json,
             comments_data=comments_json,
+            line_comment=line_comment_json,
         )
 
     def save_to_file(self, filename: str, is_multi_threaded: bool) -> Path:

@@ -606,7 +606,13 @@ const TraceViewer = {
             text = new TextDecoder('utf-8').decode(bytes);
             
             const lines = text.split('\n');
+
             const frameLines = frameId ? this.getFrameLines(filename, frameId) : null;
+            for(let lineNumber of frameLines.all) {
+                line_debug_comment = window.lineComment[`${frameId}-${filename}-${lineNumber}`]
+                lines[lineNumber-1] += line_debug_comment
+            }
+            text = lines.join("\n")
 
             // Setup dialog
             this.setupSourceDialog(dialog, titleDiv, sourceContent, filename, lineNumber);
@@ -627,7 +633,9 @@ const TraceViewer = {
                     container.querySelector('.line-numbers'),
                     container.querySelector('code'),
                     frameLines,
-                    lineNumber
+                    lineNumber,
+                    frameId,
+                    filename,
                 );
             }, 100);
         },
@@ -704,7 +712,7 @@ const TraceViewer = {
         },
         
         // Process source code after rendering
-        processSourceCode(lineNumbers, code, frameLines, lineNumber) {
+        processSourceCode(lineNumbers, code, frameLines, lineNumber, frameId, filename) {
             // Add loading indicator
             const loadingIndicator = document.createElement('div');
             loadingIndicator.style.position = 'absolute';
@@ -717,7 +725,7 @@ const TraceViewer = {
             loadingIndicator.style.borderRadius = '4px';
             loadingIndicator.textContent = 'Loading syntax highlighting...';
             lineNumbers.parentElement.appendChild(loadingIndicator);
-            
+
             const doHighlight = () => {
                 // 1. Syntax highlighting must be done first to create the final DOM for the code.
                 Prism.highlightElement(code);
