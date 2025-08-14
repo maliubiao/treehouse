@@ -780,25 +780,28 @@ Only produce JSON for lines that start with \`▷\`. Ignore CALL, RETURN, and ot
                             try {
                                 const ssePayload = JSON.parse(sseLine); // e.g., {event: 'content', data: '...'}
 
-                                if (ssePayload.event === "content" && typeof ssePayload.data === 'string') {
-                                    // Update received characters count for user feedback
-                                    receivedChars += ssePayload.data.length;
-                                    this.status.textContent = `Receiving explanation stream... (${receivedChars} chars)`;
+                                if (ssePayload.event === "content" || ssePayload.event === "thinking") {
+                                    if (typeof ssePayload.data === 'string') {
+                                        receivedChars += ssePayload.data.length;
+                                        this.status.textContent = `Receiving explanation stream... (${receivedChars} chars)`;
+                                    }
+                                    
+                                    if (ssePayload.event === "content" && typeof ssePayload.data === 'string') {
+                                        // 2. Append LLM's raw data to our content buffer
+                                        jsonContentBuffer += ssePayload.data;
 
-                                    // 2. Append LLM's raw data to our content buffer
-                                    jsonContentBuffer += ssePayload.data;
+                                        // 3. Try to extract complete JSON objects (delimited by newline)
+                                        const jsonObjectsRaw = jsonContentBuffer.split('\n');
+                                        jsonContentBuffer = jsonObjectsRaw.pop(); // Keep incomplete part for the next chunk
 
-                                    // 3. Try to extract complete JSON objects (delimited by newline)
-                                    const jsonObjectsRaw = jsonContentBuffer.split('\n');
-                                    jsonContentBuffer = jsonObjectsRaw.pop(); // Keep incomplete part for the next chunk
-
-                                    for (const jsonObjStr of jsonObjectsRaw) {
-                                        if (jsonObjStr.trim() === '') continue;
-                                        try {
-                                            const explanationData = JSON.parse(jsonObjStr);
-                                            this.renderExplanation(explanationData);
-                                        } catch (jsonError) {
-                                            console.warn('Failed to parse LLM-generated JSON object:', jsonObjStr, jsonError);
+                                        for (const jsonObjStr of jsonObjectsRaw) {
+                                            if (jsonObjStr.trim() === '') continue;
+                                            try {
+                                                const explanationData = JSON.parse(jsonObjStr);
+                                                this.renderExplanation(explanationData);
+                                            } catch (jsonError) {
+                                                console.warn('Failed to parse LLM-generated JSON object:', jsonObjStr, jsonError);
+                                            }
                                         }
                                     }
                                 } else if (ssePayload.event === "error") {
