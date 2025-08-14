@@ -610,7 +610,9 @@ const TraceViewer = {
             const frameLines = frameId ? this.getFrameLines(filename, frameId) : null;
             for(let lineNumber of frameLines.all) {
                 line_debug_comment = window.lineComment[`${frameId}-${filename}-${lineNumber}`]
-                lines[lineNumber-1] += line_debug_comment
+                if(line_debug_comment) {
+                  lines[lineNumber-1] += line_debug_comment;
+                }
             }
             text = lines.join("\n")
 
