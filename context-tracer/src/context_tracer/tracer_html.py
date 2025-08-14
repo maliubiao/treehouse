@@ -107,6 +107,32 @@ class CallTreeHtmlRender:
                 <button id="exportBtn">Export as HTML</button>
             </div>
             <div id="content">\n{content}\n</div>
+            
+            <!-- AI Explain Dialog -->
+            <div id="aiExplainDialog" class="ai-explain-dialog" style="display: none;">
+                <div class="ai-explain-dialog-content">
+                    <div class="ai-explain-header">
+                        <h2>🤖 AI Code Trace Explanation</h2>
+                        <span class="ai-explain-close-btn">&times;</span>
+                    </div>
+                    <div class="ai-explain-config">
+                        <label for="llmApiUrl">LLM API URL:</label>
+                        <input type="text" id="llmApiUrl" placeholder="e.g., http://127.0.0.1:8000">
+                        <label for="llmModelSelect">Model:</label>
+                        <select id="llmModelSelect"></select>
+                        <button id="llmSettingsSaveBtn">Save</button>
+                        <button id="llmFetchModelsBtn">Refresh Models</button>
+                    </div>
+                    <div class="ai-explain-body" id="aiExplainBody">
+                        <!-- Log content will be injected here -->
+                    </div>
+                    <div class="ai-explain-footer">
+                        <button id="startAiExplainBtn">Start Explanation</button>
+                        <span id="aiExplainStatus"></span>
+                    </div>
+                </div>
+            </div>
+
             <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
@@ -204,8 +230,10 @@ class CallTreeHtmlRender:
         if msg_type == TraceTypes.COLOR_CALL:
             copy_subtree_html = ' <span class="copy-subtree-btn" title="Copy subtree as text">📋</span>'
             focus_subtree_html = ' <span class="focus-subtree-btn" title="Focus on this subtree (crop)">🔍</span>'
+            # New AI Explain button
+            explain_ai_html = ' <span class="explain-ai-btn" title="Explain with AI">🤖</span>'
             toggle_details_html = ' <span class="toggle-details-btn" title="Show details for this subtree">👁️</span>'
-            actions_html = copy_subtree_html + focus_subtree_html + toggle_details_html
+            actions_html = copy_subtree_html + focus_subtree_html + explain_ai_html + toggle_details_html
 
         html_parts: List[str] = []
         if msg_type == TraceTypes.COLOR_CALL:

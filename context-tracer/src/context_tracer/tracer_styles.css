@@ -420,8 +420,8 @@ div[data-indent]:hover > .view-source-btn {
     display: inline;
 }
 
-/* Action Buttons: Copy Subtree, Focus Subtree, Toggle Details */
-.copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn {
+/* Action Buttons: Copy Subtree, Focus Subtree, Toggle Details, AI Explain */
+.copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn, .explain-ai-btn {
     display: none;
     margin-left: 8px;
     cursor: pointer;
@@ -431,7 +431,8 @@ div[data-indent]:hover > .view-source-btn {
 
 /* General action buttons appear on hover */
 .foldable:hover .copy-subtree-btn,
-.foldable:hover .focus-subtree-btn {
+.foldable:hover .focus-subtree-btn,
+.foldable:hover .explain-ai-btn {
     display: inline-block;
 }
 
@@ -667,4 +668,128 @@ body.skeleton-mode #content .call-group.show-details .line,
 body.skeleton-mode #content .call-group.show-details .trace,
 body.skeleton-mode #content .call-group.show-details .var {
     display: block;
+}
+
+/* ===== AI Explain Dialog Styles ===== */
+.ai-explain-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ai-explain-dialog-content {
+    background: var(--card-bg);
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: var(--dialog-shadow);
+    width: 85%;
+    max-width: 1200px;
+    height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.ai-explain-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+}
+
+.ai-explain-close-btn {
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    color: var(--text-color);
+}
+.ai-explain-close-btn:hover {
+    color: var(--error-color);
+}
+
+.ai-explain-config {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+.ai-explain-config label {
+    font-weight: bold;
+}
+.ai-explain-config input,
+.ai-explain-config select {
+    padding: 5px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+}
+.ai-explain-config input {
+    flex-grow: 1;
+    min-width: 250px;
+}
+.ai-explain-config select {
+    min-width: 150px;
+}
+
+.ai-explain-body {
+    flex-grow: 1;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    padding: 10px;
+    font-family: 'Menlo', 'Consolas', monospace;
+    white-space: pre-wrap;
+    line-height: 1.7;
+    background-color: var(--bg-color);
+}
+
+.ai-log-line-container {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 0;
+    border-bottom: 1px dashed rgba(128,128,128,0.2);
+}
+
+.ai-original-log {
+    white-space: pre; /* Keep original spacing */
+}
+
+.ai-explanation {
+    color: #27ae60; /* A nice green */
+    font-style: italic;
+    margin-top: 5px;
+    padding-left: 20px;
+    position: relative;
+}
+
+.dark-theme .ai-explanation {
+    color: #2ecc71;
+}
+
+.ai-explanation::before {
+    content: '🤖';
+    position: absolute;
+    left: 0;
+}
+
+.ai-explain-footer {
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#aiExplainStatus {
+    font-style: italic;
+    color: var(--line-color);
 }

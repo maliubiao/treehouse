@@ -402,6 +402,7 @@ class TraceDispatcher:
 
     def _handle_call_event(self, frame, _arg=None):
         """处理函数调用事件"""
+        self._logic.init_stack_variables()
         if self._logic.inside_unwanted_frame(frame):
             return self.trace_dispatch
         self._logic.maybe_unwanted_frame(frame)
@@ -611,6 +612,7 @@ class SysMonitoringTraceDispatcher:
 
     def handle_py_start(self, _code, _offset):
         """Handle PY_START event (function entry)"""
+        self._logic.init_stack_variables()
 
         frame = sys._getframe(1)  # Get the frame of the function being called
         if not self.is_target_frame(frame):

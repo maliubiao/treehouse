@@ -65,6 +65,7 @@ const TraceViewer = {
         this.initFocusSubtree();
         this.initSkeletonView();
         this.initToggleDetails();
+        this.initAiExplainer();
     },
 
     // Initialize folding functionality
@@ -510,6 +511,304 @@ const TraceViewer = {
                 toggleBtn.title = 'Show details for this subtree';
             }
         });
+    },
+
+    // Initialize AI Explainer functionality
+    initAiExplainer() {
+        const aiExplainer = {
+            dialog: document.getElementById('aiExplainDialog'),
+            closeBtn: document.querySelector('.ai-explain-close-btn'),
+            apiUrlInput: document.getElementById('llmApiUrl'),
+            modelSelect: document.getElementById('llmModelSelect'),
+            saveBtn: document.getElementById('llmSettingsSaveBtn'),
+            fetchModelsBtn: document.getElementById('llmFetchModelsBtn'),
+            startBtn: document.getElementById('startAiExplainBtn'),
+            body: document.getElementById('aiExplainBody'),
+            status: document.getElementById('aiExplainStatus'),
+            currentLogText: '',
+
+            init() {
+                // Event listener for the main "Explain AI" button (delegated)
+                TraceViewer.elements.content.addEventListener('click', e => {
+                    if (e.target.classList.contains('explain-ai-btn')) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.handleExplainClick(e.target);
+                    }
+                });
+                
+                // Dialog-specific event listeners
+                this.closeBtn.addEventListener('click', () => this.hide());
+                this.dialog.addEventListener('click', (e) => {
+                    if (e.target === this.dialog) {
+                        this.hide();
+                    }
+                });
+                this.saveBtn.addEventListener('click', () => this.saveSettings());
+                this.fetchModelsBtn.addEventListener('click', () => this.fetchModels());
+                this.startBtn.addEventListener('click', () => this.startExplanation());
+                
+                this.loadSettings();
+            },
+
+            loadSettings() {
+                const apiUrl = localStorage.getItem('llmApiUrl');
+                const model = localStorage.getItem('llmModel');
+                if (apiUrl) {
+                    this.apiUrlInput.value = apiUrl;
+                    this.fetchModels(model); // Fetch models and select the saved one
+                }
+            },
+            
+            saveSettings() {
+                const apiUrl = this.apiUrlInput.value;
+                const model = this.modelSelect.value;
+                localStorage.setItem('llmApiUrl', apiUrl);
+                localStorage.setItem('llmModel', model);
+                this.status.textContent = 'Settings saved!';
+                setTimeout(() => this.status.textContent = '', 2000);
+            },
+            
+            async fetchModels(savedModel = null) {
+                const baseUrl = this.apiUrlInput.value.trim();
+                if (!baseUrl) {
+                    alert('Please enter the LLM API URL first.');
+                    return;
+                }
+                
+                this.status.textContent = 'Fetching models...';
+                try {
+                    const response = await fetch(`${baseUrl}/models`);
+                    if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+                    const data = await response.json();
+                    
+                    if (data.error) throw new Error(data.error);
+
+                    this.modelSelect.innerHTML = '';
+                    (data.models || []).forEach(model => {
+                        const option = document.createElement('option');
+                        option.value = option.textContent = model;
+                        this.modelSelect.appendChild(option);
+                    });
+                    
+                    if (savedModel) {
+                        this.modelSelect.value = savedModel;
+                    }
+
+                    this.status.textContent = 'Models loaded.';
+                } catch (error) {
+                    this.status.textContent = `Error: ${error.message}`;
+                    console.error('Failed to fetch models:', error);
+                }
+            },
+
+            handleExplainClick(button) {
+                const foldable = button.closest('.foldable.call');
+                if (!foldable) return;
+
+                const callGroup = foldable.nextElementSibling;
+                if (!callGroup || !callGroup.classList.contains('call-group')) return;
+
+                // Use the same logic as copy subtree to get the text
+                const logText = this.getSubtreeText(foldable, callGroup);
+                this.show(logText);
+            },
+
+            getSubtreeText(foldable, callGroup) {
+                const lines = [];
+                const processNodeToText = (node) => {
+                    const clone = node.cloneNode(true);
+                    // Minimal cleanup for the prompt, remove UI buttons
+                    clone.querySelectorAll('.copy-subtree-btn, .focus-subtree-btn, .explain-ai-btn, .toggle-details-btn, .view-source-btn').forEach(b => b.remove());
+                    const text = clone.textContent.trim().replace(/\s+/g, ' ');
+                    const indent = parseInt(node.dataset.indent, 10) || 0;
+                    return ' '.repeat(indent) + text;
+                };
+
+                lines.push(processNodeToText(foldable));
+                callGroup.querySelectorAll('div[data-indent]').forEach(node => lines.push(processNodeToText(node)));
+                
+                let nextElement = callGroup.nextElementSibling;
+                while(nextElement) {
+                    if (nextElement.classList.contains('return')) {
+                        if ((parseInt(nextElement.dataset.indent, 10) || 0) === (parseInt(foldable.dataset.indent, 10) || 0)) {
+                            lines.push(processNodeToText(nextElement));
+                            break;
+                        }
+                    }
+                    if (nextElement.classList.contains('foldable')) break;
+                    nextElement = nextElement.nextElementSibling;
+                }
+                return lines.join('\n');
+            },
+
+            show(logText) {
+                this.currentLogText = logText;
+                this.body.innerHTML = '';
+                this.status.textContent = 'Ready to explain.';
+                
+                const lines = logText.split('\n');
+                lines.forEach((line, index) => {
+                    const container = document.createElement('div');
+                    container.className = 'ai-log-line-container';
+                    
+                    const originalLog = document.createElement('div');
+                    originalLog.className = 'ai-original-log';
+                    originalLog.textContent = line;
+                    
+                    const explanation = document.createElement('div');
+                    explanation.className = 'ai-explanation';
+                    explanation.style.display = 'none'; // Initially hidden
+                    
+                    // Try to extract line number for mapping
+                    const match = line.match(/▷\s*(\S+):(\d+)/);
+                    if (match) {
+                        const file = match[1];
+                        const lineNum = match[2];
+                        container.dataset.logKey = `${file}:${lineNum}:${index}`; // Add index for uniqueness
+                        explanation.id = `explanation-${file.replace(/[:/\\.]/g, '-')}-${lineNum}-${index}`;
+                    }
+
+                    container.appendChild(originalLog);
+                    container.appendChild(explanation);
+                    this.body.appendChild(container);
+                });
+
+                this.dialog.style.display = 'flex';
+            },
+
+            hide() {
+                this.dialog.style.display = 'none';
+            },
+            
+            async startExplanation() {
+                const baseUrl = this.apiUrlInput.value.trim();
+                const model = this.modelSelect.value;
+
+                if (!baseUrl || !model) {
+                    alert('Please configure API URL and select a model.');
+                    return;
+                }
+
+                // Reset previous explanations
+                this.body.querySelectorAll('.ai-explanation').forEach(el => {
+                    el.textContent = '';
+                    el.style.display = 'none';
+                });
+
+                const systemPrompt = `You are an expert code analysis assistant. Your task is to interpret a Python trace log and provide a clear, concise, line-by-line explanation in natural language (Chinese).
+
+The log contains lines prefixed with:
+- \`↘ CALL\`: Function call with arguments.
+- \`↗ RETURN\`: Function return with the result.
+- \`▷ filename:line_number source_code\`: A line of source code that was executed.
+- \`# Debug: {vars}\`: Variable values *after* the line was executed.
+
+**Your Goal:**
+For each \`▷ LINE\` entry, provide a simple, human-readable explanation of what that line of code does, using the variable values for context. Explain the *purpose* and *effect* of the line. Your explanation should be brief and to the point.
+
+**Output Format:**
+You MUST respond with a stream of JSON objects, one per line, where each line is a complete JSON object. Each JSON object should have the following structure:
+{
+  "file": "path/to/file.py", // The file path from the log line
+  "lineNumber": 123,        // The line number from the log line
+  "explanation": "..."      // Your natural language explanation for this line
+}
+
+Only produce JSON for lines that start with \`▷\`. Ignore CALL, RETURN, and other lines.
+
+**Example Input Log Snippet:**
+...
+▷ my_app/utils.py:15 my_list = [] # Debug: my_list=[]
+▷ my_app/utils.py:16 for i in range(2): # Debug: i=0
+▷ my_app/utils.py:17   my_list.append(i) # Debug: my_list=[0]
+▷ my_app/utils.py:16 for i in range(2): # Debug: i=1
+...
+
+**Example JSON Output Stream:**
+{"file": "my_app/utils.py", "lineNumber": 15, "explanation": "初始化一个名为 'my_list' 的空列表。"}
+{"file": "my_app/utils.py", "lineNumber": 16, "explanation": "开始一个循环，首次迭代变量 'i' 为 0。"}
+{"file": "my_app/utils.py", "lineNumber": 17, "explanation": "将 'i' (0) 添加到 'my_list'。"}
+{"file": "my_app/utils.py", "lineNumber": 16, "explanation": "循环继续，'i' 更新为 1。"}
+`;
+
+                const userPrompt = `Please analyze the following trace log:\n\n${this.currentLogText}`;
+                const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
+
+                this.status.textContent = 'Sending request to LLM...';
+                this.startBtn.disabled = true;
+
+                try {
+                    const response = await fetch(`${baseUrl}/ask?model=${encodeURIComponent(model)}`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ prompt: fullPrompt })
+                    });
+                    
+                    if (!response.ok || !response.body) throw new Error(`HTTP error! Status: ${response.status}`);
+                    
+                    this.status.textContent = 'Receiving explanation stream...';
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop(); // Keep the last, possibly incomplete, line
+
+                        for (const line of lines) {
+                            if (line.trim() === '') continue;
+                            try {
+                                const data = JSON.parse(line);
+                                if (data.event === "content" && data.data) {
+                                    // The actual explanation is nested inside the 'data' field
+                                    const explanationData = JSON.parse(data.data);
+                                    this.renderExplanation(explanationData);
+                                } else if (data.event === "error") {
+                                    throw new Error(data.data);
+                                } else if (data.event === "end") {
+                                    this.status.textContent = 'Explanation finished.';
+                                }
+                            } catch (e) {
+                                console.warn('Failed to parse explanation chunk:', line, e);
+                            }
+                        }
+                    }
+
+                } catch (error) {
+                    this.status.textContent = `Error: ${error.message}`;
+                    console.error('AI Explanation failed:', error);
+                } finally {
+                    this.startBtn.disabled = false;
+                }
+            },
+            
+            renderExplanation(data) {
+                if (!data.file || !data.lineNumber || !data.explanation) return;
+                
+                // Find all potential containers matching file and line number
+                const potentialContainers = this.body.querySelectorAll(`[data-log-key^="${data.file}:${data.lineNumber}:"]`);
+                
+                potentialContainers.forEach(container => {
+                    const explanationEl = container.querySelector('.ai-explanation');
+                    if (explanationEl && explanationEl.textContent === '') { // Render only if empty
+                        explanationEl.textContent = data.explanation;
+                        explanationEl.style.display = 'block';
+                        return; // Assume we found the right one for this pass
+                    }
+                });
+            }
+        };
+
+        // Initialize the module
+        aiExplainer.init();
+        // Attach to the main viewer object for debugging/scoping
+        TraceViewer.aiExplainer = aiExplainer;
     },
 
     // Adjust line number styles based on theme

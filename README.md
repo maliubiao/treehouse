@@ -429,7 +429,7 @@ python3.11及以下使用了一个c扩展
 
 #### 编译
 ```bash
-#python 3.11.11  uv python pin {version}, 最好3.11.11，因为cpp会访问python虚拟机内部数据，版本不对会崩
+#python 3.11.11  uv python pin {version}，因为cpp会访问python虚拟机内部数据，版本不对会崩
 cd treehouse; source .venv/bin/activate;
 cd debugger/cpp
 #编译不成功，到下边qq群交流, 如果文档内容不能复现，请到群里反馈
