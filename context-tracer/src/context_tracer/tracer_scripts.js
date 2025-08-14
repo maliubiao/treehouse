@@ -526,8 +526,10 @@ const TraceViewer = {
             body: document.getElementById('aiExplainBody'),
             status: document.getElementById('aiExplainStatus'),
             currentLogText: '',
+            abortController: null,
 
             init() {
+                this.abortController = null;
                 // Event listener for the main "Explain AI" button (delegated)
                 TraceViewer.elements.content.addEventListener('click', e => {
                     if (e.target.classList.contains('explain-ai-btn')) {
@@ -678,7 +680,13 @@ const TraceViewer = {
             },
 
             hide() {
+                if (this.abortController) {
+                    this.abortController.abort();
+                }
                 this.dialog.style.display = 'none';
+                this.body.innerHTML = '';
+                this.status.textContent = 'Ready to explain.';
+                this.startBtn.disabled = false;
             },
             
             async startExplanation() {
@@ -743,6 +751,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 const userPrompt = `Please analyze the following trace log:\n\n${this.currentLogText}`;
                 const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
 
+                this.abortController = new AbortController();
                 this.status.textContent = 'Sending request to LLM...';
                 this.startBtn.disabled = true;
 
@@ -750,7 +759,8 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     const response = await fetch(`${baseUrl}/ask?model=${encodeURIComponent(model)}`, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ prompt: fullPrompt })
+                        body: JSON.stringify({ prompt: fullPrompt }),
+                        signal: this.abortController.signal
                     });
                     
                     if (!response.ok || !response.body) throw new Error(`HTTP error! Status: ${response.status}`);
@@ -824,10 +834,16 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     }
 
                 } catch (error) {
-                    this.status.textContent = `Error: ${error.message}`;
-                    console.error('AI Explanation failed:', error);
+                    if (error.name === 'AbortError') {
+                        console.log('Fetch aborted by user.');
+                        // UI state is reset by hide()
+                    } else {
+                        this.status.textContent = `Error: ${error.message}`;
+                        console.error('AI Explanation failed:', error);
+                    }
                 } finally {
                     this.startBtn.disabled = false;
+                    this.abortController = null;
                 }
             },
             
