@@ -748,6 +748,7 @@ Only produce JSON for lines that start with \`▷\`. Ignore CALL, RETURN, and ot
                     if (!response.ok || !response.body) throw new Error(`HTTP error! Status: ${response.status}`);
                     
                     this.status.textContent = 'Receiving explanation stream...';
+                    let receivedChars = 0;
 
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
@@ -780,6 +781,10 @@ Only produce JSON for lines that start with \`▷\`. Ignore CALL, RETURN, and ot
                                 const ssePayload = JSON.parse(sseLine); // e.g., {event: 'content', data: '...'}
 
                                 if (ssePayload.event === "content" && typeof ssePayload.data === 'string') {
+                                    // Update received characters count for user feedback
+                                    receivedChars += ssePayload.data.length;
+                                    this.status.textContent = `Receiving explanation stream... (${receivedChars} chars)`;
+
                                     // 2. Append LLM's raw data to our content buffer
                                     jsonContentBuffer += ssePayload.data;
 
@@ -799,7 +804,7 @@ Only produce JSON for lines that start with \`▷\`. Ignore CALL, RETURN, and ot
                                 } else if (ssePayload.event === "error") {
                                     throw new Error(ssePayload.data);
                                 } else if (ssePayload.event === "end") {
-                                    this.status.textContent = 'Explanation finished.';
+                                    this.status.textContent = `Explanation finished. (Total ${receivedChars} chars)`;
                                 }
                             } catch (e) {
                                 console.warn('Failed to parse SSE line envelope:', sseLine, e);
