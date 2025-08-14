@@ -751,31 +751,58 @@ Only produce JSON for lines that start with \`▷\`. Ignore CALL, RETURN, and ot
 
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
-                    let buffer = '';
+                    let sseLineBuffer = '';
+                    let jsonContentBuffer = ''; // Buffer for the actual LLM content
 
                     while (true) {
                         const { value, done } = await reader.read();
-                        if (done) break;
-                        
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split('\n');
-                        buffer = lines.pop(); // Keep the last, possibly incomplete, line
-
-                        for (const line of lines) {
-                            if (line.trim() === '') continue;
-                            try {
-                                const data = JSON.parse(line);
-                                if (data.event === "content" && data.data) {
-                                    // The actual explanation is nested inside the 'data' field
-                                    const explanationData = JSON.parse(data.data);
+                        if (done) {
+                            // After stream ends, try to process any remaining content in the buffer
+                            if (jsonContentBuffer.trim()) {
+                                try {
+                                    const explanationData = JSON.parse(jsonContentBuffer);
                                     this.renderExplanation(explanationData);
-                                } else if (data.event === "error") {
-                                    throw new Error(data.data);
-                                } else if (data.event === "end") {
+                                } catch (e) {
+                                    console.warn('Failed to parse final LLM-generated JSON object:', jsonContentBuffer, e);
+                                }
+                            }
+                            break;
+                        }
+
+                        // 1. Process the raw stream for SSE lines (NDJSON in our case)
+                        sseLineBuffer += decoder.decode(value, { stream: true });
+                        const sseLines = sseLineBuffer.split('\n');
+                        sseLineBuffer = sseLines.pop(); // Keep the last, possibly incomplete, line
+
+                        for (const sseLine of sseLines) {
+                            if (sseLine.trim() === '') continue;
+                            try {
+                                const ssePayload = JSON.parse(sseLine); // e.g., {event: 'content', data: '...'}
+
+                                if (ssePayload.event === "content" && typeof ssePayload.data === 'string') {
+                                    // 2. Append LLM's raw data to our content buffer
+                                    jsonContentBuffer += ssePayload.data;
+
+                                    // 3. Try to extract complete JSON objects (delimited by newline)
+                                    const jsonObjectsRaw = jsonContentBuffer.split('\n');
+                                    jsonContentBuffer = jsonObjectsRaw.pop(); // Keep incomplete part for the next chunk
+
+                                    for (const jsonObjStr of jsonObjectsRaw) {
+                                        if (jsonObjStr.trim() === '') continue;
+                                        try {
+                                            const explanationData = JSON.parse(jsonObjStr);
+                                            this.renderExplanation(explanationData);
+                                        } catch (jsonError) {
+                                            console.warn('Failed to parse LLM-generated JSON object:', jsonObjStr, jsonError);
+                                        }
+                                    }
+                                } else if (ssePayload.event === "error") {
+                                    throw new Error(ssePayload.data);
+                                } else if (ssePayload.event === "end") {
                                     this.status.textContent = 'Explanation finished.';
                                 }
                             } catch (e) {
-                                console.warn('Failed to parse explanation chunk:', line, e);
+                                console.warn('Failed to parse SSE line envelope:', sseLine, e);
                             }
                         }
                     }
