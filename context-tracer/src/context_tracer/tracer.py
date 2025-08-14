@@ -983,31 +983,33 @@ class TraceLogic:
         self._file_cache = self._FileCache()
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
-        self.last_statement_vars = None
         self._last_vars_by_frame = {}  # Cache for tracking variable changes
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         if self.config.disable_html:
             self.disable_output("html")
         self._local = threading.local()
-        self._local.stack_depth = 0
-        self._local.bad_frame = None
+        self.init_stack_variables()
+
+    def init_stack_variables(self):
+        """初始化线程本地堆栈变量"""
+        if not hasattr(self._local, "stack_depth"):
+            self._local.stack_depth = 0
+        if not hasattr(self._local, "last_statement_vars"):
+            self._local.last_statement_vars = None
+        if not hasattr(self._local, "bad_frame"):
+            self._local.bad_frame = None
+        if not hasattr(self._local, "last_message"):
+            self._local.last_message = None
 
     def maybe_unwanted_frame(self, frame):
         if frame.f_code.co_name in self.config.exclude_functions and self._local.bad_frame is None:
-            if not hasattr(self._local, "bad_frame"):
-                self._local.bad_frame = None
-
             self._local.bad_frame = self.get_or_reuse_frame_id(frame)
 
     def leave_unwanted_frame(self, frame):
-        if not hasattr(self._local, "bad_frame"):
-            self._local.bad_frame = None
         if self.get_or_reuse_frame_id(frame) == self._local.bad_frame:
             self._local.bad_frame = None
 
     def inside_unwanted_frame(self, frame):
-        if not hasattr(self._local, "bad_frame"):
-            self._local.bad_frame = None
         return self._local.bad_frame is not None
 
     def decrement_stack_depth(self):
@@ -1201,8 +1203,7 @@ class TraceLogic:
 
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
+        self.init_stack_variables()
 
         try:
             args_info = []
@@ -1269,17 +1270,11 @@ class TraceLogic:
 
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
 
         return_str = truncate_repr_value(return_value)
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         frame_id = self.get_or_reuse_frame_id(frame)
-        all_traced_vars = {}
-        if self.config.enable_var_trace:
-            if self.last_statement_vars:
-                # Get the current values of variables from the *previous* statement
-                all_traced_vars = self.trace_variables(frame, self.last_statement_vars)
+
         log_data = {
             "template": "{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]",
             "data": {
@@ -1291,17 +1286,11 @@ class TraceLogic:
                 "func": frame.f_code.co_name,
                 "original_filename": frame.f_code.co_filename,
                 "thread_id": threading.get_native_id(),
-                "tracked_vars": all_traced_vars,
+                "tracked_vars": {},
             },
         }
-        if all_traced_vars:
-            log_data["template"] += " # Debug: {vars}"
-            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in all_traced_vars.items()])
-
-        self._add_to_buffer(
-            log_data,
-            TraceTypes.COLOR_RETURN,
-        )
+        # 使用统一的方法处理消息
+        self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_RETURN, need_delay_eval=False)
         self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
     def _get_var_ops(self, code_obj):
@@ -1366,7 +1355,7 @@ class TraceLogic:
             else:
                 try:
                     value = self.cache_eval(frame, var)  # nosec
-                except (AttributeError, NameError, SyntaxError):
+                except (AttributeError, NameError, SyntaxError) as err:
                     continue
             tracked_vars[var] = truncate_repr_value(value)
 
@@ -1374,12 +1363,10 @@ class TraceLogic:
 
     def handle_line(self, frame):
         """处理行事件，现在能够感知多行语句，并只报告变化的变量。"""
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
+        self.init_stack_variables()
 
         lineno = frame.f_lineno
         filename = frame.f_code.co_filename
-
         statement_info = get_statement_info(filename, lineno)
         if statement_info:
             full_statement, start_line, end_line = statement_info
@@ -1397,13 +1384,6 @@ class TraceLogic:
         formatted_filename = self._get_formatted_filename(filename)
         frame_id = self.get_or_reuse_frame_id(frame)
         self._message_id += 1
-        all_traced_vars = {}
-        if self.config.enable_var_trace:
-            if self.last_statement_vars:
-                # Get the current values of variables from the *previous* statement
-                all_traced_vars = self.trace_variables(frame, self.last_statement_vars)
-            # Determine variables for the *current* statement for the next trace
-            self.last_statement_vars = self._get_vars_in_range(frame.f_code, start_line, end_line)
 
         indented_statement = full_statement.replace("\n", "\n" + _INDENT * (self._local.stack_depth + 1))
 
@@ -1418,16 +1398,19 @@ class TraceLogic:
                 "raw_line": full_statement,
                 "frame_id": frame_id,
                 "original_filename": filename,
-                "tracked_vars": all_traced_vars,
+                "tracked_vars": {},
                 "thread_id": threading.get_native_id(),
             },
         }
-
-        if all_traced_vars:
-            log_data["template"] += " # Debug: {vars}"
-            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in all_traced_vars.items()])
-
-        self._add_to_buffer(log_data, TraceTypes.COLOR_LINE)
+        if self.config.enable_var_trace:
+            current_statement_vars = self._get_vars_in_range(frame.f_code, start_line, end_line)
+        else:
+            current_statement_vars = None
+        # 使用统一的方法处理消息
+        self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_LINE, need_delay_eval=current_statement_vars)
+        if self.config.enable_var_trace:
+            # Determine variables for the *current* statement for the next trace
+            self._local.last_statement_vars = current_statement_vars
 
         for i, line_content in enumerate(full_statement.split("\n")):
             current_line_no = start_line + i
@@ -1440,6 +1423,41 @@ class TraceLogic:
         if self.config.disable_html:
             return
         self._html_render.add_stack_variable_create(self._message_id, opcode, name, value)
+
+    def _process_message_with_vars(self, frame, log_data, color_type, need_delay_eval=False, is_exception=False):
+        """处理消息，包括变量跟踪和添加到缓冲区"""
+        # 1. 首先处理任何未决的延迟消息
+        if self._local.last_message:
+            pending_data, pending_color = self._local.last_message
+            self._local.last_message = None
+            # 尝试获取变量的当前值
+            if self._local.last_statement_vars:
+                all_traced_vars = self.trace_variables(frame, self._local.last_statement_vars)
+                if all_traced_vars:
+                    pending_data["template"] += " # Debug: {vars}"
+                    # 展开f-string以避免潜在问题
+                    var_strings = []
+                    for k, v in all_traced_vars.items():
+                        # 替换换行符并添加注释前缀
+                        formatted_value = v.replace("\n", "\n#")
+                        var_strings.append(k + "=" + formatted_value)
+                    pending_data["data"]["vars"] = ", ".join(var_strings)
+                    pending_data["data"]["tracked_vars"] = all_traced_vars
+            self._local.last_statement_vars = None
+            self._add_to_buffer(pending_data, pending_color)
+
+        # 2. 异常处理前确保处理完所有延迟消息
+        if is_exception:
+            # 异常发生时强制处理任何未完成的延迟消息
+            self.exception_chain.append((log_data, color_type))
+
+        # 3. 处理当前消息
+        elif need_delay_eval:
+            # 延迟当前消息（行事件）
+            self._local.last_message = (log_data, color_type)
+        else:
+            # 立即处理消息（返回/调用等事件）
+            self._add_to_buffer(log_data, color_type)
 
     def _process_trace_expression(self, frame, line, filename, lineno):
         """处理追踪表达式"""
@@ -1499,8 +1517,7 @@ class TraceLogic:
                     return
 
         # 初始化线程本地堆栈深度
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
+        self.init_stack_variables()
 
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
@@ -1509,11 +1526,6 @@ class TraceLogic:
         if len(self.exception_chain) > 0:
             if self.exception_chain[-1][0]["data"]["frame_id"] == frame_id:
                 return
-        all_traced_vars = {}
-        if self.config.enable_var_trace:
-            if self.last_statement_vars:
-                # Get the current values of variables from the *previous* statement
-                all_traced_vars = self.trace_variables(frame, self.last_statement_vars)
         log_data = {
             "template": (
                 "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
@@ -1528,22 +1540,20 @@ class TraceLogic:
                 "func": frame.f_code.co_name,
                 "original_filename": frame.f_code.co_filename,
                 "thread_id": threading.get_native_id(),
-                "tracked_vars": all_traced_vars,
+                "tracked_vars": {},
             },
         }
-        if all_traced_vars:
-            log_data["template"] += " # Debug: {vars}"
-            log_data["data"]["vars"] = ", ".join([f"{k}={v}" for k, v in all_traced_vars.items()])
-        msg = (
-            log_data,
-            TraceTypes.COLOR_EXCEPTION,
-        )
-        # 对于非 monitoring 模式，直接记录
-        if sys.version_info < (3, 12):
-            self._add_to_buffer(*msg)
+
+        # 对于 sys.monitoring 模式，需要特殊处理
+        if sys.version_info >= (3, 12):
+            self._process_message_with_vars(
+                frame, log_data, TraceTypes.COLOR_EXCEPTION, is_exception=True, need_delay_eval=False
+            )
         else:
-            self.exception_chain.append(msg)
-        # 不再在此处减少堆栈深度，将在PY_UNWIND事件中处理
+            # 对于非 sys.monitoring 模式，直接处理
+            self._process_message_with_vars(
+                frame, log_data, TraceTypes.COLOR_EXCEPTION, is_exception=False, need_delay_eval=False
+            )
 
     def handle_exception_was_handled(self, frame):
         """
@@ -1551,8 +1561,7 @@ class TraceLogic:
         这是 sys.monitoring 的 EXCEPTION_HANDLED 事件的钩子。
         """
         # 初始化线程本地堆栈深度
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
+        self.init_stack_variables()
 
         if len(self.exception_chain) > 0:
             # 最近引发的异常就是被处理的那个, 不算数
@@ -1561,8 +1570,7 @@ class TraceLogic:
 
     def handle_c_call(self, frame: Any, callable_obj: object, arg0: object) -> None:
         """Handles a call to a C function."""
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
+        self.init_stack_variables()
 
         try:
             func_name = callable_obj.__name__
@@ -1589,8 +1597,7 @@ class TraceLogic:
 
     def handle_c_return(self, frame: Any, callable_obj: object, arg0: object) -> None:
         """Handles the return from a C function."""
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
+        self.init_stack_variables()
         self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
         try:
@@ -1615,8 +1622,7 @@ class TraceLogic:
 
     def handle_c_raise(self, frame: Any, callable_obj: object, arg0: object) -> None:
         """Handles an exception raised from a C function."""
-        if not hasattr(self._local, "stack_depth"):
-            self._local.stack_depth = 0
+        self.init_stack_variables()
         self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
         try:
