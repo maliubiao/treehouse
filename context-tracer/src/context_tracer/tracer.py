@@ -746,8 +746,8 @@ class SysMonitoringTraceDispatcher:
 
     def is_target_frame(self, frame):
         """Check if frame matches target files"""
-        # if self.config.is_excluded_function(frame.f_code.co_name):
-        #     return
+        if self.config.is_excluded_function(frame.f_code.co_name):
+            return
         if frame.f_code.co_name.startswith("<genexpr>"):
             # one line code, ignore
             return False

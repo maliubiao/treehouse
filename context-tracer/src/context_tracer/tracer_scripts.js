@@ -61,6 +61,7 @@ const TraceViewer = {
         this.initSourceDialog();
         this.initKeyboardShortcuts();
         this.initCommentToggle();
+        this.initDebugVarsToggle(); // New UI toggle
         this.initCopySubtree();
         this.initFocusSubtree();
         this.initSkeletonView();
@@ -284,12 +285,35 @@ const TraceViewer = {
                 clone.querySelector('.focus-subtree-btn')?.remove();
                 clone.querySelector('.toggle-details-btn')?.remove();
                 clone.querySelector('.explain-ai-btn')?.remove();
+                
+                // Handle new debug vars UI
+                const debugVarsEl = clone.querySelector('.debug-vars');
+                let debugCommentText = '';
+                if (debugVarsEl) {
+                    const vars = [];
+                    // Use list-view as the reliable source of all vars
+                    debugVarsEl.querySelectorAll('.list-view .var-entry').forEach(entry => {
+                        const nameEl = entry.querySelector('.var-name');
+                        const valueEl = entry.querySelector('.var-value');
+                        if (nameEl && valueEl) {
+                            const name = nameEl.textContent.trim();
+                            const value = valueEl.textContent.trim();
+                            vars.push(`${name}=${value}`);
+                        }
+                    });
+                    if (vars.length > 0) {
+                        debugCommentText = ` # Debug: ${vars.join(', ')}`;
+                    }
+                    debugVarsEl.remove();
+                }
+
+                // Handle legacy comment UI
                 clone.querySelector('.comment')?.remove();
 
                 const text = clone.textContent.trim().replace(/\s+/g, ' ');
                 const indent = parseInt(node.dataset.indent, 10) || 0;
                 
-                return ' '.repeat(indent) + text;
+                return ' '.repeat(indent) + text + debugCommentText;
             };
 
             // Process the main foldable 'call' line itself
@@ -919,35 +943,19 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         }
     },
 
-    // Initialize comment toggle functionality
+    // Initialize comment toggle functionality (for legacy comments on call/return)
     initCommentToggle() {
         const content = this.elements.content;
         
-        // 使用事件委托模式，但增加更精确的判断
         content.addEventListener('click', e => {
-            // 检查是否点击了评论或其子元素
-            let target = e.target;
-            let isComment = target.classList.contains('comment') || 
-                             target.classList.contains('comment-preview') ||
-                             target.classList.contains('comment-full') ||
-                             target.closest('.comment');
-            
-            if (!isComment) return;
-            
-            // 找到评论根元素
-            const commentElement = target.classList.contains('comment') ? 
-                                  target : target.closest('.comment');
-            
+            const commentElement = e.target.closest('.comment');
             if (!commentElement) return;
             
-            // 阻止事件冒泡
             e.stopPropagation();
             e.preventDefault();
             
-            // 切换展开状态
             commentElement.classList.toggle('expanded');
             
-            // 如果展开，滚动到可见区域
             if (commentElement.classList.contains('expanded')) {
                 setTimeout(() => {
                     commentElement.scrollIntoView({behavior: 'smooth', block: 'nearest'});
@@ -955,6 +963,18 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             }
         });
     },
+
+    // Initialize new debug vars UI toggle functionality
+    initDebugVarsToggle() {
+        this.elements.content.addEventListener('click', e => {
+            const debugVars = e.target.closest('.debug-vars');
+            if (debugVars) {
+                e.stopPropagation();
+                debugVars.classList.toggle('expanded');
+            }
+        });
+    },
+
 
     // Source code viewer functionality
     sourceViewer: {

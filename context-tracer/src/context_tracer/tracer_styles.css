@@ -43,6 +43,12 @@
     /* New comment colors */
     --comment-color: #6a9955;
     --comment-hover: #4d7b3a;
+
+    /* New Debug Vars UI */
+    --debug-vars-bg: #eef1f3;
+    --debug-vars-border: #d6dde4;
+    --debug-vars-name-color: #9b59b6;
+    --debug-vars-value-color: #333;
 }
 
 /* Dark theme variables */
@@ -84,6 +90,12 @@
     /* Control elements - dark theme */
     --btn-bg: #0d47a1;
     --btn-hover: #1565c0;
+
+    /* New Debug Vars UI - dark theme */
+    --debug-vars-bg: #2d2d2d;
+    --debug-vars-border: #444;
+    --debug-vars-name-color: #ba68c8;
+    --debug-vars-value-color: #d4d4d4;
 }
 
 /* ===== Base Styles ===== */
@@ -534,20 +546,20 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
     scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
-/* New comment styles - improved */
+/* Legacy comment styles */
 .comment {
     color: var(--comment-color);
     margin-left: 10px;
     font-style: italic;
     cursor: pointer;
-    display: inline-block; /* Ensure it stays as a block */
+    display: inline-block;
     padding: 2px 4px;
     border-radius: 3px;
     background-color: rgba(106, 153, 85, 0.1);
     transition: all 0.2s ease;
     user-select: none;
-    position: relative; /* 添加定位上下文 */
-    max-width: 500px; /* 限制宽度 */
+    position: relative;
+    max-width: 500px;
     vertical-align: middle;
 }
 
@@ -572,8 +584,8 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
 
 .comment-full {
     display: none;
-    white-space: pre-wrap; /* Handle line breaks properly */
-    word-break: break-word; /* Prevent overflow for long unbroken text */
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .comment.expanded {
@@ -594,7 +606,6 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
     display: block !important;
 }
 
-/* 确保黑暗主题下评论可见 */
 .dark-theme .comment {
     background-color: rgba(106, 153, 85, 0.2);
     color: #9fca82;
@@ -604,6 +615,80 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
 .dark-theme .comment.expanded {
     background-color: rgba(106, 153, 85, 0.3);
     color: #b5e6a1;
+}
+
+
+/* ===== New Debug Vars UI Styles ===== */
+.debug-vars {
+    display: inline-block;
+    background-color: var(--debug-vars-bg);
+    border: 1px solid var(--debug-vars-border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin-left: 10px;
+    cursor: pointer;
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-style: normal;
+    font-size: 0.9em;
+    vertical-align: middle;
+    user-select: none;
+    transition: background-color 0.2s;
+}
+
+.debug-vars:hover {
+    background-color: var(--debug-vars-border);
+}
+
+.debug-vars .var-name {
+    color: var(--debug-vars-name-color);
+    font-weight: bold;
+}
+
+.debug-vars .var-value {
+    color: var(--debug-vars-value-color);
+}
+.debug-vars .var-value pre {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    background: none;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+
+.debug-vars .compact-view {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 500px; /* Limit width in compact mode */
+}
+
+.debug-vars .list-view {
+    display: none;
+    margin-top: 5px;
+    padding-left: 10px;
+}
+
+.debug-vars.expanded {
+    display: block;
+    padding: 8px;
+    max-width: 80%;
+}
+
+.debug-vars.expanded .list-view {
+    display: block;
+}
+
+.debug-vars.expanded .compact-view {
+    display: none;
+}
+
+.debug-vars .var-entry {
+    margin-bottom: 4px;
+    white-space: pre-wrap;
+    word-break: break-all;
 }
 
 /* ===== Overlay and modal isolation ===== */

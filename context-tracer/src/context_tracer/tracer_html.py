@@ -229,6 +229,18 @@ class CallTreeHtmlRender:
         """
         stripped_message = message.lstrip()
         indent = len(message) - len(stripped_message)
+
+        # Handle structured debug variables for LINE events
+        debug_vars_html = ""
+        if log_data and isinstance(log_data, dict) and "data" in log_data:
+            tracked_vars = log_data["data"].get("tracked_vars")
+            if tracked_vars:
+                debug_vars_html = self._build_debug_vars_html(tracked_vars)
+                # Remove the text version from the main message for HTML view
+                debug_part_str = " # Debug: "
+                if debug_part_str in stripped_message:
+                    stripped_message = stripped_message.split(debug_part_str, 1)[0]
+
         escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
 
         data: Dict[str, Any] = log_data.get("data", {}) if isinstance(log_data, dict) else {}
@@ -254,12 +266,15 @@ class CallTreeHtmlRender:
             toggle_details_html = ' <span class="toggle-details-btn" title="Show details for this subtree">👁️</span>'
             actions_html = copy_subtree_html + focus_subtree_html + explain_ai_html + toggle_details_html
 
+        # Combine all parts to be appended after the main content
+        appended_html = f"{view_source_html}{comment_html}{debug_vars_html}{actions_html}"
+
         html_parts: List[str] = []
         if msg_type == TraceTypes.COLOR_CALL:
             html_parts.extend(
                 [
                     f'<div class="foldable {TraceTypes.HTML_CALL}" {data_indent_attr} style="padding-left:{indent}px">',
-                    f"    {escaped_content}{view_source_html}{comment_html}{actions_html}",
+                    f"    {escaped_content}{appended_html}",
                     "</div>",
                     '<div class="call-group collapsed">',
                 ]
@@ -269,7 +284,7 @@ class CallTreeHtmlRender:
                 [
                     "</div>",
                     f'<div class="{TraceTypes.HTML_RETURN}" {data_indent_attr} style="padding-left:{indent}px">',
-                    f"    {escaped_content}{comment_html}",
+                    f"    {escaped_content}{appended_html}",
                     "</div>",
                 ]
             )
@@ -278,7 +293,7 @@ class CallTreeHtmlRender:
                 [
                     "</div>",
                     f'<div class="{TraceTypes.HTML_ERROR}" {data_indent_attr} style="padding-left:{indent}px">',
-                    f"    {escaped_content}{view_source_html}{comment_html}",
+                    f"    {escaped_content}{appended_html}",
                     "</div>",
                 ]
             )
@@ -286,7 +301,7 @@ class CallTreeHtmlRender:
             html_parts.extend(
                 [
                     f'<div class="{msg_type}" {data_indent_attr} style="padding-left:{indent}px">',
-                    f"    {escaped_content}{view_source_html}{comment_html}",
+                    f"    {escaped_content}{appended_html}",
                     "</div>",
                 ]
             )
@@ -297,6 +312,46 @@ class CallTreeHtmlRender:
             size_limit_mb = self._size_limit / (1024 * 1024)
             return f'<div class="{TraceTypes.HTML_ERROR}">⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略</div>\n'
         return html_content
+
+    def _build_debug_vars_html(self, variables: Dict[str, str]) -> str:
+        """
+        Builds the HTML for the interactive debug variables UI.
+
+        Args:
+            variables: A dictionary of variable names to their string representations.
+
+        Returns:
+            An HTML string for the debug variables container.
+        """
+        if not variables:
+            return ""
+
+        # 1. Generate compact view HTML
+        compact_items_html = []
+        for name, value in variables.items():
+            escaped_name = html.escape(name)
+            escaped_value = html.escape(value)
+            compact_items_html.append(
+                f'<span class="var-name">{escaped_name}</span>=<span class="var-value">{escaped_value}</span>'
+            )
+        compact_view_html = f'<div class="compact-view">{" ".join(compact_items_html)}</div>'
+
+        # 2. Generate list view HTML
+        list_items_html = []
+        for name, value in variables.items():
+            escaped_name = html.escape(name)
+            # Use <pre> for value to preserve formatting
+            escaped_value = f"<pre>{html.escape(value)}</pre>"
+            list_items_html.append(
+                f'<div class="var-entry"><span class="var-name">{escaped_name}</span>: <span class="var-value">{escaped_value}</span></div>'
+            )
+        list_view_html = f'<div class="list-view">{"".join(list_items_html)}</div>'
+
+        # 3. Combine into the final container
+        return f"""<div class="debug-vars" title="Click to expand/collapse">
+            {compact_view_html}
+            {list_view_html}
+        </div>"""
 
     def _build_comment_html(self, comment_id: str, comment: str) -> str:
         """
