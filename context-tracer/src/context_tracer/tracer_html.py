@@ -126,6 +126,25 @@ class CallTreeHtmlRender:
                     <div class="ai-explain-body" id="aiExplainBody">
                         <!-- Log content will be injected here -->
                     </div>
+
+                    <!-- Raw LLM Response Viewer -->
+                    <div class="llm-raw-response-viewer">
+                        <div class="llm-raw-response-header">
+                            <span>LLM Raw Response (for diagnosis)</span>
+                            <button id="llmRawResponseToggleBtn">Show</button>
+                        </div>
+                        <div class="llm-raw-response-content" id="llmRawResponseContent" style="display: none;">
+                            <div class="llm-panel">
+                                <h4>Thinking</h4>
+                                <pre id="llmThinkingOutput"></pre>
+                            </div>
+                            <div class="llm-panel">
+                                <h4>Content</h4>
+                                <pre id="llmContentOutput"></pre>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="ai-explain-footer">
                         <button id="startAiExplainBtn">Start Explanation</button>
                         <span id="aiExplainStatus"></span>

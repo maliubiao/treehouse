@@ -724,7 +724,11 @@ class SysMonitoringTraceDispatcher:
         if hasattr(callable_obj, "__code__"):
             return  # This is a Python function, PY_START will handle it.
 
+        # It's a C-call
         frame = sys._getframe(1)  # Caller's frame
+        if not self.is_target_frame(frame):
+            return
+
         # No need to check is_target_frame, assume we trace return if we trace call.
         self._logic.handle_c_return(frame, callable_obj, retval)
 
@@ -734,7 +738,10 @@ class SysMonitoringTraceDispatcher:
         if hasattr(callable_obj, "__code__"):
             return  # This is a Python function, PY_START will handle it.
 
+        # It's a C-call
         frame = sys._getframe(1)  # Caller's frame
+        if not self.is_target_frame(frame):
+            return
         self._logic.handle_c_raise(frame, callable_obj, exception)
 
     def is_target_frame(self, frame):

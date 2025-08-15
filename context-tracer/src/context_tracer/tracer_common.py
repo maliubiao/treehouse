@@ -113,8 +113,8 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
             if len(value) > _MAX_VALUE_LENGTH:
                 half = _MAX_VALUE_LENGTH // 2
                 omitted = len(value) - 2 * half
-                return value[:half] + "..." + value[-half:] + f" (total length: {len(value)}, omitted: {omitted})"
-            return value
+                return f'"{value[:half]}...{value[-half:]}" (total length: {len(value)}, omitted: {omitted})'
+            return f'"{value}"'
         elif callable(value):
             if hasattr(value, "__code__"):
                 return f"callable: {str(inspect.signature(value))}"

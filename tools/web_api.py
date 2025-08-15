@@ -316,7 +316,8 @@ async def ask_llm(
     logger.info(f"Using model: {selected_model}")
 
     context_processor = GPTContextProcessor()
-    processed_prompt = context_processor.process_text(prompt)
+    processed_prompt = prompt
+    # processed_prompt = context_processor.process_text(prompt)
 
     async def sse_generator():
         try:

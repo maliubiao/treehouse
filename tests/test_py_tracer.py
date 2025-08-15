@@ -627,7 +627,7 @@ class TestTraceLogic(BaseTracerTest):
         self.assertEqual(self.logic._add_to_buffer.call_count, 2)
         last_call_args = self.logic._add_to_buffer.call_args_list[1][0]
         log_data = last_call_args[0]
-        self.assertIn("↳ Debug Statement c=small", self.logic._format_log_message(log_data))
+        self.assertIn('↳ Debug Statement c="small"', self.logic._format_log_message(log_data))
         self.assertEqual(frame.f_locals.get("c"), "small")
 
     def test_handle_exception(self):

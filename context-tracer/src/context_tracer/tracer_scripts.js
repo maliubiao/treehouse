@@ -283,6 +283,7 @@ const TraceViewer = {
                 clone.querySelector('.copy-subtree-btn')?.remove();
                 clone.querySelector('.focus-subtree-btn')?.remove();
                 clone.querySelector('.toggle-details-btn')?.remove();
+                clone.querySelector('.explain-ai-btn')?.remove();
                 clone.querySelector('.comment')?.remove();
 
                 const text = clone.textContent.trim().replace(/\s+/g, ' ');
@@ -525,6 +526,13 @@ const TraceViewer = {
             startBtn: document.getElementById('startAiExplainBtn'),
             body: document.getElementById('aiExplainBody'),
             status: document.getElementById('aiExplainStatus'),
+            
+            // Raw response elements
+            rawResponseToggleBtn: document.getElementById('llmRawResponseToggleBtn'),
+            rawResponseContent: document.getElementById('llmRawResponseContent'),
+            thinkingOutput: document.getElementById('llmThinkingOutput'),
+            contentOutput: document.getElementById('llmContentOutput'),
+
             currentLogText: '',
             abortController: null,
 
@@ -549,6 +557,15 @@ const TraceViewer = {
                 this.saveBtn.addEventListener('click', () => this.saveSettings());
                 this.fetchModelsBtn.addEventListener('click', () => this.fetchModels());
                 this.startBtn.addEventListener('click', () => this.startExplanation());
+                
+                // Raw response toggle
+                if (this.rawResponseToggleBtn) {
+                    this.rawResponseToggleBtn.addEventListener('click', () => {
+                        const isHidden = this.rawResponseContent.style.display === 'none';
+                        this.rawResponseContent.style.display = isHidden ? 'flex' : 'none';
+                        this.rawResponseToggleBtn.textContent = isHidden ? 'Hide' : 'Show';
+                    });
+                }
                 
                 this.loadSettings();
             },
@@ -649,6 +666,12 @@ const TraceViewer = {
                 this.body.innerHTML = '';
                 this.status.textContent = 'Ready to explain.';
                 
+                // Reset raw response viewer
+                this.thinkingOutput.textContent = '';
+                this.contentOutput.textContent = '';
+                this.rawResponseContent.style.display = 'none';
+                this.rawResponseToggleBtn.textContent = 'Show';
+
                 const lines = logText.split('\n');
                 lines.forEach((line, index) => {
                     const container = document.createElement('div');
@@ -698,11 +721,14 @@ const TraceViewer = {
                     return;
                 }
 
-                // Reset previous explanations
+                // Reset previous explanations and raw outputs
                 this.body.querySelectorAll('.ai-explanation').forEach(el => {
                     el.textContent = '';
                     el.style.display = 'none';
                 });
+                this.thinkingOutput.textContent = '';
+                this.contentOutput.textContent = '';
+
 
                 const systemPrompt = `You are a highly specialized code analysis assistant. Your mission is to provide **concrete, data-driven explanations** for a Python trace log. You must explain what the code *actually did* with its runtime data, not just what the code *does* in general.
 
@@ -797,14 +823,21 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                             if (sseLine.trim() === '') continue;
                             try {
                                 const ssePayload = JSON.parse(sseLine); // e.g., {event: 'content', data: '...'}
-
-                                if (ssePayload.event === "content" || ssePayload.event === "thinking") {
+                                
+                                if (ssePayload.event === "thinking") {
+                                    if (typeof ssePayload.data === 'string') {
+                                        this.thinkingOutput.textContent += ssePayload.data;
+                                        this.thinkingOutput.scrollTop = this.thinkingOutput.scrollHeight;
+                                    }
+                                } else if (ssePayload.event === "content" || ssePayload.event === "thinking") {
                                     if (typeof ssePayload.data === 'string') {
                                         receivedChars += ssePayload.data.length;
                                         this.status.textContent = `Receiving explanation stream... (${receivedChars} chars)`;
                                     }
                                     
                                     if (ssePayload.event === "content" && typeof ssePayload.data === 'string') {
+                                        this.contentOutput.textContent += ssePayload.data;
+                                        this.contentOutput.scrollTop = this.contentOutput.scrollHeight;
                                         // 2. Append LLM's raw data to our content buffer
                                         jsonContentBuffer += ssePayload.data;
 
