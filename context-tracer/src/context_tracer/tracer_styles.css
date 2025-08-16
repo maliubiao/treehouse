@@ -381,6 +381,11 @@ button:hover {
     white-space: pre;
 }
 
+/* New rule to ensure each source line is a block for accurate height measurement */
+.code-content .source-line {
+    display: block;
+}
+
 .code-content pre {
     margin: 0;
     padding: 0;
