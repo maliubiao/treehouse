@@ -1330,7 +1330,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                             const data = JSON.parse(jsonData);
                             const debugEl = this.createDebugVarsElementForSourceView(data);
                             if (debugEl && comment.parentNode) {
-                                // Replace the comment span with the debug info div
                                 comment.parentNode.replaceChild(debugEl, comment);
                             }
                         } catch (e) {

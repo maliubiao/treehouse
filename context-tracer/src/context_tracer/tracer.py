@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
