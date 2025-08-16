@@ -398,14 +398,24 @@ class StepHandler:
         return source_info, source_line, resolved_filepath
 
     def _build_source_info_string(self, original_path: str, resolved_path: str, line_num: int, column: int) -> str:
-        """构建源信息字符串"""
+        """构建源信息字符串，智能选择绝对或相对路径"""
+        filepath = resolved_path or original_path
 
-        source_base_dir = self.tracer.config_manager.get_source_base_dir()
-        if source_base_dir and resolved_path and resolved_path.startswith(source_base_dir):
-            # Make path relative to source_base_dir for shorter output
-            filepath = os.path.relpath(resolved_path, source_base_dir)
-        else:
-            filepath = resolved_path or original_path
+        if resolved_path:  # Only try to make relative if we have a resolved path
+            # 优先：相对于 source_base_dir
+            source_base_dir = self.tracer.config_manager.get_source_base_dir()
+            if source_base_dir and resolved_path.startswith(source_base_dir):
+                filepath = os.path.relpath(resolved_path, source_base_dir)
+            else:
+                # 其次：相对于当前工作目录
+                try:
+                    cwd = os.getcwd()
+                    if resolved_path.startswith(cwd):
+                        filepath = os.path.relpath(resolved_path, cwd)
+                except (AttributeError, ValueError):
+                    # In case of error, filepath remains resolved_path
+                    pass
+
         if line_num <= 0:
             return f"{filepath}:<no line>"
         return f"{filepath}:{line_num}:{column}" if column > 0 else f"{filepath}:{line_num}"
