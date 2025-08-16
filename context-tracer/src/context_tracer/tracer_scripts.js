@@ -1285,25 +1285,15 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 // 1. Syntax highlighting must be done first to create the final DOM for the code.
                 Prism.highlightElement(code);
 
-                // 1.5. Post-process the highlighted HTML to wrap each line in a span for reliable access.
-                // This makes the logic resilient to changes in Prism's output structure.
-                let linesHTML = code.innerHTML.split('\n');
-                // If the code ends with a newline, split() will produce an empty string at the end. Remove it.
-                if (linesHTML.length > 1 && linesHTML[linesHTML.length - 1] === '') {
-                    linesHTML.pop();
-                }
-                // Wrap each line's HTML content in a span. Use a non-breaking space for empty lines to ensure they have height.
-                code.innerHTML = linesHTML.map(line => `<span class="code-line">${line || '&nbsp;'}</span>`).join('');
-                
-                const codeLines = code.querySelectorAll('.code-line');
-                
-                // Ensure spans behave like lines by taking up the full width.
-                codeLines.forEach(line => line.style.display = 'block');
-                
                 // 2. Synchronize line heights based on the now-highlighted code.
-                this.synchronizeWithPrismLines(lineNumbers, codeLines);
+                const codeLines = code.querySelectorAll('.token-line, .line');
+                if (!codeLines || codeLines.length === 0) {
+                    this.synchronizeLineHeights(lineNumbers, code.parentElement);
+                } else {
+                    this.synchronizeWithPrismLines(lineNumbers, codeLines);
+                }
 
-                // 3. Inject debug info non-invasively into the newly created line spans.
+                // NEW: Inject debug info non-invasively
                 if (frameLines && codeLines.length > 0) {
                     frameLines.all.forEach(lineNum => {
                         const lineIdx = lineNum - 1;
@@ -1313,7 +1303,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                             if (commentData) {
                                 const debugEl = this.createDebugVarsElementForSourceView(commentData);
                                 if (debugEl) {
-                                    // Append to the span that holds the line's code.
+                                    // Append to the span that holds the line's code, not the line number div
                                     codeLines[lineIdx].appendChild(debugEl);
                                 }
                             }
