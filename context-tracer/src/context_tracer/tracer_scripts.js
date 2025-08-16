@@ -1282,46 +1282,18 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             lineNumbers.parentElement.appendChild(loadingIndicator);
 
             const doHighlight = () => {
-                // 1. Syntax highlighting.
+                // 1. Syntax highlighting must be done first to create the final DOM for the code.
                 Prism.highlightElement(code);
 
-                // 2. Robustly wrap each line of code in a <span> to ensure a consistent structure
-                // for synchronizing with line numbers and injecting debug information. This handles
-                // cases where Prism plugins don't automatically create line-by-line structures.
-                const nodes = Array.from(code.childNodes);
-                const linesFragment = document.createDocumentFragment();
-                let currentLineWrapper = document.createElement('span');
-                currentLineWrapper.className = 'line';
-                linesFragment.appendChild(currentLineWrapper);
+                // 2. Synchronize line heights based on the now-highlighted code.
+                const codeLines = code.querySelectorAll('.token-line, .line');
+                if (!codeLines || codeLines.length === 0) {
+                    this.synchronizeLineHeights(lineNumbers, code.parentElement);
+                } else {
+                    this.synchronizeWithPrismLines(lineNumbers, codeLines);
+                }
 
-                nodes.forEach(node => {
-                    if (node.nodeType === Node.TEXT_NODE) {
-                        const parts = node.nodeValue.split('\n');
-                        if (parts[0]) {
-                            currentLineWrapper.appendChild(document.createTextNode(parts[0]));
-                        }
-                        for (let i = 1; i < parts.length; i++) {
-                            currentLineWrapper = document.createElement('span');
-                            currentLineWrapper.className = 'line';
-                            linesFragment.appendChild(currentLineWrapper);
-                            if (parts[i]) {
-                                currentLineWrapper.appendChild(document.createTextNode(parts[i]));
-                            }
-                        }
-                    } else {
-                        // It's an element (like a token span), move it to the current line.
-                        currentLineWrapper.appendChild(node);
-                    }
-                });
-
-                code.innerHTML = '';
-                code.appendChild(linesFragment);
-                const codeLines = Array.from(code.children);
-
-                // 3. Synchronize line heights based on the now-structured code lines.
-                this.synchronizeWithPrismLines(lineNumbers, codeLines);
-
-                // 4. Inject debug info. This now works reliably.
+                // NEW: Inject debug info non-invasively
                 if (frameLines && codeLines.length > 0) {
                     frameLines.all.forEach(lineNum => {
                         const lineIdx = lineNum - 1;
@@ -1331,7 +1303,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                             if (commentData) {
                                 const debugEl = this.createDebugVarsElementForSourceView(commentData);
                                 if (debugEl) {
-                                    // Append to the span that holds the line's code
+                                    // Append to the span that holds the line's code, not the line number div
                                     codeLines[lineIdx].appendChild(debugEl);
                                 }
                             }
@@ -1339,7 +1311,8 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     });
                 }
 
-                // 5. Highlight all lines that were executed in this frame.
+
+                // 3. Highlight all lines that were executed in this frame.
                 if (frameLines) {
                     frameLines.all.forEach(line => {
                         const lineElement = lineNumbers.querySelector(`.line-number[data-line="${line}"]`);
@@ -1349,12 +1322,13 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     });
                 }
 
-                // 6. Highlight the specific line that triggered the 'view source' action.
+                // 4. Highlight the specific line that triggered the 'view source' action.
                 const targetLine = lineNumbers.querySelector(`.line-number[data-line="${lineNumber}"]`);
                 if (targetLine) {
                     targetLine.classList.add('current-line');
                     
-                    // 7. Scroll the single parent container to the target line.
+                    // 5. Scroll the single parent container to the target line.
+                    // This is robust because there is only one scrollable container.
                     targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
                 
