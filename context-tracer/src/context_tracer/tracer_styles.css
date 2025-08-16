@@ -964,7 +964,7 @@ body.skeleton-mode #content .call-group.show-details .var {
 }
 .multi-line-container .code-full .multi-line-prefix {
     /* Style for the prefix (▷ file:line) inside the full view */
-    display: none;
+    /* display: none; */ /* Removed to show prefix in expanded view */
 }
 .multi-line-container .code-full pre {
     margin: 0;

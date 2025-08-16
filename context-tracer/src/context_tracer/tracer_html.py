@@ -257,7 +257,7 @@ class CallTreeHtmlRender:
             escaped_raw_statement = html.escape(raw_statement)
 
             escaped_content = f"""<div class="multi-line-container">
-                <span class="code-preview">{escaped_prefix}{escaped_first_line}... <span class="expand-code-btn" title="Toggle view">[+]</span></span>
+                <span class="code-preview">{escaped_prefix}{escaped_first_line}... </span><span class="expand-code-btn" title="Toggle view">[+]</span>
                 <div class="code-full">
                     <span class="multi-line-prefix">{escaped_prefix}</span>
                     <pre class="language-python"><code>{escaped_raw_statement}</code></pre>
