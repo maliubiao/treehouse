@@ -18,7 +18,9 @@ const TraceViewer = {
             { value: 'prism-ghcolors', label: 'GitHub', isDark: false },
             { value: 'prism-pojoaque', label: 'Pojoaque', isDark: true },
             { value: 'prism-xonokai', label: 'Xonokai', isDark: true }
-        ]
+        ],
+        INITIAL_LOAD_MAX_LINES: 2000, // Max lines to show on smart "Expand All"
+        SMART_EXPAND_THRESHOLD: 1000,  // Subtrees smaller than this will be fully expanded on click
     },
 
     // Utilities
@@ -54,6 +56,7 @@ const TraceViewer = {
         };
 
         // Initialize components
+        this.calculateSubtreeSizes(); // Must run before initFolding
         this.initFolding();
         this.initSearch();
         this.initExport();
@@ -61,12 +64,26 @@ const TraceViewer = {
         this.initSourceDialog();
         this.initKeyboardShortcuts();
         this.initCommentToggle();
-        this.initDebugVarsToggle(); // New UI toggle
+        this.initDebugVarsToggle();
         this.initCopySubtree();
         this.initFocusSubtree();
         this.initSkeletonView();
         this.initToggleDetails();
         this.initAiExplainer();
+    },
+
+    // Pre-calculates the size of each foldable section for smart expansion
+    calculateSubtreeSizes() {
+        const foldables = this.elements.content.querySelectorAll('.foldable.call');
+        foldables.forEach(foldable => {
+            const callGroup = foldable.nextElementSibling;
+            if (callGroup && callGroup.classList.contains('call-group')) {
+                const descendantCount = callGroup.querySelectorAll('div[data-indent]').length;
+                foldable.dataset.subtreeSize = descendantCount;
+            } else {
+                foldable.dataset.subtreeSize = 0;
+            }
+        });
     },
 
     // Initialize folding functionality
@@ -76,42 +93,94 @@ const TraceViewer = {
         // Toggle folding on click
         content.addEventListener('click', e => {
             if (e.target.classList.contains('foldable')) {
-                e.target.classList.toggle('expanded');
-                const group = e.target.nextElementSibling;
-                if (group && group.classList.contains('call-group')) {
-                    group.classList.toggle('collapsed');
-                }
+                this.toggleFoldable(e.target);
             }
         });
 
-        // Expand all button
+        // Smart expand all button
         if (expandAllBtn) {
-            expandAllBtn.addEventListener('click', () => {
-                const foldables = content.querySelectorAll('.foldable');
-                foldables.forEach(el => {
-                    el.classList.add('expanded');
-                    const group = el.nextElementSibling;
-                    if (group && group.classList.contains('call-group')) {
-                        group.classList.remove('collapsed');
-                    }
-                });
-            });
+            expandAllBtn.addEventListener('click', () => this.smartExpandAll());
         }
 
         // Collapse all button
         if (collapseAllBtn) {
             collapseAllBtn.addEventListener('click', () => {
-                const foldables = content.querySelectorAll('.foldable');
-                foldables.forEach(el => {
-                    el.classList.remove('expanded');
-                    const group = el.nextElementSibling;
-                    if (group && group.classList.contains('call-group')) {
-                        group.classList.add('collapsed');
-                    }
-                });
+                const foldables = content.querySelectorAll('.foldable.expanded');
+                foldables.forEach(el => this.collapseSubtree(el));
             });
         }
     },
+
+    // Toggles a single foldable element's state
+    toggleFoldable(foldable) {
+        if (foldable.classList.contains('expanded')) {
+            this.collapseSubtree(foldable);
+        } else {
+            this.expandSubtree(foldable);
+        }
+    },
+
+    // Expands a subtree, intelligently deciding between full and partial expansion
+    expandSubtree(foldable) {
+        const callGroup = foldable.nextElementSibling;
+        if (!callGroup || !callGroup.classList.contains('call-group')) return;
+
+        foldable.classList.add('expanded');
+        callGroup.classList.remove('collapsed');
+
+        const subtreeSize = parseInt(foldable.dataset.subtreeSize, 10) || 0;
+        // If the subtree is small enough, perform a full recursive expansion for convenience
+        if (subtreeSize > 0 && subtreeSize < this.config.SMART_EXPAND_THRESHOLD) {
+            const children = callGroup.querySelectorAll('.foldable.call');
+            children.forEach(child => this.expandSubtree(child));
+        }
+        // For large subtrees, only the first level is expanded by the lines above.
+    },
+
+    // Recursively collapses a subtree
+    collapseSubtree(foldable) {
+        foldable.classList.remove('expanded');
+        const callGroup = foldable.nextElementSibling;
+        if (!callGroup || !callGroup.classList.contains('call-group')) return;
+
+        callGroup.classList.add('collapsed');
+        
+        // Also recursively collapse any children that were open
+        const children = callGroup.querySelectorAll('.foldable.call.expanded');
+        children.forEach(child => this.collapseSubtree(child));
+    },
+
+    // Expands top-level items level by level until a line threshold is met
+    smartExpandAll() {
+        let visibleCount = 0;
+        // Get only top-level nodes to start the breadth-first expansion
+        const queue = Array.from(this.elements.content.children)
+                           .filter(el => el.classList.contains('foldable'));
+
+        // Start with a clean slate
+        this.elements.content.querySelectorAll('.foldable.expanded').forEach(f => this.collapseSubtree(f));
+
+        while (queue.length > 0 && visibleCount < this.config.INITIAL_LOAD_MAX_LINES) {
+            const current = queue.shift();
+            if (current.classList.contains('expanded')) continue;
+
+            current.classList.add('expanded');
+            const callGroup = current.nextElementSibling;
+            
+            if (callGroup && callGroup.classList.contains('call-group')) {
+                callGroup.classList.remove('collapsed');
+                
+                // Add the number of newly visible lines to the count
+                visibleCount += callGroup.children.length;
+
+                // Add direct children to the end of the queue for breadth-first processing
+                const directChildren = Array.from(callGroup.children)
+                                          .filter(el => el.classList.contains('foldable'));
+                queue.push(...directChildren);
+            }
+        }
+    },
+
 
     // Initialize search functionality
     initSearch() {
