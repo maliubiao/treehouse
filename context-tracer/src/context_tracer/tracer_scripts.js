@@ -65,6 +65,7 @@ const TraceViewer = {
         this.initKeyboardShortcuts();
         this.initCommentToggle();
         this.initDebugVarsToggle();
+        this.initMultiLineToggle();
         this.initCopySubtree();
         this.initFocusSubtree();
         this.initSkeletonView();
@@ -354,7 +355,21 @@ const TraceViewer = {
                 clone.querySelector('.focus-subtree-btn')?.remove();
                 clone.querySelector('.toggle-details-btn')?.remove();
                 clone.querySelector('.explain-ai-btn')?.remove();
-                
+                clone.querySelector('.expand-code-btn')?.remove();
+            
+                let text;
+                const multiLineContainer = clone.querySelector('.multi-line-container');
+            
+                if (multiLineContainer) {
+                    const prefixEl = multiLineContainer.querySelector('.multi-line-prefix');
+                    const codeEl = multiLineContainer.querySelector('.code-full code');
+                    const prefix = prefixEl ? prefixEl.textContent : '';
+                    const code = codeEl ? codeEl.textContent : '';
+                    text = prefix + code;
+                } else {
+                    text = clone.textContent.trim().replace(/\s+/g, ' ');
+                }
+
                 // Handle new debug vars UI
                 const debugVarsEl = clone.querySelector('.debug-vars');
                 let debugCommentText = '';
@@ -378,11 +393,12 @@ const TraceViewer = {
 
                 // Handle legacy comment UI
                 clone.querySelector('.comment')?.remove();
-
-                const text = clone.textContent.trim().replace(/\s+/g, ' ');
+                
                 const indent = parseInt(node.dataset.indent, 10) || 0;
                 
-                return ' '.repeat(indent) + text + debugCommentText;
+                // For multi-line text, indent each line correctly
+                const indentedLines = text.trim().split('\n').map(line => ' '.repeat(indent) + line);
+                return indentedLines.join('\n') + debugCommentText;
             };
 
             // Process the main foldable 'call' line itself
@@ -1044,6 +1060,29 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         });
     },
 
+    // Initialize multi-line statement toggle functionality
+    initMultiLineToggle() {
+        this.elements.content.addEventListener('click', e => {
+            const toggleBtn = e.target.closest('.expand-code-btn');
+            if (!toggleBtn) return;
+    
+            e.stopPropagation();
+            const container = toggleBtn.closest('.multi-line-container');
+            if (!container) return;
+    
+            container.classList.toggle('expanded');
+            const isExpanded = container.classList.contains('expanded');
+            toggleBtn.textContent = isExpanded ? '[-]' : '[+]';
+
+            if (isExpanded) {
+                // If Prism is available, highlight the full code block
+                const codeBlock = container.querySelector('.code-full pre code');
+                if (codeBlock && typeof Prism !== 'undefined') {
+                    Prism.highlightElement(codeBlock);
+                }
+            }
+        });
+    },
 
     // Source code viewer functionality
     sourceViewer: {

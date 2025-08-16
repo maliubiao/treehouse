@@ -229,21 +229,43 @@ class CallTreeHtmlRender:
         """
         stripped_message = message.lstrip()
         indent = len(message) - len(stripped_message)
+        data: Dict[str, Any] = log_data.get("data", {}) if isinstance(log_data, dict) else {}
 
-        # Handle structured debug variables for LINE events
+        # --- Handle special rendering for LINE events ---
+        is_multiline_stmt = False
         debug_vars_html = ""
-        if log_data and isinstance(log_data, dict) and "data" in log_data:
-            tracked_vars = log_data["data"].get("tracked_vars")
+        if msg_type == TraceTypes.COLOR_LINE and log_data and isinstance(log_data, dict):
+            raw_line = data.get("raw_line", "")
+            if "\n" in raw_line:
+                is_multiline_stmt = True
+            tracked_vars = data.get("tracked_vars")
             if tracked_vars:
                 debug_vars_html = self._build_debug_vars_html(tracked_vars)
-                # Remove the text version from the main message for HTML view
+                # Remove text version from main message for HTML view
                 debug_part_str = " # Debug: "
                 if debug_part_str in stripped_message:
                     stripped_message = stripped_message.split(debug_part_str, 1)[0]
 
-        escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
+        if is_multiline_stmt:
+            indented_statement = data.get("line", "")
+            first_line_of_indented = indented_statement.splitlines()[0]
+            prefix = stripped_message.split(first_line_of_indented, 1)[0]
+            raw_statement = data.get("raw_line", "")
 
-        data: Dict[str, Any] = log_data.get("data", {}) if isinstance(log_data, dict) else {}
+            escaped_prefix = html.escape(prefix)
+            escaped_first_line = html.escape(first_line_of_indented)
+            escaped_raw_statement = html.escape(raw_statement)
+
+            escaped_content = f"""<div class="multi-line-container">
+                <span class="code-preview">{escaped_prefix}{escaped_first_line}... <span class="expand-code-btn" title="Toggle view">[+]</span></span>
+                <div class="code-full">
+                    <span class="multi-line-prefix">{escaped_prefix}</span>
+                    <pre class="language-python"><code>{escaped_raw_statement}</code></pre>
+                </div>
+            </div>"""
+        else:
+            escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
+
         original_filename: Optional[str] = data.get("original_filename")
         line_number: Optional[int] = data.get("lineno")
         frame_id: Optional[int] = data.get("frame_id")

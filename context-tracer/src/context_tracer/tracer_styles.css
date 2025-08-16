@@ -49,6 +49,10 @@
     --debug-vars-border: #d6dde4;
     --debug-vars-name-color: #9b59b6;
     --debug-vars-value-color: #333;
+
+    /* Multi-line statement UI */
+    --multiline-bg: #f9f9f9;
+    --multiline-border: #eee;
 }
 
 /* Dark theme variables */
@@ -96,6 +100,10 @@
     --debug-vars-border: #444;
     --debug-vars-name-color: #ba68c8;
     --debug-vars-value-color: #d4d4d4;
+
+    /* Multi-line statement UI - dark theme */
+    --multiline-bg: #2a2a2a;
+    --multiline-border: #3c3c3c;
 }
 
 /* ===== Base Styles ===== */
@@ -939,4 +947,41 @@ body.skeleton-mode #content .call-group.show-details .var {
     overflow-y: auto;
     font-size: 0.85em;
     margin: 0;
+}
+
+/* ===== Multi-line Statement Styles ===== */
+.multi-line-container {
+    display: inline-block;
+}
+
+.multi-line-container .code-full {
+    display: none;
+    margin-top: 5px;
+    background-color: var(--multiline-bg);
+    border: 1px solid var(--multiline-border);
+    border-radius: 4px;
+    padding: 5px;
+}
+.multi-line-container .code-full .multi-line-prefix {
+    /* Style for the prefix (▷ file:line) inside the full view */
+    display: none;
+}
+.multi-line-container .code-full pre {
+    margin: 0;
+    padding: 0;
+    background: none;
+}
+.multi-line-container.expanded .code-full {
+    display: flex;
+    align-items: flex-start;
+}
+.multi-line-container.expanded .code-preview {
+    display: none;
+}
+.expand-code-btn {
+    cursor: pointer;
+    color: var(--call-color);
+    font-weight: bold;
+    user-select: none;
+    margin-left: 5px;
 }
