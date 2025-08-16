@@ -333,98 +333,20 @@ button:hover {
     position: relative;
     flex: 1;
     overflow: auto; /* This element will now scroll if content is too large */
-    max-height: 100%; /* Add this to fix flexbox scrolling issue */
 }
 
-/* Source container layout */
-.source-container {
-    display: flex;
-    /* height: 100% removed to allow it to grow with content */
-    font-family: 'Menlo', 'Consolas', monospace;
-    font-size: 14px;
-    border-radius: 4px;
-    border: 1px solid var(--border-color);
-    /* overflow-y: auto removed, parent .source-content handles scrolling */
-}
-
-/* Line numbers column */
-.line-numbers {
-    padding-right: 10px;
-    text-align: right;
-    user-select: none;
-    border-right: 1px solid var(--border-color);
-    margin-right: 10px;
-    min-width: 40px;
-    font-family: 'Menlo', 'Consolas', monospace;
-    font-size: 14px;
-    line-height: 1.5;
-    background-color: var(--linenumber-bg);
-    overflow-y: hidden;
-    color: var(--linenumber-text, var(--text-color));
-}
-
-.line-number {
-    padding: 0 5px;
+/* Line highlighting using Prism's structure */
+pre.line-numbers > code .executed-line {
+    background-color: var(--executed-bg) !important;
     display: block;
-    white-space: nowrap;
-    height: 1.5em;
-    line-height: 1.5;
-    box-sizing: border-box;
 }
 
-/* Code content area */
-.code-content {
-    flex: 1;
-    font-family: 'Menlo', 'Consolas', monospace;
-    font-size: 14px;
-    line-height: 1.5;
-    white-space: pre;
-}
-
-.code-content pre {
-    margin: 0;
-    padding: 0;
-}
-
-.code-content code {
+pre.line-numbers > code .current-line {
+    background-color: var(--current-bg) !important;
+    font-weight: bold;
     display: block;
-    line-height: 1.5;
 }
 
-/* Line highlighting */
-.executed-line-light {
-    background-color: var(--executed-bg);
-    border-left: 2px solid var(--executed-border);
-}
-
-.current-line-light {
-    background-color: var(--current-bg);
-    border-left: 2px solid var(--current-border);
-    font-weight: bold;
-}
-
-.executed-line-dark {
-    background-color: var(--executed-bg);
-    border-left: 2px solid var(--executed-border);
-}
-
-.current-line-dark {
-    background-color: var(--current-bg);
-    border-left: 2px solid var(--current-border);
-    font-weight: bold;
-}
-
-/* Simplified legacy classes for compatibility */
-.executed-line {
-    background-color: var(--executed-bg);
-    border-left: 2px solid var(--executed-border);
-}
-
-.current-line {
-    background-color: var(--current-bg);
-    border-left: 2px solid var(--current-border);
-    font-weight: bold;
-}
 
 /* Source view buttons */
 .view-source-btn {
