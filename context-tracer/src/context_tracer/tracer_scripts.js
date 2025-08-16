@@ -1251,21 +1251,13 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 // 1. Syntax highlighting must be done first to create the final DOM for the code.
                 Prism.highlightElement(code);
 
-                // 2. NEW ROBUST LOGIC: Wrap each line of the highlighted output in a span
-                //    for robust height measurement. This correctly handles line wrapping.
-                let highlightedHtml = code.innerHTML;
-                // Prism tokenizer might leave a trailing newline, which results in an empty
-                // line span at the end. We remove it to keep line counts consistent.
-                if (highlightedHtml.endsWith('\n')) {
-                    highlightedHtml = highlightedHtml.slice(0, -1);
+                // 2. Synchronize line heights based on the now-highlighted code.
+                const codeLines = code.querySelectorAll('.token-line, .line');
+                if (!codeLines || codeLines.length === 0) {
+                    this.synchronizeLineHeights(lineNumbers, code.parentElement);
+                } else {
+                    this.synchronizeWithPrismLines(lineNumbers, codeLines);
                 }
-                // Use our own class 'source-line' to avoid conflicts with '.line' used for log messages.
-                // Use &nbsp; for empty lines to ensure they have height and are not collapsed.
-                code.innerHTML = highlightedHtml.split('\n').map(line => `<span class="source-line">${line || '&nbsp;'}</span>`).join('');
-
-                const codeLines = code.querySelectorAll('.source-line');
-                this.synchronizeWithPrismLines(lineNumbers, codeLines);
-
 
                 // 3. Highlight all lines that were executed in this frame.
                 if (frameLines) {
