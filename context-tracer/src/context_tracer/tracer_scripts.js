@@ -1293,36 +1293,18 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     this.synchronizeWithPrismLines(lineNumbers, codeLines);
                 }
 
-                // NEW: Inject debug info by anchoring to the line number gutter
-                if (frameLines) {
-                    // Ensure the line number container can show overflowing content
-                    lineNumbers.style.overflow = 'visible';
-
+                // NEW: Inject debug info non-invasively
+                if (frameLines && codeLines.length > 0) {
                     frameLines.all.forEach(lineNum => {
-                        const key = `${frameId}-${filename}-${lineNum}`;
-                        const commentData = window.lineComment[key];
-
-                        if (commentData) {
-                            const lineNumEl = lineNumbers.querySelector(`.line-number[data-line="${lineNum}"]`);
-                            if (lineNumEl) {
+                        const lineIdx = lineNum - 1;
+                        if (lineIdx < codeLines.length) {
+                            const key = `${frameId}-${filename}-${lineNum}`;
+                            const commentData = window.lineComment[key];
+                            if (commentData) {
                                 const debugEl = this.createDebugVarsElementForSourceView(commentData);
                                 if (debugEl) {
-                                    // Style the debug element for overlay positioning
-                                    Object.assign(debugEl.style, {
-                                        position: 'absolute',
-                                        left: '100%',
-                                        top: '0',
-                                        marginLeft: '15px',
-                                        width: '600px',
-                                        maxWidth: 'calc(100vw - 250px)',
-                                        zIndex: '10',
-                                        pointerEvents: 'auto'
-                                    });
-
-                                    // Make the line number element a positioning context
-                                    lineNumEl.style.position = 'relative';
-                                    
-                                    lineNumEl.appendChild(debugEl);
+                                    // Append to the span that holds the line's code, not the line number div
+                                    codeLines[lineIdx].appendChild(debugEl);
                                 }
                             }
                         }
