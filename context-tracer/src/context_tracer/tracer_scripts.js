@@ -1167,27 +1167,13 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             }
             text = new TextDecoder('utf-8').decode(bytes);
             
-            const originalLines = text.split('\n');
-
-            // Pre-process text to inject placeholders for debug variables.
-            const frameLines = this.getFrameLines(filename, frameId);
-            if (frameLines && window.lineComment) {
-                const lines = text.split('\n');
-                frameLines.all.forEach(lineNum => {
-                    const key = `${frameId}-${filename}-${lineNum}`;
-                    const commentData = window.lineComment[key];
-                    if (commentData && lines[lineNum - 1] !== undefined) {
-                        lines[lineNum - 1] += `<!--DEBUG_VAR_PLACEHOLDER:${key}-->`;
-                    }
-                });
-                text = lines.join('\n');
-            }
+            const lines = text.split('\n');
 
             // Setup dialog
             this.setupSourceDialog(dialog, titleDiv, sourceContent, filename, lineNumber);
             
-            // Create content elements, using original lines for numbering and modified text for content
-            const container = this.createSourceContainer(originalLines, text);
+            // Create content elements
+            const container = this.createSourceContainer(lines, text);
             sourceContent.appendChild(container);
             
             // Add close controls
@@ -1201,7 +1187,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 this.processSourceCode(
                     container.querySelector('.line-numbers'),
                     container.querySelector('code'),
-                    frameLines, // Pass the already fetched frameLines object
+                    this.getFrameLines(filename, frameId), // Pass frameLines object
                     lineNumber,
                     frameId,
                     filename,
@@ -1299,39 +1285,34 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 // 1. Syntax highlighting must be done first to create the final DOM for the code.
                 Prism.highlightElement(code);
 
-                // 2. Find placeholders and inject debug variable elements.
-                if (frameLines && window.lineComment) {
-                    let htmlContent = code.innerHTML;
-                    let replaced = false;
-                    frameLines.all.forEach(lineNum => {
-                        const key = `${frameId}-${filename}-${lineNum}`;
-                        const commentData = window.lineComment[key];
-                        if (commentData) {
-                            const debugEl = this.createDebugVarsElementForSourceView(commentData);
-                            if (debugEl) {
-                                const placeholder = `<!--DEBUG_VAR_PLACEHOLDER:${key}-->`;
-                                if (htmlContent.includes(placeholder)) {
-                                    htmlContent = htmlContent.replace(placeholder, debugEl.outerHTML);
-                                    replaced = true;
-                                }
-                            }
-                        }
-                    });
-                    if (replaced) {
-                        code.innerHTML = htmlContent;
-                    }
-                }
-
-                // 3. Synchronize line heights based on the now-highlighted and modified code.
+                // 2. Synchronize line heights based on the now-highlighted code.
                 const codeLines = code.querySelectorAll('.token-line, .line');
                 if (!codeLines || codeLines.length === 0) {
-                    // Fallback for Prism versions without line wrappers
                     this.synchronizeLineHeights(lineNumbers, code.parentElement);
                 } else {
                     this.synchronizeWithPrismLines(lineNumbers, codeLines);
                 }
-                
-                // 4. Highlight all lines that were executed in this frame.
+
+                // NEW: Inject debug info non-invasively
+                if (frameLines && codeLines.length > 0) {
+                    frameLines.all.forEach(lineNum => {
+                        const lineIdx = lineNum - 1;
+                        if (lineIdx < codeLines.length) {
+                            const key = `${frameId}-${filename}-${lineNum}`;
+                            const commentData = window.lineComment[key];
+                            if (commentData) {
+                                const debugEl = this.createDebugVarsElementForSourceView(commentData);
+                                if (debugEl) {
+                                    // Append to the span that holds the line's code, not the line number div
+                                    codeLines[lineIdx].appendChild(debugEl);
+                                }
+                            }
+                        }
+                    });
+                }
+
+
+                // 3. Highlight all lines that were executed in this frame.
                 if (frameLines) {
                     frameLines.all.forEach(line => {
                         const lineElement = lineNumbers.querySelector(`.line-number[data-line="${line}"]`);
@@ -1341,12 +1322,13 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     });
                 }
 
-                // 5. Highlight the specific line that triggered the 'view source' action.
+                // 4. Highlight the specific line that triggered the 'view source' action.
                 const targetLine = lineNumbers.querySelector(`.line-number[data-line="${lineNumber}"]`);
                 if (targetLine) {
                     targetLine.classList.add('current-line');
                     
-                    // 6. Scroll the single parent container to the target line.
+                    // 5. Scroll the single parent container to the target line.
+                    // This is robust because there is only one scrollable container.
                     targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
                 
