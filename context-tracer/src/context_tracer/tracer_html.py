@@ -252,14 +252,16 @@ class CallTreeHtmlRender:
             prefix = stripped_message.split(first_line_of_indented, 1)[0]
             raw_statement = data.get("raw_line", "")
 
-            escaped_prefix = html.escape(prefix)
-            escaped_first_line = html.escape(first_line_of_indented)
+            # To prevent whitespace collapse in HTML, replace spaces with &nbsp;
+            # This ensures both the prefix and the code line's own indentation are preserved.
+            escaped_prefix_nbsp = html.escape(prefix).replace(" ", "&nbsp;")
+            escaped_first_line_nbsp = html.escape(first_line_of_indented).replace(" ", "&nbsp;")
             escaped_raw_statement = html.escape(raw_statement)
 
             escaped_content = f"""<div class="multi-line-container">
-                <span class="code-preview">{escaped_prefix}{escaped_first_line}... </span><span class="expand-code-btn" title="Toggle view">[+]</span>
+                <span class="code-preview">{escaped_prefix_nbsp}{escaped_first_line_nbsp}... </span><span class="expand-code-btn" title="Toggle view">[+]</span>
                 <div class="code-full">
-                    <span class="multi-line-prefix">{escaped_prefix}</span>
+                    <span class="multi-line-prefix">{escaped_prefix_nbsp}</span>
                     <pre class="language-python"><code>{escaped_raw_statement}</code></pre>
                 </div>
             </div>"""
@@ -295,7 +297,7 @@ class CallTreeHtmlRender:
         if msg_type == TraceTypes.COLOR_CALL:
             html_parts.extend(
                 [
-                    f'<div class="foldable {TraceTypes.HTML_CALL}" {data_indent_attr} style="padding-left:{indent}px">',
+                    f'<div class="foldable {TraceTypes.HTML_CALL}" {data_indent_attr} style="padding-left:{indent}ch">',
                     f"    {escaped_content}{appended_html}",
                     "</div>",
                     '<div class="call-group collapsed">',
@@ -305,7 +307,7 @@ class CallTreeHtmlRender:
             html_parts.extend(
                 [
                     "</div>",
-                    f'<div class="{TraceTypes.HTML_RETURN}" {data_indent_attr} style="padding-left:{indent}px">',
+                    f'<div class="{TraceTypes.HTML_RETURN}" {data_indent_attr} style="padding-left:{indent}ch">',
                     f"    {escaped_content}{appended_html}",
                     "</div>",
                 ]
@@ -314,7 +316,7 @@ class CallTreeHtmlRender:
             html_parts.extend(
                 [
                     "</div>",
-                    f'<div class="{TraceTypes.HTML_ERROR}" {data_indent_attr} style="padding-left:{indent}px">',
+                    f'<div class="{TraceTypes.HTML_ERROR}" {data_indent_attr} style="padding-left:{indent}ch">',
                     f"    {escaped_content}{appended_html}",
                     "</div>",
                 ]
@@ -322,7 +324,7 @@ class CallTreeHtmlRender:
         else:
             html_parts.extend(
                 [
-                    f'<div class="{msg_type}" {data_indent_attr} style="padding-left:{indent}px">',
+                    f'<div class="{msg_type}" {data_indent_attr} style="padding-left:{indent}ch">',
                     f"    {escaped_content}{appended_html}",
                     "</div>",
                 ]
