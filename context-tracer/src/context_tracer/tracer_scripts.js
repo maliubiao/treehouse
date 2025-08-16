@@ -33,6 +33,11 @@ const TraceViewer = {
                     func.apply(this, args);
                 }, delay);
             };
+        },
+        escapeHTML(str) {
+            const p = document.createElement('p');
+            p.textContent = str;
+            return p.innerHTML;
         }
     },
     
@@ -1101,6 +1106,44 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             };
         },
 
+        createDebugVarsElementForSourceView(variables) {
+            if (!variables || Object.keys(variables).length === 0) return null;
+        
+            const container = document.createElement('div');
+            container.className = 'debug-vars';
+            container.title = 'Click to expand/collapse';
+            container.addEventListener('click', e => {
+                e.stopPropagation();
+                container.classList.toggle('expanded');
+            });
+        
+            // Compact view
+            const compactView = document.createElement('div');
+            compactView.className = 'compact-view';
+            const compactItems = [];
+            for (const [name, value] of Object.entries(variables)) {
+                const escapedName = TraceViewer.utils.escapeHTML(name);
+                const escapedValue = TraceViewer.utils.escapeHTML(value);
+                compactItems.push(`<span class="var-name">${escapedName}</span>=<span class="var-value">${escapedValue}</span>`);
+            }
+            compactView.innerHTML = compactItems.join(' ');
+            container.appendChild(compactView);
+        
+            // List view
+            const listView = document.createElement('div');
+            listView.className = 'list-view';
+            const listItems = [];
+            for (const [name, value] of Object.entries(variables)) {
+                const escapedName = TraceViewer.utils.escapeHTML(name);
+                const escapedValue = TraceViewer.utils.escapeHTML(value);
+                listItems.push(`<div class="var-entry"><span class="var-name">${escapedName}</span>: <span class="var-value"><pre>${escapedValue}</pre></span></div>`);
+            }
+            listView.innerHTML = listItems.join('');
+            container.appendChild(listView);
+        
+            return container;
+        },
+
         // Show source code dialog
         showSource(filename, lineNumber, frameId) {
             const sourceContent = document.getElementById('sourceContent');
@@ -1126,15 +1169,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             
             const lines = text.split('\n');
 
-            const frameLines = frameId ? this.getFrameLines(filename, frameId) : null;
-            for(let lineNumber of frameLines.all) {
-                line_debug_comment = window.lineComment[`${frameId}-${filename}-${lineNumber}`]
-                if(line_debug_comment) {
-                  lines[lineNumber-1] += line_debug_comment;
-                }
-            }
-            text = lines.join("\n")
-
             // Setup dialog
             this.setupSourceDialog(dialog, titleDiv, sourceContent, filename, lineNumber);
             
@@ -1153,7 +1187,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 this.processSourceCode(
                     container.querySelector('.line-numbers'),
                     container.querySelector('code'),
-                    frameLines,
+                    this.getFrameLines(filename, frameId), // Pass frameLines object
                     lineNumber,
                     frameId,
                     filename,
@@ -1258,6 +1292,25 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 } else {
                     this.synchronizeWithPrismLines(lineNumbers, codeLines);
                 }
+
+                // NEW: Inject debug info non-invasively
+                if (frameLines && codeLines.length > 0) {
+                    frameLines.all.forEach(lineNum => {
+                        const lineIdx = lineNum - 1;
+                        if (lineIdx < codeLines.length) {
+                            const key = `${frameId}-${filename}-${lineNum}`;
+                            const commentData = window.lineComment[key];
+                            if (commentData) {
+                                const debugEl = this.createDebugVarsElementForSourceView(commentData);
+                                if (debugEl) {
+                                    // Append to the span that holds the line's code, not the line number div
+                                    codeLines[lineIdx].appendChild(debugEl);
+                                }
+                            }
+                        }
+                    });
+                }
+
 
                 // 3. Highlight all lines that were executed in this frame.
                 if (frameLines) {

@@ -488,10 +488,8 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             original_filename: Optional[str] = data.get("original_filename")
             lineno: Optional[int] = data.get("lineno")
             frame_id: Optional[int] = data.get("frame_id")
-            if data.get("vars"):
-                self.line_comment[f"{frame_id}-{original_filename}-{lineno}"] = " # Debug: {vars}".format(
-                    vars=data["vars"]
-                )
+            if data.get("tracked_vars"):
+                self.line_comment[f"{frame_id}-{original_filename}-{lineno}"] = data["tracked_vars"]
             if original_filename and lineno is not None and frame_id is not None:
                 self._executed_lines[original_filename][frame_id].add(lineno)
                 self._load_source_file(original_filename)
