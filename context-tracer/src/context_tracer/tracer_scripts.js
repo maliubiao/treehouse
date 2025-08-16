@@ -1017,22 +1017,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         TraceViewer.aiExplainer = aiExplainer;
     },
 
-    // Adjust line number styles based on theme
-    adjustLineNumberStyles(isDark) {
-        const lineNumbers = document.querySelectorAll('.line-number');
-        if (isDark) {
-            lineNumbers.forEach(el => {
-                el.style.color = '#aaa';
-                el.style.borderRightColor = '#444';
-            });
-        } else {
-            lineNumbers.forEach(el => {
-                el.style.color = '#999';
-                el.style.borderRightColor = '#eee';
-            });
-        }
-    },
-
     // Initialize comment toggle functionality (for legacy comments on call/return)
     initCommentToggle() {
         const content = this.elements.content;
@@ -1197,7 +1181,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             this.setupSourceDialog(dialog, titleDiv, sourceContent, filename, lineNumber);
             
             // Create content elements
-            const container = this.createSourceContainer(lines, text);
+            const container = this.createSourceContainer(text);
             sourceContent.appendChild(container);
             
             // Add close controls
@@ -1209,9 +1193,8 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             // Process after dialog is visible
             setTimeout(() => {
                 this.processSourceCode(
-                    container.querySelector('.line-numbers'),
-                    container.querySelector('code'),
-                    frameLines, // Pass original frameLines object
+                    container.querySelector('pre'),
+                    frameLines,
                     lineNumber,
                     frameId,
                     filename,
@@ -1237,34 +1220,19 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         },
         
         // Create source container with line numbers and code
-        createSourceContainer(lines, text) {
+        createSourceContainer(text) {
             const container = document.createElement('div');
             container.className = 'source-container';
             
-            const lineNumbers = document.createElement('div');
-            lineNumbers.className = 'line-numbers';
-            
-            const codeContent = document.createElement('div');
-            codeContent.className = 'code-content';
-            
             const pre = document.createElement('pre');
+            // Activate Prism line numbers plugin
+            pre.className = 'line-numbers language-python';
+            
             const code = document.createElement('code');
-            code.className = 'language-python';
             code.textContent = text;
             pre.appendChild(code);
-            codeContent.appendChild(pre);
             
-            // Generate line numbers
-            for (let i = 1; i <= lines.length; i++) {
-                const lineNum = document.createElement('div');
-                lineNum.className = 'line-number';
-                lineNum.textContent = i;
-                lineNum.setAttribute('data-line', i);
-                lineNumbers.appendChild(lineNum);
-            }
-            
-            container.appendChild(lineNumbers);
-            container.appendChild(codeContent);
+            container.appendChild(pre);
             
             return container;
         },
@@ -1291,7 +1259,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         },
         
         // Process source code after rendering
-        processSourceCode(lineNumbers, code, frameLines, lineNumber, frameId, filename) {
+        processSourceCode(preElement, frameLines, lineNumber, frameId, filename) {
             // Add loading indicator
             const loadingIndicator = document.createElement('div');
             loadingIndicator.style.position = 'absolute';
@@ -1303,23 +1271,23 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             loadingIndicator.style.color = 'white';
             loadingIndicator.style.borderRadius = '4px';
             loadingIndicator.textContent = 'Loading syntax highlighting...';
-            lineNumbers.parentElement.appendChild(loadingIndicator);
+            if (preElement.parentElement) {
+                preElement.parentElement.appendChild(loadingIndicator);
+            }
 
             const doHighlight = () => {
-                // 1. Syntax highlighting must be done first to create the final DOM for the code.
-                Prism.highlightElement(code);
-
-                // 2. Synchronize line heights based on the now-highlighted code.
-                const codeLines = code.querySelectorAll('.token-line, .line');
-                if (!codeLines || codeLines.length === 0) {
-                    this.synchronizeLineHeights(lineNumbers, code.parentElement);
-                } else {
-                    this.synchronizeWithPrismLines(lineNumbers, codeLines);
+                const codeElement = preElement.querySelector('code');
+                if (!codeElement) {
+                    loadingIndicator.remove();
+                    return;
                 }
+
+                // 1. Syntax highlighting must be done first. This also triggers the line-numbers plugin.
+                Prism.highlightElement(codeElement);
 
                 // START MODIFICATION: Find placeholders and replace them with debug info elements
                 const placeholderPrefix = '# __CTX_DEBUG_PLACEHOLDER__';
-                const comments = code.querySelectorAll('.token.comment');
+                const comments = codeElement.querySelectorAll('.token.comment');
                 comments.forEach(comment => {
                     const text = comment.textContent || '';
                     if (text.startsWith(placeholderPrefix)) {
@@ -1340,25 +1308,37 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     }
                 });
                 // END MODIFICATION
+                
+                // Get theme for highlighting
+                const themeSelector = document.getElementById('themeSelector');
+                const selectedOption = themeSelector.options[themeSelector.selectedIndex];
+                const isDark = selectedOption.dataset.isDark === 'true';
+                const lightDarkClassSuffix = isDark ? '-dark' : '-light';
 
-                // 3. Highlight all lines that were executed in this frame.
-                if (frameLines) {
-                    frameLines.all.forEach(line => {
-                        const lineElement = lineNumbers.querySelector(`.line-number[data-line="${line}"]`);
-                        if (lineElement) {
-                            lineElement.classList.add('executed-line');
-                        }
-                    });
-                }
-
-                // 4. Highlight the specific line that triggered the 'view source' action.
-                const targetLine = lineNumbers.querySelector(`.line-number[data-line="${lineNumber}"]`);
-                if (targetLine) {
-                    targetLine.classList.add('current-line');
+                // 2. Highlight all lines that were executed in this frame.
+                const lineNumbersWrapper = preElement.parentElement?.querySelector('.line-numbers-rows');
+                const codeLines = preElement.querySelectorAll('.token-line');
+                
+                if (lineNumbersWrapper && codeLines.length > 0) {
+                    const lineNumberSpans = lineNumbersWrapper.children;
                     
-                    // 5. Scroll the single parent container to the target line.
-                    // This is robust because there is only one scrollable container.
-                    targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    if (frameLines) {
+                        frameLines.all.forEach(line => {
+                            const lineIdx = line - 1;
+                            if (lineNumberSpans[lineIdx]) lineNumberSpans[lineIdx].classList.add('executed-line', `executed-line${lightDarkClassSuffix}`);
+                            if (codeLines[lineIdx]) codeLines[lineIdx].classList.add('executed-line', `executed-line${lightDarkClassSuffix}`);
+                        });
+                    }
+
+                    // 3. Highlight the specific line that triggered the 'view source' action.
+                    const targetIdx = lineNumber - 1;
+                    if (lineNumberSpans[targetIdx]) lineNumberSpans[targetIdx].classList.add('current-line', `current-line${lightDarkClassSuffix}`);
+                    if (codeLines[targetIdx]) {
+                        codeLines[targetIdx].classList.add('current-line', `current-line${lightDarkClassSuffix}`);
+                        
+                        // 4. Scroll to the target line.
+                        codeLines[targetIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
                 }
                 
                 // Remove loading indicator
@@ -1366,60 +1346,18 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             };
             
             // Check if Prism is loaded
-            if (typeof Prism !== 'undefined') {
+            if (typeof Prism !== 'undefined' && Prism.highlightElement) {
                 doHighlight();
             } else {
                 // Poll until Prism is available
                 const prismCheckInterval = setInterval(() => {
-                    if (typeof Prism !== 'undefined') {
+                    if (typeof Prism !== 'undefined' && Prism.highlightElement) {
                         clearInterval(prismCheckInterval);
                         doHighlight();
                     }
                 }, 100);
             }
         },
-        
-        // Synchronize line number heights with code
-        synchronizeLineHeights(lineNumbersContainer, codeContainer) {
-            const computedStyle = window.getComputedStyle(codeContainer);
-            const lineHeight = computedStyle.lineHeight;
-            const fontSize = computedStyle.fontSize;
-            
-            const lineNumberElements = lineNumbersContainer.querySelectorAll('.line-number');
-            
-            lineNumberElements.forEach(el => {
-                el.style.height = lineHeight;
-                el.style.lineHeight = lineHeight;
-                el.style.fontSize = fontSize;
-            });
-        },
-
-        // Synchronize with Prism-generated line elements
-        synchronizeWithPrismLines(lineNumbersContainer, codeLines) {
-            const lineNumberElements = lineNumbersContainer.querySelectorAll('.line-number');
-            const count = Math.min(lineNumberElements.length, codeLines.length);
-            
-            // Get current theme info
-            const themeSelector = document.getElementById('themeSelector');
-            const selectedOption = themeSelector.options[themeSelector.selectedIndex];
-            const isDark = selectedOption.dataset.isDark === 'true';
-            
-            // Set background color based on theme
-            lineNumbersContainer.style.backgroundColor = isDark ? '#2d2d2d' : '#f5f5f5';
-            
-            // Adjust line heights to match
-            for (let i = 0; i < count; i++) {
-                const codeLineHeight = codeLines[i].offsetHeight;
-                
-                if (lineNumberElements[i]) {
-                    lineNumberElements[i].style.height = `${codeLineHeight}px`;
-                    lineNumberElements[i].style.lineHeight = `${codeLineHeight}px`;
-                }
-            }
-            
-            // Apply theme styles
-            TraceViewer.adjustLineNumberStyles(isDark);
-        }
     }
 };
 
