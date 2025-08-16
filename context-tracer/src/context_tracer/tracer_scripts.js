@@ -1157,17 +1157,41 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 return;
             }
             // Get source code, decode if it's Base64-encoded
-            let text = window.sourceFiles[filename];
+            let originalText = window.sourceFiles[filename];
         
             // Attempt to decode Base64 with UTF-8 support
-            const raw = atob(text);
+            const raw = atob(originalText);
             const bytes = new Uint8Array(raw.length);
             for (let i = 0; i < raw.length; i++) {
                 bytes[i] = raw.charCodeAt(i);
             }
-            text = new TextDecoder('utf-8').decode(bytes);
-            
+            let text = new TextDecoder('utf-8').decode(bytes);
+
+            // START MODIFICATION: Inject debug info placeholders before highlighting
+            const frameLines = this.getFrameLines(filename, frameId);
             const lines = text.split('\n');
+            if (frameLines) {
+                frameLines.all.forEach(lineNum => {
+                    const lineIdx = lineNum - 1;
+                    if (lineIdx < lines.length) {
+                        const key = `${frameId}-${filename}-${lineNum}`;
+                        const commentData = window.lineComment[key];
+                        if (commentData) {
+                            try {
+                                const jsonData = JSON.stringify(commentData);
+                                // btoa requires a string of single-byte characters.
+                                // We first encode multi-byte characters (like Chinese) into a URI-like format.
+                                const encodedData = btoa(unescape(encodeURIComponent(jsonData)));
+                                lines[lineIdx] += ` # __CTX_DEBUG_PLACEHOLDER__${encodedData}`;
+                            } catch (e) {
+                                console.error(`Failed to encode debug data for line ${lineNum}:`, e);
+                            }
+                        }
+                    }
+                });
+                text = lines.join('\n');
+            }
+            // END MODIFICATION
 
             // Setup dialog
             this.setupSourceDialog(dialog, titleDiv, sourceContent, filename, lineNumber);
@@ -1187,7 +1211,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 this.processSourceCode(
                     container.querySelector('.line-numbers'),
                     container.querySelector('code'),
-                    this.getFrameLines(filename, frameId), // Pass frameLines object
+                    frameLines, // Pass original frameLines object
                     lineNumber,
                     frameId,
                     filename,
@@ -1293,24 +1317,30 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     this.synchronizeWithPrismLines(lineNumbers, codeLines);
                 }
 
-                // NEW: Inject debug info non-invasively
-                if (frameLines && codeLines.length > 0) {
-                    frameLines.all.forEach(lineNum => {
-                        const lineIdx = lineNum - 1;
-                        if (lineIdx < codeLines.length) {
-                            const key = `${frameId}-${filename}-${lineNum}`;
-                            const commentData = window.lineComment[key];
-                            if (commentData) {
-                                const debugEl = this.createDebugVarsElementForSourceView(commentData);
-                                if (debugEl) {
-                                    // Append to the span that holds the line's code, not the line number div
-                                    codeLines[lineIdx].appendChild(debugEl);
-                                }
+                // START MODIFICATION: Find placeholders and replace them with debug info elements
+                const placeholderPrefix = '# __CTX_DEBUG_PLACEHOLDER__';
+                const comments = code.querySelectorAll('.token.comment');
+                comments.forEach(comment => {
+                    const text = comment.textContent || '';
+                    if (text.startsWith(placeholderPrefix)) {
+                        const encodedData = text.substring(placeholderPrefix.length);
+                        try {
+                            // The reverse process of btoa encoding for multi-byte strings
+                            const jsonData = decodeURIComponent(escape(atob(encodedData)));
+                            const data = JSON.parse(jsonData);
+                            const debugEl = this.createDebugVarsElementForSourceView(data);
+                            if (debugEl && comment.parentNode) {
+                                // Replace the comment span with the debug info div
+                                comment.parentNode.replaceChild(debugEl, comment);
                             }
+                        } catch (e) {
+                            console.error('Failed to decode or render debug placeholder:', e);
+                             // To avoid breaking the UI, just hide the broken placeholder
+                            comment.style.display = 'none';
                         }
-                    });
-                }
-
+                    }
+                });
+                // END MODIFICATION
 
                 // 3. Highlight all lines that were executed in this frame.
                 if (frameLines) {
