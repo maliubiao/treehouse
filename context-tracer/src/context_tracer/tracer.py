@@ -1003,8 +1003,6 @@ class TraceLogic:
         """初始化线程本地堆栈变量"""
         if not hasattr(self._local, "stack_depth"):
             self._local.stack_depth = 0
-        if not hasattr(self._local, "last_statement_vars"):
-            self._local.last_statement_vars = None
         if not hasattr(self._local, "bad_frame"):
             self._local.bad_frame = None
         if not hasattr(self._local, "last_message"):
@@ -1213,6 +1211,7 @@ class TraceLogic:
     def handle_call(self, frame):
         """增强参数捕获逻辑"""
         self.init_stack_variables()
+        self._process_message_with_vars(frame, None, None)
 
         try:
             args_info = []
@@ -1299,7 +1298,7 @@ class TraceLogic:
             },
         }
         # 使用统一的方法处理消息
-        self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_RETURN, need_delay_eval=False)
+        self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_RETURN)
         self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
     def _get_var_ops(self, code_obj):
@@ -1416,10 +1415,9 @@ class TraceLogic:
         else:
             current_statement_vars = None
         # 使用统一的方法处理消息
-        self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_LINE, need_delay_eval=current_statement_vars)
-        if self.config.enable_var_trace:
-            # Determine variables for the *current* statement for the next trace
-            self._local.last_statement_vars = current_statement_vars
+        self._process_message_with_vars(
+            frame, log_data, TraceTypes.COLOR_LINE, vars_to_delay_eval=current_statement_vars
+        )
 
         for i, line_content in enumerate(full_statement.split("\n")):
             current_line_no = start_line + i
@@ -1433,15 +1431,35 @@ class TraceLogic:
             return
         self._html_render.add_stack_variable_create(self._message_id, opcode, name, value)
 
-    def _process_message_with_vars(self, frame, log_data, color_type, need_delay_eval=False, is_exception=False):
-        """处理消息，包括变量跟踪和添加到缓冲区"""
-        # 1. 首先处理任何未决的延迟消息
+    def _process_message_with_vars(
+        self,
+        frame: types.FrameType,
+        log_data: Optional[Dict[str, Any]],
+        color_type: Optional[str],
+        vars_to_delay_eval: Optional[List[str]] = None,
+        is_exception: bool = False,
+    ) -> None:
+        """
+        处理日志消息，包括刷新延迟消息和处理当前消息。
+
+        此方法是事件处理的核心，它确保在处理新事件（如CALL或RETURN）之前，
+        与前一行代码相关的延迟消息会被正确地处理和记录。
+
+        Args:
+            frame: 当前事件的帧对象。
+            log_data: 当前事件的日志数据，或为None（用于仅刷新）。
+            color_type: 当前事件的颜色类型。
+            vars_to_delay_eval: 如果提供了变量列表，则当前消息将被延迟处理。
+                                 否则，它将被立即处理。
+            is_exception: 标志当前事件是否是异常。
+        """
+        # 1. 首先处理任何待处理的延迟消息
         if self._local.last_message:
-            pending_data, pending_color = self._local.last_message
+            pending_data, pending_color, pending_frame, pending_vars = self._local.last_message
             self._local.last_message = None
-            # 尝试获取变量的当前值
-            if self._local.last_statement_vars:
-                all_traced_vars = self.trace_variables(frame, self._local.last_statement_vars)
+            # 使用正确的帧（pending_frame）来评估变量
+            if pending_vars:
+                all_traced_vars = self.trace_variables(pending_frame, pending_vars)
                 if all_traced_vars:
                     pending_data["template"] += " # Debug: {vars}"
                     # 展开f-string以避免潜在问题
@@ -1452,20 +1470,23 @@ class TraceLogic:
                         var_strings.append(k + "=" + formatted_value)
                     pending_data["data"]["vars"] = ", ".join(var_strings)
                     pending_data["data"]["tracked_vars"] = all_traced_vars
-            self._local.last_statement_vars = None
             self._add_to_buffer(pending_data, pending_color)
 
         # 2. 异常处理前确保处理完所有延迟消息
         if is_exception:
-            # 异常发生时强制处理任何未完成的延迟消息
-            self.exception_chain.append((log_data, color_type))
+            if log_data:
+                self.exception_chain.append((log_data, color_type))
+            return  # 不要进一步处理
 
         # 3. 处理当前消息
-        elif need_delay_eval:
-            # 延迟当前消息（行事件）
-            self._local.last_message = (log_data, color_type)
+        if not log_data:
+            return  # 这是仅刷新的情况，例如来自 handle_call
+
+        if vars_to_delay_eval is not None:
+            # 延迟当前消息（通常是行事件）
+            self._local.last_message = (log_data, color_type, frame, vars_to_delay_eval)
         else:
-            # 立即处理消息（返回/调用等事件）
+            # 立即处理不需要延迟变量评估的消息（调用/返回等）
             self._add_to_buffer(log_data, color_type)
 
     def _process_trace_expression(self, frame, line, filename, lineno):
@@ -1555,14 +1576,10 @@ class TraceLogic:
 
         # 对于 sys.monitoring 模式，需要特殊处理
         if sys.version_info >= (3, 12):
-            self._process_message_with_vars(
-                frame, log_data, TraceTypes.COLOR_EXCEPTION, is_exception=True, need_delay_eval=False
-            )
+            self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_EXCEPTION, is_exception=True)
         else:
             # 对于非 sys.monitoring 模式，直接处理
-            self._process_message_with_vars(
-                frame, log_data, TraceTypes.COLOR_EXCEPTION, is_exception=False, need_delay_eval=False
-            )
+            self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_EXCEPTION, is_exception=True)
 
     def handle_exception_was_handled(self, frame):
         """
