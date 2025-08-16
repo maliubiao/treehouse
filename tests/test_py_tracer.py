@@ -991,39 +991,35 @@ class TestTraceLogic(BaseTracerTest):
             # This next line should trigger the flush of the previous message
             return result
 
-        # To test the delayed message logic for multi-line statements, we must simulate
-        # the tracer seeing a `line` event at the *start* of the statement.
-        # Python's `line` events are not guaranteed for every source line, so we
-        # get a real frame from inside the function and then create a proxy object
-        # that reports the correct starting line number.
-
-        # Get a real frame from inside the function to have the correct context.
-        frame_inside = self._get_frame_at(multiline_func, event_type="line")
+        # To test the delayed message logic, we get the frame at the end of the
+        # function, which has the final state of local variables.
+        return_frame = self._get_frame_at(multiline_func, event_type="return")
 
         # Determine the actual start line of the multi-line statement.
         lines, func_start_line = inspect.getsourcelines(multiline_func)
         multiline_start_offset = next(i for i, line in enumerate(lines) if "result = [" in line)
         statement_start_lineno = func_start_line + multiline_start_offset
 
-        # Create a proxy frame that reports being at the start of the statement.
+        # Create a proxy frame that reports being at the start of the statement
+        # but has the FINAL local variables. This simulates the state of a real
+        # frame object at the point of flushing.
         frame_proxy = SimpleNamespace(
-            f_code=frame_inside.f_code,
-            f_locals=frame_inside.f_locals,
-            f_globals=frame_inside.f_globals,
+            f_code=return_frame.f_code,
+            f_locals=return_frame.f_locals,  # Key change: use final locals
+            f_globals=return_frame.f_globals,
             f_lineno=statement_start_lineno,
-            f_lasti=frame_inside.f_lasti,
+            f_lasti=return_frame.f_lasti,
         )
 
-        # 1. Simulate the line event for the list comprehension's start using the proxy.
-        # This should create a pending message, not log immediately.
+        # 1. Simulate the line event. This creates a pending message with the proxy
+        # that holds the final, correct local variables.
         self.logic.handle_line(frame_proxy)
         self.logic._add_to_buffer.assert_not_called()
         self.assertIsNotNone(self.logic._local.last_message)
         self.assertIn("result = [", self.logic._local.last_message[0]["data"]["line"])
 
         # 2. Simulate the 'return' event, which should flush the pending message.
-        # The frame for the return event has the final state of variables.
-        return_frame = self._get_frame_at(multiline_func, event_type="return")
+        # Use the real return_frame for the return event itself.
         self.logic.handle_return(return_frame, [0, 1, 2])
 
         # Expect 2 calls: the flushed line, and the return statement itself.
@@ -1041,44 +1037,56 @@ class TestTraceLogic(BaseTracerTest):
         self.logic._add_to_buffer = MagicMock()
         func = func_with_delayed_exception
 
-        # 1. Get a frame at the start of the multi-line statement to create a pending message.
-        frame_at_multiline_start = self._get_frame_at(
-            func,
-            event_type="line",
-            lineno=func.__code__.co_firstlineno + 1,  # The "my_list = [" line
-        )
-
-        # 2. Simulate the line event. This should create a pending message, not log immediately.
-        self.logic.handle_line(frame_at_multiline_start)
-        self.logic._add_to_buffer.assert_not_called()
-        self.assertIsNotNone(self.logic._local.last_message)
-        self.assertIn("my_list = [", self.logic._local.last_message[0]["data"]["line"])
-
-        # 3. Trigger the exception by running the function and get its context.
+        # To accurately simulate a real trace, we need a frame object whose state
+        # (like f_locals) evolves. The _get_frame_at helper freezes the frame's
+        # state too early.
+        # So, we first run the function to completion (until it excepts) to get
+        # the frame in its final state.
         exception_frame = None
         exc_type, exc_value, tb = None, None, None
         try:
             func()
-        except ZeroDivisionError as e:
+        except ZeroDivisionError:
             exc_type, exc_value, tb = sys.exc_info()
-            # The actual frame where the exception occurred is at the end of the traceback chain.
             current_tb = tb
             while current_tb.tb_next:
                 current_tb = current_tb.tb_next
             exception_frame = current_tb.tb_frame
         finally:
-            # Clean up reference cycle
             del tb
         self.assertIsNotNone(exception_frame, "Failed to capture exception frame.")
+        # At the point of exception, 'my_list' should have been assigned.
+        self.assertIn("my_list", exception_frame.f_locals)
 
-        # 4. Simulate the tracer's exception handler. This should flush the pending message.
+        # Now, simulate the 'line' event that would have occurred at the *start*
+        # of the multi-line statement. We use a proxy for the frame that reports
+        # the correct starting line number, but shares the final f_locals of the
+        # exception frame. This mimics how a single frame object is updated
+        # throughout its execution.
+        statement_start_lineno = func.__code__.co_firstlineno + 1
+        frame_proxy_at_start = SimpleNamespace(
+            f_code=exception_frame.f_code,
+            f_locals=exception_frame.f_locals,
+            f_globals=exception_frame.f_globals,
+            f_lineno=statement_start_lineno,
+            f_lasti=exception_frame.f_lasti,
+        )
+
+        # Simulate the line event. This should create a pending message, not log immediately.
+        self.logic.handle_line(frame_proxy_at_start)
+        self.logic._add_to_buffer.assert_not_called()
+        self.assertIsNotNone(self.logic._local.last_message)
+        self.assertIn("my_list = [", self.logic._local.last_message[0]["data"]["line"])
+
+        # Simulate the tracer's exception handler with the real exception frame.
+        # This should trigger the flush of the pending message.
         self.logic.handle_exception(exc_type, exc_value, exception_frame)
 
         # The pending message should have been flushed.
         self.logic._add_to_buffer.assert_called()
 
-        # The first logged call should be the flushed message, with variables captured
-        # from the exception frame (where 'my_list' is now defined).
+        # The first logged call should be the flushed message. Its variables should
+        # have been evaluated against the frame proxy, which had the correct final locals.
         flushed_log_data = self.logic._add_to_buffer.call_args_list[0][0][0]
         self.assertIn("my_list", flushed_log_data["data"]["vars"])
         self.assertIn("[0, 1, 2]", flushed_log_data["data"]["vars"])
@@ -1089,8 +1097,8 @@ class TestTraceLogic(BaseTracerTest):
             exc_log_data = self.logic.exception_chain[0][0]
             self.assertEqual(exc_log_data["data"]["exc_type"], "ZeroDivisionError")
         else:
-            # On older versions, the exception is logged directly to the buffer.
-            self.assertGreaterEqual(self.logic._add_to_buffer.call_count, 2)
+            # On older versions, the exception is logged directly to the buffer in addition to the flushed message.
+            self.assertEqual(self.logic._add_to_buffer.call_count, 2)
             exc_log_data = self.logic._add_to_buffer.call_args_list[1][0][0]
             self.assertEqual(exc_log_data["data"]["exc_type"], "ZeroDivisionError")
 

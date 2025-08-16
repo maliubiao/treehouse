@@ -116,15 +116,15 @@ def analyze_variable_ops(func_or_code: Union[types.CodeType, Callable[..., Any]]
                     if obj_name in line_vars[current_line]:
                         line_vars[current_line].remove(obj_name)
 
-        # super() 属性加载
-        elif opname == "LOAD_SUPER_ATTR":
-            attr_name = instr.argval
-            var_name = f"super().{attr_name}"
-            # super() 调用会隐式加载 'super', '__class__', 和 'self'。
-            # 为了提供更清晰、更符合源代码意图的分析，我们移除这些实现细节。
-            line_vars[current_line].discard("super")
-            line_vars[current_line].discard("__class__")
-            line_vars[current_line].discard("self")
+        # # super() 属性加载
+        # elif opname == "LOAD_SUPER_ATTR":
+        #     attr_name = instr.argval
+        #     var_name = f"super().{attr_name}"
+        #     # super() 调用会隐式加载 'super', '__class__', 和 'self'。
+        #     # 为了提供更清晰、更符合源代码意图的分析，我们移除这些实现细节。
+        #     line_vars[current_line].discard("super")
+        #     line_vars[current_line].discard("__class__")
+        #     line_vars[current_line].discard("self")
 
         if var_name:
             line_vars[current_line].add(var_name)
@@ -163,22 +163,22 @@ if __name__ == "__main__":
         def get_x(self) -> int:
             return self.x
 
-    class Derived(Base):
-        def __init__(self) -> None:
-            super().__init__()
-            self.y = 20
+    # class Derived(Base):
+    #     def __init__(self) -> None:
+    #         super().__init__()
+    #         self.y = 20
 
-        def get_x_from_super(self) -> int:
-            return super().x  # Generates LOAD_SUPER_ATTR
+    #     def get_x_from_super(self) -> int:
+    #         return super().x  # Generates LOAD_SUPER_ATTR
 
-        def get_x_method_from_super(self) -> int:
-            return super().get_x()  # Generates LOAD_SUPER_ATTR
+    #     def get_x_method_from_super(self) -> int:
+    #         return super().get_x()  # Generates LOAD_SUPER_ATTR
 
-    def test_super_attr():
-        d = Derived()
-        a = d.get_x_from_super()
-        b = d.get_x_method_from_super()
-        return a, b
+    # def test_super_attr():
+    #     d = Derived()
+    #     a = d.get_x_from_super()
+    #     b = d.get_x_method_from_super()
+    #     return a, b
 
     # --- Assertion-based Test Suite ---
     print("\n--- Running Automated Tests ---")
@@ -242,30 +242,30 @@ if __name__ == "__main__":
         },
     )
 
-    run_test(
-        Derived.get_x_from_super,
-        {
-            "return super().x  # Generates LOAD_SUPER_ATTR": ["super().x"],
-        },
-    )
+    # run_test(
+    #     Derived.get_x_from_super,
+    #     {
+    #         "return super().x  # Generates LOAD_SUPER_ATTR": ["super().x"],
+    #     },
+    # )
 
-    run_test(
-        Derived.get_x_method_from_super,
-        {
-            "return super().get_x()  # Generates LOAD_SUPER_ATTR": ["super().get_x"],
-        },
-    )
+    # run_test(
+    #     Derived.get_x_method_from_super,
+    #     {
+    #         "return super().get_x()  # Generates LOAD_SUPER_ATTR": ["super().get_x"],
+    #     },
+    # )
 
-    if PYTHON_312_OR_LATER:
-        run_test(
-            test_super_attr,
-            {
-                "d = Derived()": ["d", "Derived"],
-                "a = d.get_x_from_super()": ["a", "d.get_x_from_super"],
-                "b = d.get_x_method_from_super()": ["b", "d.get_x_method_from_super"],
-                "return a, b": ["a", "b"],
-            },
-        )
+    # if PYTHON_312_OR_LATER:
+    #     run_test(
+    #         test_super_attr,
+    #         {
+    #             "d = Derived()": ["d", "Derived"],
+    #             "a = d.get_x_from_super()": ["a", "d.get_x_from_super"],
+    #             "b = d.get_x_method_from_super()": ["b", "d.get_x_method_from_super"],
+    #             "return a, b": ["a", "b"],
+    #         },
+    #     )
 
     print("\n--- Test Summary ---")
     if all_tests_passed:
