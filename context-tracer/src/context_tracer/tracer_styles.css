@@ -699,6 +699,28 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
     word-break: break-all;
 }
 
+/*
+ * Specific override for debug vars inside the source code viewer.
+ * This removes padding and border to prevent line height issues,
+ * making it blend seamlessly with the code.
+ */
+.source-container .debug-vars {
+    padding: 0;
+    border: none;
+    background-color: transparent;
+    margin-left: 8px; /* Add some space from the code */
+    vertical-align: baseline; /* Align with the text better */
+    box-shadow: none; /* Remove any shadow */
+}
+
+/* When expanded inside the source view, give it back some styling for clarity */
+.source-container .debug-vars.expanded {
+    padding: 8px; /* Restore padding for the list view */
+    background-color: var(--debug-vars-bg);
+    border: 1px solid var(--debug-vars-border);
+    box-shadow: var(--shadow); /* Restore shadow for popup effect */
+}
+
 /* ===== Overlay and modal isolation ===== */
 .source-dialog {
     /* Existing properties */
