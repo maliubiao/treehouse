@@ -707,9 +707,9 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
 .source-container .debug-vars {
     padding: 0;
     border: none;
-    background-color: transparent;
+    background-color: var(--debug-vars-bg);
     margin-left: 8px; /* Add some space from the code */
-    vertical-align: baseline; /* Align with the text better */
+    vertical-align: middle; /* Align with the text better */
     box-shadow: none; /* Remove any shadow */
 }
 
