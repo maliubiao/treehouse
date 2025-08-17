@@ -699,38 +699,6 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
     word-break: break-all;
 }
 
-/* Special override for debug-vars inside the source code viewer */
-/* This removes padding and borders to prevent line height issues */
-.source-container .debug-vars {
-    padding: 0;
-    border: none;
-    background-color: transparent;
-    margin: 0 0 0 10px; /* Keep a small left margin */
-    border-radius: 0;
-    font-size: inherit; /* Inherit font size from the code block */
-    vertical-align: baseline; /* Better alignment with text */
-    box-shadow: none;
-}
-
-.source-container .debug-vars:hover {
-    background-color: transparent; /* Disable hover effect in compact mode */
-}
-
-/* When expanded inside the source view, style it as an overlay to avoid disrupting layout */
-.source-container .debug-vars.expanded {
-    position: absolute;
-    display: block;
-    background-color: var(--card-bg);
-    border: 1px solid var(--border-color);
-    padding: 8px;
-    margin-top: 5px;
-    z-index: 10;
-    box-shadow: var(--shadow);
-    border-radius: 4px;
-    max-width: 60%; /* Prevent it from being too wide */
-}
-
-
 /* ===== Overlay and modal isolation ===== */
 .source-dialog {
     /* Existing properties */
