@@ -76,6 +76,7 @@ const TraceViewer = {
         this.initSkeletonView();
         this.initToggleDetails();
         this.initAiExplainer();
+        this.initClipboardInterceptor(); // New feature activation
     },
 
     // Pre-calculates the size of each foldable section for smart expansion
@@ -1015,6 +1016,89 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         aiExplainer.init();
         // Attach to the main viewer object for debugging/scoping
         TraceViewer.aiExplainer = aiExplainer;
+    },
+
+    // NEW: Intercept native copy events for better text representation
+    initClipboardInterceptor() {
+        document.addEventListener('copy', (event) => {
+            const selection = document.getSelection();
+            if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+                return;
+            }
+    
+            const contentEl = this.elements.content;
+            const range = selection.getRangeAt(0);
+            if (!contentEl || !contentEl.contains(range.commonAncestorContainer)) {
+                // Selection is outside our scope, let the browser handle it.
+                return;
+            }
+    
+            const plainText = this.extractTextFromSelection(selection);
+    
+            // Set the clipboard data and prevent the default browser copy action.
+            event.clipboardData.setData('text/plain', plainText);
+            event.preventDefault();
+        });
+    },
+    
+    // NEW: Helper to generate clean text from a selection fragment
+    extractTextFromSelection(selection) {
+        const range = selection.getRangeAt(0);
+        const fragment = range.cloneContents();
+        const tempContainer = document.createElement('div');
+        tempContainer.appendChild(fragment);
+    
+        // Phase 1: Clean up UI-only elements that shouldn't appear in copied text
+        tempContainer.querySelectorAll('.view-source-btn, .copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn, .explain-ai-btn, .expand-code-btn').forEach(el => el.remove());
+    
+        // Phase 2: Transform custom components into their plain-text representations
+        
+        // Handle multi-line statements
+        tempContainer.querySelectorAll('.multi-line-container').forEach(container => {
+            const prefixEl = container.querySelector('.multi-line-prefix');
+            const codeEl = container.querySelector('.code-full code');
+            if (codeEl) {
+                const prefixText = prefixEl ? prefixEl.textContent : '';
+                const codeText = codeEl.textContent;
+                // Replace the complex container with a simple text node.
+                // Newlines within codeText will be preserved by the final .innerText call.
+                container.replaceWith(document.createTextNode(prefixText + codeText));
+            }
+        });
+    
+        // Handle new debug vars UI
+        tempContainer.querySelectorAll('.debug-vars').forEach(debugEl => {
+            const vars = [];
+            debugEl.querySelectorAll('.list-view .var-entry').forEach(entry => {
+                const name = entry.querySelector('.var-name')?.textContent.trim();
+                // Use innerText for value to handle potential <pre> tags correctly
+                const value = entry.querySelector('.var-value')?.innerText.trim();
+                if (name && value) {
+                    vars.push(`${name}=${value}`);
+                }
+            });
+            
+            if (vars.length > 0) {
+                // Prepend a space to ensure separation from the preceding code/text.
+                const debugText = ` # Debug: ${vars.join(', ')}`;
+                debugEl.replaceWith(document.createTextNode(debugText));
+            } else {
+                debugEl.remove();
+            }
+        });
+        
+        // Handle legacy comments
+        tempContainer.querySelectorAll('.comment').forEach(commentEl => {
+            const fullTextEl = commentEl.querySelector('.comment-full');
+            const content = (fullTextEl || commentEl).textContent.trim();
+            // Prepend a space for correct formatting.
+            commentEl.replaceWith(document.createTextNode(` # ${content}`));
+        });
+    
+        // Phase 3: Extract formatted text
+        // .innerText is great because it interprets line breaks from block elements (like our <div> log lines)
+        // and generally produces a more readable text output than .textContent.
+        return tempContainer.innerText;
     },
 
     // Adjust line number styles based on theme
