@@ -432,7 +432,11 @@ button:hover {
 
 /* Source view buttons */
 .view-source-btn {
-    display: none; /* Hidden by default, shown on hover */
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+    display: inline-block;
+    vertical-align: middle;
     cursor: pointer;
     color: var(--call-color);
     text-decoration: underline;
@@ -441,12 +445,17 @@ button:hover {
 }
 
 div[data-indent]:hover > .view-source-btn {
-    display: inline;
+    opacity: 1;
+    pointer-events: auto;
 }
 
 /* Action Buttons: Copy Subtree, Focus Subtree, Toggle Details, AI Explain */
 .copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn, .explain-ai-btn {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+    display: inline-block; /* Occupy space even when invisible */
+    vertical-align: middle;
     margin-left: 8px;
     cursor: pointer;
     font-size: 0.9em;
@@ -457,12 +466,14 @@ div[data-indent]:hover > .view-source-btn {
 .foldable:hover .copy-subtree-btn,
 .foldable:hover .focus-subtree-btn,
 .foldable:hover .explain-ai-btn {
-    display: inline-block;
+    opacity: 1;
+    pointer-events: auto;
 }
 
 /* Toggle Details button appears on hover only when in skeleton mode */
 body.skeleton-mode .foldable:hover .toggle-details-btn {
-    display: inline-block;
+    opacity: 1;
+    pointer-events: auto;
 }
 
 
