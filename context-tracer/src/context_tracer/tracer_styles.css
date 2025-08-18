@@ -182,15 +182,19 @@ body {
 .foldable {
     cursor: pointer;
     position: relative;
-    padding-left: 20px;
+    /* The indentation for the text content is now controlled by padding-left */
+    /* It's calculated based on the CSS variable from the inline style plus space for the arrow */
+    padding-left: calc(var(--indent-space, 0ch) + 20px);
     margin: 5px 0;
 }
 
 .foldable::before {
     content: '▶';
     position: absolute;
-    left: 0;
+    /* Position the arrow where the text indentation should begin */
+    left: var(--indent-space, 0ch);
     color: var(--text-color);
+    width: 20px; /* Give it a fixed width to occupy the space we made in padding-left */
 }
 
 .foldable.expanded::before {

@@ -297,7 +297,7 @@ class CallTreeHtmlRender:
         if msg_type == TraceTypes.COLOR_CALL:
             html_parts.extend(
                 [
-                    f'<div class="foldable {TraceTypes.HTML_CALL}" {data_indent_attr} style="padding-left:{indent}ch">',
+                    f'<div class="foldable {TraceTypes.HTML_CALL}" {data_indent_attr} style="--indent-space: {indent}ch;">',
                     f"    {escaped_content}{appended_html}",
                     "</div>",
                     '<div class="call-group collapsed">',
