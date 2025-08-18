@@ -373,7 +373,10 @@ const TraceViewer = {
                     const code = codeEl ? codeEl.textContent : '';
                     text = prefix + code;
                 } else {
-                    text = clone.textContent.trim().replace(/\s+/g, ' ');
+                    // For single-line events, trim whitespace from the ends but do not collapse
+                    // internal whitespace. This is crucial for preserving the indentation
+                    // of source code within the log line.
+                    text = clone.textContent.trim();
                 }
 
                 // Handle new debug vars UI
