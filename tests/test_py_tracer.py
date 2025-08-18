@@ -287,8 +287,8 @@ class TestTruncateReprValue(unittest.TestCase):
     def test_safe_mode_with_containers(self):
         my_list = [1, 2, BuggyRepr()]
         my_dict = {"a": 1, "b": BuggyRepr()}
-        self.assertEqual(truncate_repr_value(my_list, safe=True), "<list length=3 (safe mode)>")
-        self.assertEqual(truncate_repr_value(my_dict, safe=True), "<dict size=2 (safe mode)>")
+        self.assertEqual(truncate_repr_value(my_list, safe=True), "[trace system error: This repr is buggy!]")
+        self.assertEqual(truncate_repr_value(my_dict, safe=True), "[trace system error: This repr is buggy!]")
 
     def test_safe_mode_with_primitives(self):
         self.assertEqual(truncate_repr_value("hello", safe=True), '"hello"')
@@ -1826,11 +1826,11 @@ class TestIntegration(BaseTracerTest):
 
         # Assert call to `process_object` shows safe repr for the argument
         self.assertIn("↘ CALL", log_content)
-        self.assertIn("process_object(obj=<object of type", log_content)
+        self.assertIn("process_object(obj=BuggyRepr.({}))", log_content)
 
         # Assert return from `process_object` shows safe repr for the return value
         self.assertIn("↗ RETURN", log_content)
-        self.assertIn("→ <object of type", log_content)
+        self.assertIn("→ BuggyRepr.({})", log_content)
 
     @unittest.skipUnless(sys.version_info >= (3, 12), "C function tracing requires Python 3.12+")
     def test_e2e_c_calls_tracing(self):
