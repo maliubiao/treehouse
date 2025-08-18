@@ -1290,20 +1290,19 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             // Add close controls
             this.addDialogCloseControls(dialog);
             
-            // Show the dialog
-            dialog.style.display = 'flex';
-
-            // Process after dialog is visible
+            // The dialog is kept hidden until all its content is fully rendered to prevent flicker.
+            // We pass the dialog object to the processor, which will be responsible for making it visible.
             setTimeout(() => {
                 this.processSourceCode(
                     container.querySelector('.line-numbers'),
                     container.querySelector('code'),
-                    frameLines, // Pass original frameLines object
+                    frameLines,
                     lineNumber,
                     frameId,
                     filename,
+                    dialog // Pass the dialog to be shown later
                 );
-            }, 100);
+            }, 10); // A small delay is enough.
         },
         
         // Setup dialog header
@@ -1378,8 +1377,9 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         },
         
         // Process source code after rendering
-        processSourceCode(lineNumbers, code, frameLines, lineNumber, frameId, filename) {
-            // Add loading indicator
+        processSourceCode(lineNumbers, code, frameLines, lineNumber, frameId, filename, dialog) {
+            // Add loading indicator. This will be added to a hidden element, so it's not visible
+            // to the user, but it's good practice.
             const loadingIndicator = document.createElement('div');
             loadingIndicator.style.position = 'absolute';
             loadingIndicator.style.top = '50%';
@@ -1437,6 +1437,12 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                         }
                     });
                 }
+                
+                // Remove loading indicator before showing the dialog
+                loadingIndicator.remove();
+
+                // Make the dialog visible now that all content is ready.
+                dialog.style.display = 'flex';
 
                 // 4. Highlight the specific line that triggered the 'view source' action.
                 const targetLine = lineNumbers.querySelector(`.line-number[data-line="${lineNumber}"]`);
@@ -1444,12 +1450,12 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     targetLine.classList.add('current-line');
                     
                     // 5. Scroll the single parent container to the target line.
-                    // This is robust because there is only one scrollable container.
-                    targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Use a minimal timeout to ensure the browser has rendered the dialog
+                    // before we try to scroll within it.
+                    setTimeout(() => {
+                        targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 0);
                 }
-                
-                // Remove loading indicator
-                loadingIndicator.remove();
             };
             
             // Check if Prism is loaded
