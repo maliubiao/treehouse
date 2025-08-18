@@ -89,7 +89,7 @@ def _truncate_object(value, keep_elements):
     return f"{type(value).__name__}(%s ...)" % s[:-1]
 
 
-def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
+def truncate_repr_value(value: Any, keep_elements: int = 10, safe: bool = False) -> str:
     """
     Intelligently truncates a value and creates a suitable string representation for it,
     while preserving key type information.
@@ -100,10 +100,10 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
     Args:
         value: The value to be represented.
         keep_elements: The maximum number of elements to keep for sequences and dicts.
-
-    Returns:
-        A truncated string representation suitable for logging and code generation.
+        safe: If True, avoids calling custom __repr__ or __str__ methods on objects
+              to prevent side effects.
     """
+    # If not in safe mode, or if it's a whitelisted type, proceed with the full logic.
     preview = "..."
     try:
         # [FIX] Explicitly handle strings to prevent double-quoting by `repr()`.
@@ -134,10 +134,10 @@ def truncate_repr_value(value: Any, keep_elements: int = 10) -> str:
         elif isinstance(value, dict):
             preview = _truncate_dict(value, keep_elements)
         # For other objects with a custom __repr__, use it as it's the developer's intended representation.
-        elif hasattr(value, "__repr__") and value.__repr__.__qualname__ != "object.__repr__":
+        elif not safe and hasattr(value, "__repr__") and value.__repr__.__qualname__ != "object.__repr__":
             preview = repr(value)
         # As a fallback, use __str__ if it's customized.
-        elif hasattr(value, "__str__") and value.__str__.__qualname__ != "object.__str__":
+        elif not safe and hasattr(value, "__str__") and value.__str__.__qualname__ != "object.__str__":
             preview = str(value)
         # For simple objects, show their structure.
         elif hasattr(value, "__dict__"):

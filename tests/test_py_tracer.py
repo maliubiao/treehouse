@@ -36,6 +36,15 @@ from context_tracer.tracer_common import _MAX_VALUE_LENGTH, TraceTypes
 # A temporary directory for test artifacts
 TEST_DIR = Path(__file__).parent / "test_artifacts"
 
+
+# --- Helper Classes & Functions for Testing ---
+class BuggyRepr:
+    """A helper class with a __repr__ that raises an exception."""
+
+    def __repr__(self):
+        raise RuntimeError("This repr is buggy!")
+
+
 # --- Test Target Code ---
 # This code will be "traced" by our tests.
 # We define it here to have access to its source and frame objects.
@@ -265,6 +274,26 @@ class TestTruncateReprValue(unittest.TestCase):
         result = truncate_repr_value(obj)
         self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
 
+    def test_unsafe_mode_with_buggy_repr(self):
+        obj = BuggyRepr()
+        result = truncate_repr_value(obj, safe=False)
+        self.assertIn("[trace system error: This repr is buggy!]", result)
+
+    def test_safe_mode_with_buggy_repr(self):
+        obj = BuggyRepr()
+        result = truncate_repr_value(obj, safe=True)
+        self.assertEqual(result, "BuggyRepr.({})")
+
+    def test_safe_mode_with_containers(self):
+        my_list = [1, 2, BuggyRepr()]
+        my_dict = {"a": 1, "b": BuggyRepr()}
+        self.assertEqual(truncate_repr_value(my_list, safe=True), "<list length=3 (safe mode)>")
+        self.assertEqual(truncate_repr_value(my_dict, safe=True), "<dict size=2 (safe mode)>")
+
+    def test_safe_mode_with_primitives(self):
+        self.assertEqual(truncate_repr_value("hello", safe=True), '"hello"')
+        self.assertEqual(truncate_repr_value(123, safe=True), "123")
+
 
 class TestTraceConfig(BaseTracerTest):
     """Tests for the TraceConfig class."""
@@ -278,6 +307,7 @@ class TestTraceConfig(BaseTracerTest):
         self.assertEqual(config.report_name, "trace_report.html")
         self.assertEqual(config.target_files, [])
         self.assertEqual(config.line_ranges, defaultdict(set))
+        self.assertEqual(config.skip_vars_on_lines, [])
         self.assertEqual(config.capture_vars, [])
         self.assertEqual(config.exclude_functions, [])
         self.assertIsNone(config.callback)
@@ -335,6 +365,7 @@ class TestTraceConfig(BaseTracerTest):
         sample_config = {
             "target_files": ["*.py", "test_*.py"],
             "line_ranges": {resolved_test_py_path: [(1, 10), (20, 30)]},  # Use resolved path here
+            "skip_vars_on_lines": [{"pattern": f"*{test_py_path.name}", "start": 5, "end": 8}],
             "capture_vars": ["x", "y.z"],
             "exclude_functions": ["some_excluded_func"],
             "ignore_system_paths": False,
@@ -353,6 +384,7 @@ class TestTraceConfig(BaseTracerTest):
         self.assertEqual(
             config.line_ranges[resolved_test_py_path], {i for i in range(1, 11)} | {i for i in range(20, 31)}
         )
+        self.assertEqual(config.skip_vars_on_lines, sample_config["skip_vars_on_lines"])
         self.assertEqual(config.capture_vars, sample_config["capture_vars"])
         self.assertEqual(config.exclude_functions, sample_config["exclude_functions"])
         self.assertFalse(config.ignore_system_paths)
@@ -440,6 +472,39 @@ class TestTraceConfig(BaseTracerTest):
         config_no_ignore = TraceConfig(ignore_system_paths=False, include_stdlibs=["os"])
         self.assertTrue(config_no_ignore.match_filename(str(os_path)))
         self.assertTrue(config_no_ignore.match_filename(str(collections_path)))
+
+    def test_should_skip_vars(self):
+        test_file_path = self.test_dir / "my_app_for_skip_test.py"
+        test_file_path.touch()
+        resolved_path = str(test_file_path.resolve())
+
+        config = TraceConfig(
+            skip_vars_on_lines=[
+                {"pattern": f"*{test_file_path.name}", "start": 5, "end": 10},
+                {"pattern": "lib/*.py", "start": 1, "end": 100},
+            ]
+        )
+
+        # Test matching rule
+        self.assertTrue(config.should_skip_vars(resolved_path, 7))
+        self.assertTrue(config.should_skip_vars(resolved_path, 5))
+        self.assertTrue(config.should_skip_vars(resolved_path, 10))
+
+        # Test outside range
+        self.assertFalse(config.should_skip_vars(resolved_path, 4))
+        self.assertFalse(config.should_skip_vars(resolved_path, 11))
+
+        # Test non-matching file
+        other_file_path = self.test_dir / "other_app.py"
+        other_file_path.touch()
+        self.assertFalse(config.should_skip_vars(str(other_file_path.resolve()), 7))
+
+        # Test caching (simple check: it should return the same result)
+        self.assertTrue(config.should_skip_vars(resolved_path, 7))
+        self.assertIn(f"{resolved_path}:7", config._skip_vars_cache)
+
+        test_file_path.unlink()
+        other_file_path.unlink()
 
 
 class TestTraceLogic(BaseTracerTest):
@@ -575,6 +640,44 @@ class TestTraceLogic(BaseTracerTest):
             self.logic._format_log_message(log_data),
         )
         self.assertEqual(self.logic._local.stack_depth, 1)
+
+    def test_safe_variable_capture_with_skip_rule(self):
+        # 1. Define a function that uses the buggy object
+        def func_with_buggy_arg(arg1):
+            x = 1  # We need at least one line to trace
+            return arg1
+
+        # 2. Configure the tracer to skip vars in this test file
+        test_file_path = Path(__file__).resolve()
+        lines, start_line = inspect.getsourcelines(func_with_buggy_arg)
+        end_line = start_line + len(lines)
+
+        config = TraceConfig(
+            target_files=[f"*{test_file_path.name}"],
+            skip_vars_on_lines=[{"pattern": f"*{test_file_path.name}", "start": start_line, "end": end_line}],
+        )
+        logic = TraceLogic(config)
+        logic._add_to_buffer = MagicMock()  # Mock the buffer
+        logic.init_stack_variables()
+
+        # 3. Get a real frame from the function
+        buggy_instance = BuggyRepr()
+        frame = self._get_frame_at(func_with_buggy_arg, buggy_instance, event_type="call")
+
+        # 4. Simulate the handle_call event
+        logic.handle_call(frame)
+
+        # 5. Assert that the call was logged with a safe representation
+        logic._add_to_buffer.assert_called_once()
+        log_data = logic._add_to_buffer.call_args[0][0]
+        self.assertEqual("arg1=BuggyRepr.({})", log_data["data"]["args"])
+
+        # 6. Test return value
+        logic._local.stack_depth = 1  # Simulate being inside the call
+        logic.handle_return(frame, buggy_instance)
+
+        return_log_data = logic._add_to_buffer.call_args[0][0]
+        self.assertEqual("BuggyRepr.({})", return_log_data["data"]["return_value"])
 
     def test_handle_return(self):
         frame = self._get_frame_at(sample_function, 5, 3, event_type="return")
@@ -1679,6 +1782,55 @@ class TestIntegration(BaseTracerTest):
         # The key is to check that the variable `my_list` was logged, which means
         # the delayed message was flushed by the `stop()` logic.
         self.assertIn("my_list=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]", log_content)
+
+    def test_e2e_skip_vars_on_lines_cli(self):
+        """
+        E2E test to ensure --skip-vars-on-lines CLI flag works correctly and
+        prevents crashes from buggy __repr__ implementations.
+        """
+        script_content = dedent("""
+            class BuggyRepr:
+                def __repr__(self):
+                    raise RuntimeError("This repr is buggy!")
+
+            def process_object(obj):
+                # This line is where the tracer will try to represent 'obj'
+                print("Processing...")
+                return obj
+
+            def main():
+                buggy_instance = BuggyRepr()
+                result = process_object(buggy_instance)
+
+            if __name__ == "__main__":
+                main()
+        """)
+        script_path = self.test_dir / "buggy_repr_script.py"
+        script_path.write_text(script_content, encoding="utf-8")
+
+        log_dir = Path.cwd() / "tracer-logs"
+        report_name = f"{script_path.stem}.html"
+        log_file_path = log_dir / f"{script_path.stem}.log"
+        if log_file_path.exists():
+            log_file_path.unlink()
+
+        # Run the tracer with the skip rule
+        cli_args = ["--report-name", report_name, "--skip-vars-on-lines", f"*{script_path.name}:1-20"]
+        process = self._run_e2e_test(script_path, cli_args)
+
+        # Assert it didn't crash
+        self.assertEqual(process.returncode, 0, f"Tracer process exited with error. Stderr: {process.stderr}")
+        self.assertTrue(log_file_path.exists())
+
+        log_content = log_file_path.read_text(encoding="utf-8")
+
+        # Assert call to `process_object` shows safe repr for the argument
+        self.assertIn("↘ CALL", log_content)
+        self.assertIn("process_object(obj=<object of type", log_content)
+
+        # Assert return from `process_object` shows safe repr for the return value
+        self.assertIn("↗ RETURN", log_content)
+        self.assertIn("→ <object of type", log_content)
 
     @unittest.skipUnless(sys.version_info >= (3, 12), "C function tracing requires Python 3.12+")
     def test_e2e_c_calls_tracing(self):

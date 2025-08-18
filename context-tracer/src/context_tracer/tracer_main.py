@@ -63,6 +63,7 @@ def create_parser() -> ArgumentParser:
         "  context-tracer --watch-files='src/*.py' script.py\n"
         "  context-tracer --capture-vars='x' --capture-vars='y.z' script.py\n"
         "  context-tracer --line-ranges='test.py:10-20' script.py\n"
+        "  context-tracer --skip-vars-on-lines='lib.py:50-100' script.py\n"
         "  context-tracer --start-function='main.py:5' script.py arg1 --arg2\n"
         "  context-tracer --include-stdlibs=json --include-stdlibs=re script.py\n"
         "  context-tracer --trace-c-calls script.py"
@@ -116,6 +117,11 @@ def create_parser() -> ArgumentParser:
         "--line-ranges",
         type=str,
         help="要跟踪的行号范围，格式为'文件路径:起始行-结束行'，多个范围用逗号分隔",
+    )
+    parser.add_argument(
+        "--skip-vars-on-lines",
+        action="append",
+        help="跳过指定文件模式和行号范围的变量捕获，格式为 '文件模式:起始行-结束行' (可多次指定)",
     )
     parser.add_argument(
         "--enable-var-trace",
@@ -232,6 +238,21 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
             except Exception as e:
                 raise ValueError(f"解析行号范围时发生未知错误 '{range_str}': {e}") from e
 
+    # 解析跳过变量捕获的范围
+    skip_vars_on_lines = []
+    if args.skip_vars_on_lines:
+        for range_str in args.skip_vars_on_lines:
+            try:
+                # 使用 rsplit 确保模式中的冒号不会被错误分割
+                pattern, ranges = range_str.rsplit(":", 1)
+                start_str, end_str = ranges.split("-", 1)
+                start, end = int(start_str), int(end_str)
+                if start > end:
+                    raise ValueError(f"起始行号 {start} 大于结束行号 {end}")
+                skip_vars_on_lines.append({"pattern": pattern, "start": start, "end": end})
+            except ValueError as e:
+                raise ValueError(f"跳过变量捕获范围格式错误 '{range_str}': {e}") from e
+
     return {
         "target_script": target_script,
         "target_module": target_module,
@@ -242,6 +263,7 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "capture_vars": args.capture_vars or [],
         "exclude_functions": args.exclude_functions or [],
         "line_ranges": line_ranges,
+        "skip_vars_on_lines": skip_vars_on_lines,
         "enable_var_trace": args.enable_var_trace,
         "disable_html": args.disable_html,
         "report_name": args.report_name,
@@ -338,6 +360,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             print(color_wrap(f"📝 排除函数: {', '.join(args['exclude_functions'])}", "var"))
         if args["line_ranges"]:
             print(color_wrap(f"📝 行号范围: {args['line_ranges']}", "var"))
+        if args["skip_vars_on_lines"]:
+            print(color_wrap(f"📝 跳过变量捕获: {args['skip_vars_on_lines']}", "var"))
         if args["start_function"]:
             print(color_wrap(f"📝 起始函数: {args['start_function']}", "var"))
         if args["source_base_dir"]:
@@ -350,6 +374,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             target_files=args["watch_files"] + [f"*{target_path_for_config.stem}.py"],
             capture_vars=args["capture_vars"],
             line_ranges=args["line_ranges"],
+            skip_vars_on_lines=args["skip_vars_on_lines"],
             exclude_functions=args["exclude_functions"],
             enable_var_trace=args["enable_var_trace"],
             disable_html=args["disable_html"],

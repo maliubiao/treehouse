@@ -98,6 +98,7 @@ class TraceConfig:
         self,
         target_files: Optional[List[str]] = None,
         line_ranges: Optional[Dict[str, List[Tuple[int, int]]]] = None,
+        skip_vars_on_lines: Optional[List[Dict[str, Any]]] = None,
         capture_vars: Optional[List[str]] = None,
         callback: Optional[callable] = None,
         report_name: str = _DEFAULT_REPORT_NAME,
@@ -117,6 +118,7 @@ class TraceConfig:
         Args:
             target_files: 目标文件模式列表，支持通配符
             line_ranges: 文件行号范围字典，key为文件名，value为 (start_line, end_line) 元组列表
+            skip_vars_on_lines: 跳过变量捕获的规则列表
             capture_vars: 要捕获的变量表达式列表
             callback: 变量捕获时的回调函数
             report_name: HTML报告文件名
@@ -132,6 +134,7 @@ class TraceConfig:
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
+        self.skip_vars_on_lines = skip_vars_on_lines or []
         self.capture_vars = capture_vars or []
         self.callback = callback
         self.report_name = report_name if report_name else _DEFAULT_REPORT_NAME
@@ -147,6 +150,7 @@ class TraceConfig:
         self.disable_html = disable_html
         self.include_stdlibs = include_stdlibs or []
         self.trace_c_calls = trace_c_calls
+        self._skip_vars_cache: Dict[str, bool] = {}
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -203,6 +207,35 @@ class TraceConfig:
         filename_posix = resolved_path.as_posix()
         return any(fnmatch.fnmatch(filename_posix, pattern) for pattern in self.target_files)
 
+    def should_skip_vars(self, filename: str, lineno: int) -> bool:
+        """检查是否应跳过给定文件和行号的变量捕獲。"""
+        if not self.skip_vars_on_lines:
+            return False
+
+        # A simple cache for the check result for a given file/line combo
+        cache_key = f"{filename}:{lineno}"
+        if cache_key in self._skip_vars_cache:
+            return self._skip_vars_cache[cache_key]
+
+        try:
+            resolved_path = Path(filename).resolve()
+            filename_posix = resolved_path.as_posix()
+        except (ValueError, OSError):
+            filename_posix = filename  # Fallback for non-file paths like <string>
+
+        for rule in self.skip_vars_on_lines:
+            pattern = rule["pattern"]
+            start = rule["start"]
+            end = rule["end"]
+
+            if fnmatch.fnmatch(filename_posix, pattern) or fnmatch.fnmatch(filename, pattern):
+                if start <= lineno <= end:
+                    self._skip_vars_cache[cache_key] = True
+                    return True
+
+        self._skip_vars_cache[cache_key] = False
+        return False
+
     @classmethod
     def from_yaml(cls, config_path: Union[str, Path]) -> "TraceConfig":
         """
@@ -235,6 +268,7 @@ class TraceConfig:
         return cls(
             target_files=config_data.get("target_files", []),
             line_ranges=config_data.get("line_ranges", {}),
+            skip_vars_on_lines=config_data.get("skip_vars_on_lines", []),
             capture_vars=config_data.get("capture_vars", []),
             callback=config_data.get("callback", None),
             exclude_functions=config_data.get("exclude_functions", []),
@@ -1215,6 +1249,7 @@ class TraceLogic:
         self._process_message_with_vars(frame, None, None)
 
         try:
+            is_safe = self.config.should_skip_vars(frame.f_code.co_filename, frame.f_lineno)
             args_info = []
             if frame.f_code.co_name == "<module>":
                 log_prefix = TraceTypes.PREFIX_MODULE
@@ -1227,7 +1262,7 @@ class TraceLogic:
                     args = []
                     values = {}
                     args_to_show = []
-                args_info = [f"{arg}={truncate_repr_value(values[arg])}" for arg in args_to_show]
+                args_info = [f"{arg}={truncate_repr_value(values[arg], safe=is_safe)}" for arg in args_to_show]
                 log_prefix = TraceTypes.PREFIX_CALL
 
             parent_frame = frame.f_back
@@ -1279,8 +1314,8 @@ class TraceLogic:
 
     def handle_return(self, frame, return_value):
         """增强返回值记录"""
-
-        return_str = truncate_repr_value(return_value)
+        is_safe = self.config.should_skip_vars(frame.f_code.co_filename, frame.f_lineno)
+        return_str = truncate_repr_value(return_value, safe=is_safe)
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         frame_id = self.get_or_reuse_frame_id(frame)
 
@@ -1348,6 +1383,8 @@ class TraceLogic:
         if not var_names:
             return tracked_vars
 
+        is_safe = self.config.should_skip_vars(frame.f_code.co_filename, frame.f_lineno)
+
         # Filter out special (self, cls) and private (__var) variables
         vars_to_track = [
             v for v in var_names if v not in ("self", "cls") and not (v.startswith("__") and not v.endswith("__"))
@@ -1366,7 +1403,7 @@ class TraceLogic:
                     value = self.cache_eval(frame, var)  # nosec
                 except (AttributeError, NameError, SyntaxError) as err:
                     continue
-            tracked_vars[var] = truncate_repr_value(value)
+            tracked_vars[var] = truncate_repr_value(value, safe=is_safe)
 
         return tracked_vars
 
@@ -1502,7 +1539,9 @@ class TraceLogic:
             value = self.cache_eval(frame, cached_expr)  # 预编译表达式
         except (AttributeError, NameError, SyntaxError) as e:
             value = f"<Failed to evaluate: {str(e)}>"
-        formatted = truncate_repr_value(value)
+
+        is_safe = self.config.should_skip_vars(filename, lineno)
+        formatted = truncate_repr_value(value, safe=is_safe)
         self._add_to_buffer(
             {
                 "template": "{indent}↳ Debug Statement {expr}={value} [frame:{frame_id}]",
@@ -1604,13 +1643,14 @@ class TraceLogic:
         except AttributeError:
             func_name = repr(callable_obj)
 
+        is_safe = self.config.should_skip_vars(frame.f_code.co_filename, frame.f_lineno)
         self._add_to_buffer(
             {
                 "template": "{indent}↘ C-CALL {func_name}({arg0}) at {filename}:{lineno} [frame:{frame_id}][thread:{thread_id}]",
                 "data": {
                     "indent": _INDENT * self._local.stack_depth,
                     "func_name": func_name,
-                    "arg0": truncate_repr_value(arg0),
+                    "arg0": truncate_repr_value(arg0, safe=is_safe),
                     "filename": self._get_formatted_filename(frame.f_code.co_filename),
                     "lineno": frame.f_lineno,
                     "original_filename": frame.f_code.co_filename,
@@ -1680,13 +1720,14 @@ class TraceLogic:
             locals_dict = frame.f_locals
             globals_dict = frame.f_globals
             results = {}
+            is_safe = self.config.should_skip_vars(frame.f_code.co_filename, frame.f_lineno)
 
             for expr in self.config.capture_vars:
                 try:
                     _, compiled = self._compile_expr(expr)
                     # 安全警告：eval使用是必要的调试功能
                     value = eval(compiled, globals_dict, locals_dict)  # nosec
-                    formatted = truncate_repr_value(value)
+                    formatted = truncate_repr_value(value, safe=is_safe)
                     results[expr] = formatted
                 except (NameError, SyntaxError, TypeError, AttributeError) as e:
                     self._add_to_buffer(
@@ -1852,6 +1893,7 @@ class TraceContext:
 def trace(
     target_files: Optional[List[str]] = None,
     line_ranges: Optional[Dict[str, List[Tuple[int, int]]]] = None,
+    skip_vars_on_lines: Optional[List[Dict[str, Any]]] = None,
     capture_vars: Optional[List[str]] = None,
     callback: Optional[callable] = None,
     report_name: str = _DEFAULT_REPORT_NAME,
@@ -1870,6 +1912,7 @@ def trace(
     Args:
         target_files: 目标文件模式列表，支持通配符
         line_ranges: 文件行号范围字典，key为文件名，value为 (start_line, end_line) 元组列表
+        skip_vars_on_lines: 跳过变量捕获的规则列表
         capture_vars: 要捕获的变量表达式列表
         callback: 变量捕获时的回调函数
         report_name: 报告文件名
@@ -1902,6 +1945,7 @@ def trace(
         config = TraceConfig(
             target_files=target_files or [target_file],
             line_ranges=line_ranges,
+            skip_vars_on_lines=skip_vars_on_lines,
             capture_vars=capture_vars,
             callback=callback,
             report_name=report_name,
