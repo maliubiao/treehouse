@@ -439,9 +439,10 @@ class TraceDispatcher:
     def _handle_call_event(self, frame, _arg=None):
         """处理函数调用事件"""
         self._logic.init_stack_variables()
+        self._logic.maybe_unwanted_frame(frame)
+
         if self._logic.inside_unwanted_frame(frame):
             return self.trace_dispatch
-        self._logic.maybe_unwanted_frame(frame)
 
         if self.is_target_frame(frame):
             self.active_frames.add(frame)
@@ -672,9 +673,10 @@ class SysMonitoringTraceDispatcher:
         self._logic.init_stack_variables()
 
         frame = sys._getframe(1)  # Get the frame of the function being called
+        self._logic.maybe_unwanted_frame(frame)
+
         if self._logic.inside_unwanted_frame(frame):
             return self.monitoring_module.DISABLE
-        self._logic.maybe_unwanted_frame(frame)
 
         if self.is_target_frame(frame):
             # If we're waiting for a start function, check if this is it
@@ -708,7 +710,6 @@ class SysMonitoringTraceDispatcher:
         is_active = frame in self.active_frames
 
         if is_active or is_simple:
-            self._logic.leave_unwanted_frame(frame)
             if not self._logic.inside_unwanted_frame(frame):
                 self._logic.handle_return(frame, retval, is_simple=is_simple)
             self._logic.frame_cleanup(frame)
@@ -716,6 +717,8 @@ class SysMonitoringTraceDispatcher:
                 self.active_frames.discard(frame)
             if is_simple:
                 self.simple_frames.discard(frame)
+
+        self._logic.leave_unwanted_frame(frame)
 
     def handle_line(self, _code, _line_number):
         """Handle LINE event"""
@@ -764,15 +767,16 @@ class SysMonitoringTraceDispatcher:
         if is_active or is_simple:
             for exception in self._logic.exception_chain:
                 self._logic._add_to_buffer(exception[0], exception[1])
-            self._logic.exception_chain = []
-            # 减少堆栈深度（函数因异常退出）
-            self._logic.decrement_stack_depth()
-            self._logic.leave_unwanted_frame(frame)
             self._logic.frame_cleanup(frame)
             if is_active:
                 self.active_frames.discard(frame)
             if is_simple:
                 self.simple_frames.discard(frame)
+
+        # These state updates must happen for ALL frames during unwind to keep state consistent.
+        self._logic.exception_chain = []
+        self._logic.decrement_stack_depth()
+        self._logic.leave_unwanted_frame(frame)
 
     def _handle_reraise(self, _code, _offset, exc):
         """Handle RERAISE event (exception re-raised)"""
