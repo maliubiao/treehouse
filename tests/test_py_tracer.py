@@ -1597,7 +1597,14 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         # 2. Start of non_target_helper (boundary call)
         with patch("sys._getframe", return_value=frame_nontarget):
             result = self.dispatcher.handle_py_start(frame_nontarget.f_code, frame_nontarget.f_lasti)
-            expected_events = self.mock_monitoring.events.PY_RETURN | self.mock_monitoring.events.PY_UNWIND
+            expected_events = (
+                self.mock_monitoring.events.PY_RETURN
+                | self.mock_monitoring.events.PY_UNWIND
+                | self.mock_monitoring.events.RAISE
+                | self.mock_monitoring.events.RERAISE
+                | self.mock_monitoring.events.PY_THROW
+                | self.mock_monitoring.events.EXCEPTION_HANDLED
+            )
             self.assertEqual(result, expected_events)
             self.mock_logic.handle_call.assert_called_with(frame_nontarget, is_simple=True)
             self.assertIn(frame_nontarget, self.dispatcher.simple_frames)
