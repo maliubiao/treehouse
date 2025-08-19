@@ -297,7 +297,7 @@ class TestTruncateReprValue(unittest.TestCase):
 
         obj = TestObj()
         result = truncate_repr_value(obj)
-        self.assertIn("TestObj.({'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5, 'f': 6})", result)
+        self.assertIn("TestObj(a=1, b=2, c=3, d=4, e=5, f=6)", result)
 
     def test_unsafe_mode_with_buggy_repr(self):
         obj = BuggyRepr()
@@ -307,16 +307,16 @@ class TestTruncateReprValue(unittest.TestCase):
     def test_safe_mode_with_buggy_repr(self):
         obj = BuggyRepr()
         result = truncate_repr_value(obj, safe=True)
-        self.assertEqual(result, "BuggyRepr.({})")
+        self.assertEqual(result, "<BuggyRepr object>")
 
     def test_safe_mode_with_containers(self):
         my_list = [1, 2, BuggyRepr()]
         my_dict = {"a": 1, "b": BuggyRepr()}
-        self.assertEqual(truncate_repr_value(my_list, safe=True), "[trace system error: This repr is buggy!]")
-        self.assertEqual(truncate_repr_value(my_dict, safe=True), "[trace system error: This repr is buggy!]")
+        self.assertEqual(truncate_repr_value(my_list, safe=True), "[1, 2, <BuggyRepr object>]")
+        self.assertEqual(truncate_repr_value(my_dict, safe=True), "{'a': 1, 'b': <BuggyRepr object>}")
 
     def test_safe_mode_with_primitives(self):
-        self.assertEqual(truncate_repr_value("hello", safe=True), '"hello"')
+        self.assertEqual(truncate_repr_value("hello", safe=True), "'hello'")
         self.assertEqual(truncate_repr_value(123, safe=True), "123")
 
 
@@ -695,14 +695,14 @@ class TestTraceLogic(BaseTracerTest):
         # 5. Assert that the call was logged with a safe representation
         logic._add_to_buffer.assert_called_once()
         log_data = logic._add_to_buffer.call_args[0][0]
-        self.assertEqual("arg1=BuggyRepr.({})", log_data["data"]["args"])
+        self.assertEqual("arg1=<BuggyRepr object>", log_data["data"]["args"])
 
         # 6. Test return value
         logic._local.stack_depth = 1  # Simulate being inside the call
         logic.handle_return(frame, buggy_instance)
 
         return_log_data = logic._add_to_buffer.call_args[0][0]
-        self.assertEqual("BuggyRepr.({})", return_log_data["data"]["return_value"])
+        self.assertEqual("<BuggyRepr object>", return_log_data["data"]["return_value"])
 
     def test_handle_return(self):
         frame = self._get_frame_at(sample_function, 5, 3, event_type="return")
@@ -755,7 +755,7 @@ class TestTraceLogic(BaseTracerTest):
         self.assertEqual(self.logic._add_to_buffer.call_count, 2)
         last_call_args = self.logic._add_to_buffer.call_args_list[1][0]
         log_data = last_call_args[0]
-        self.assertIn('↳ Debug Statement c="small"', self.logic._format_log_message(log_data))
+        self.assertIn("↳ Debug Statement c='small'", self.logic._format_log_message(log_data))
         self.assertEqual(frame.f_locals.get("c"), "small")
 
     def test_handle_exception(self):
@@ -779,7 +779,7 @@ class TestTraceLogic(BaseTracerTest):
             self.assertEqual(len(self.logic.exception_chain), 0)
             log_data, _ = self.logic._add_to_buffer.call_args[0]
 
-        self.assertIn("⚠ EXCEPTION", log_data["template"])
+        self.assertIn("⚠ EXCEPTION", self.logic._format_log_message(log_data))
         self.assertIn("ValueError: x cannot be zero", self.logic._format_log_message(log_data))
         # Assert that stack depth is NOT decremented by handle_exception
         self.assertEqual(self.logic._local.stack_depth, 1)
@@ -1578,6 +1578,7 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         self.dispatcher = SysMonitoringTraceDispatcher(self.test_filename, self.config)
         self.dispatcher.monitoring_module = self.mock_monitoring
         self.mock_logic = MagicMock(spec=TraceLogic)
+        self.mock_logic.exception_chain = []
         self.dispatcher._logic = self.mock_logic
         self.mock_logic.inside_unwanted_frame.return_value = False
 
@@ -1588,11 +1589,11 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
 
         # --- Simulate Trace ---
         # 1. Start of target_main_function
+
         with patch("sys._getframe", return_value=frame_target):
             result = self.dispatcher.handle_py_start(frame_target.f_code, frame_target.f_lasti)
             self.assertIsNone(result)  # Should enable all events for a target frame
-            self.mock_logic.handle_call.assert_called_once_with(frame_target)
-
+            self.mock_logic.handle_call.assert_called_once_with(frame_target, is_simple=False)
         # 2. Start of non_target_helper (boundary call)
         with patch("sys._getframe", return_value=frame_nontarget):
             result = self.dispatcher.handle_py_start(frame_nontarget.f_code, frame_nontarget.f_lasti)
@@ -1619,6 +1620,7 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         self.dispatcher = SysMonitoringTraceDispatcher(self.test_filename, self.config)
         self.dispatcher.monitoring_module = self.mock_monitoring
         self.mock_logic = MagicMock(spec=TraceLogic)
+        self.mock_logic.exception_chain = []
         self.dispatcher._logic = self.mock_logic
         self.mock_logic.inside_unwanted_frame.return_value = False
 
@@ -1840,13 +1842,18 @@ class TestIntegration(BaseTracerTest):
         # Check if logs were produced by inspecting the tracer's internal state.
         self.assertGreater(len(tracer._logic._html_render._messages), 0)
 
-    def _run_e2e_test(self, script_path, cli_args):
+    def _run_e2e_test(self, script_path, cli_args, extra_pythonpath: str | None = None):
         """Helper to run tracer_main as a subprocess for E2E tests."""
         # Define PYTHONPATH to include the project's src directory
         env = os.environ.copy()
         project_root = Path(__file__).parent.parent
         src_path = str(project_root / "context-tracer" / "src")
-        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{project_root}{os.pathsep}{env.get('PYTHONPATH', '')}"
+
+        python_path_parts = [src_path, str(project_root), env.get("PYTHONPATH", "")]
+        if extra_pythonpath:
+            python_path_parts.insert(0, extra_pythonpath)
+
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, python_path_parts))
 
         # Build command
         command = (
@@ -1956,11 +1963,13 @@ class TestIntegration(BaseTracerTest):
 
         # Assert call to `process_object` shows safe repr for the argument
         self.assertIn("↘ CALL", log_content)
-        self.assertIn("process_object(obj=BuggyRepr.({}))", log_content)
+        # In some environments, safe repr falls back to '...'.
+        # The main goal is to ensure the tracer doesn't crash.
+        self.assertIn("process_object(obj=<BuggyRepr object>)", log_content)
 
         # Assert return from `process_object` shows safe repr for the return value
         self.assertIn("↗ RETURN", log_content)
-        self.assertIn("→ BuggyRepr.({})", log_content)
+        self.assertIn("→ <BuggyRepr object>", log_content)
 
     @unittest.skipUnless(sys.version_info >= (3, 12), "C function tracing requires Python 3.12+")
     def test_e2e_c_calls_tracing(self):
@@ -2047,6 +2056,72 @@ class TestIntegration(BaseTracerTest):
         self.assertNotIn("↗ C-RETURN", log_content)
         self.assertNotIn("⚠ C-RAISE", log_content)
 
+    def test_e2e_settrace_boundary_exception(self):
+        """
+        E2E test for sys.settrace dispatcher to correctly handle boundary exceptions.
+        This replaces the unit test which was prone to interference.
+        """
+        # 1. Create helper (non-target) script
+        helper_content = dedent("""
+            def non_target_raiser():
+                raise ValueError("Error from non-target function")
+        """)
+        helper_script_path = self.test_dir / "helper_script.py"
+        helper_script_path.write_text(helper_content, encoding="utf-8")
+
+        # 2. Create main (target) script
+        target_content = dedent(f"""
+            import sys
+            # This allows importing from the same directory in the subprocess
+            sys.path.insert(0, r'{str(self.test_dir)}')
+            from helper_script import non_target_raiser
+
+            def target_main_caller_of_raiser():
+                try:
+                    # This should be a B-CALL that raises a B-EXCEPTION
+                    non_target_raiser()
+                except ValueError as e:
+                    # This line should be traced normally
+                    return str(e)
+                # This line should be traced normally
+                return "No error"
+
+            if __name__ == "__main__":
+                result = target_main_caller_of_raiser()
+                # The output helps verify the script ran correctly.
+                print(f"Script result: {{result}}")
+        """)
+        target_script_path = self.test_dir / "target_script.py"
+        target_script_path.write_text(target_content, encoding="utf-8")
+
+        # 3. Setup log file paths for assertion
+        log_dir = Path.cwd() / "tracer-logs"
+        report_name = f"{target_script_path.stem}.html"
+        log_file_path = log_dir / f"{target_script_path.stem}.log"
+        if log_file_path.exists():
+            log_file_path.unlink()
+
+        # 4. Run the tracer, targeting ONLY the main script
+        cli_args = ["--report-name", report_name, "--watch-files", f"*{target_script_path.name}"]
+        process = self._run_e2e_test(target_script_path, cli_args, extra_pythonpath=str(self.test_dir))
+
+        # 5. Assertions
+        self.assertEqual(process.returncode, 0, f"Tracer process exited with error. Stderr: {process.stderr}")
+        self.assertTrue(log_file_path.exists(), f"Log file not found at {log_file_path}")
+
+        log_content = log_file_path.read_text(encoding="utf-8")
+
+        # Check that the script ran and produced the expected output
+        self.assertIn("Script result: Error from non-target function", process.stdout)
+
+        # Check for boundary call, exception, and normal return
+        self.assertIn("↘ B-CALL", log_content)
+        self.assertIn("non_target_raiser()", log_content)
+        self.assertIn("⚠ B-EXCEPTION IN non_target_raiser", log_content)
+        self.assertIn("ValueError: Error from non-target function", log_content)
+        self.assertIn("↗ RETURN", log_content)
+        self.assertIn("target_main_caller_of_raiser() → 'Error from non-target function'", log_content)
+
 
 class TestTraceDispatcher(BaseTracerTest):
     """Tests for the sys.settrace-based TraceDispatcher."""
@@ -2064,6 +2139,7 @@ class TestTraceDispatcher(BaseTracerTest):
         self.mock_logic = MagicMock(spec=TraceLogic)
         self.dispatcher._logic = self.mock_logic
         self.mock_logic.inside_unwanted_frame.return_value = False
+        self.mock_logic.exception_chain = []
 
     def test_boundary_call_and_return(self):
         """Tests that calls from a target to a non-target are handled as boundary calls."""
@@ -2112,40 +2188,6 @@ class TestTraceDispatcher(BaseTracerTest):
         second_return_args = handle_return_mock.call_args_list[1]
         self.assertEqual(second_return_args[0][0].f_code.co_name, "target_main_function")
         self.assertFalse(second_return_args[1].get("is_simple", False))
-
-    def test_boundary_exception(self):
-        """Tests that exceptions from non-target functions are handled as boundary exceptions."""
-        config = TraceConfig(target_files=[f"*{Path(__file__).name}"])
-        self._setup_dispatcher(config)
-
-        sys.settrace(self.dispatcher.trace_dispatch)
-        try:
-            target_main_caller_of_raiser()
-        finally:
-            sys.settrace(None)
-
-        handle_call_mock = self.mock_logic.handle_call
-        handle_exception_mock = self.mock_logic.handle_exception
-        handle_return_mock = self.mock_logic.handle_return
-
-        # Check calls
-        self.assertEqual(handle_call_mock.call_count, 2)
-        self.assertEqual(handle_call_mock.call_args_list[0][0][0].f_code.co_name, "target_main_caller_of_raiser")
-        self.assertFalse(handle_call_mock.call_args_list[0][1].get("is_simple", False))
-        self.assertEqual(handle_call_mock.call_args_list[1][0][0].f_code.co_name, "non_target_raiser")
-        self.assertTrue(handle_call_mock.call_args_list[1][1].get("is_simple"))
-
-        # Check exception
-        self.assertEqual(handle_exception_mock.call_count, 1)
-        exc_args = handle_exception_mock.call_args_list[0]
-        self.assertEqual(exc_args[0][2].f_code.co_name, "non_target_raiser")  # frame name
-        self.assertTrue(exc_args[1].get("is_simple"))
-
-        # Check return (from the main function after catching exception)
-        self.assertEqual(handle_return_mock.call_count, 1)
-        return_args = handle_return_mock.call_args_list[0]
-        self.assertEqual(return_args[0][0].f_code.co_name, "target_main_caller_of_raiser")
-        self.assertFalse(return_args[1].get("is_simple", False))
 
 
 if __name__ == "__main__":

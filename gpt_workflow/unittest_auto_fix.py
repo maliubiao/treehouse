@@ -12,11 +12,11 @@ from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 from unittest.mock import ANY
 
 from colorama import Fore, Style
+from context_tracer import tracer
 from fixer_prompt import FixerPromptGenerator
 from report_generator import ReportGenerator
 from tqdm import tqdm
 
-from debugger import tracer
 from llm_query import (
     GPT_FLAG_EDIT,
     GPT_FLAG_PATCH,
@@ -471,9 +471,9 @@ class TestAutoFix:
         report_name="run_all_tests.html",
         ignore_self=False,
         ignore_system_paths=True,
-        disable_html=True,
+        disable_html=False,
         source_base_dir=Path(__file__).parent.parent,
-        exclude_functions=["symbol_at_line", "get_symbol_paths", "traverse", "search_exact", "__init__", "insert"],
+        exclude_functions=["symbol_at_line", "get_symbol_paths", "traverse", "search_exact", "insert"],
     )
     def run_tests(test_patterns: Optional[List[str]] = None, verbosity: int = 1, list_tests: bool = False) -> Dict:
         """
