@@ -19,6 +19,9 @@ import yaml
 
 # Add project's source directory to path to allow importing context_tracer modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "context-tracer" / "src"))
+# Add project root to path to allow importing 'tests' package
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 
 from context_tracer.tracer import (
     CallTreeHtmlRender,
@@ -32,6 +35,8 @@ from context_tracer.tracer import (
     truncate_repr_value,
 )
 from context_tracer.tracer_common import _MAX_VALUE_LENGTH, TraceTypes
+
+from tests.boundary_test_helpers.helpers import non_target_helper, non_target_raiser
 
 # A temporary directory for test artifacts
 TEST_DIR = Path(__file__).parent / "test_artifacts"
@@ -127,6 +132,26 @@ def main_func_calling_raiser():
 def simple_target_func():
     """A simple function to be targeted."""
     return 1
+
+
+# New test target functions for boundary call logic
+def target_main_function(x, y):
+    """This function IS a target for tracing."""
+    val = x + y  # This line should be traced.
+    res = non_target_helper(val, y)  # This should be a B-CALL.
+    return res * 2  # This line should be traced.
+
+
+def target_main_caller_of_raiser():
+    """A target function that calls a raiser."""
+    try:
+        # This should be a B-CALL
+        non_target_raiser()
+    except ValueError as e:
+        # This line should be traced
+        return str(e)
+    # This line should be traced
+    return "No error"
 
 
 # --- End of Test Target Code ---
@@ -1391,7 +1416,7 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         result = self.dispatcher.handle_py_start(real_frame.f_code, real_frame.f_lasti)
 
         self.mock_logic.maybe_unwanted_frame.assert_called_once_with(real_frame)
-        self.mock_logic.handle_call.assert_called_once_with(real_frame)
+        self.mock_logic.handle_call.assert_called_once_with(real_frame, is_simple=False)
         self.assertIn(real_frame, self.dispatcher.active_frames)
         self.assertIsNone(result)
 
@@ -1406,7 +1431,7 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         self.dispatcher.handle_py_return(real_frame.f_code, real_frame.f_lasti, "retval")
 
         self.mock_logic.leave_unwanted_frame.assert_called_once_with(real_frame)
-        self.mock_logic.handle_return.assert_called_once_with(real_frame, "retval")
+        self.mock_logic.handle_return.assert_called_once_with(real_frame, "retval", is_simple=False)
         self.mock_logic.frame_cleanup.assert_called_once_with(real_frame)
         self.assertNotIn(real_frame, self.dispatcher.active_frames)
 
@@ -1441,7 +1466,7 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
 
         self.dispatcher.handle_raise(real_frame.f_code, real_frame.f_lasti, exc)
 
-        self.mock_logic.handle_exception.assert_called_once_with(type(exc), exc, real_frame)
+        self.mock_logic.handle_exception.assert_called_once_with(type(exc), exc, real_frame, is_simple=False)
 
     @patch("sys._getframe")
     def test_handle_c_call_python_callable(self, mock_getframe):
@@ -1518,6 +1543,83 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         self.dispatcher.handle_c_raise(MagicMock(), 0, callable_obj, exception)
 
         self.mock_logic.handle_c_raise.assert_called_once_with(real_frame, callable_obj, exception)
+
+    def test_boundary_call_and_return(self):
+        """Tests that PY_START in a non-target is handled as a boundary call."""
+        # Setup: only trace this test file.
+        self.config = TraceConfig(target_files=[f"*{Path(self.test_filename).name}"])
+        self.dispatcher = SysMonitoringTraceDispatcher(self.test_filename, self.config)
+        self.dispatcher.monitoring_module = self.mock_monitoring
+        self.mock_logic = MagicMock(spec=TraceLogic)
+        self.dispatcher._logic = self.mock_logic
+        self.mock_logic.inside_unwanted_frame.return_value = False
+
+        # Capture real frames from a call
+        frames = self._get_frames_for_test(target_main_function, 10, 5)
+        frame_target = frames["target_main_function"]
+        frame_nontarget = frames["non_target_helper"]
+
+        # --- Simulate Trace ---
+        # 1. Start of target_main_function
+        with patch("sys._getframe", return_value=frame_target):
+            result = self.dispatcher.handle_py_start(frame_target.f_code, frame_target.f_lasti)
+            self.assertIsNone(result)  # Should enable all events for a target frame
+            self.mock_logic.handle_call.assert_called_once_with(frame_target, is_simple=False)
+
+        # 2. Start of non_target_helper (boundary call)
+        with patch("sys._getframe", return_value=frame_nontarget):
+            result = self.dispatcher.handle_py_start(frame_nontarget.f_code, frame_nontarget.f_lasti)
+            expected_events = self.mock_monitoring.events.PY_RETURN | self.mock_monitoring.events.PY_UNWIND
+            self.assertEqual(result, expected_events)
+            self.mock_logic.handle_call.assert_called_with(frame_nontarget, is_simple=True)
+            self.assertIn(frame_nontarget, self.dispatcher.simple_frames)
+
+        # 3. Line event inside non_target_helper should be ignored
+        with patch("sys._getframe", return_value=frame_nontarget):
+            self.dispatcher.handle_line(frame_nontarget.f_code, frame_nontarget.f_lineno)
+            # handle_line is only called for active_frames, so mock should not be called.
+            self.mock_logic.handle_line.assert_not_called()
+
+        # 4. Return from non_target_helper
+        with patch("sys._getframe", return_value=frame_nontarget):
+            self.dispatcher.handle_py_return(frame_nontarget.f_code, frame_nontarget.f_lasti, 10)
+            self.mock_logic.handle_return.assert_called_once_with(frame_nontarget, 10, is_simple=True)
+            self.assertNotIn(frame_nontarget, self.dispatcher.simple_frames)
+
+    def test_boundary_exception(self):
+        """Tests that exceptions from non-target functions are handled as boundary exceptions."""
+        self.config = TraceConfig(target_files=[f"*{Path(self.test_filename).name}"])
+        self.dispatcher = SysMonitoringTraceDispatcher(self.test_filename, self.config)
+        self.dispatcher.monitoring_module = self.mock_monitoring
+        self.mock_logic = MagicMock(spec=TraceLogic)
+        self.dispatcher._logic = self.mock_logic
+        self.mock_logic.inside_unwanted_frame.return_value = False
+
+        frames = self._get_frames_for_test(target_main_caller_of_raiser)
+        frame_target = frames["target_main_caller_of_raiser"]
+        frame_nontarget = frames["non_target_raiser"]
+
+        # --- Simulate Trace ---
+        # 1. Start of target function
+        with patch("sys._getframe", return_value=frame_target):
+            self.dispatcher.handle_py_start(frame_target.f_code, frame_target.f_lasti)
+            self.mock_logic.handle_call.assert_called_once_with(frame_target, is_simple=False)
+
+        # 2. Start of non-target raiser function (boundary)
+        with patch("sys._getframe", return_value=frame_nontarget):
+            self.dispatcher.handle_py_start(frame_nontarget.f_code, frame_nontarget.f_lasti)
+            self.mock_logic.handle_call.assert_called_with(frame_nontarget, is_simple=True)
+
+        # 3. Exception raised in non-target function
+        exc = ValueError("Error from non-target function")
+        with patch("sys._getframe", return_value=frame_nontarget):
+            self.dispatcher.handle_raise(frame_nontarget.f_code, frame_nontarget.f_lasti, exc)
+            self.mock_logic.handle_exception.assert_called_once_with(type(exc), exc, frame_nontarget, is_simple=True)
+
+        # 4. Unwind from non-target function
+        with patch("sys._getframe", return_value=frame_nontarget):
+            self.dispatcher.handle_py_unwind(frame_nontarget.f_code, frame_nontarget.f_lasti)
+            self.assertNotIn(frame_nontarget, self.dispatcher.simple_frames)
 
 
 class TestCallTreeHtmlRender(BaseTracerTest):
@@ -1715,8 +1817,9 @@ class TestIntegration(BaseTracerTest):
         """Helper to run tracer_main as a subprocess for E2E tests."""
         # Define PYTHONPATH to include the project's src directory
         env = os.environ.copy()
-        python_path = str(Path(__file__).parent.parent / "context-tracer" / "src")
-        env["PYTHONPATH"] = f"{python_path}{os.pathsep}{env.get('PYTHONPATH', '')}"
+        project_root = Path(__file__).parent.parent
+        src_path = str(project_root / "context-tracer" / "src")
+        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{project_root}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
         # Build command
         command = (
@@ -1916,6 +2019,106 @@ class TestIntegration(BaseTracerTest):
         self.assertNotIn("↘ C-CALL", log_content)
         self.assertNotIn("↗ C-RETURN", log_content)
         self.assertNotIn("⚠ C-RAISE", log_content)
+
+
+class TestTraceDispatcher(BaseTracerTest):
+    """Tests for the sys.settrace-based TraceDispatcher."""
+
+    def setUp(self):
+        super().setUp()
+        self.test_filename = str(Path(__file__).resolve())
+        self.config = None
+        self.dispatcher = None
+        self.mock_logic = None
+
+    def _setup_dispatcher(self, config):
+        self.config = config
+        self.dispatcher = TraceDispatcher(self.test_filename, self.config)
+        self.mock_logic = MagicMock(spec=TraceLogic)
+        self.dispatcher._logic = self.mock_logic
+        self.mock_logic.inside_unwanted_frame.return_value = False
+
+    def test_boundary_call_and_return(self):
+        """Tests that calls from a target to a non-target are handled as boundary calls."""
+        # Setup: only trace this test file, not the helper file.
+        config = TraceConfig(target_files=[f"*{Path(__file__).name}"])
+        self._setup_dispatcher(config)
+
+        # Run the trace
+        sys.settrace(self.dispatcher.trace_dispatch)
+        try:
+            target_main_function(10, 5)
+        finally:
+            sys.settrace(None)
+
+        # Assertions
+        handle_call_mock = self.mock_logic.handle_call
+        handle_return_mock = self.mock_logic.handle_return
+        handle_line_mock = self.mock_logic.handle_line
+
+        # 1. Check calls
+        self.assertEqual(handle_call_mock.call_count, 2)
+        # First call is to the target function (is_simple=False)
+        first_call_args = handle_call_mock.call_args_list[0]
+        self.assertEqual(first_call_args[0][0].f_code.co_name, "target_main_function")
+        self.assertFalse(first_call_args[1].get("is_simple", False))
+        # Second call is to the non-target helper (is_simple=True)
+        second_call_args = handle_call_mock.call_args_list[1]
+        self.assertEqual(second_call_args[0][0].f_code.co_name, "non_target_helper")
+        self.assertTrue(second_call_args[1].get("is_simple"))
+
+        # 2. Check line events
+        self.assertGreater(handle_line_mock.call_count, 0)
+        for call in handle_line_mock.call_args_list:
+            frame = call[0][0]
+            self.assertEqual(
+                frame.f_code.co_name, "target_main_function", "Line event should only occur in target function"
+            )
+
+        # 3. Check returns
+        self.assertEqual(handle_return_mock.call_count, 2)
+        # First return is from the non-target helper (is_simple=True)
+        first_return_args = handle_return_mock.call_args_list[0]
+        self.assertEqual(first_return_args[0][0].f_code.co_name, "non_target_helper")
+        self.assertTrue(first_return_args[1].get("is_simple"))
+        # Second return is from the target function (is_simple=False)
+        second_return_args = handle_return_mock.call_args_list[1]
+        self.assertEqual(second_return_args[0][0].f_code.co_name, "target_main_function")
+        self.assertFalse(second_return_args[1].get("is_simple", False))
+
+    def test_boundary_exception(self):
+        """Tests that exceptions from non-target functions are handled as boundary exceptions."""
+        config = TraceConfig(target_files=[f"*{Path(__file__).name}"])
+        self._setup_dispatcher(config)
+
+        sys.settrace(self.dispatcher.trace_dispatch)
+        try:
+            target_main_caller_of_raiser()
+        finally:
+            sys.settrace(None)
+
+        handle_call_mock = self.mock_logic.handle_call
+        handle_exception_mock = self.mock_logic.handle_exception
+        handle_return_mock = self.mock_logic.handle_return
+
+        # Check calls
+        self.assertEqual(handle_call_mock.call_count, 2)
+        self.assertEqual(handle_call_mock.call_args_list[0][0][0].f_code.co_name, "target_main_caller_of_raiser")
+        self.assertFalse(handle_call_mock.call_args_list[0][1].get("is_simple", False))
+        self.assertEqual(handle_call_mock.call_args_list[1][0][0].f_code.co_name, "non_target_raiser")
+        self.assertTrue(handle_call_mock.call_args_list[1][1].get("is_simple"))
+
+        # Check exception
+        self.assertEqual(handle_exception_mock.call_count, 1)
+        exc_args = handle_exception_mock.call_args_list[0]
+        self.assertEqual(exc_args[0][2].f_code.co_name, "non_target_raiser")  # frame name
+        self.assertTrue(exc_args[1].get("is_simple"))
+
+        # Check return (from the main function after catching exception)
+        self.assertEqual(handle_return_mock.call_count, 1)
+        return_args = handle_return_mock.call_args_list[0]
+        self.assertEqual(return_args[0][0].f_code.co_name, "target_main_caller_of_raiser")
+        self.assertFalse(return_args[1].get("is_simple", False))
 
 
 if __name__ == "__main__":

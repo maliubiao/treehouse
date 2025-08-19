@@ -691,8 +691,8 @@ class SysMonitoringTraceDispatcher:
             # Boundary call: from a target frame to a non-target one
             self.simple_frames.add(frame)
             self._logic.handle_call(frame, is_simple=True)
-            # For simple frames, we only want RETURN and RAISE events.
-            return self.monitoring_module.events.PY_RETURN | self.monitoring_module.events.RAISE
+            # For simple frames, we only want RETURN and PY_UNWIND events.
+            return self.monitoring_module.events.PY_RETURN | self.monitoring_module.events.PY_UNWIND
         else:
             # Not a target, and not called by a target. Ignore.
             return self.monitoring_module.DISABLE
