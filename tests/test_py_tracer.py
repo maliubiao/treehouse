@@ -1591,7 +1591,7 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
         with patch("sys._getframe", return_value=frame_target):
             result = self.dispatcher.handle_py_start(frame_target.f_code, frame_target.f_lasti)
             self.assertIsNone(result)  # Should enable all events for a target frame
-            self.mock_logic.handle_call.assert_called_once_with(frame_target, is_simple=False)
+            self.mock_logic.handle_call.assert_called_once_with(frame_target)
 
         # 2. Start of non_target_helper (boundary call)
         with patch("sys._getframe", return_value=frame_nontarget):
