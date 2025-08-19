@@ -4382,7 +4382,7 @@ def handle_ask_mode(program_args, proxies):
     nodes = context_processor.parse_text_into_nodes(ask_text)
     use_json_output = should_use_json_output(nodes)
     text = context_processor.process_text(ask_text, use_json_output=use_json_output)
-    text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
+    text = inject_edit_prompt_if_needed(text, nodes, use_json_output, model_switch.current_config.is_thinking)
     print(text)
     response_data = model_switch.query(program_args.model, text, proxies=proxies, use_json_output=use_json_output)
     process_response(
@@ -4405,11 +4405,13 @@ def should_use_json_output(nodes) -> bool:
     return has_patch_or_edit and GLOBAL_MODEL_CONFIG.supports_json_output
 
 
-def inject_edit_prompt_if_needed(text: str, nodes, use_json_output: bool) -> str:
+def inject_edit_prompt_if_needed(text: str, nodes, use_json_output: bool, is_thinking: bool) -> str:
     has_edit = any(isinstance(node, CmdNode) and node.command == "edit" for node in nodes)
     if not has_edit:
         return text
     prompt_file = "edit-file-v3" if use_json_output else "edit-file-v2"
+    if not is_thinking:
+        prompt_file = "edit-file-v3-non-thinking"
     prompt_path = _resolve_prompt_path(prompt_file)
     if prompt_path and os.path.exists(prompt_path):
         edit_prompt = Path(prompt_path).read_text(encoding="utf-8")
@@ -4596,7 +4598,7 @@ class ModelSwitch:
 
     def models(self) -> list[str]:
         """获取所有可用的模型名称列表"""
-        return list(self._get_config().keys())
+        return list(self.get_config().keys())
 
     def _load_and_validate_config(self, config_dict: dict) -> ModelConfig:
         """加载并验证配置字典"""
@@ -4624,7 +4626,7 @@ class ModelSwitch:
             supports_json_output=config_dict.get("supports_json_output", False),
         )
 
-    def _get_config(self) -> dict[str, ModelConfig]:
+    def get_config(self) -> dict[str, ModelConfig]:
         """获取配置，使用缓存机制"""
         if self._config_cache is not None:
             return self._config_cache
@@ -4677,7 +4679,7 @@ class ModelSwitch:
 
     def _get_model_config(self, model_name: str) -> ModelConfig:
         """获取指定模型的配置"""
-        config = self._get_config()
+        config = self.get_config()
         if model_name not in config:
             error_msg = f"未找到模型配置: {model_name}"
             if self.test_mode:
