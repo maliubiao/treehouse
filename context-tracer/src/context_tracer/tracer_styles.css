@@ -39,6 +39,8 @@
     /* Control elements */
     --btn-bg: #3498db;
     --btn-hover: #2980b9;
+    --tab-active-border: #3498db;
+    --tab-bg: transparent;
 
     /* New comment colors */
     --comment-color: #6a9955;
@@ -94,6 +96,8 @@
     /* Control elements - dark theme */
     --btn-bg: #0d47a1;
     --btn-hover: #1565c0;
+    --tab-active-border: #4fc3f7;
+    --tab-bg: #2d2d2d;
 
     /* New Debug Vars UI - dark theme */
     --debug-vars-bg: #2d2d2d;
@@ -115,6 +119,33 @@ body {
     background-color: var(--bg-color);
     color: var(--text-color);
 }
+
+h1 {
+    margin: 0;
+    font-size: 1.5em;
+}
+
+
+/* ===== Main Header & Nav Bar ===== */
+.main-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: var(--card-bg);
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+    margin-bottom: 15px;
+    flex-wrap: wrap; /* Allow wrapping on smaller screens */
+}
+
+.nav-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap; /* Allow controls to wrap */
+}
+
 
 /* ===== Call Type Styles ===== */
 .call,
@@ -212,33 +243,25 @@ body {
 }
 
 /* ===== Controls and Search ===== */
-#controls {
-    margin: 10px 0;
-    padding: 10px;
-    background: var(--card-bg);
-    border-radius: 4px;
-    box-shadow: var(--shadow);
-}
-
 #search {
-    margin: 10px;
     padding: 8px;
-    width: 300px;
+    width: 250px;
     border: 1px solid var(--border-color);
     border-radius: 4px;
-    background-color: var(--card-bg);
+    background-color: var(--bg-color);
     color: var(--text-color);
+    font-family: inherit;
 }
 
 button {
     padding: 8px 12px;
-    margin-right: 5px;
     background: var(--btn-bg);
     color: white;
     border: none;
     border-radius: 4px;
     cursor: pointer;
     transition: background-color 0.2s ease;
+    font-family: inherit;
 }
 
 button:hover {
@@ -257,37 +280,153 @@ button:hover {
     box-shadow: var(--shadow);
 }
 
-.section {
+/* ===== Summary Dropdown ===== */
+.dropdown-container {
+    position: relative;
+    display: inline-block;
+}
+
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 110%;
+    background-color: var(--card-bg);
+    min-width: 250px;
+    box-shadow: var(--shadow);
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    padding: 10px;
+    z-index: 100;
+}
+
+.dropdown-menu.show {
+    display: block;
+}
+
+.dropdown-menu p {
+    margin: 5px 0;
+    white-space: nowrap;
+}
+
+
+/* ===== Generic Modal Styles (for Settings/Help) ===== */
+.modal {
+    display: none; /* Hidden by default */
+    position: fixed;
+    z-index: 2000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.5);
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-content {
+    background-color: var(--card-bg);
+    margin: auto;
+    padding: 20px 30px;
+    border: 1px solid var(--border-color);
+    width: 80%;
+    max-width: 600px;
+    border-radius: 8px;
+    box-shadow: var(--dialog-shadow);
+    position: relative;
+}
+
+.modal-content.wide {
+    max-width: 800px;
+}
+
+.modal-close-btn {
+    color: #aaa;
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.modal-close-btn:hover,
+.modal-close-btn:focus {
+    color: var(--text-color);
+    text-decoration: none;
+}
+.modal h2 { margin-top: 0; }
+.modal h3 { margin-top: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; }
+.modal table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+.modal th, .modal td {
+    border: 1px solid var(--border-color);
+    padding: 8px;
+    text-align: left;
+}
+.modal th { background-color: var(--bg-color); }
+.modal ul {
+    list-style-type: disc;
+    padding-left: 20px;
+}
+.modal code {
+    background-color: var(--bg-color);
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+/* ===== Settings Dialog Tabs ===== */
+.modal-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border-color);
     margin-bottom: 20px;
 }
-
-.summary {
-    background: var(--bg-color);
-    padding: 10px;
-    border-radius: 4px;
-    margin-bottom: 15px;
+.tab-link {
+    background: none;
+    border: none;
+    padding: 10px 15px;
+    cursor: pointer;
+    font-size: 1em;
+    color: var(--text-color);
+    border-bottom: 3px solid transparent;
+    margin-bottom: -1px; /* Overlap with container border */
 }
-
-/* ===== Theme Selector ===== */
-.theme-selector {
-    margin: 10px 0;
-    display: flex;
-    align-items: center;
+.tab-link:hover {
+    background-color: var(--bg-color);
 }
-
-.theme-selector label {
-    margin-right: 10px;
+.tab-link.active {
+    border-bottom-color: var(--tab-active-border);
     font-weight: bold;
 }
-
-.theme-selector select {
+.tab-content {
+    display: none;
+}
+.tab-content.active {
+    display: block;
+}
+.setting-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 15px;
+}
+.setting-item label {
+    margin-right: 10px;
+    font-weight: bold;
+    min-width: 100px;
+}
+.setting-item select {
     padding: 6px 8px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
-    background-color: var(--card-bg);
+    background-color: var(--bg-color);
     color: var(--text-color);
-    min-width: 180px;
+    min-width: 200px;
 }
+
 
 /* ===== Source Dialog ===== */
 .source-dialog {
@@ -706,12 +845,6 @@ body.skeleton-mode .foldable:hover .toggle-details-btn {
 
 .debug-vars.expanded .compact-view {
     display: none;
-}
-
-.debug-vars .var-entry {
-    margin-bottom: 4px;
-    white-space: pre-wrap;
-    word-break: break-all;
 }
 
 /*

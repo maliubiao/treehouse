@@ -54,18 +54,21 @@ const TraceViewer = {
             collapseAllBtn: document.getElementById('collapseAll'),
             skeletonViewBtn: document.getElementById('skeletonViewBtn'),
             exportBtn: document.getElementById('exportBtn'),
-            themeSelector: document.getElementById('themeSelector'),
             sourceDialog: document.getElementById('sourceDialog'),
-            closeSourceBtn: document.getElementById('closeSourceBtn'),
-            dialogCloseBtn: document.getElementById('dialogCloseBtn')
+            dialogCloseBtn: document.getElementById('dialogCloseBtn'),
+            summaryBtn: document.getElementById('summaryBtn'),
+            summaryDropdown: document.getElementById('summaryDropdown'),
+            settingsBtn: document.getElementById('settingsBtn'),
+            settingsDialog: document.getElementById('settingsDialog')
         };
 
         // Initialize components
+        this.i18n.init();
         this.calculateSubtreeSizes(); // Must run before initFolding
         this.initFolding();
         this.initSearch();
         this.initExport();
-        this.initThemes();
+        this.initSettingsDialog(); // Replaces theme and help init
         this.initSourceDialog();
         this.initKeyboardShortcuts();
         this.initCommentToggle();
@@ -76,7 +79,8 @@ const TraceViewer = {
         this.initSkeletonView();
         this.initToggleDetails();
         this.initAiExplainer();
-        this.initClipboardInterceptor(); // New feature activation
+        this.initClipboardInterceptor();
+        this.initSummaryDropdown();
     },
 
     // Pre-calculates the size of each foldable section for smart expansion
@@ -243,71 +247,114 @@ const TraceViewer = {
         });
     },
 
-    // Initialize theme selector
-    initThemes() {
-        const { themeSelector } = this.elements;
+    // Initialize themes functionality (part of settings dialog now)
+    initThemes(themeSelector) {
+        if (!themeSelector) return;
         
-        if (themeSelector) {
-            // Clear existing options
-            themeSelector.innerHTML = '';
-            
-            // Add theme options
-            this.config.themes.forEach(theme => {
-                const option = document.createElement('option');
-                option.value = theme.value;
-                option.textContent = theme.label;
-                option.dataset.isDark = theme.isDark;
-                themeSelector.appendChild(option);
-            });
-            
-            // Add change event
-            themeSelector.addEventListener('change', () => {
-                const selectedOption = themeSelector.options[themeSelector.selectedIndex];
-                const isDark = selectedOption.dataset.isDark === 'true';
-                
-                this.changeTheme(themeSelector.value);
-                document.body.className = isDark ? 'dark-theme' : '';
-            });
-        }
+        themeSelector.innerHTML = '';
+        this.config.themes.forEach(theme => {
+            const option = document.createElement('option');
+            option.value = theme.value;
+            option.textContent = theme.label;
+            option.dataset.isDark = theme.isDark;
+            themeSelector.appendChild(option);
+        });
+        
+        themeSelector.addEventListener('change', () => {
+            this.handleThemeChange(themeSelector);
+        });
+        
+        // Set initial theme
+        this.handleThemeChange(themeSelector);
     },
 
     // Handle theme changes
-    changeTheme(theme) {
-        const themeLink = document.getElementById('prism-theme');
-        themeLink.href = `https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/${theme}.min.css`;
+    handleThemeChange(themeSelector) {
+        const selectedOption = themeSelector.options[themeSelector.selectedIndex];
+        if (!selectedOption) return;
+
+        const theme = selectedOption.value;
+        const isDark = selectedOption.dataset.isDark === 'true';
+        
+        document.getElementById('prism-theme').href = `https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/${theme}.min.css`;
+        document.body.className = isDark ? 'dark-theme' : '';
         this.updateLineHighlights();
     },
 
     // Update line highlights based on current theme
     updateLineHighlights() {
-        const { themeSelector } = this.elements;
-        const executedLines = document.querySelectorAll('.executed-line');
-        const currentLines = document.querySelectorAll('.current-line');
-        
-        const selectedOption = themeSelector.options[themeSelector.selectedIndex];
-        const isDark = selectedOption.dataset.isDark === 'true';
-        
-        executedLines.forEach(el => {
+        const isDark = document.body.classList.contains('dark-theme');
+        document.querySelectorAll('.executed-line').forEach(el => {
             el.classList.remove('executed-line-light', 'executed-line-dark');
             el.classList.add(isDark ? 'executed-line-dark' : 'executed-line-light');
         });
         
-        currentLines.forEach(el => {
+        document.querySelectorAll('.current-line').forEach(el => {
             el.classList.remove('current-line-light', 'current-line-dark');
             el.classList.add(isDark ? 'current-line-dark' : 'current-line-light');
         });
     },
 
+    initSummaryDropdown() {
+        const { summaryBtn, summaryDropdown } = this.elements;
+        if (!summaryBtn || !summaryDropdown) return;
+
+        summaryBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            summaryDropdown.classList.toggle('show');
+        });
+
+        window.addEventListener('click', (e) => {
+            if (!summaryBtn.contains(e.target) && !summaryDropdown.contains(e.target)) {
+                summaryDropdown.classList.remove('show');
+            }
+        });
+    },
+
+    // NEW: Initialize Settings Dialog
+    initSettingsDialog() {
+        const { settingsBtn, settingsDialog } = this.elements;
+        if (!settingsBtn || !settingsDialog) return;
+
+        const closeBtn = settingsDialog.querySelector('.modal-close-btn');
+        const tabLinks = settingsDialog.querySelectorAll('.tab-link');
+        const tabContents = settingsDialog.querySelectorAll('.tab-content');
+        const themeSelector = document.getElementById('themeSelector');
+        
+        // Init themes inside the dialog
+        this.initThemes(themeSelector);
+
+        settingsBtn.addEventListener('click', () => {
+            settingsDialog.style.display = 'flex';
+        });
+
+        closeBtn.addEventListener('click', () => {
+            settingsDialog.style.display = 'none';
+        });
+        
+        settingsDialog.addEventListener('click', (e) => {
+            if (e.target === settingsDialog) {
+                settingsDialog.style.display = 'none';
+            }
+        });
+
+        // Tab switching logic
+        tabLinks.forEach(link => {
+            link.addEventListener('click', () => {
+                const tabId = link.dataset.tab;
+
+                tabLinks.forEach(l => l.classList.remove('active'));
+                tabContents.forEach(c => c.classList.remove('active'));
+
+                link.classList.add('active');
+                document.getElementById(tabId).classList.add('active');
+            });
+        });
+    },
+
     // Initialize source dialog
     initSourceDialog() {
-        const { sourceDialog, closeSourceBtn, dialogCloseBtn } = this.elements;
-        
-        if (closeSourceBtn) {
-            closeSourceBtn.addEventListener('click', e => {
-                e.stopPropagation();
-                sourceDialog.style.display = 'none';
-            });
-        }
+        const { sourceDialog, dialogCloseBtn } = this.elements;
         
         // Dialog close button
         if (dialogCloseBtn) {
@@ -315,16 +362,17 @@ const TraceViewer = {
                 sourceDialog.style.display = 'none';
             });
         }
-        
     },
 
     // Initialize keyboard shortcuts
     initKeyboardShortcuts() {
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape') {
-                const sourceDialog = this.elements.sourceDialog;
-                if (sourceDialog) {
-                    sourceDialog.style.display = 'none';
+                if (this.elements.sourceDialog) {
+                    this.elements.sourceDialog.style.display = 'none';
+                }
+                if (this.elements.settingsDialog) {
+                    this.elements.settingsDialog.style.display = 'none';
                 }
             }
         });
@@ -590,12 +638,7 @@ const TraceViewer = {
 
         skeletonViewBtn.addEventListener('click', () => {
             document.body.classList.toggle('skeleton-mode');
-
-            if (document.body.classList.contains('skeleton-mode')) {
-                skeletonViewBtn.textContent = '完整视图';
-            } else {
-                skeletonViewBtn.textContent = '框架模式';
-            }
+            this.i18n.apply(); // Re-apply translations to update button text
         });
     },
     
@@ -681,7 +724,7 @@ const TraceViewer = {
                     this.rawResponseToggleBtn.addEventListener('click', () => {
                         const isHidden = this.rawResponseContent.style.display === 'none';
                         this.rawResponseContent.style.display = isHidden ? 'flex' : 'none';
-                        this.rawResponseToggleBtn.textContent = isHidden ? 'Hide' : 'Show';
+                        this.rawResponseToggleBtn.textContent = isHidden ? TraceViewer.i18n.t('aiHideBtn') : TraceViewer.i18n.t('aiShowBtn');
                     });
                 }
                 
@@ -702,18 +745,18 @@ const TraceViewer = {
                 const model = this.modelSelect.value;
                 localStorage.setItem('llmApiUrl', apiUrl);
                 localStorage.setItem('llmModel', model);
-                this.status.textContent = 'Settings saved!';
+                this.status.textContent = TraceViewer.i18n.t('aiStatusSaved');
                 setTimeout(() => this.status.textContent = '', 2000);
             },
             
             async fetchModels(savedModel = null) {
                 const baseUrl = this.apiUrlInput.value.trim();
                 if (!baseUrl) {
-                    alert('Please enter the LLM API URL first.');
+                    alert(TraceViewer.i18n.t('aiApiUrlAlert'));
                     return;
                 }
                 
-                this.status.textContent = 'Fetching models...';
+                this.status.textContent = TraceViewer.i18n.t('aiStatusFetching');
                 try {
                     const response = await fetch(`${baseUrl}/models`);
                     if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
@@ -732,7 +775,7 @@ const TraceViewer = {
                         this.modelSelect.value = savedModel;
                     }
 
-                    this.status.textContent = 'Models loaded.';
+                    this.status.textContent = TraceViewer.i18n.t('aiStatusLoaded');
                 } catch (error) {
                     this.status.textContent = `Error: ${error.message}`;
                     console.error('Failed to fetch models:', error);
@@ -782,13 +825,13 @@ const TraceViewer = {
             show(logText) {
                 this.currentLogText = logText;
                 this.body.innerHTML = '';
-                this.status.textContent = 'Ready to explain.';
+                this.status.textContent = TraceViewer.i18n.t('aiStatusReady');
                 
                 // Reset raw response viewer
                 this.thinkingOutput.textContent = '';
                 this.contentOutput.textContent = '';
                 this.rawResponseContent.style.display = 'none';
-                this.rawResponseToggleBtn.textContent = 'Show';
+                this.rawResponseToggleBtn.textContent = TraceViewer.i18n.t('aiShowBtn');
 
                 const lines = logText.split('\n');
                 lines.forEach((line, index) => {
@@ -826,7 +869,7 @@ const TraceViewer = {
                 }
                 this.dialog.style.display = 'none';
                 this.body.innerHTML = '';
-                this.status.textContent = 'Ready to explain.';
+                this.status.textContent = TraceViewer.i18n.t('aiStatusReady');
                 this.startBtn.disabled = false;
             },
             
@@ -835,7 +878,7 @@ const TraceViewer = {
                 const model = this.modelSelect.value;
 
                 if (!baseUrl || !model) {
-                    alert('Please configure API URL and select a model.');
+                    alert(TraceViewer.i18n.t('aiApiUrlAlert'));
                     return;
                 }
 
@@ -896,7 +939,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
 
                 this.abortController = new AbortController();
-                this.status.textContent = 'Sending request to LLM...';
+                this.status.textContent = TraceViewer.i18n.t('aiStatusSending');
                 this.startBtn.disabled = true;
 
                 try {
@@ -909,7 +952,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     
                     if (!response.ok || !response.body) throw new Error(`HTTP error! Status: ${response.status}`);
                     
-                    this.status.textContent = 'Receiving explanation stream...';
+                    this.status.textContent = TraceViewer.i18n.t('aiStatusReceiving');
                     let receivedChars = 0;
 
                     const reader = response.body.getReader();
@@ -950,7 +993,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                                 } else if (ssePayload.event === "content" || ssePayload.event === "thinking") {
                                     if (typeof ssePayload.data === 'string') {
                                         receivedChars += ssePayload.data.length;
-                                        this.status.textContent = `Receiving explanation stream... (${receivedChars} chars)`;
+                                        this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${receivedChars} chars)`;
                                     }
                                     
                                     if (ssePayload.event === "content" && typeof ssePayload.data === 'string') {
@@ -976,7 +1019,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                                 } else if (ssePayload.event === "error") {
                                     throw new Error(ssePayload.data);
                                 } else if (ssePayload.event === "end") {
-                                    this.status.textContent = `Explanation finished. (Total ${receivedChars} chars)`;
+                                    this.status.textContent = `${TraceViewer.i18n.t('aiStatusFinished')} (Total ${receivedChars} chars)`;
                                 }
                             } catch (e) {
                                 console.warn('Failed to parse SSE line envelope:', sseLine, e);
@@ -1174,6 +1217,132 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 }
             }
         });
+    },
+
+    // Internationalization (i18n) Module
+    i18n: {
+        currentLang: 'en',
+        translations: {
+            // Nav Controls
+            mainTitle: { en: 'Python Trace Report', zh: 'Python 追踪报告' },
+            searchPlaceholder: { en: 'Search messages...', zh: '搜索消息...' },
+            expandAll: { en: 'Expand All', zh: '全部展开' },
+            collapseAll: { en: 'Collapse All', zh: '全部折叠' },
+            skeletonView: { en: 'Skeleton View', zh: '框架模式' },
+            skeletonViewActive: { en: 'Full View', zh: '完整视图' },
+            summary: { en: 'Summary', zh: '摘要' },
+            settings: { en: 'Settings', zh: '设置' },
+            export: { en: 'Export as HTML', zh: '导出为HTML' },
+            // Summary Dropdown
+            generatedAt: { en: 'Generated at:', zh: '生成于:' },
+            totalMessages: { en: 'Total messages:', zh: '总消息数:' },
+            errors: { en: 'Errors:', zh: '错误数:' },
+            // Settings Dialog
+            settingsTitle: { en: 'Settings', zh: '设置' },
+            displayTab: { en: 'Display', zh: '显示' },
+            helpTab: { en: 'Help', zh: '帮助' },
+            languageLabel: { en: 'Language:', zh: '语言:' },
+            themeLabel: { en: 'Theme:', zh: '主题:' },
+            // Help Tab
+            logEntrySymbolsTitle: { en: 'Log Entry Symbols', zh: '日志条目符号' },
+            tableHeaderSymbol: { en: 'Symbol', zh: '符号' },
+            tableHeaderType: { en: 'Type', zh: '类型' },
+            tableHeaderDescription: { en: 'Description', zh: '描述' },
+            typeFuncCall: { en: 'Function Call', zh: '函数调用' },
+            descFuncCall: { en: 'A function call inside a traced file.', zh: '追踪文件内的函数调用。' },
+            typeFuncReturn: { en: 'Function Return', zh: '函数返回' },
+            descFuncReturn: { en: 'The return from a function inside a traced file.', zh: '追踪文件内的函数返回。' },
+            typeBoundaryCall: { en: 'Boundary Call', zh: '边界调用' },
+            descBoundaryCall: { en: 'A call from a traced file to a non-traced file (e.g., standard library, third-party package). Details within the call are not shown.', zh: '从追踪文件到非追踪文件的调用（例如，标准库、第三方包）。调用内部细节不显示。' },
+            typeBoundaryReturn: { en: 'Boundary Return', zh: '边界返回' },
+            descBoundaryReturn: { en: 'The return from a boundary call.', zh: '边界调用的返回。' },
+            typeBoundaryException: { en: 'Boundary Exception', zh: '边界异常' },
+            descBoundaryException: { en: 'An exception that occurred within a boundary call.', zh: '边界调用内部发生的异常。' },
+            typeCCall: { en: 'C Function Call', zh: 'C函数调用' },
+            descCCall: { en: '(Python 3.12+) A direct call to a C-language function or builtin.', zh: '（Python 3.12+）对C语言函数或内置函数的直接调用。' },
+            typeCReturn: { en: 'C Function Return', zh: 'C函数返回' },
+            descCReturn: { en: '(Python 3.12+) The return from a C function call.', zh: '（Python 3.12+）C函数调用的返回。' },
+            typeCRaise: { en: 'C Function Raise', zh: 'C函数异常' },
+            descCRaise: { en: '(Python 3.12+) An exception raised from within a C function.', zh: '（Python 3.12+）C函数内部抛出的异常。' },
+            typeLineExec: { en: 'Line Execution', zh: '行执行' },
+            descLineExec: { en: 'A line of source code that was executed.', zh: '被执行的一行源代码。' },
+            typeException: { en: 'Exception', zh: '异常' },
+            descException: { en: 'An exception that occurred within a traced function.', zh: '追踪函数内发生的异常。' },
+            typeDebugStmt: { en: 'Debug Statement', zh: '调试语句' },
+            descDebugStmt: { en: 'The result of a special `# trace: expression` comment.', zh: '特殊的 `# trace: expression` 注释的结果。' },
+            interactiveFeaturesTitle: { en: 'Interactive Features', zh: '交互功能' },
+            featureFolding: { en: '<strong>Folding:</strong> Click on any <code>CALL</code> entry to expand or collapse its entire call stack.', zh: '<strong>折叠:</strong> 点击任何 <code>CALL</code> 条目可展开或折叠其完整的调用堆栈。' },
+            featureViewSource: { en: '<strong>View Source:</strong> Hover over a log entry and click \'view source\' to see the source code with executed lines highlighted.', zh: '<strong>查看源码:</strong> 鼠标悬停在日志条目上并点击“view source”可查看源码，已执行的行会被高亮。' },
+            featureCopySubtree: { en: '<strong>Copy Subtree (📋):</strong> Copies the text of a complete call subtree (from CALL to RETURN) to the clipboard.', zh: '<strong>复制子树 (📋):</strong> 将完整的调用子树（从CALL到RETURN）的文本复制到剪贴板。' },
+            featureFocusSubtree: { en: '<strong>Focus Subtree (🔍):</strong> Opens a new window showing only the selected call subtree.', zh: '<strong>聚焦子树 (🔍):</strong> 在新窗口中仅显示所选的调用子树。' },
+            featureExplainAI: { en: '<strong>Explain with AI (🤖):</strong> Sends the selected subtree to a Large Language Model for an explanation (requires a running LLM API).', zh: '<strong>AI 解释 (🤖):</strong> 将选定的子树发送给大语言模型进行解释（需要一个运行中的LLM API）。' },
+            // AI Dialog
+            aiDialogTitle: { en: '🤖 AI Code Trace Explanation', zh: '🤖 AI 代码追踪解释' },
+            aiApiUrlLabel: { en: 'LLM API URL:', zh: 'LLM API 地址:' },
+            aiApiUrlPlaceholder: { en: 'e.g., http://127.0.0.1:8000', zh: '例如: http://127.0.0.1:8000' },
+            aiModelLabel: { en: 'Model:', zh: '模型:' },
+            aiSaveBtn: { en: 'Save', zh: '保存' },
+            aiRefreshModelsBtn: { en: 'Refresh Models', zh: '刷新模型' },
+            aiRawResponseTitle: { en: 'LLM Raw Response (for diagnosis)', zh: 'LLM 原始响应 (用于诊断)' },
+            aiShowBtn: { en: 'Show', zh: '显示' },
+            aiHideBtn: { en: 'Hide', zh: '隐藏' },
+            aiThinkingPanel: { en: 'Thinking', zh: '思考过程' },
+            aiContentPanel: { en: 'Content', zh: '内容' },
+            aiStartExplanationBtn: { en: 'Start Explanation', zh: '开始解释' },
+            aiStatusReady: { en: 'Ready to explain.', zh: '准备解释。' },
+            aiStatusSaved: { en: 'Settings saved!', zh: '设置已保存！' },
+            aiApiUrlAlert: { en: 'Please enter the LLM API URL first.', zh: '请先输入LLM API地址。' },
+            aiStatusFetching: { en: 'Fetching models...', zh: '正在获取模型...' },
+            aiStatusLoaded: { en: 'Models loaded.', zh: '模型已加载。' },
+            aiStatusSending: { en: 'Sending request to LLM...', zh: '正在向LLM发送请求...' },
+            aiStatusReceiving: { en: 'Receiving explanation stream...', zh: '正在接收解释流...' },
+            aiStatusFinished: { en: 'Explanation finished.', zh: '解释完成。' },
+        },
+        init() {
+            const savedLang = localStorage.getItem('traceViewerLang');
+            const browserLang = navigator.language.startsWith('zh') ? 'zh' : 'en';
+            const initialLang = savedLang || browserLang;
+
+            const langSelector = document.getElementById('languageSelector');
+            if (langSelector) {
+                langSelector.value = initialLang;
+                langSelector.addEventListener('change', (e) => this.setLang(e.target.value));
+            }
+            
+            this.setLang(initialLang);
+        },
+        setLang(lang) {
+            this.currentLang = lang;
+            localStorage.setItem('traceViewerLang', lang);
+            document.documentElement.lang = lang;
+            this.apply();
+        },
+        apply() {
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.dataset.i18n;
+                const translation = this.translations[key]?.[this.currentLang];
+                if (translation) {
+                    if (key === 'skeletonView' && document.body.classList.contains('skeleton-mode')) {
+                        el.textContent = this.translations['skeletonViewActive'][this.currentLang];
+                    } else {
+                        el.innerHTML = translation; // Use innerHTML to support <strong> etc.
+                    }
+                }
+            });
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.dataset.i18nPlaceholder;
+                const translation = this.translations[key]?.[this.currentLang];
+                if (translation) el.placeholder = translation;
+            });
+            document.querySelectorAll('[data-i18n-title]').forEach(el => {
+                const key = el.dataset.i18nTitle;
+                const translation = this.translations[key]?.[this.currentLang];
+                if (translation) el.title = translation;
+            });
+        },
+        t(key) {
+            return this.translations[key]?.[this.currentLang] || key;
+        }
     },
 
     // Source code viewer functionality

@@ -772,7 +772,7 @@ class SysMonitoringTraceDispatcher:
                 self.active_frames.discard(frame)
             if is_simple:
                 self.simple_frames.discard(frame)
-
+        self._logic.init_stack_variables()
         # These state updates must happen for ALL frames during unwind to keep state consistent.
         self._logic.exception_chain = []
         self._logic.decrement_stack_depth()

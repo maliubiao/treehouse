@@ -87,41 +87,107 @@ class CallTreeHtmlRender:
                     </div>
                     <div class="source-content" id="sourceContent"></div>
             </div>
-            <h1>Python Trace Report</h1>
-            <div class="summary">
-                <p>Generated at: {generation_time}</p>
-                <p>Total messages: {message_count}</p>
-                <p>Errors: {error_count}</p>
-                <div class="theme-selector">
-                    <label>Theme: </label>
-                    <select id="themeSelector">
-                        <!-- Options will be populated by JavaScript -->
-                    </select>
+
+            <header class="main-header">
+                <h1 data-i18n="mainTitle">Python Trace Report</h1>
+                <nav id="controls" class="nav-controls">
+                    <input type="text" id="search" data-i18n-placeholder="searchPlaceholder" placeholder="Search messages...">
+                    <button id="expandAll" data-i18n="expandAll">Expand All</button>
+                    <button id="collapseAll" data-i18n="collapseAll">Collapse All</button>
+                    <button id="skeletonViewBtn" data-i18n="skeletonView">框架模式</button>
+                    <div class="dropdown-container">
+                        <button id="summaryBtn" class="dropdown-toggle" data-i18n="summary">Summary ▾</button>
+                        <div id="summaryDropdown" class="dropdown-menu">
+                            <p><strong data-i18n="generatedAt">Generated at:</strong> {generation_time}</p>
+                            <p><strong data-i18n="totalMessages">Total messages:</strong> {message_count}</p>
+                            <p><strong data-i18n="errors">Errors:</strong> {error_count}</p>
+                        </div>
+                    </div>
+                    <button id="settingsBtn" data-i18n="settings">Settings</button>
+                    <button id="exportBtn" data-i18n="export">Export as HTML</button>
+                </nav>
+            </header>
+
+            <!-- Settings Dialog -->
+            <div id="settingsDialog" class="modal" style="display: none;">
+                <div class="modal-content wide">
+                    <span class="modal-close-btn">&times;</span>
+                    <h2 data-i18n="settingsTitle">Settings</h2>
+                    <div class="modal-tabs">
+                        <button class="tab-link active" data-tab="tab-display" data-i18n="displayTab">Display</button>
+                        <button class="tab-link" data-tab="tab-help" data-i18n="helpTab">Help</button>
+                    </div>
+
+                    <!-- Display Tab -->
+                    <div id="tab-display" class="tab-content active">
+                        <div class="setting-item">
+                            <label for="languageSelector" data-i18n="languageLabel">Language:</label>
+                            <select id="languageSelector">
+                                <option value="en">English</option>
+                                <option value="zh">简体中文</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label for="themeSelector" data-i18n="themeLabel">Theme:</label>
+                            <select id="themeSelector">
+                                <!-- Options will be populated by JavaScript -->
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Help Tab -->
+                    <div id="tab-help" class="tab-content">
+                        <h3 data-i18n="logEntrySymbolsTitle">Log Entry Symbols</h3>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th data-i18n="tableHeaderSymbol">Symbol</th>
+                                    <th data-i18n="tableHeaderType">Type</th>
+                                    <th data-i18n="tableHeaderDescription">Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>↘ CALL</td><td data-i18n="typeFuncCall">Function Call</td><td data-i18n="descFuncCall">A function call inside a traced file.</td></tr>
+                                <tr><td>↗ RETURN</td><td data-i18n="typeFuncReturn">Function Return</td><td data-i18n="descFuncReturn">The return from a function inside a traced file.</td></tr>
+                                <tr><td>↘ B-CALL</td><td data-i18n="typeBoundaryCall">Boundary Call</td><td data-i18n="descBoundaryCall">A call from a traced file to a non-traced file (e.g., standard library, third-party package). Details within the call are not shown.</td></tr>
+                                <tr><td>↗ B-RETURN</td><td data-i18n="typeBoundaryReturn">Boundary Return</td><td data-i18n="descBoundaryReturn">The return from a boundary call.</td></tr>
+                                <tr><td>⚠ B-EXCEPTION</td><td data-i18n="typeBoundaryException">Boundary Exception</td><td data-i18n="descBoundaryException">An exception that occurred within a boundary call.</td></tr>
+                                <tr><td>↘ C-CALL</td><td data-i18n="typeCCall">C Function Call</td><td data-i18n="descCCall">(Python 3.12+) A direct call to a C-language function or builtin.</td></tr>
+                                <tr><td>↗ C-RETURN</td><td data-i18n="typeCReturn">C Function Return</td><td data-i18n="descCReturn">(Python 3.12+) The return from a C function call.</td></tr>
+                                <tr><td>⚠ C-RAISE</td><td data-i18n="typeCRaise">C Function Raise</td><td data-i18n="descCRaise">(Python 3.12+) An exception raised from within a C function.</td></tr>
+                                <tr><td>▷ LINE</td><td data-i18n="typeLineExec">Line Execution</td><td data-i18n="descLineExec">A line of source code that was executed.</td></tr>
+                                <tr><td>⚠ EXCEPTION</td><td data-i18n="typeException">Exception</td><td data-i18n="descException">An exception that occurred within a traced function.</td></tr>
+                                <tr><td>↳ Debug</td><td data-i18n="typeDebugStmt">Debug Statement</td><td data-i18n="descDebugStmt">The result of a special <code># trace: expression</code> comment.</td></tr>
+                            </tbody>
+                        </table>
+                        <h3 data-i18n="interactiveFeaturesTitle">Interactive Features</h3>
+                        <ul>
+                            <li data-i18n="featureFolding"><strong>Folding:</strong> Click on any <code>CALL</code> entry to expand or collapse its entire call stack.</li>
+                            <li data-i18n="featureViewSource"><strong>View Source:</strong> Hover over a log entry and click 'view source' to see the source code with executed lines highlighted.</li>
+                            <li data-i18n="featureCopySubtree"><strong>Copy Subtree (📋):</strong> Copies the text of a complete call subtree (from CALL to RETURN) to the clipboard.</li>
+                            <li data-i18n="featureFocusSubtree"><strong>Focus Subtree (🔍):</strong> Opens a new window showing only the selected call subtree.</li>
+                            <li data-i18n="featureExplainAI"><strong>Explain with AI (🤖):</strong> Sends the selected subtree to a Large Language Model for an explanation (requires a running LLM API).</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
-            <div id="controls">
-                <input type="text" id="search" placeholder="Search messages...">
-                <button id="expandAll">Expand All</button>
-                <button id="collapseAll">Collapse All</button>
-                <button id="skeletonViewBtn">框架模式</button>
-                <button id="exportBtn">Export as HTML</button>
-            </div>
+
             <div id="content">\n{content}\n</div>
             
             <!-- AI Explain Dialog -->
             <div id="aiExplainDialog" class="ai-explain-dialog" style="display: none;">
                 <div class="ai-explain-dialog-content">
                     <div class="ai-explain-header">
-                        <h2>🤖 AI Code Trace Explanation</h2>
+                        <h2 data-i18n="aiDialogTitle">🤖 AI Code Trace Explanation</h2>
                         <span class="ai-explain-close-btn">&times;</span>
                     </div>
                     <div class="ai-explain-config">
-                        <label for="llmApiUrl">LLM API URL:</label>
-                        <input type="text" id="llmApiUrl" placeholder="e.g., http://127.0.0.1:8000">
-                        <label for="llmModelSelect">Model:</label>
+                        <label for="llmApiUrl" data-i18n="aiApiUrlLabel">LLM API URL:</label>
+                        <input type="text" id="llmApiUrl" data-i18n-placeholder="aiApiUrlPlaceholder" placeholder="e.g., http://127.0.0.1:8000">
+                        <label for="llmModelSelect" data-i18n="aiModelLabel">Model:</label>
                         <select id="llmModelSelect"></select>
-                        <button id="llmSettingsSaveBtn">Save</button>
-                        <button id="llmFetchModelsBtn">Refresh Models</button>
+                        <button id="llmSettingsSaveBtn" data-i18n="aiSaveBtn">Save</button>
+                        <button id="llmFetchModelsBtn" data-i18n="aiRefreshModelsBtn">Refresh Models</button>
                     </div>
                     <div class="ai-explain-body" id="aiExplainBody">
                         <!-- Log content will be injected here -->
@@ -130,23 +196,23 @@ class CallTreeHtmlRender:
                     <!-- Raw LLM Response Viewer -->
                     <div class="llm-raw-response-viewer">
                         <div class="llm-raw-response-header">
-                            <span>LLM Raw Response (for diagnosis)</span>
-                            <button id="llmRawResponseToggleBtn">Show</button>
+                            <span data-i18n="aiRawResponseTitle">LLM Raw Response (for diagnosis)</span>
+                            <button id="llmRawResponseToggleBtn" data-i18n="aiShowBtn">Show</button>
                         </div>
                         <div class="llm-raw-response-content" id="llmRawResponseContent" style="display: none;">
                             <div class="llm-panel">
-                                <h4>Thinking</h4>
+                                <h4 data-i18n="aiThinkingPanel">Thinking</h4>
                                 <pre id="llmThinkingOutput"></pre>
                             </div>
                             <div class="llm-panel">
-                                <h4>Content</h4>
+                                <h4 data-i18n="aiContentPanel">Content</h4>
                                 <pre id="llmContentOutput"></pre>
                             </div>
                         </div>
                     </div>
 
                     <div class="ai-explain-footer">
-                        <button id="startAiExplainBtn">Start Explanation</button>
+                        <button id="startAiExplainBtn" data-i18n="aiStartExplanationBtn">Start Explanation</button>
                         <span id="aiExplainStatus"></span>
                     </div>
                 </div>
