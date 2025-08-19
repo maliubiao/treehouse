@@ -1338,6 +1338,33 @@ class TestSysMonitoringTraceDispatcher(BaseTracerTest):
             self.fail(f"Failed to capture Python frame for C call in {python_func_calling_c.__name__}")
         return frame
 
+    def _get_frames_for_test(self, func, *args, **kwargs):
+        """
+        Runs a function under a tracer and captures the frames for specific functions in the call stack.
+        Returns a dictionary of {func_name: frame_object}.
+        This is used to obtain real, correctly-structured frame objects for unit testing.
+        """
+        captured_frames = {}
+
+        def tracer(frame, event, arg):
+            func_name = frame.f_code.co_name
+            # Capture the first time we see a frame for a function.
+            # The frame object is reused for the lifetime of the call.
+            if func_name not in captured_frames:
+                captured_frames[frame.f_code.co_name] = frame
+            return tracer
+
+        sys.settrace(tracer)
+        try:
+            func(*args, **kwargs)
+        except Exception:
+            # We need to capture frames even if an exception occurs during the run.
+            pass
+        finally:
+            sys.settrace(None)
+
+        return captured_frames
+
     def setUp(self):
         super().setUp()
         self.test_filename = str(Path(__file__).resolve())
