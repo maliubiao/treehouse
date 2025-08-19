@@ -386,6 +386,7 @@ class TraceDispatcher:
         self.path_cache = {}
         self._logic = TraceLogic(config)
         self.active_frames = set()
+        self.simple_frames = set()  # For shallow tracing
 
     def add_target_frame(self, frame):
         if self.is_target_frame(frame):
@@ -441,26 +442,36 @@ class TraceDispatcher:
         if self._logic.inside_unwanted_frame(frame):
             return self.trace_dispatch
         self._logic.maybe_unwanted_frame(frame)
+
         if self.is_target_frame(frame):
             self.active_frames.add(frame)
             self._logic.handle_call(frame)
+        elif frame.f_back in self.active_frames:
+            # Boundary call: from a target frame to a non-target one
+            self.simple_frames.add(frame)
+            self._logic.handle_call(frame, is_simple=True)
+
         return self.trace_dispatch
 
     def _handle_return_event(self, frame, arg):
-        # 总是通知 TraceLogic 离开此帧的作用域，无论其调用是否被 Dispatcher 完全处理。
-        # 这确保了 TraceLogic 正确管理其内部的非追踪帧堆栈。
+        """处理返回事件，支持active和simple两种模式"""
         self._logic.leave_unwanted_frame(frame)
 
-        # 仅当帧是活动帧（即其 CALL 事件未被 Dispatcher 过滤）时，才调用 handle_return。
-        if frame in self.active_frames:
-            self._logic.handle_return(frame, arg)
+        is_simple = frame in self.simple_frames
+        is_active = frame in self.active_frames
+
+        if is_active or is_simple:
+            self._logic.handle_return(frame, arg, is_simple=is_simple)
             self._logic.frame_cleanup(frame)
-            self.active_frames.remove(frame)
+            if is_active:
+                self.active_frames.remove(frame)
+            if is_simple:
+                self.simple_frames.remove(frame)
 
         return self.trace_dispatch
 
     def _handle_line_event(self, frame, _arg=None):
-        """处理行号事件"""
+        """处理行号事件，只对active frame有效"""
         if frame in self.active_frames:
             if self._logic.inside_unwanted_frame(frame):
                 return self.trace_dispatch
@@ -468,12 +479,22 @@ class TraceDispatcher:
         return self.trace_dispatch
 
     def _handle_exception_event(self, frame, arg):
-        """处理异常事件"""
-        if frame in self.active_frames:
+        """处理异常事件，支持active和simple两种模式"""
+        is_simple = frame in self.simple_frames
+        is_active = frame in self.active_frames
+
+        if is_active or is_simple:
             if self._logic.inside_unwanted_frame(frame):
                 return self.trace_dispatch
             exc_type, exc_value, _ = arg
-            self._logic.handle_exception(exc_type, exc_value, frame)
+            self._logic.handle_exception(exc_type, exc_value, frame, is_simple=is_simple)
+            # Exception implies a return, so we clean up the frame
+            self._logic.frame_cleanup(frame)
+            if is_active:
+                self.active_frames.remove(frame)
+            if is_simple:
+                self.simple_frames.remove(frame)
+
         return self.trace_dispatch
 
     def start(self):
@@ -500,6 +521,7 @@ class SysMonitoringTraceDispatcher:
         self.path_cache = {}
         self._logic = TraceLogic(config)
         self.active_frames = set()
+        self.simple_frames = set()  # For shallow tracing
         self._tool_id = None
         self._registered = False
         self.monitoring_module: MonitoringModule = sys.monitoring
@@ -650,29 +672,30 @@ class SysMonitoringTraceDispatcher:
         self._logic.init_stack_variables()
 
         frame = sys._getframe(1)  # Get the frame of the function being called
-        if not self.is_target_frame(frame):
-            return self.monitoring_module.DISABLE
         if self._logic.inside_unwanted_frame(frame):
             return self.monitoring_module.DISABLE
         self._logic.maybe_unwanted_frame(frame)
-        # If we're already tracing after finding the start function
-        if self.start_function and self.start_at_enable:
-            self.active_frames.add(frame)
-            self._logic.handle_call(frame)
-            return None
 
-        # If we need to wait for a specific start function
-        if self.start_function:
-            if frame.f_code.co_name in self.start_function:
-                self.start_at_enable = True
-                self.active_frames.add(frame)
-                self._logic.handle_call(frame)
-            else:
-                return self.monitoring_module.DISABLE
-        # No start function specified, trace everything
-        else:
+        if self.is_target_frame(frame):
+            # If we're waiting for a start function, check if this is it
+            if self.start_function and not self.start_at_enable:
+                if frame.f_code.co_name in self.start_function:
+                    self.start_at_enable = True
+                else:
+                    return self.monitoring_module.DISABLE  # Not the start function yet
+
             self.active_frames.add(frame)
-            self._logic.handle_call(frame)
+            self._logic.handle_call(frame, is_simple=False)
+            return None  # Enable all events for this frame
+        elif frame.f_back in self.active_frames:
+            # Boundary call: from a target frame to a non-target one
+            self.simple_frames.add(frame)
+            self._logic.handle_call(frame, is_simple=True)
+            # For simple frames, we only want RETURN and RAISE events.
+            return self.monitoring_module.events.PY_RETURN | self.monitoring_module.events.RAISE
+        else:
+            # Not a target, and not called by a target. Ignore.
+            return self.monitoring_module.DISABLE
 
     def handle_py_resume(self, _code, _offset):
         """Handle PY_RESUME event (function resume)"""
@@ -681,12 +704,18 @@ class SysMonitoringTraceDispatcher:
     def handle_py_return(self, _code, _offset, retval):
         """Handle PY_RETURN event (function return)"""
         frame = sys._getframe(1)
-        if frame in self.active_frames:
+        is_simple = frame in self.simple_frames
+        is_active = frame in self.active_frames
+
+        if is_active or is_simple:
             self._logic.leave_unwanted_frame(frame)
             if not self._logic.inside_unwanted_frame(frame):
-                self._logic.handle_return(frame, retval)
+                self._logic.handle_return(frame, retval, is_simple=is_simple)
             self._logic.frame_cleanup(frame)
-            self.active_frames.discard(frame)
+            if is_active:
+                self.active_frames.discard(frame)
+            if is_simple:
+                self.simple_frames.discard(frame)
 
     def handle_line(self, _code, _line_number):
         """Handle LINE event"""
@@ -698,14 +727,17 @@ class SysMonitoringTraceDispatcher:
     def handle_raise(self, _code, _offset, exc):
         """Handle RAISE event (exception raised)"""
         frame = sys._getframe(1)  # Get the frame where exception was raised
-        if frame in self.active_frames:
+        is_simple = frame in self.simple_frames
+        is_active = frame in self.active_frames
+
+        if is_active or is_simple:
             if not self._logic.inside_unwanted_frame(frame):
-                self._logic.handle_exception(type(exc), exc, frame)
+                self._logic.handle_exception(type(exc), exc, frame, is_simple=is_simple)
 
     def handle_exception_handled(self, _code, _offset, exc):
         """Handle EXCEPTION_HANDLED event"""
         frame = sys._getframe(1)  # Get the frame where exception was handled
-        if frame in self.active_frames:
+        if frame in self.active_frames or frame in self.simple_frames:
             if not self._logic.inside_unwanted_frame(frame):
                 self._logic.handle_exception_was_handled(frame)
 
@@ -716,14 +748,20 @@ class SysMonitoringTraceDispatcher:
     def handle_py_throw(self, _code, _offset, exc):
         """Handle PY_THROW event (generator throw)"""
         frame = sys._getframe(1)
-        if frame in self.active_frames:
+        is_simple = frame in self.simple_frames
+        is_active = frame in self.active_frames
+
+        if is_active or is_simple:
             if not self._logic.inside_unwanted_frame(frame):
-                self._logic.handle_exception(type(exc), exc, frame)
+                self._logic.handle_exception(type(exc), exc, frame, is_simple=is_simple)
 
     def handle_py_unwind(self, *args):
         """Handle PY_UNWIND event (stack unwinding)"""
         frame = sys._getframe(1)
-        if frame in self.active_frames:
+        is_simple = frame in self.simple_frames
+        is_active = frame in self.active_frames
+
+        if is_active or is_simple:
             for exception in self._logic.exception_chain:
                 self._logic._add_to_buffer(exception[0], exception[1])
             self._logic.exception_chain = []
@@ -731,14 +769,20 @@ class SysMonitoringTraceDispatcher:
             self._logic.decrement_stack_depth()
             self._logic.leave_unwanted_frame(frame)
             self._logic.frame_cleanup(frame)
-            self.active_frames.discard(frame)
+            if is_active:
+                self.active_frames.discard(frame)
+            if is_simple:
+                self.simple_frames.discard(frame)
 
     def _handle_reraise(self, _code, _offset, exc):
         """Handle RERAISE event (exception re-raised)"""
         frame = sys._getframe(1)
-        if frame in self.active_frames:
+        is_simple = frame in self.simple_frames
+        is_active = frame in self.active_frames
+
+        if is_active or is_simple:
             if not self._logic.inside_unwanted_frame(frame):
-                self._logic.handle_exception(type(exc), exc, frame)
+                self._logic.handle_exception(type(exc), exc, frame, is_simple=is_simple)
 
     def handle_call(self, code: Any, offset: int, callable_obj: object, arg0: object) -> None:
         """Handles the CALL event, filtering for C-function calls."""
@@ -1243,7 +1287,7 @@ class TraceLogic:
         self._file_cache._ast_cache[expr] = (node, compiled)
         return node, compiled
 
-    def handle_call(self, frame):
+    def handle_call(self, frame, is_simple: bool = False):
         """增强参数捕获逻辑"""
         self.init_stack_variables()
         self._process_message_with_vars(frame, None, None)
@@ -1263,7 +1307,7 @@ class TraceLogic:
                     values = {}
                     args_to_show = []
                 args_info = [f"{arg}={truncate_repr_value(values[arg], safe=is_safe)}" for arg in args_to_show]
-                log_prefix = TraceTypes.PREFIX_CALL
+                log_prefix = TraceTypes.PREFIX_B_CALL if is_simple else TraceTypes.PREFIX_CALL
 
             parent_frame = frame.f_back
             parent_lineno = 0
@@ -1312,17 +1356,19 @@ class TraceLogic:
             del self._last_vars_by_frame[frame_id]  # Clean up var cache
         self._remove_frame_id(frame)
 
-    def handle_return(self, frame, return_value):
+    def handle_return(self, frame, return_value, is_simple: bool = False):
         """增强返回值记录"""
         is_safe = self.config.should_skip_vars(frame.f_code.co_filename, frame.f_lineno)
         return_str = truncate_repr_value(return_value, safe=is_safe)
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         frame_id = self.get_or_reuse_frame_id(frame)
+        log_prefix = TraceTypes.PREFIX_B_RETURN if is_simple else TraceTypes.PREFIX_RETURN
 
         log_data = {
-            "template": "{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]",
+            "template": "{indent}↗ {prefix} {filename} {func}() → {return_value} [frame:{frame_id}]",
             "data": {
                 "indent": _INDENT * (self._local.stack_depth - 1),
+                "prefix": log_prefix,
                 "filename": filename,
                 "lineno": frame.f_lineno,
                 "return_value": return_str,
@@ -1571,7 +1617,7 @@ class TraceLogic:
                 TraceTypes.COLOR_VAR,
             )
 
-    def handle_exception(self, exc_type, exc_value, frame):
+    def handle_exception(self, exc_type, exc_value, frame, is_simple: bool = False):
         """
         记录异常信息。
         对于 sys.monitoring，此方法会将异常事件暂存到 exception_chain 中，
@@ -1592,16 +1638,18 @@ class TraceLogic:
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self.get_or_reuse_frame_id(frame)
+        log_prefix = TraceTypes.PREFIX_B_EXCEPTION if is_simple else TraceTypes.PREFIX_EXCEPTION
         # 同一个frame, 不会重复抛出两个exception， 要么handled, 要么unwind, 要么finally reraise
         if len(self.exception_chain) > 0:
             if self.exception_chain[-1][0]["data"]["frame_id"] == frame_id:
                 return
         log_data = {
             "template": (
-                "{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
+                "{indent}⚠ {prefix} IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
             ),
             "data": {
                 "indent": _INDENT * (self._local.stack_depth - 1),
+                "prefix": log_prefix,
                 "filename": filename,
                 "lineno": lineno,
                 "exc_type": exc_type.__name__,
