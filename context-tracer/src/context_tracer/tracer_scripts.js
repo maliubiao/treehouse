@@ -410,24 +410,8 @@ const TraceViewer = {
                 clone.querySelector('.toggle-details-btn')?.remove();
                 clone.querySelector('.explain-ai-btn')?.remove();
                 clone.querySelector('.expand-code-btn')?.remove();
-            
-                let text;
-                const multiLineContainer = clone.querySelector('.multi-line-container');
-            
-                if (multiLineContainer) {
-                    const prefixEl = multiLineContainer.querySelector('.multi-line-prefix');
-                    const codeEl = multiLineContainer.querySelector('.code-full code');
-                    const prefix = prefixEl ? prefixEl.textContent : '';
-                    const code = codeEl ? codeEl.textContent : '';
-                    text = prefix + code;
-                } else {
-                    // For single-line events, trim whitespace from the ends but do not collapse
-                    // internal whitespace. This is crucial for preserving the indentation
-                    // of source code within the log line.
-                    text = clone.textContent.trim();
-                }
 
-                // Handle new debug vars UI
+                // Handle new debug vars UI: process it, then remove it
                 const debugVarsEl = clone.querySelector('.debug-vars');
                 let debugCommentText = '';
                 if (debugVarsEl) {
@@ -445,12 +429,28 @@ const TraceViewer = {
                     if (vars.length > 0) {
                         debugCommentText = ` # Debug: ${vars.join(', ')}`;
                     }
-                    debugVarsEl.remove();
+                    debugVarsEl.remove(); // Remove before textContent is called
                 }
 
-                // Handle legacy comment UI
+                // Handle legacy comment UI: just remove it
                 clone.querySelector('.comment')?.remove();
-                
+            
+                let text;
+                const multiLineContainer = clone.querySelector('.multi-line-container');
+            
+                if (multiLineContainer) {
+                    const prefixEl = multiLineContainer.querySelector('.multi-line-prefix');
+                    const codeEl = multiLineContainer.querySelector('.code-full code');
+                    const prefix = prefixEl ? prefixEl.textContent : '';
+                    const code = codeEl ? codeEl.textContent : '';
+                    text = prefix + code;
+                } else {
+                    // For single-line events, trim whitespace from the ends but do not collapse
+                    // internal whitespace. This is crucial for preserving the indentation
+                    // of source code within the log line.
+                    text = clone.textContent.trim();
+                }
+
                 const indent = parseInt(node.dataset.indent, 10) || 0;
                 
                 // For multi-line text, indent each line correctly
