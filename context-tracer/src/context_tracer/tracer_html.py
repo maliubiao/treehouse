@@ -147,16 +147,13 @@ class CallTreeHtmlRender:
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr><td>↘ CALL</td><td data-i18n="typeFuncCall">Function Call</td><td data-i18n="descFuncCall">A function call inside a traced file.</td></tr>
-                                <tr><td>↗ RETURN</td><td data-i18n="typeFuncReturn">Function Return</td><td data-i18n="descFuncReturn">The return from a function inside a traced file.</td></tr>
-                                <tr><td>↘ B-CALL</td><td data-i18n="typeBoundaryCall">Boundary Call</td><td data-i18n="descBoundaryCall">A call from a traced file to a non-traced file (e.g., standard library, third-party package). Details within the call are not shown.</td></tr>
-                                <tr><td>↗ B-RETURN</td><td data-i18n="typeBoundaryReturn">Boundary Return</td><td data-i18n="descBoundaryReturn">The return from a boundary call.</td></tr>
-                                <tr><td>⚠ B-EXCEPTION</td><td data-i18n="typeBoundaryException">Boundary Exception</td><td data-i18n="descBoundaryException">An exception that occurred within a boundary call.</td></tr>
+                                <tr><td>↘ CALL</td><td data-i18n="typeFuncCall">Function Call</td><td data-i18n="descFuncCall">A function call, either within a traced file or to an external library.</td></tr>
+                                <tr><td>↗ RETURN</td><td data-i18n="typeFuncReturn">Function Return</td><td data-i18n="descFuncReturn">The return from a function.</td></tr>
                                 <tr><td>↘ C-CALL</td><td data-i18n="typeCCall">C Function Call</td><td data-i18n="descCCall">(Python 3.12+) A direct call to a C-language function or builtin.</td></tr>
                                 <tr><td>↗ C-RETURN</td><td data-i18n="typeCReturn">C Function Return</td><td data-i18n="descCReturn">(Python 3.12+) The return from a C function call.</td></tr>
                                 <tr><td>⚠ C-RAISE</td><td data-i18n="typeCRaise">C Function Raise</td><td data-i18n="descCRaise">(Python 3.12+) An exception raised from within a C function.</td></tr>
                                 <tr><td>▷ LINE</td><td data-i18n="typeLineExec">Line Execution</td><td data-i18n="descLineExec">A line of source code that was executed.</td></tr>
-                                <tr><td>⚠ EXCEPTION</td><td data-i18n="typeException">Exception</td><td data-i18n="descException">An exception that occurred within a traced function.</td></tr>
+                                <tr><td>⚠ EXCEPTION</td><td data-i18n="typeException">Exception</td><td data-i18n="descException">An exception that occurred within a function.</td></tr>
                                 <tr><td>↳ Debug</td><td data-i18n="typeDebugStmt">Debug Statement</td><td data-i18n="descDebugStmt">The result of a special <code># trace: expression</code> comment.</td></tr>
                             </tbody>
                         </table>

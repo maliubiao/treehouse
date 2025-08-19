@@ -2115,9 +2115,9 @@ class TestIntegration(BaseTracerTest):
         self.assertIn("Script result: Error from non-target function", process.stdout)
 
         # Check for boundary call, exception, and normal return
-        self.assertIn("↘ B-CALL", log_content)
+        self.assertIn("↘ CALL", log_content)
         self.assertIn("non_target_raiser()", log_content)
-        self.assertIn("⚠ B-EXCEPTION IN non_target_raiser", log_content)
+        self.assertIn("⚠ EXCEPTION IN non_target_raiser", log_content)
         self.assertIn("ValueError: Error from non-target function", log_content)
         self.assertIn("↗ RETURN", log_content)
         self.assertIn("target_main_caller_of_raiser() → 'Error from non-target function'", log_content)

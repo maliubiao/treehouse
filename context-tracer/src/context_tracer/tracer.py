@@ -717,7 +717,7 @@ class SysMonitoringTraceDispatcher:
                 self.active_frames.discard(frame)
             if is_simple:
                 self.simple_frames.discard(frame)
-
+        self._logic.init_stack_variables()
         self._logic.leave_unwanted_frame(frame)
 
     def handle_line(self, _code, _line_number):
@@ -1311,7 +1311,7 @@ class TraceLogic:
                     values = {}
                     args_to_show = []
                 args_info = [f"{arg}={truncate_repr_value(values[arg], safe=is_safe)}" for arg in args_to_show]
-                log_prefix = TraceTypes.PREFIX_B_CALL if is_simple else TraceTypes.PREFIX_CALL
+                log_prefix = TraceTypes.PREFIX_CALL
 
             parent_frame = frame.f_back
             parent_lineno = 0
@@ -1366,7 +1366,7 @@ class TraceLogic:
         return_str = truncate_repr_value(return_value, safe=is_safe)
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         frame_id = self.get_or_reuse_frame_id(frame)
-        log_prefix = TraceTypes.PREFIX_B_RETURN if is_simple else TraceTypes.PREFIX_RETURN
+        log_prefix = TraceTypes.PREFIX_RETURN
 
         log_data = {
             "template": "{indent}↗ {prefix} {filename} {func}() → {return_value} [frame:{frame_id}]",
@@ -1642,7 +1642,7 @@ class TraceLogic:
         filename = self._get_formatted_filename(frame.f_code.co_filename)
         lineno = frame.f_lineno
         frame_id = self.get_or_reuse_frame_id(frame)
-        log_prefix = TraceTypes.PREFIX_B_EXCEPTION if is_simple else TraceTypes.PREFIX_EXCEPTION
+        log_prefix = TraceTypes.PREFIX_EXCEPTION
         # 同一个frame, 不会重复抛出两个exception， 要么handled, 要么unwind, 要么finally reraise
         if len(self.exception_chain) > 0:
             if self.exception_chain[-1][0]["data"]["frame_id"] == frame_id:

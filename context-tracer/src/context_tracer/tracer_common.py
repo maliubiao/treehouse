@@ -40,12 +40,9 @@ class TraceTypes:
 
     # Log prefixes
     PREFIX_CALL = "CALL"
-    PREFIX_B_CALL = "B-CALL"  # Boundary Call
     PREFIX_RETURN = "RETURN"
-    PREFIX_B_RETURN = "B-RETURN"  # Boundary Return
     PREFIX_MODULE = "MODULE"
     PREFIX_EXCEPTION = "EXCEPTION"
-    PREFIX_B_EXCEPTION = "B-EXCEPTION"  # Boundary Exception
 
     # HTML classes
     HTML_CALL = "call"
