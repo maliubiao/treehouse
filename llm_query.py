@@ -663,11 +663,6 @@ def _get_api_response(
 
             client = genai.Client(api_key=api_key)
 
-            # # 提取系统消息作为system_instruction
-            # system_instructions = "\n".join(
-            #     [msg["content"] for msg in history if msg.get("role") == "system" and msg.get("content")]
-            # )
-
             # 构建Gemini兼容的消息格式
             gemini_contents = []
             for msg in history:
@@ -819,6 +814,8 @@ def _process_stream_response(stream_client, history, model, **kwargs) -> tuple:
             if chunk.choices[0].delta.content:
                 if verbose:
                     _print_content(chunk.choices[0].delta.content, console)
+                if chunk.choices[0].delta.content is None:
+                    break
                 content += chunk.choices[0].delta.content
 
     if verbose:

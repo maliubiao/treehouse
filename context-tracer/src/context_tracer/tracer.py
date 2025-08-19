@@ -449,6 +449,7 @@ class TraceDispatcher:
             self._logic.handle_call(frame)
         elif frame.f_back in self.active_frames:
             # Boundary call: from a target frame to a non-target one
+
             self.simple_frames.add(frame)
             self._logic.handle_call(frame, is_simple=True)
 
@@ -691,10 +692,21 @@ class SysMonitoringTraceDispatcher:
             return None  # Enable all events for this frame
         elif frame.f_back in self.active_frames:
             # Boundary call: from a target frame to a non-target one
+            if frame.f_code.co_name.startswith("<genexpr>"):
+                # one line code, ignore
+                return self.monitoring_module.DISABLE
             self.simple_frames.add(frame)
             self._logic.handle_call(frame, is_simple=True)
-            # For simple frames, we only want RETURN and PY_UNWIND events.
-            return self.monitoring_module.events.PY_RETURN | self.monitoring_module.events.PY_UNWIND
+            # For simple frames, we don't want line events
+            return (
+                self.monitoring_module.events.PY_RETURN
+                | self.monitoring_module.events.PY_UNWIND
+                | self.monitoring_module.events.RAISE
+                | self.monitoring_module.events.RERAISE
+                | self.monitoring_module.events.PY_THROW
+                | self.monitoring_module.events.EXCEPTION_HANDLED
+            )
+
         else:
             # Not a target, and not called by a target. Ignore.
             return self.monitoring_module.DISABLE
@@ -717,8 +729,8 @@ class SysMonitoringTraceDispatcher:
                 self.active_frames.discard(frame)
             if is_simple:
                 self.simple_frames.discard(frame)
-        self._logic.init_stack_variables()
-        self._logic.leave_unwanted_frame(frame)
+            self._logic.init_stack_variables()
+            self._logic.leave_unwanted_frame(frame)
 
     def handle_line(self, _code, _line_number):
         """Handle LINE event"""
@@ -732,7 +744,6 @@ class SysMonitoringTraceDispatcher:
         frame = sys._getframe(1)  # Get the frame where exception was raised
         is_simple = frame in self.simple_frames
         is_active = frame in self.active_frames
-
         if is_active or is_simple:
             if not self._logic.inside_unwanted_frame(frame):
                 self._logic.handle_exception(type(exc), exc, frame, is_simple=is_simple)
@@ -753,7 +764,6 @@ class SysMonitoringTraceDispatcher:
         frame = sys._getframe(1)
         is_simple = frame in self.simple_frames
         is_active = frame in self.active_frames
-
         if is_active or is_simple:
             if not self._logic.inside_unwanted_frame(frame):
                 self._logic.handle_exception(type(exc), exc, frame, is_simple=is_simple)
@@ -763,7 +773,6 @@ class SysMonitoringTraceDispatcher:
         frame = sys._getframe(1)
         is_simple = frame in self.simple_frames
         is_active = frame in self.active_frames
-
         if is_active or is_simple:
             for exception in self._logic.exception_chain:
                 self._logic._add_to_buffer(exception[0], exception[1])
@@ -772,11 +781,9 @@ class SysMonitoringTraceDispatcher:
                 self.active_frames.discard(frame)
             if is_simple:
                 self.simple_frames.discard(frame)
-        self._logic.init_stack_variables()
-        # These state updates must happen for ALL frames during unwind to keep state consistent.
-        self._logic.exception_chain = []
-        self._logic.decrement_stack_depth()
-        self._logic.leave_unwanted_frame(frame)
+            self._logic.exception_chain = []
+            self._logic.decrement_stack_depth()
+            self._logic.leave_unwanted_frame(frame)
 
     def _handle_reraise(self, _code, _offset, exc):
         """Handle RERAISE event (exception re-raised)"""
@@ -1102,8 +1109,14 @@ class TraceLogic:
     def inside_unwanted_frame(self, frame):
         return self._local.bad_frame is not None
 
+    def increment_stack_depth(self):
+        """增加堆栈深度"""
+        # print(self._local.stack_depth,"+1" )
+        self._local.stack_depth += 1
+
     def decrement_stack_depth(self):
-        """减少堆栈深度（用于异常退出时调用）"""
+        """减少堆栈深度"""
+        # print(self._local.stack_depth, "-1", sys._getframe(1))
         self._local.stack_depth = max(0, self._local.stack_depth - 1)
 
     def get_or_reuse_frame_id(self, frame):
@@ -1342,7 +1355,7 @@ class TraceLogic:
                 },
                 TraceTypes.COLOR_CALL,
             )
-            self._local.stack_depth += 1
+            self.increment_stack_depth()
 
         except (AttributeError, TypeError) as e:
             traceback.print_exc()
@@ -1385,7 +1398,7 @@ class TraceLogic:
         }
         # 使用统一的方法处理消息
         self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_RETURN)
-        self._local.stack_depth = max(0, self._local.stack_depth - 1)
+        self.decrement_stack_depth()
 
     def _get_var_ops(self, code_obj):
         """获取代码对象的变量操作分析结果"""
@@ -1712,12 +1725,12 @@ class TraceLogic:
             },
             TraceTypes.COLOR_TRACE,
         )
-        self._local.stack_depth += 1
+        self.increment_stack_depth()
 
     def handle_c_return(self, frame: Any, callable_obj: object, arg0: object) -> None:
         """Handles the return from a C function."""
         self.init_stack_variables()
-        self._local.stack_depth = max(0, self._local.stack_depth - 1)
+        self.decrement_stack_depth()
 
         try:
             func_name = callable_obj.__name__
@@ -1742,7 +1755,7 @@ class TraceLogic:
     def handle_c_raise(self, frame: Any, callable_obj: object, arg0: object) -> None:
         """Handles an exception raised from a C function."""
         self.init_stack_variables()
-        self._local.stack_depth = max(0, self._local.stack_depth - 1)
+        self.decrement_stack_depth()
 
         try:
             func_name = callable_obj.__name__

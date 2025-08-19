@@ -572,6 +572,7 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
         """
         buffer: List[str] = []
         error_count: int = 0
+        frame_indents: Dict[int, int] = {}
         for _idx, (message, msg_type, log_data) in enumerate(self._messages):
             if self._size_exceeded and msg_type not in (
                 TraceTypes.ERROR,
@@ -579,7 +580,29 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
                 TraceTypes.COLOR_EXCEPTION,
             ):
                 continue
-            buffer.append(self._message_to_html(message, msg_type, log_data))
+
+            # --- Indentation Correction Logic ---
+            original_indent = len(message) - len(message.lstrip())
+            corrected_indent = original_indent
+
+            frame_id: Optional[int] = None
+            if isinstance(log_data, dict):
+                data = log_data.get("data")
+                if isinstance(data, dict):
+                    frame_id = data.get("frame_id")
+
+            if frame_id is not None:
+                if frame_id not in frame_indents:
+                    # First time seeing this frame, store its indent. Assumes the CALL event is first.
+                    frame_indents[frame_id] = original_indent
+                # Always use the stored indent for consistency.
+                corrected_indent = frame_indents[frame_id]
+
+            # Reconstruct the message with the corrected indentation for rendering.
+            corrected_message = " " * corrected_indent + message.lstrip()
+
+            buffer.append(self._message_to_html(corrected_message, msg_type, log_data))
+
             if msg_type in (TraceTypes.ERROR, TraceTypes.EXCEPTION, TraceTypes.COLOR_EXCEPTION):
                 error_count += 1
 
