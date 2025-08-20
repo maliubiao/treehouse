@@ -499,10 +499,10 @@ const TraceViewer = {
                 lines.push(processNodeToText(node));
             });
             
-            // Process the corresponding 'return' line
+            // Process the corresponding 'return' or 'exception' line
             let nextElement = callGroup.nextElementSibling;
             while(nextElement) {
-                if (nextElement.classList.contains('return')) {
+                if (nextElement.classList.contains('return') || nextElement.classList.contains('error')) {
                      const indent = parseInt(nextElement.dataset.indent, 10) || 0;
                      const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
                      if(indent === foldableIndent) {
@@ -561,10 +561,10 @@ const TraceViewer = {
             subtreeContainer.appendChild(foldable.cloneNode(true));
             subtreeContainer.appendChild(callGroup.cloneNode(true));
             
-            // Find and add the matching return
+            // Find and add the matching return or exception
             let nextElement = callGroup.nextElementSibling;
             while(nextElement) {
-                if (nextElement.classList.contains('return')) {
+                if (nextElement.classList.contains('return') || nextElement.classList.contains('error')) {
                      const indent = parseInt(nextElement.dataset.indent, 10) || 0;
                      const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
                      if(indent === foldableIndent) {
