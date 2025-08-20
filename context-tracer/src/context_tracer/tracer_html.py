@@ -64,6 +64,7 @@ class CallTreeHtmlRender:
         self._current_size: int = 0
         self._size_exceeded: bool = False
         self.line_comment: DefaultDict[str, List[Any]] = defaultdict(lambda: list())
+
         self._html_template: str = """
         <!DOCTYPE html>
         <html>

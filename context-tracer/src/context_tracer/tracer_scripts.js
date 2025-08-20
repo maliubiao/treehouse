@@ -1329,6 +1329,9 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             loadingSyntax: { en: 'Loading syntax highlighting...', zh: '正在加载语法高亮...' },
             sourceNotAvailable: { en: 'Source not available', zh: '源码不可用' },
             errorMessagePrefix: { en: 'Error: ', zh: '错误：' },
+            // Error messages from Python backend
+            htmlSizeExceeded: { en: '⚠ HTML report size has exceeded {size_limit_mb}MB limit, subsequent content will be ignored', zh: '⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略' },
+            assetCopyError: { en: 'Failed to copy asset files: {error}', zh: '无法复制资源文件: {error}' },
             // Button titles
             expandAllTitle: { en: 'Expand all call stacks', zh: '展开所有调用堆栈' },
             collapseAllTitle: { en: 'Collapse all call stacks', zh: '折叠所有调用堆栈' },
@@ -1382,9 +1385,37 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 const translation = this.translations[key]?.[this.currentLang];
                 if (translation) el.title = translation;
             });
+            
+            // Translate dynamic content from Python backend
+            this.translateDynamicContent();
         },
         t(key) {
             return this.translations[key]?.[this.currentLang] || key;
+        },
+        
+        // Translate dynamic content from Python backend
+        translateDynamicContent() {
+            // Translate HTML size limit error messages
+            const errorElements = document.querySelectorAll('.error, .exception');
+            errorElements.forEach(element => {
+                const text = element.textContent;
+                
+                // HTML size exceeded error
+                const sizeMatch = text.match(/HTML报告大小已超过(\d+\.?\d*)MB限制，后续内容将被忽略/);
+                if (sizeMatch) {
+                    const sizeLimitMb = sizeMatch[1];
+                    element.textContent = this.t('htmlSizeExceeded', {size_limit_mb: sizeLimitMb});
+                    return;
+                }
+                
+                // Asset copy error (from console/logging)
+                const assetMatch = text.match(/无法复制资源文件: (.+)/);
+                if (assetMatch) {
+                    const error = assetMatch[1];
+                    element.textContent = this.t('assetCopyError', {error: error});
+                    return;
+                }
+            });
         }
     },
 
@@ -1451,7 +1482,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
 
             if (!window.sourceFiles || !window.sourceFiles[filename]) {
                 titleDiv.textContent = `${filename} (${TraceViewer.i18n.t('sourceNotAvailable')})`;
-                sourceContent.innerHTML = '<div>Source file not available</div>';
+                sourceContent.innerHTML = `<div>${TraceViewer.i18n.t('sourceNotAvailable')}</div>`;
                 dialog.style.display = 'flex';
                 return;
             }
