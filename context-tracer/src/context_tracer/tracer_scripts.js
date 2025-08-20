@@ -98,10 +98,16 @@ const TraceViewer = {
     calculateSubtreeSizes() {
         const foldables = this.elements.content.querySelectorAll('.foldable.call');
         foldables.forEach(foldable => {
-            const callGroup = foldable.nextElementSibling;
+            // Look for call group as next sibling or first child
+            let callGroup = foldable.nextElementSibling;
+            if (!callGroup || !callGroup.classList.contains('call-group')) {
+                callGroup = foldable.querySelector('.call-group');
+            }
+            
             if (callGroup && callGroup.classList.contains('call-group')) {
-                const descendantCount = callGroup.querySelectorAll('div[data-indent]').length;
-                foldable.dataset.subtreeSize = descendantCount;
+                // Count only direct children, excluding nested foldable elements
+                const directDescendants = callGroup.querySelectorAll(':scope > div[data-indent]:not(.foldable.call)');
+                foldable.dataset.subtreeSize = directDescendants.length;
             } else {
                 foldable.dataset.subtreeSize = 0;
             }
@@ -332,6 +338,18 @@ const TraceViewer = {
         const tabContents = settingsDialog.querySelectorAll('.tab-content');
         const themeSelector = document.getElementById('themeSelector');
         
+        // Debug: log what elements were found
+        console.log('Settings dialog init - tabLinks:', tabLinks.length);
+        console.log('Settings dialog init - tabContents:', tabContents.length);
+        
+        // Debug: log the actual elements
+        tabLinks.forEach((link, index) => {
+            console.log(`Tab link ${index}:`, link.className, link.dataset);
+        });
+        tabContents.forEach((content, index) => {
+            console.log(`Tab content ${index}:`, content.id, content.className);
+        });
+        
         // Init themes inside the dialog
         this.initThemes(themeSelector);
 
@@ -352,6 +370,7 @@ const TraceViewer = {
         // Tab switching logic
         tabLinks.forEach(link => {
             link.addEventListener('click', () => {
+                console.log('Tab clicked:', link.dataset.tab);
                 const tabId = link.dataset.tab;
 
                 tabLinks.forEach(l => l.classList.remove('active'));
@@ -359,6 +378,8 @@ const TraceViewer = {
 
                 link.classList.add('active');
                 document.getElementById(tabId).classList.add('active');
+                
+                console.log('Tab switched to:', tabId);
             });
         });
     },
@@ -1389,8 +1410,15 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             // Translate dynamic content from Python backend
             this.translateDynamicContent();
         },
-        t(key) {
-            return this.translations[key]?.[this.currentLang] || key;
+        t(key, params = {}) {
+            let translation = this.translations[key]?.[this.currentLang] || key;
+            
+            // Replace template parameters
+            Object.entries(params).forEach(([param, value]) => {
+                translation = translation.replace(`{${param}}`, value);
+            });
+            
+            return translation;
         },
         
         // Translate dynamic content from Python backend
@@ -1400,8 +1428,19 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             errorElements.forEach(element => {
                 const text = element.textContent;
                 
+                // Store original content if not already stored
+                if (!element.dataset.originalContent) {
+                    element.dataset.originalContent = text;
+                }
+                
+                // If current language is Chinese, restore original content
+                if (this.currentLang === 'zh') {
+                    element.textContent = element.dataset.originalContent;
+                    return;
+                }
+                
                 // HTML size exceeded error
-                const sizeMatch = text.match(/HTML报告大小已超过(\d+\.?\d*)MB限制，后续内容将被忽略/);
+                const sizeMatch = element.dataset.originalContent.match(/HTML报告大小已超过(\d+\.?\d*)MB限制，后续内容将被忽略/);
                 if (sizeMatch) {
                     const sizeLimitMb = sizeMatch[1];
                     element.textContent = this.t('htmlSizeExceeded', {size_limit_mb: sizeLimitMb});
@@ -1409,7 +1448,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 }
                 
                 // Asset copy error (from console/logging)
-                const assetMatch = text.match(/无法复制资源文件: (.+)/);
+                const assetMatch = element.dataset.originalContent.match(/无法复制资源文件: (.+)/);
                 if (assetMatch) {
                     const error = assetMatch[1];
                     element.textContent = this.t('assetCopyError', {error: error});
@@ -1872,4 +1911,12 @@ function toggleCommentExpand(commentId, event) {
             }, 10);
         }
     }
+}
+// Export for Node.js environment
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = TraceViewer;
+    global.TraceViewer = TraceViewer;
+    global.showSource = showSource;
+    global.getFrameLines = getFrameLines;
+    global.toggleCommentExpand = toggleCommentExpand;
 }

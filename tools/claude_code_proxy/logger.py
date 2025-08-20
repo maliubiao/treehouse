@@ -138,8 +138,22 @@ class RequestLogger:
         self.log.info(f"Request {request_id} response translated", extra=extra)
 
     def log_error(self, request_id: str, error: Exception, context: Dict[str, Any]) -> None:
-        extra = {"request_id": request_id, "error": str(error), "context": context}
-        self.log.error(f"Error processing request {request_id}: {error}", extra=extra)
+        import traceback
+
+        # 获取完整的堆栈跟踪信息
+        stack_trace = traceback.format_exc()
+        if not stack_trace or stack_trace == "None\n":
+            # 如果没有异常堆栈，获取当前调用堆栈
+            stack_trace = "".join(traceback.format_stack())
+
+        extra = {
+            "request_id": request_id,
+            "error": str(error),
+            "error_type": error.__class__.__name__,
+            "stack_trace": stack_trace,
+            "context": context,
+        }
+        self.log.error(f"Error processing request {request_id}: {error}\nStack trace: {stack_trace}", extra=extra)
 
     def log_model_mapping(
         self, request_id: str, anthropic_model: str, target_model: str, provider_key: str, provider_name: str
