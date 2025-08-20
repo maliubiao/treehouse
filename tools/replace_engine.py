@@ -462,11 +462,14 @@ class LLMInstructionParser:
             "run_shell_script": "project_setup_script",
             "create_file": "created_file",
             "overwrite_file": "overwrite_whole_file",
+            "replace_content": "replace",
         }
         # 定义JSON字段名到内部字段名的映射
         field_map = {
             "script_content": "content",
             "file_path": "path",
+            "source_content": "src",
+            "destination_content": "dst",
         }
 
         for action in data["actions"]:

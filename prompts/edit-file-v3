@@ -84,6 +84,15 @@ JSON对象必须包含两个顶级键：`thinking_process` 和 `actions`。
     *   `file_path` (string): 要修改的文件的绝对路径。
     *   `content` (string): 修改后文件的**完整**内容。
 
+#### Action Type: `replace_content`
+
+*   **用途:** 对已有文件中的一处内容进行精确替换。这是进行少量、局部修改时推荐的方式。
+*   **结构:**
+    *   `action_type` (string): 固定为 `"replace_content"`。
+    *   `file_path` (string): 要修改的文件的绝对路径。
+    *   `source_content` (string): 要被替换掉的【旧】的完整内容。这部分内容**必须**与文件中的目标代码完全一致，包括所有的前导空格（缩进）和换行符。
+    *   `destination_content` (string): 用来替换的【新】的完整内容。
+
 
 ### 完整输出示例
 
