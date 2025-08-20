@@ -49,7 +49,7 @@ const TraceViewer = {
         // Cache DOM elements
         this.elements = {
             content: document.getElementById('content'),
-            search: document.getElementById('search'),
+            search: document.getElementById('sidebarSearch') || document.getElementById('search'),
             expandAllBtn: document.getElementById('expandAll'),
             collapseAllBtn: document.getElementById('collapseAll'),
             skeletonViewBtn: document.getElementById('skeletonViewBtn'),
@@ -59,7 +59,14 @@ const TraceViewer = {
             summaryBtn: document.getElementById('summaryBtn'),
             summaryDropdown: document.getElementById('summaryDropdown'),
             settingsBtn: document.getElementById('settingsBtn'),
-            settingsDialog: document.getElementById('settingsDialog')
+            settingsDialog: document.getElementById('settingsDialog'),
+            sidebar: document.getElementById('sidebar'),
+            sidebarOverlay: document.getElementById('sidebarOverlay'),
+            toggleSidebar: document.getElementById('toggleSidebar'),
+            filterCall: document.getElementById('filterCall'),
+            filterReturn: document.getElementById('filterReturn'),
+            filterLine: document.getElementById('filterLine'),
+            filterException: document.getElementById('filterException')
         };
 
         // Initialize components
@@ -81,6 +88,10 @@ const TraceViewer = {
         this.initAiExplainer();
         this.initClipboardInterceptor();
         this.initSummaryDropdown();
+        
+        // New sidebar and filter functionality
+        this.initSidebar();
+        this.initFilters();
     },
 
     // Pre-calculates the size of each foldable section for smart expansion
@@ -490,7 +501,7 @@ const TraceViewer = {
             try {
                 await navigator.clipboard.writeText(fullText);
                 const originalContent = copyBtn.textContent;
-                copyBtn.textContent = 'Copied!';
+                copyBtn.textContent = TraceViewer.i18n.t('copiedText');
                 setTimeout(() => {
                     copyBtn.textContent = originalContent;
                 }, 1500);
@@ -667,10 +678,10 @@ const TraceViewer = {
             // Update button appearance to reflect state
             if (callGroup.classList.contains('show-details')) {
                 toggleBtn.textContent = '📦';
-                toggleBtn.title = 'Hide details for this subtree';
+                toggleBtn.title = TraceViewer.i18n.t('toggleDetailsHideTitle');
             } else {
                 toggleBtn.textContent = '👁️';
-                toggleBtn.title = 'Show details for this subtree';
+                toggleBtn.title = TraceViewer.i18n.t('toggleDetailsTitle');
             }
         });
     },
@@ -1032,7 +1043,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                         console.log('Fetch aborted by user.');
                         // UI state is reset by hide()
                     } else {
-                        this.status.textContent = `Error: ${error.message}`;
+                        this.status.textContent = `${TraceViewer.i18n.t('errorMessagePrefix')}${error.message}`;
                         console.error('AI Explanation failed:', error);
                     }
                 } finally {
@@ -1233,6 +1244,14 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             summary: { en: 'Summary', zh: '摘要' },
             settings: { en: 'Settings', zh: '设置' },
             export: { en: 'Export as HTML', zh: '导出为HTML' },
+            // Title attributes for buttons
+            toggleSidebarTitle: { en: 'Toggle sidebar', zh: '切换侧边栏' },
+            summaryTitle: { en: 'Show summary', zh: '显示摘要' },
+            expandAllTitle: { en: 'Expand all call stacks', zh: '展开所有调用堆栈' },
+            collapseAllTitle: { en: 'Collapse all call stacks', zh: '折叠所有调用堆栈' },
+            skeletonViewTitle: { en: 'Toggle skeleton view', zh: '切换框架视图' },
+            settingsTitle: { en: 'Settings', zh: '设置' },
+            exportTitle: { en: 'Export as HTML', zh: '导出为HTML' },
             // Summary Dropdown
             generatedAt: { en: 'Generated at:', zh: '生成于:' },
             totalMessages: { en: 'Total messages:', zh: '总消息数:' },
@@ -1291,6 +1310,36 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             aiStatusSending: { en: 'Sending request to LLM...', zh: '正在向LLM发送请求...' },
             aiStatusReceiving: { en: 'Receiving explanation stream...', zh: '正在接收解释流...' },
             aiStatusFinished: { en: 'Explanation finished.', zh: '解释完成。' },
+            // Sidebar translations
+            sidebarTraceExplorer: { en: 'Trace Explorer', zh: '追踪浏览器' },
+            filterByType: { en: 'Filter by Type', zh: '按类型过滤' },
+            statistics: { en: 'Statistics', zh: '统计信息' },
+            quickActions: { en: 'Quick Actions', zh: '快捷操作' },
+            calls: { en: 'Calls', zh: '调用' },
+            returns: { en: 'Returns', zh: '返回' },
+            lines: { en: 'Lines', zh: '行' },
+            exceptions: { en: 'Exceptions', zh: '异常' },
+            summary: { en: 'Summary', zh: '摘要' },
+            totalMessages: { en: 'Total Messages', zh: '总消息数' },
+            errors: { en: 'Errors', zh: '错误' },
+            generated: { en: 'Generated', zh: '生成于' },
+            viewSource: { en: 'view source', zh: '查看源码' },
+            copiedText: { en: 'Copied to clipboard', zh: '已复制到剪贴板' },
+            closeEsc: { en: 'Close (Esc)', zh: '关闭 (Esc)' },
+            loadingSyntax: { en: 'Loading syntax highlighting...', zh: '正在加载语法高亮...' },
+            sourceNotAvailable: { en: 'Source not available', zh: '源码不可用' },
+            errorMessagePrefix: { en: 'Error: ', zh: '错误：' },
+            // Button titles
+            expandAllTitle: { en: 'Expand all call stacks', zh: '展开所有调用堆栈' },
+            collapseAllTitle: { en: 'Collapse all call stacks', zh: '折叠所有调用堆栈' },
+            skeletonViewTitle: { en: 'Toggle skeleton view', zh: '切换框架视图' },
+            copySubtreeTitle: { en: 'Copy subtree as text', zh: '复制子树为文本' },
+            focusSubtreeTitle: { en: 'Focus on this subtree (crop)', zh: '聚焦此子树（裁剪）' },
+            explainAITitle: { en: 'Explain with AI', zh: '使用AI解释' },
+            toggleDetailsTitle: { en: 'Show details for this subtree', zh: '显示此子树的详细信息' },
+            toggleDetailsHideTitle: { en: 'Hide details for this subtree', zh: '隐藏此子树的详细信息' },
+            expandCodeTitle: { en: 'Toggle view', zh: '切换视图' },
+            debugVarsTitle: { en: 'Click to expand/collapse', zh: '点击展开/折叠' },
         },
         init() {
             const savedLang = localStorage.getItem('traceViewerLang');
@@ -1361,7 +1410,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         
             const container = document.createElement('div');
             container.className = 'debug-vars';
-            container.title = 'Click to expand/collapse';
+            container.title = TraceViewer.i18n.t('debugVarsTitle');
             container.addEventListener('click', e => {
                 e.stopPropagation();
                 container.classList.toggle('expanded');
@@ -1401,7 +1450,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             const dialog = document.getElementById('sourceDialog');
 
             if (!window.sourceFiles || !window.sourceFiles[filename]) {
-                titleDiv.textContent = `${filename} (Source not available)`;
+                titleDiv.textContent = `${filename} (${TraceViewer.i18n.t('sourceNotAvailable')})`;
                 sourceContent.innerHTML = '<div>Source file not available</div>';
                 dialog.style.display = 'flex';
                 return;
@@ -1523,7 +1572,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             const closeBtn = document.createElement('div');
             closeBtn.className = 'floating-close-btn';
             closeBtn.innerHTML = '&times;';
-            closeBtn.title = "Close (Esc)";
+            closeBtn.title = TraceViewer.i18n.t('closeEsc');
             closeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 dialog.style.display = 'none';
@@ -1552,7 +1601,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             loadingIndicator.style.background = 'rgba(0,0,0,0.7)';
             loadingIndicator.style.color = 'white';
             loadingIndicator.style.borderRadius = '4px';
-            loadingIndicator.textContent = 'Loading syntax highlighting...';
+            loadingIndicator.textContent = TraceViewer.i18n.t('loadingSyntax');
             lineNumbers.parentElement.appendChild(loadingIndicator);
 
             const doHighlight = () => {
@@ -1683,6 +1732,87 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
 document.addEventListener('DOMContentLoaded', () => {
     TraceViewer.init();
 });
+
+// Sidebar functionality
+TraceViewer.initSidebar = function() {
+    const { toggleSidebar, sidebar, sidebarOverlay } = this.elements;
+    
+    if (toggleSidebar) {
+        toggleSidebar.addEventListener('click', () => {
+            sidebar.classList.toggle('open');
+            sidebarOverlay.classList.toggle('show');
+        });
+    }
+    
+    if (sidebarOverlay) {
+        sidebarOverlay.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+            sidebarOverlay.classList.remove('show');
+        });
+    }
+};
+
+// Filter functionality
+TraceViewer.initFilters = function() {
+    const { filterCall, filterReturn, filterLine, filterException } = this.elements;
+    const filters = {
+        call: filterCall,
+        return: filterReturn,
+        line: filterLine,
+        exception: filterException
+    };
+    
+    // Add change event listeners to all filters
+    Object.values(filters).forEach(filter => {
+        if (filter) {
+            filter.addEventListener('change', () => this.applyFilters());
+        }
+    });
+    
+    // Initial filter application
+    this.applyFilters();
+};
+
+// Apply filters to content
+TraceViewer.applyFilters = function() {
+    const { filterCall, filterReturn, filterLine, filterException, content } = this.elements;
+    
+    const filterStates = {
+        call: filterCall ? filterCall.checked : true,
+        return: filterReturn ? filterReturn.checked : true,
+        line: filterLine ? filterLine.checked : true,
+        exception: filterException ? filterException.checked : true
+    };
+    
+    // Get all elements that can be filtered
+    const elements = content.querySelectorAll('div[class*="call"], div[class*="return"], div[class*="line"], div[class*="error"]');
+    
+    elements.forEach(el => {
+        let show = true;
+        
+        if (el.classList.contains('call') && !filterStates.call) {
+            show = false;
+        } else if (el.classList.contains('return') && !filterStates.return) {
+            show = false;
+        } else if (el.classList.contains('line') && !filterStates.line) {
+            show = false;
+        } else if (el.classList.contains('error') || el.classList.contains('exception')) {
+            if (!filterStates.exception) {
+                show = false;
+            }
+        }
+        
+        // Show/hide the element
+        el.style.display = show ? '' : 'none';
+    });
+    
+    // Also hide/show call groups based on their children
+    const callGroups = content.querySelectorAll('.call-group');
+    callGroups.forEach(group => {
+        const hasVisibleChildren = Array.from(group.children).some(child => child.style.display !== 'none');
+        group.style.display = hasVisibleChildren ? '' : 'none';
+    });
+};
 
 // Make source viewer methods available globally to be used by inline event handlers
 function showSource(filename, lineNumber, frameId) {

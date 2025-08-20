@@ -69,6 +69,7 @@ class CallTreeHtmlRender:
         <html>
         <head>
             <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>{title}</title>
             <link rel="stylesheet" href="../tracer_styles.css">
             <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css"
@@ -77,36 +78,124 @@ class CallTreeHtmlRender:
                 rel="stylesheet">
             <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.css"
                 rel="stylesheet">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         </head>
         <body>
-            <div id="sourceDialog"  class="source-dialog" style="display: none;">
-                    <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
-                    <div class="close-overlay"></div>
-                    <div class="source-header">
-                        <div class="source-title" id="sourceTitle"></div>
+            <!-- App Container -->
+            <div class="app-container">
+                <!-- Sidebar -->
+                <aside class="sidebar" id="sidebar">
+                    <div class="sidebar-header">
+                        <h2 class="sidebar-title" data-i18n="sidebarTraceExplorer">
+                            <i class="fas fa-bug"></i> Trace Explorer
+                        </h2>
                     </div>
-                    <div class="source-content" id="sourceContent"></div>
-            </div>
+                    <div class="sidebar-content">
+                        <!-- Search -->
+                        <div class="sidebar-section">
+                            <input type="text" id="sidebarSearch" class="sidebar-search" 
+                                   data-i18n-placeholder="searchPlaceholder" placeholder="Search messages...">
+                        </div>
 
-            <header class="main-header">
-                <h1 data-i18n="mainTitle">Python Trace Report</h1>
-                <nav id="controls" class="nav-controls">
-                    <input type="text" id="search" data-i18n-placeholder="searchPlaceholder" placeholder="Search messages...">
-                    <button id="expandAll" data-i18n="expandAll">Expand All</button>
-                    <button id="collapseAll" data-i18n="collapseAll">Collapse All</button>
-                    <button id="skeletonViewBtn" data-i18n="skeletonView">框架模式</button>
-                    <div class="dropdown-container">
-                        <button id="summaryBtn" class="dropdown-toggle" data-i18n="summary">Summary ▾</button>
-                        <div id="summaryDropdown" class="dropdown-menu">
-                            <p><strong data-i18n="generatedAt">Generated at:</strong> {generation_time}</p>
-                            <p><strong data-i18n="totalMessages">Total messages:</strong> {message_count}</p>
-                            <p><strong data-i18n="errors">Errors:</strong> {error_count}</p>
+                        <!-- Filters -->
+                        <div class="sidebar-section">
+                            <h3 class="sidebar-section-title" data-i18n="filterByType">Filter by Type</h3>
+                            <div class="filter-group">
+                                <label class="filter-checkbox">
+                                    <input type="checkbox" id="filterCall" checked>
+                                    <span class="color-indicator" style="background-color: var(--call-color)"></span>
+                                    <span data-i18n="calls">Calls</span>
+                                </label>
+                                <label class="filter-checkbox">
+                                    <input type="checkbox" id="filterReturn" checked>
+                                    <span class="color-indicator" style="background-color: var(--return-color)"></span>
+                                    <span data-i18n="returns">Returns</span>
+                                </label>
+                                <label class="filter-checkbox">
+                                    <input type="checkbox" id="filterLine" checked>
+                                    <span class="color-indicator" style="background-color: var(--line-color)"></span>
+                                    <span data-i18n="lines">Lines</span>
+                                </label>
+                                <label class="filter-checkbox">
+                                    <input type="checkbox" id="filterException" checked>
+                                    <span class="color-indicator" style="background-color: var(--error-color)"></span>
+                                    <span data-i18n="exceptions">Exceptions</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Statistics -->
+                        <div class="sidebar-section">
+                            <h3 class="sidebar-section-title" data-i18n="statistics">Statistics</h3>
+                            <div class="filter-stats">
+                                <h3 data-i18n="summary">Summary</h3>
+                                <p><span data-i18n="totalMessages">Total Messages</span>: <span class="stat-value">{message_count}</span></p>
+                                <p><span data-i18n="errors">Errors</span>: <span class="stat-value">{error_count}</span></p>
+                                <p><span data-i18n="generated">Generated</span>: <span class="stat-value">{generation_time}</span></p>
+                            </div>
+                        </div>
+
+                        <!-- Quick Actions -->
+                        <div class="sidebar-section">
+                            <h3 class="sidebar-section-title" data-i18n="quickActions">Quick Actions</h3>
+                            <button id="expandAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="expandAllTitle" title="Expand all call stacks">
+                                <i class="fas fa-expand-alt"></i> Expand All
+                            </button>
+                            <button id="collapseAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="collapseAllTitle" title="Collapse all call stacks">
+                                <i class="fas fa-compress-alt"></i> Collapse All
+                            </button>
+                            <button id="skeletonViewBtn" style="width: 100%;" data-i18n-title="skeletonViewTitle" title="Toggle skeleton view">
+                                <i class="fas fa-code-branch"></i> Skeleton View
+                            </button>
                         </div>
                     </div>
-                    <button id="settingsBtn" data-i18n="settings">Settings</button>
-                    <button id="exportBtn" data-i18n="export">Export as HTML</button>
-                </nav>
-            </header>
+                </aside>
+
+                <!-- Sidebar Overlay for Mobile -->
+                <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+                <!-- Main Content -->
+                <main class="main-content">
+                    <header class="main-header">
+                        <button class="toggle-sidebar icon-btn" id="toggleSidebar" title="Toggle sidebar">
+                            <i class="fas fa-bars"></i>
+                        </button>
+                        <h1 data-i18n="mainTitle">Python Trace Report</h1>
+                        <nav id="controls" class="nav-controls">
+                            <div class="dropdown-container">
+                                <button id="summaryBtn" class="dropdown-toggle" title="Show summary">
+                                    <i class="fas fa-chart-bar"></i>
+                                </button>
+                                <div id="summaryDropdown" class="dropdown-menu">
+                                    <p><strong data-i18n="generatedAt">Generated at:</strong> {generation_time}</p>
+                                    <p><strong data-i18n="totalMessages">Total messages:</strong> {message_count}</p>
+                                    <p><strong data-i18n="errors">Errors:</strong> {error_count}</p>
+                                </div>
+                            </div>
+                            <button id="settingsBtn" class="icon-btn" title="Settings">
+                                <i class="fas fa-cog"></i>
+                            </button>
+                            <button id="exportBtn" class="icon-btn" title="Export as HTML">
+                                <i class="fas fa-download"></i>
+                            </button>
+                        </nav>
+                    </header>
+
+                    <div class="content-wrapper">
+                        <div id="content">{content}</div>
+                    </div>
+                </main>
+            </div>
+
+            <!-- Source Dialog -->
+            <div id="sourceDialog" class="source-dialog" style="display: none;">
+                <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
+                <div class="close-overlay"></div>
+                <div class="source-header">
+                    <div class="source-title" id="sourceTitle"></div>
+                </div>
+                <div class="source-content" id="sourceContent"></div>
+            </div>
 
             <!-- Settings Dialog -->
             <div id="settingsDialog" class="modal" style="display: none;">
@@ -169,8 +258,6 @@ class CallTreeHtmlRender:
                 </div>
             </div>
 
-            <div id="content">\n{content}\n</div>
-            
             <!-- AI Explain Dialog -->
             <div id="aiExplainDialog" class="ai-explain-dialog" style="display: none;">
                 <div class="ai-explain-dialog-content">
@@ -322,7 +409,7 @@ class CallTreeHtmlRender:
             escaped_raw_statement = html.escape(raw_statement)
 
             escaped_content = f"""<div class="multi-line-container">
-                <span class="code-preview">{escaped_prefix_nbsp}{escaped_first_line_nbsp}... </span><span class="expand-code-btn" title="Toggle view">[+]</span>
+                <span class="code-preview">{escaped_prefix_nbsp}{escaped_first_line_nbsp}... </span><span class="expand-code-btn" data-i18n-title="expandCodeTitle" title="Toggle view">[+]</span>
                 <div class="code-full">
                     <span class="multi-line-prefix">{escaped_prefix_nbsp}</span>
                     <pre class="language-python"><code>{escaped_raw_statement}</code></pre>
@@ -346,11 +433,13 @@ class CallTreeHtmlRender:
         data_indent_attr = f'data-indent="{indent}"'
         actions_html = ""
         if msg_type == TraceTypes.COLOR_CALL:
-            copy_subtree_html = ' <span class="copy-subtree-btn" title="Copy subtree as text">📋</span>'
-            focus_subtree_html = ' <span class="focus-subtree-btn" title="Focus on this subtree (crop)">🔍</span>'
+            copy_subtree_html = ' <span class="copy-subtree-btn" data-i18n-title="copySubtreeTitle" title="Copy subtree as text">📋</span>'
+            focus_subtree_html = ' <span class="focus-subtree-btn" data-i18n-title="focusSubtreeTitle" title="Focus on this subtree (crop)">🔍</span>'
             # New AI Explain button
-            explain_ai_html = ' <span class="explain-ai-btn" title="Explain with AI">🤖</span>'
-            toggle_details_html = ' <span class="toggle-details-btn" title="Show details for this subtree">👁️</span>'
+            explain_ai_html = (
+                ' <span class="explain-ai-btn" data-i18n-title="explainAITitle" title="Explain with AI">🤖</span>'
+            )
+            toggle_details_html = ' <span class="toggle-details-btn" data-i18n-title="toggleDetailsTitle" title="Show details for this subtree">👁️</span>'
             actions_html = copy_subtree_html + focus_subtree_html + explain_ai_html + toggle_details_html
 
         # Combine all parts to be appended after the main content
@@ -392,7 +481,7 @@ class CallTreeHtmlRender:
                     "</div>",
                 ]
             )
-        html_content = "\n".join(html_parts) + "\n"
+        html_content = "\n".join(html_parts)
         self._current_size += len(html_content)
         if self._current_size > self._size_limit and not self._size_exceeded:
             self._size_exceeded = True
@@ -435,7 +524,7 @@ class CallTreeHtmlRender:
         list_view_html = f'<div class="list-view">{"".join(list_items_html)}</div>'
 
         # 3. Combine into the final container
-        return f"""<div class="debug-vars" title="Click to expand/collapse">
+        return f"""<div class="debug-vars" data-i18n-title="debugVarsTitle" title="Click to expand/collapse">
             {compact_view_html}
             {list_view_html}
         </div>"""
@@ -478,7 +567,7 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             return ""
         # Escape backslashes in filenames (important for Windows paths)
         escaped_filename = filename.replace("\\", "\\\\").replace("'", "\\'")
-        return f'<span class="view-source-btn" onclick="showSource(\'{escaped_filename}\', {line_number}, {frame_id})">view source</span>'
+        return f'<span class="view-source-btn" onclick="showSource(\'{escaped_filename}\', {line_number}, {frame_id})" data-i18n="viewSource">view source</span>'
 
     def _load_source_file(self, filename: str) -> None:
         """
