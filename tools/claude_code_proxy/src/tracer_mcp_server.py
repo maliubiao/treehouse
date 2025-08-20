@@ -40,80 +40,142 @@ class TracerMCPServer:
         self.tools = [
             {
                 "name": "trace_python",
-                "description": "Execute and trace Python scripts or modules with detailed execution analysis",
+                "description": """执行并深度追踪Python脚本或模块，以进行详细的执行分析和调试。这是解决复杂代码行为问题的首选工具。
+
+**何时使用此工具:**
+当遇到以下情况时，请使用此工具：
+- **代码行为不符合预期:** 程序崩溃、挂起、返回错误结果，但原因不明显。
+- **ImportError/ModuleNotFoundError:** 无法确定模块导入失败的原因。
+- **逻辑错误:** 需要理解复杂的条件判断、循环或算法的实际执行路径。
+- **状态变化问题:** 需要观察变量、对象属性或数据结构在运行时的具体变化。
+- **异常分析:** 需要追溯异常的源头，了解它在哪个函数调用链中被抛出和捕获。
+
+**输出解读:**
+工具的输出是一个详细的文本日志，包含以下部分：
+1.  **执行摘要:** 程序的退出码，以及是否因超时而终止。
+2.  **STDOUT/STDERR:** 目标脚本自身打印到标准输出和标准错误的内容。
+3.  **TRACE LOG:** 核心追踪日志，逐行记录了程序的执行轨迹。包括：
+    - `↘ CALL`: 函数调用及其参数值。
+    - `↗ RETURN`: 函数的返回值。
+    - `▷ LINE`: 逐行执行的代码，以及行执行后相关变量的状态（`# Debug: var=value`）。
+    - `⚠ EXCEPTION`: 发生的异常及其在代码中的位置。
+
+**重要提示:**
+- **默认开启变量追踪:** `enable_var_trace` 默认为 `True`，提供最详细的变量状态信息。
+- **文件路径:** 所有文件路径参数（如 'target'、'watch_files' 和 'line_ranges' 中的路径）都应是相对于当前工作目录的路径或绝对路径。
+- **追踪范围:** 默认仅追踪目标脚本/模块及其同级或子目录中的代码。使用 `include_system` 或 `include_stdlibs` 来扩大追踪范围。
+
+**使用示例:**
+
+1.  **基本脚本追踪 (带参数):**
+    `trace_python(target='src/main.py', target_type='script', args=['--user', 'test'])`
+
+2.  **模块追踪:**
+    `trace_python(target='my_project.service.worker', target_type='module', args=['--config', 'config/dev.yaml'])`
+
+3.  **聚焦特定代码范围 (调试核心逻辑):**
+    `trace_python(target='app/main.py', target_type='script', line_ranges='app/core/logic.py:50-100')`
+
+4.  **追踪与标准库的交互:**
+    `trace_python(target='utils/network_helper.py', target_type='script', include_stdlibs=['socket', 'json'])`
+
+5.  **追踪第三方库的行为 (需要绝对路径或正确的相对路径):**
+    `trace_python(target='scripts/process_data.py', target_type='script', include_system=True, line_ranges='.../site-packages/pandas/core/frame.py:350-370')`
+
+6.  **复杂场景 (追踪一个包，排除日志函数，并监控多个文件目录):**
+    `trace_python(target='my_app.main', target_type='module', watch_files=['my_app/core/**/*.py', 'my_app/utils/*.py'], exclude_functions=['log_info', 'debug_print'])`
+""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "target": {
                             "type": "string",
-                            "description": "目标脚本路径或模块名称。例如：'/absolute/path/src/main.py' 或 'my_package.module'",
+                            "description": "目标脚本的相对/绝对路径或Python模块的名称。例如: 'src/main.py' 或 'my_package.module'。",
                         },
                         "target_type": {
                             "type": "string",
                             "enum": ["script", "module"],
-                            "description": "目标类型：'script' 表示脚本文件，'module' 表示Python模块",
+                            "description": "目标类型: 'script' 用于文件路径, 'module' 用于模块名称。",
                         },
                         "args": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "传递给目标脚本/模块的参数列表。例如：['--verbose', 'input.txt']",
+                            "description": "传递给目标脚本或模块的命令行参数列表。例如: ['--verbose', 'input.txt']。",
                         },
                         "watch_files": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "要监控的文件模式列表，支持通配符。例如：['src/*.py', 'tests/**/*.py']",
+                            "description": "要监控的文件模式列表 (支持glob通配符, 如 'src/**/*.py')。如果未提供，默认仅追踪目标文件自身。例如: ['src/core/*.py', 'src/utils/**/*.py']。",
                         },
                         "exclude_functions": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "要排除跟踪的函数名称列表。例如：['print', 'logging.debug']",
+                            "description": "要从追踪日志中排除的函数名称列表，用于减少噪音。例如: ['print', 'logging.debug']。",
                         },
                         "line_ranges": {
                             "type": "string",
-                            "description": "指定要跟踪的行号范围，格式为'文件路径:起始行-结束行'，多个范围用逗号分隔。例如：'main.py:10-50,utils.py:5-20'",
+                            "description": "限制追踪范围到特定的文件和行号。格式为 '文件路径:起始行-结束行'。多个范围用逗号分隔。这对于聚焦于代码的特定部分非常有用，可以显著减少日志量。例如: 'src/main.py:10-50,src/utils.py:5-20'。",
                         },
                         "enable_var_trace": {
                             "type": "boolean",
-                            "description": "启用详细的变量变化跟踪（可能影响性能）",
+                            "default": True,
+                            "description": "启用详细的变量状态跟踪。开启后，日志中每行代码执行后都会附带相关变量的快照 (`# Debug: var=value`)。这是理解程序状态变化的核心功能。默认为开启。",
                         },
                         "report_name": {
                             "type": "string",
-                            "description": "自定义报告文件名，默认为'trace_report'。例如：'my_analysis' 将生成 my_analysis.log",
+                            "description": "自定义报告日志的文件名(不含扩展名)。默认为 'trace_report'。",
                             "default": "trace_report",
                         },
                         "include_system": {
                             "type": "boolean",
-                            "description": "是否包含系统路径和第三方库的跟踪，默认为false",
+                            "default": False,
+                            "description": "设置为 true 以包含对Python系统库和已安装的第三方库(site-packages)的跟踪。默认情况下会忽略这些以减少日志噪音。",
                         },
                         "include_stdlibs": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "即使忽略系统路径，也强制跟踪指定的标准库模块。例如：['json', 're', 'os.path']",
+                            "description": "一个选择性包含标准库模块进行追踪的列表，即使在 `include_system` 为 false 时也生效。这对于调试与特定标准库（如 'json', 're', 'os.path'）的交互非常有用。",
                         },
-                        "timeout": {"type": "number", "description": "最大执行时间（秒），超时将终止跟踪，默认为30秒"},
+                        "timeout": {
+                            "type": "number",
+                            "description": "程序执行的最大时间（秒）。如果超时，程序将被终止。默认为30秒。",
+                            "default": 30,
+                        },
                     },
                     "required": ["target", "target_type"],
                 },
             },
             {
                 "name": "import_path_finder",
-                "description": "分析当前目录和父目录的文件结构，帮助确定Python import语句的写法",
+                "description": """当遇到 'ImportError' 或 'ModuleNotFoundError' 时，使用此工具来诊断Python导入问题并找到正确的导入语句。
+
+此工具会扫描当前工作目录和其父目录的文件结构，分析Python包（包含 `__init__.py` 的目录），并提供一系列可能的导入语句建议。这有助于解决因项目结构、相对导入或PYTHONPATH问题导致的导入失败。
+
+**使用示例:**
+`import_path_finder()`
+
+输出是一个JSON对象，其中包含文件结构树和 'import_suggestions' 列表，指导你如何修复导入错误。
+""",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "include_patterns": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "要包含的文件模式列表，支持通配符。例如：['*.py', '*.pyi']，默认包含所有Python文件",
+                            "description": "要包含在扫描结果中的文件模式列表 (支持glob通配符)。默认为Python源文件和类型提示文件。",
                             "default": ["*.py", "*.pyi"],
                         },
                         "exclude_patterns": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "要排除的文件模式列表，支持通配符。例如：['__pycache__/*', '*.pyc']",
+                            "description": "要从扫描结果中排除的文件或目录模式列表 (支持glob通配符)。默认排除常见的缓存和版本控制目录。",
                             "default": ["__pycache__/*", "*.pyc", "*.pyo", ".git/*", ".pytest_cache/*"],
                         },
-                        "max_depth": {"type": "number", "description": "扫描的最大目录深度，默认为3层", "default": 3},
+                        "max_depth": {
+                            "type": "number",
+                            "description": "从当前目录和父目录开始扫描的最大目录深度。默认为3层。",
+                            "default": 3,
+                        },
                     },
                     "required": [],
                 },
@@ -160,8 +222,8 @@ class TracerMCPServer:
 
     def _extract_log_path_from_stdout(self, stdout: str) -> Optional[str]:
         """从stdout中提取日志文件路径"""
-        # 匹配格式：📂 报告文件路径: /path/to/trace_report.log
-        pattern = r"📂 报告文件路径:\s*([^\n]+)"
+        # 匹配格式：📂 跟踪日志路径: /path/to/trace.log
+        pattern = r"📂 跟踪日志路径:\s*([^\n]+)"
         match = re.search(pattern, stdout)
         if match:
             return match.group(1).strip()
@@ -194,7 +256,8 @@ class TracerMCPServer:
         if params.get("line_ranges"):
             argv.extend(["--line-ranges", params["line_ranges"]])
 
-        if params.get("enable_var_trace"):
+        # By default, variable tracing is enabled. It is only disabled if explicitly set to False.
+        if params.get("enable_var_trace", True):
             argv.append("--enable-var-trace")
 
         # Always disable HTML report
@@ -216,7 +279,7 @@ class TracerMCPServer:
             argv.append(target)
 
         argv.extend(params.get("args", []))
-        return [sys.executable, "-m", "debugger.tracer_main"] + argv
+        return [sys.executable, "-m", "context_tracer.tracer_main"] + argv
 
     def _execute_tracer_process(self, command_args: List[str], cwd: str, timeout: int) -> Tuple[int, str, str, bool]:
         """Executes the tracer process and handles timeouts.
