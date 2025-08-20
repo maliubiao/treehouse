@@ -64,6 +64,9 @@ class CallTreeHtmlRender:
         self._current_size: int = 0
         self._size_exceeded: bool = False
         self.line_comment: DefaultDict[str, List[Any]] = defaultdict(lambda: list())
+        # Track last displayed file per frame for filename collapsing.
+        # Structure: {frame_id: (original_filename, formatted_filename, lineno)}
+        self._last_frame_info: Dict[int, Tuple[str, str, int]] = {}
 
         self._html_template: str = """
         <!DOCTYPE html>
@@ -405,7 +408,8 @@ class CallTreeHtmlRender:
 
             # To prevent whitespace collapse in HTML, replace spaces with &nbsp;
             # This ensures both the prefix and the code line's own indentation are preserved.
-            escaped_prefix_nbsp = html.escape(prefix).replace(" ", "&nbsp;")
+            # A special character '§' is used for alignment padding and must also be replaced.
+            escaped_prefix_nbsp = html.escape(prefix).replace("§", "&nbsp;").replace(" ", "&nbsp;")
             escaped_first_line_nbsp = html.escape(first_line_of_indented).replace(" ", "&nbsp;")
             escaped_raw_statement = html.escape(raw_statement)
 
@@ -417,7 +421,9 @@ class CallTreeHtmlRender:
                 </div>
             </div>"""
         else:
-            escaped_content = html.escape(stripped_message).replace(" ", "&nbsp;")
+            # Replace placeholder with &nbsp; before replacing normal spaces
+            # to handle alignment padding correctly.
+            escaped_content = html.escape(stripped_message).replace("§", "&nbsp;").replace(" ", "&nbsp;")
 
         original_filename: Optional[str] = data.get("original_filename")
         line_number: Optional[int] = data.get("lineno")
@@ -635,7 +641,43 @@ onclick="event.stopPropagation(); toggleCommentExpand('{comment_id}', event)">
             message = log_data
         else:
             # Pre-format the message to avoid duplicate formatting.
-            message = log_data["template"].format(**log_data["data"])
+            # Apply filename collapsing logic before formatting
+            data = log_data["data"]
+            template = log_data["template"]
+
+            # Apply filename collapsing for LINE events
+            if color_type == TraceTypes.COLOR_LINE:
+                frame_id = data.get("frame_id")
+                original_filename = data.get("original_filename")
+                line_number = data.get("lineno")
+                formatted_filename = data.get("filename")
+
+                if frame_id is not None and original_filename and line_number is not None and formatted_filename:
+                    # Get last displayed file info for this frame
+                    last_info = self._last_frame_info.get(frame_id)
+
+                    if last_info and last_info[0] == original_filename:
+                        # Same file as previous line: collapse filename and right-align line number.
+                        last_formatted_filename, last_lineno = last_info[1], last_info[2]
+                        total_width = len(last_formatted_filename) + 1 + len(str(last_lineno))
+                        # Create a right-aligned string that includes the arrow. Use a placeholder
+                        # for padding to protect it from lstrip() later on. '§' is chosen as it's
+                        # unlikely to appear in code. It will be replaced with &nbsp; in _message_to_html.
+                        aligned_str = f"▷ {line_number}".rjust(total_width + 2, "§")  # +2 for "▷ "
+                        template = template.replace("▷ {filename}:{lineno}", "{aligned_location_str}")
+                        data["aligned_location_str"] = aligned_str
+                    else:
+                        # Different file or first line in frame: show full path and update tracking.
+                        self._last_frame_info[frame_id] = (original_filename, formatted_filename, line_number)
+
+            message = template.format(**data)
+
+        # Reset frame tracking for non-LINE events
+        if color_type != TraceTypes.COLOR_LINE and isinstance(log_data, dict):
+            frame_id = log_data.get("data", {}).get("frame_id")
+            if frame_id is not None and frame_id in self._last_frame_info:
+                del self._last_frame_info[frame_id]
+
         if color_type == TraceTypes.COLOR_LINE and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
             data: Dict[str, Any] = log_data["data"]
             original_filename: Optional[str] = data.get("original_filename")

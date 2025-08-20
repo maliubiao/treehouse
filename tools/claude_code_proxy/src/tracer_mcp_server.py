@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,22 +29,22 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-import shutil
-from typing import Any, Dict, List, Optional, Tuple
-
-
 class TracerMCPServer:
     """MCP server implementation with tracing capabilities."""
 
+    MAX_TRACE_LOG_BYTES = 90 * 1024  # 90 KB limit for trace logs
+
     def __init__(self) -> None:
-        self.server_info = {"name": "tracer-mcp-server", "version": "2.0.0"}
+        self.server_info = {"name": "tracer-mcp-server", "version": "2.2.0"}
         self.tools = [
             {
                 "name": "trace_python",
-                "description": """执行并深度追踪Python脚本或模块，以进行详细的执行分析和调试。这是解决复杂代码行为问题的首选工具。
+                "description": """这是你验证代码正确性的核心工具。**在你编写或修改完任何Python代码后，都应该使用此工具来运行它**，以观察其真实的执行流程和状态变化。
 
-**何时使用此工具:**
-当遇到以下情况时，请使用此工具：
+把它想象成一个强大的交互式调试器，它能完整地记录下程序的“故事”，让你能够确认代码的行为与你的设想完全一致。**在每次修改后都进行追踪验证，就像运行单元测试一样，是构建健壮、无误程序的关键开发习惯。**
+
+**具体调试场景:**
+当遇到以下情况时，此工具尤其有效：
 - **代码行为不符合预期:** 程序崩溃、挂起、返回错误结果，但原因不明显。
 - **ImportError/ModuleNotFoundError:** 无法确定模块导入失败的原因。
 - **逻辑错误:** 需要理解复杂的条件判断、循环或算法的实际执行路径。
@@ -59,38 +60,40 @@ class TracerMCPServer:
     - `↗ RETURN`: 函数的返回值。
     - `▷ LINE`: 逐行执行的代码，以及行执行后相关变量的状态（`# Debug: var=value`）。
     - `⚠ EXCEPTION`: 发生的异常及其在代码中的位置。
+4.  **截断警告 (如果出现):** 如果追踪日志过长(>90KB)，超过了模型的上下文限制，日志将被截断，并会在开头显示一条警告信息。此时，你必须缩小追踪范围（例如，使用 `line_ranges` 参数）才能获取完整的日志。
 
 **重要提示:**
-- **默认开启变量追踪:** `enable_var_trace` 默认为 `True`，提供最详细的变量状态信息。
-- **文件路径:** 所有文件路径参数（如 'target'、'watch_files' 和 'line_ranges' 中的路径）都应是相对于当前工作目录的路径或绝对路径。
+- **默认开启变量追踪:** `enable_var_trace` 默认为 `True`，提供最详细的变量状态信息。这是理解程序状态变化的核心。
+- **日志大小限制:** 为防止超出模型上下文，追踪日志有大小限制（约90KB）。如果日志过长，它将被截断。
+- **文件路径:** 所有文件路径参数（如 'target'、'watch_files' 和 'line_ranges' 中的路径）都应是绝对路径。
 - **追踪范围:** 默认仅追踪目标脚本/模块及其同级或子目录中的代码。使用 `include_system` 或 `include_stdlibs` 来扩大追踪范围。
 
 **使用示例:**
 
 1.  **基本脚本追踪 (带参数):**
-    `trace_python(target='src/main.py', target_type='script', args=['--user', 'test'])`
+    `trace_python(target='/path/to/src/main.py', target_type='script', args=['--user', 'test'])`
 
 2.  **模块追踪:**
     `trace_python(target='my_project.service.worker', target_type='module', args=['--config', 'config/dev.yaml'])`
 
 3.  **聚焦特定代码范围 (调试核心逻辑):**
-    `trace_python(target='app/main.py', target_type='script', line_ranges='app/core/logic.py:50-100')`
+    `trace_python(target='/path/to/app/main.py', target_type='script', line_ranges='/path/to/app/core/logic.py:50-100')`
 
 4.  **追踪与标准库的交互:**
-    `trace_python(target='utils/network_helper.py', target_type='script', include_stdlibs=['socket', 'json'])`
+    `trace_python(target='/path/to/utils/network_helper.py', target_type='script', include_stdlibs=['socket', 'json'])`
 
-5.  **追踪第三方库的行为 (需要绝对路径或正确的相对路径):**
-    `trace_python(target='scripts/process_data.py', target_type='script', include_system=True, line_ranges='.../site-packages/pandas/core/frame.py:350-370')`
+5.  **追踪第三方库的行为 (需要绝对路径):**
+    `trace_python(target='/path/to/scripts/process_data.py', target_type='script', include_system=True, line_ranges='.../site-packages/pandas/core/frame.py:350-370')`
 
 6.  **复杂场景 (追踪一个包，排除日志函数，并监控多个文件目录):**
-    `trace_python(target='my_app.main', target_type='module', watch_files=['my_app/core/**/*.py', 'my_app/utils/*.py'], exclude_functions=['log_info', 'debug_print'])`
+    `trace_python(target='my_app.main', target_type='module', watch_files=['/path/to/my_app/core/**/*.py', '/path/to/my_app/utils/*.py'], exclude_functions=['log_info', 'debug_print'])`
 """,
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "target": {
                             "type": "string",
-                            "description": "目标脚本的相对/绝对路径或Python模块的名称。例如: 'src/main.py' 或 'my_package.module'。",
+                            "description": "目标脚本的绝对路径或Python模块的名称。例如: '/path/to/src/main.py' 或 'my_package.module'。",
                         },
                         "target_type": {
                             "type": "string",
@@ -105,7 +108,7 @@ class TracerMCPServer:
                         "watch_files": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "要监控的文件模式列表 (支持glob通配符, 如 'src/**/*.py')。如果未提供，默认仅追踪目标文件自身。例如: ['src/core/*.py', 'src/utils/**/*.py']。",
+                            "description": "要监控的文件模式列表 (支持glob通配符, 如 'src/**/*.py')。如果未提供，默认仅追踪目标文件自身。路径应为绝对路径。例如: ['/path/to/src/core/*.py', '/path/to/src/utils/**/*.py']。",
                         },
                         "exclude_functions": {
                             "type": "array",
@@ -114,7 +117,7 @@ class TracerMCPServer:
                         },
                         "line_ranges": {
                             "type": "string",
-                            "description": "限制追踪范围到特定的文件和行号。格式为 '文件路径:起始行-结束行'。多个范围用逗号分隔。这对于聚焦于代码的特定部分非常有用，可以显著减少日志量。例如: 'src/main.py:10-50,src/utils.py:5-20'。",
+                            "description": "限制追踪范围到特定的文件和行号。格式为 '文件路径:起始行-结束行'。多个范围用逗号分隔。这对于聚焦于代码的特定部分非常有用，可以显著减少日志量。路径应为绝对路径。例如: '/path/to/src/main.py:10-50,/path/to/src/utils.py:5-20'。",
                         },
                         "enable_var_trace": {
                             "type": "boolean",
@@ -205,8 +208,11 @@ class TracerMCPServer:
         raise ValueError(f"Unknown tool: {tool_name}")
 
     def _validate_script_target(self, target: str) -> None:
-        """Validate that target is an existing .py file."""
+        """Validate that target path points to an existing .py file."""
         path = Path(target)
+        if not path.is_absolute():
+            # This should not happen if called after path resolution, but as a safeguard.
+            raise ValueError(f"Internal validation error: script path is not absolute: {target}")
         if not path.exists():
             raise ValueError(f"Script file does not exist: {target}")
         if not path.is_file():
@@ -241,14 +247,17 @@ class TracerMCPServer:
         except OSError as e:
             return f"读取日志文件失败: {str(e)}"
 
-    def _build_tracer_command_args(self, params: Dict[str, Any], target: str, target_type: str) -> List[str]:
-        """Builds the command line arguments for the tracer process."""
+    def _build_tracer_command_args(self, params: Dict[str, Any]) -> List[str]:
+        """Builds the command line arguments for the tracer process from resolved params."""
         argv = []
+        target = params["target"]
+        target_type = params["target_type"]
 
         if params.get("watch_files"):
             for pattern in params["watch_files"]:
                 argv.extend(["--watch-files", pattern])
-
+        else:
+            argv.extend(["--watch-files", "*.py"])
         if params.get("exclude_functions"):
             for func in params["exclude_functions"]:
                 argv.extend(["--exclude-functions", func])
@@ -256,11 +265,9 @@ class TracerMCPServer:
         if params.get("line_ranges"):
             argv.extend(["--line-ranges", params["line_ranges"]])
 
-        # By default, variable tracing is enabled. It is only disabled if explicitly set to False.
         if params.get("enable_var_trace", True):
             argv.append("--enable-var-trace")
 
-        # Always disable HTML report
         argv.append("--disable-html")
 
         report_name = params.get("report_name", "trace_report")
@@ -292,7 +299,7 @@ class TracerMCPServer:
         killed = False
 
         try:
-            logger.info("Starting trace with timeout %ss", timeout)
+            logger.info("Starting trace with timeout %ss and command: %s", timeout, " ".join(command_args))
 
             result = subprocess.run(
                 command_args,
@@ -301,7 +308,7 @@ class TracerMCPServer:
                 text=True,
                 cwd=cwd,
                 timeout=timeout,
-                check=False,  # Do not raise CalledProcessError for non-zero exit codes
+                check=False,
             )
             stdout = result.stdout
             stderr = result.stderr
@@ -309,9 +316,9 @@ class TracerMCPServer:
             killed = False
         except subprocess.TimeoutExpired as e:
             logger.warning("Trace timed out after %ss", timeout)
-            stdout = e.stdout if e.stdout else ""  # Capture any output before timeout
+            stdout = e.stdout if e.stdout else ""
             stderr = e.stderr if e.stderr else ""
-            exit_code = -1  # Indicate timeout by -1 exit code
+            exit_code = -1
             killed = True
         except OSError as e:
             logger.error("Failed to execute tracer process: %s", e)
@@ -324,14 +331,19 @@ class TracerMCPServer:
 
     def _cleanup_temp_dir(self, temp_dir: str) -> None:
         """Cleans up the temporary directory."""
-        # C0415: import shutil was moved to the top of the file as per Pylint recommendation.
         try:
             shutil.rmtree(temp_dir)
         except OSError as e:
             logger.warning("Failed to clean up temp directory %s: %s", temp_dir, e)
 
     def _compose_trace_result_text(
-        self, exit_code: int, killed: bool, stdout: str, stderr: str, trace_log_content: str
+        self,
+        exit_code: int,
+        killed: bool,
+        stdout: str,
+        stderr: str,
+        trace_log_content: str,
+        truncation_warning: Optional[str] = None,
     ) -> str:
         """Composes the final result text for the trace."""
         result_text = "Trace completed\n"
@@ -343,7 +355,10 @@ class TracerMCPServer:
             result_text += f"STDOUT:\n{stdout}\n"
         if stderr:
             result_text += f"STDERR:\n{stderr}\n"
-        if trace_log_content:
+
+        if truncation_warning:
+            result_text += f"TRACE LOG:\n{truncation_warning}{trace_log_content}\n"
+        elif trace_log_content:
             result_text += f"TRACE LOG:\n{trace_log_content}\n"
         return result_text
 
@@ -361,9 +376,8 @@ class TracerMCPServer:
 
         result = {"path": str(directory), "files": [], "subdirectories": {}}
 
-        # 默认排除隐藏文件/目录及常见开发产物
         default_excludes = [
-            ".*",  # 隐藏文件/目录
+            ".*",
             "__pycache__",
             "__pycache__/*",
             "node_modules",
@@ -403,19 +417,8 @@ class TracerMCPServer:
         try:
             for item in directory.iterdir():
                 if item.is_file():
-                    # 检查是否匹配包含模式
-                    include_file = False
-                    for pattern in include_patterns:
-                        if item.match(pattern):
-                            include_file = True
-                            break
-
-                    # 检查是否匹配排除模式
-                    exclude_file = False
-                    for pattern in exclude_patterns:
-                        if item.match(pattern):
-                            exclude_file = True
-                            break
+                    include_file = any(item.match(p) for p in include_patterns)
+                    exclude_file = any(item.match(p) for p in exclude_patterns)
 
                     if include_file and not exclude_file:
                         result["files"].append(
@@ -425,14 +428,12 @@ class TracerMCPServer:
                                 "full_path": str(item.absolute()),
                             }
                         )
-
-                elif item.is_dir() and not any(item.match(pattern) for pattern in exclude_patterns):
+                elif item.is_dir() and not any(item.match(p) for p in exclude_patterns):
                     subdir_result = self._scan_directory(
                         item, include_patterns, exclude_patterns, max_depth, current_depth + 1
                     )
                     if subdir_result:
                         result["subdirectories"][item.name] = subdir_result
-
         except PermissionError:
             logger.warning(f"Permission denied accessing directory: {directory}")
 
@@ -441,24 +442,17 @@ class TracerMCPServer:
     def _handle_import_path_finder(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """处理import_path_finder工具调用"""
         try:
-            # 获取参数
             include_patterns = params.get("include_patterns", ["*.py", "*.pyi"])
             exclude_patterns = params.get(
                 "exclude_patterns", ["__pycache__/*", "*.pyc", "*.pyo", ".git/*", ".pytest_cache/*"]
             )
             max_depth = params.get("max_depth", 3)
-
-            # 获取当前目录和父目录
             current_dir = Path.cwd()
             parent_dir = current_dir.parent
 
-            # 扫描当前目录
             current_structure = self._scan_directory(current_dir, include_patterns, exclude_patterns, max_depth)
-
-            # 扫描父目录
             parent_structure = self._scan_directory(parent_dir, include_patterns, exclude_patterns, max_depth)
 
-            # 构建结果
             result = {
                 "current_directory": {
                     "path": str(current_dir),
@@ -472,7 +466,6 @@ class TracerMCPServer:
             }
 
             return {"content": [{"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}]}
-
         except Exception as e:
             logger.error("Error in import_path_finder: %s", e)
             return {"content": [{"type": "text", "text": f"Error analyzing directory structure: {str(e)}"}]}
@@ -482,118 +475,143 @@ class TracerMCPServer:
     ) -> List[str]:
         """生成import语句建议"""
         suggestions = []
-
-        # 检查当前目录下的Python文件
         has_init = any(f["name"] == "__init__.py" for f in current_structure.get("files", []))
         if current_structure.get("files"):
             for file_info in current_structure["files"]:
                 if file_info["name"].endswith(".py") and file_info["name"] != "__init__.py":
-                    module_name = file_info["name"][:-3]  # 去掉.py
+                    module_name = file_info["name"][:-3]
                     if not has_init:
                         suggestions.append(f"import {module_name}")
 
-        # 检查父目录下的Python包
         if parent_structure.get("subdirectories"):
             for dir_name, dir_info in parent_structure["subdirectories"].items():
                 if dir_info.get("files"):
-                    # 检查是否有__init__.py来判断是否是Python包
                     has_init = any(f["name"] == "__init__.py" for f in dir_info.get("files", []))
                     if has_init:
                         suggestions.append(f"import {dir_name}")
-                        # 检查包内的模块
                         for file_info in dir_info.get("files", []):
                             if file_info["name"].endswith(".py") and file_info["name"] != "__init__.py":
                                 module_name = file_info["name"][:-3]
                                 suggestions.append(f"from {dir_name} import {module_name}")
-
-        # 去重并保持顺序
         seen = set()
         unique_suggestions = []
         for suggestion in suggestions:
             if suggestion not in seen:
                 seen.add(suggestion)
                 unique_suggestions.append(suggestion)
-
         return unique_suggestions
 
     def _handle_trace_python(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle trace_python tool synchronously."""
+        """Handle trace_python tool by resolving paths and executing the tracer."""
         try:
-            # Validate parameters
-            target = params.get("target")
-            target_type = params.get("target_type")
+            project_root = Path.cwd()
+            cmd_params = params.copy()
 
+            target = cmd_params.get("target")
+            target_type = cmd_params.get("target_type")
             if not target or not target_type:
-                raise ValueError("target and target_type are required")
+                raise ValueError("'target' and 'target_type' are required parameters")
 
-            # Strict validation based on target_type
             if target_type == "script":
-                self._validate_script_target(target)
+                target_path = Path(target)
+                if not target_path.is_absolute():
+                    target_path = (project_root / target_path).resolve()
+                self._validate_script_target(str(target_path))
+                cmd_params["target"] = str(target_path)
             elif target_type == "module":
                 self._validate_module_target(target)
             else:
                 raise ValueError("target_type must be either 'script' or 'module'")
 
-            timeout = params.get("timeout", 30)
+            if cmd_params.get("watch_files"):
+                resolved_patterns = []
+                for pattern in cmd_params["watch_files"]:
+                    p = Path(pattern)
+                    if not p.is_absolute():
+                        resolved_patterns.append(str(project_root / p))
+                    else:
+                        resolved_patterns.append(pattern)
+                cmd_params["watch_files"] = resolved_patterns
 
-            # Create temporary directory for this trace
+            if cmd_params.get("line_ranges"):
+                resolved_ranges = []
+                for range_str in cmd_params["line_ranges"].split(","):
+                    range_str = range_str.strip()
+                    try:
+                        file_part, line_part = range_str.rsplit(":", 1)
+                        file_path = Path(file_part)
+                        if not file_path.is_absolute():
+                            file_path = (project_root / file_path).resolve()
+                        resolved_ranges.append(f"{file_path}:{line_part}")
+                    except (ValueError, FileNotFoundError):
+                        resolved_ranges.append(range_str)
+                cmd_params["line_ranges"] = ",".join(resolved_ranges)
+
+            timeout = cmd_params.get("timeout", 30)
             temp_dir = tempfile.mkdtemp(prefix="trace_")
 
             try:
-                # Build command line arguments for tracer
-                command_args = self._build_tracer_command_args(params, target, target_type)
-
-                # Run tracer process with timeout
+                command_args = self._build_tracer_command_args(cmd_params)
                 exit_code, stdout, stderr, killed = self._execute_tracer_process(command_args, temp_dir, timeout)
-
-                # Extract log path from stdout
                 log_path = self._extract_log_path_from_stdout(stdout)
                 trace_log_content = self._read_log_content(log_path) if log_path else ""
+
                 if log_path:
                     logger.info("Extracted trace log from: %s", log_path)
                 else:
                     logger.warning("Could not extract trace log path from stdout")
 
-                # Prepare response
-                result_text = self._compose_trace_result_text(exit_code, killed, stdout, stderr, trace_log_content)
-                return {"content": [{"type": "text", "text": result_text}]}
+                truncation_warning = None
+                log_bytes = trace_log_content.encode("utf-8")
+                actual_size_kb = len(log_bytes) / 1024
 
+                if len(log_bytes) > self.MAX_TRACE_LOG_BYTES:
+                    truncation_warning = (
+                        "--- TRACE LOG TRUNCATED ---\n"
+                        f"WARNING: The full trace log is too large ({actual_size_kb:.1f} KB) and has been truncated to fit within the model's context limit.\n"
+                        "To get a complete and useful trace, you MUST narrow the execution scope.\n\n"
+                        "ACTIONABLE SUGGESTIONS:\n"
+                        "1. Use the 'line_ranges' parameter to focus on a specific function or code block.\n"
+                        "   Example: line_ranges='/path/to/file.py:50-100'\n"
+                        "2. If running tests, trace ONE test case at a time instead of the whole suite.\n"
+                        "3. Use the 'exclude_functions' parameter to filter out noisy or irrelevant functions.\n"
+                        "--- END OF WARNING ---\n\n"
+                    )
+
+                    # Truncate bytes and decode safely
+                    truncated_bytes = log_bytes[: self.MAX_TRACE_LOG_BYTES]
+                    trace_log_content = truncated_bytes.decode("utf-8", errors="ignore")
+
+                result_text = self._compose_trace_result_text(
+                    exit_code, killed, stdout, stderr, trace_log_content, truncation_warning
+                )
+                return {"content": [{"type": "text", "text": result_text}]}
             finally:
                 self._cleanup_temp_dir(temp_dir)
 
-        except ValueError as e:  # Specific catch for validation errors
+        except ValueError as e:
             logger.error("Trace validation error: %s", e)
             return {"content": [{"type": "text", "text": f"Error during trace validation: {str(e)}"}]}
-        # Catch specific execution errors
         except (OSError, subprocess.SubprocessError) as e:
             logger.error("Error during trace execution: %s", e)
             return {"content": [{"type": "text", "text": f"Error during trace execution: {str(e)}"}]}
-        # Catching common unexpected errors to ensure a response is always returned.
-        except (
-            TypeError,
-            AttributeError,
-            RuntimeError,
-        ) as e:
-            logger.error("Unexpected error during trace handling: %s", e)
+        except Exception as e:
+            logger.error("Unexpected error during trace handling: %s", e, exc_info=True)
             return {"content": [{"type": "text", "text": f"An unexpected error occurred: {str(e)}"}]}
 
     def run(self) -> None:
         """Run the MCP server over stdio synchronously."""
         logger.info("Starting tracer MCP server...")
-
         try:
             while True:
                 line = sys.stdin.readline()
-
                 if not line:
                     break
-
                 try:
                     message = json.loads(line.strip())
                     request_id = message.get("id")
                     method = message.get("method")
                     params = message.get("params", {})
-
                     logger.debug("Received request: %s", method)
 
                     if method == "initialize":
@@ -604,37 +622,22 @@ class TracerMCPServer:
                         result = self.handle_tools_call(params)
                     else:
                         result = {"error": f"Unknown method: {method}"}
-
                     response = {"jsonrpc": "2.0", "id": request_id, "result": result}
-
                     print(json.dumps(response), flush=True)
 
-                # Catching specific application errors for server robustness per request.
-                except (
-                    ValueError,
-                    TypeError,
-                    KeyError,
-                    AttributeError,
-                    OSError,
-                    subprocess.SubprocessError,
-                ) as e:
-                    logger.error("Error handling request: %s", e)
+                except (json.JSONDecodeError, ValueError, TypeError, KeyError, Exception) as e:
+                    logger.error("Error handling request: %s", e, exc_info=True)
                     error_response = {
                         "jsonrpc": "2.0",
-                        "id": request_id if "request_id" in locals() else None,
+                        "id": locals().get("request_id"),
                         "error": {"code": -32603, "message": str(e)},
                     }
                     print(json.dumps(error_response), flush=True)
 
         except KeyboardInterrupt:
             logger.info("Server shutting down...")
-        # Catching specific system-level errors for top-level server robustness and graceful handling.
-        except (
-            RuntimeError,
-            SystemError,
-            OSError,
-        ) as e:
-            logger.error("Server error: %s", e)
+        except Exception as e:
+            logger.critical("Top-level server error: %s", e, exc_info=True)
 
 
 def main() -> None:
