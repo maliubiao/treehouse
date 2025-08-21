@@ -2034,7 +2034,43 @@ function toggleCommentExpand(commentId, event) {
 TraceViewer.SearchModal = SearchModal;
 TraceViewer.SearchDatabase = SearchDatabase;
 
-// ===== Navigation Bar Functionality =====
+// ===== Navigation Bar Functionality (Refactored for Performance) =====
+
+TraceViewer._updateNavIndicators = function(navViewport, navPosition, content, navigationBar) {
+    const contentHeight = content.scrollHeight;
+    const viewportHeight = content.clientHeight;
+    const scrollTop = content.scrollTop;
+
+    if (contentHeight <= viewportHeight + 2) {
+        navViewport.style.display = 'none';
+        navPosition.style.display = 'none';
+        return;
+    }
+    
+    navViewport.style.display = 'block';
+    navPosition.style.display = 'block';
+    
+    const navHeight = navigationBar.getBoundingClientRect().height;
+    if (navHeight === 0) return;
+
+    const viewportRatio = viewportHeight / contentHeight;
+    const scrollRatio = scrollTop / contentHeight;
+    
+    const viewportTop = scrollRatio * navHeight;
+    const viewportHeightPx = viewportRatio * navHeight;
+    
+    navViewport.style.top = viewportTop + 'px';
+    navViewport.style.height = Math.max(viewportHeightPx, 8) + 'px';
+    
+    navPosition.style.top = viewportTop + 'px';
+};
+
+TraceViewer._redrawNavThumbnail = function(canvas, ctx, content, navigationBar) {
+    const navHeight = navigationBar.getBoundingClientRect().height;
+    if (navHeight === 0) return;
+    this.drawThumbnail(ctx, canvas, content, navHeight);
+};
+
 TraceViewer.initNavigationBar = function() {
     const navigationBar = document.getElementById('navigationBar');
     const navThumbnail = document.getElementById('navThumbnail');
@@ -2044,112 +2080,92 @@ TraceViewer.initNavigationBar = function() {
     
     if (!navigationBar || !content) return;
     
-    // Create canvas for thumbnail
     const canvas = document.createElement('canvas');
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     navThumbnail.appendChild(canvas);
-    
     const ctx = canvas.getContext('2d');
-    let isUpdating = false;
     
-    // Debounced update function
-    const updateNavigationBar = this.utils.debounce(() => {
-        if (isUpdating) return;
-        isUpdating = true;
+    let isRedrawing = false;
+
+    // Fast, non-debounced function for smooth scroll feedback
+    const updateIndicators = () => {
+        this._updateNavIndicators(navViewport, navPosition, content, navigationBar);
+    };
+
+    // Debounced, expensive function for redrawing thumbnail and syncing indicators
+    const debouncedRedrawAndSync = this.utils.debounce(() => {
+        if (isRedrawing) return;
+        isRedrawing = true;
         
         requestAnimationFrame(() => {
-            this.updateNavigationBar(canvas, ctx, navViewport, navPosition, content, navigationBar);
-            isUpdating = false;
+            this._redrawNavThumbnail(canvas, ctx, content, navigationBar);
+            this._updateNavIndicators(navViewport, navPosition, content, navigationBar);
+            isRedrawing = false;
         });
-    }, 100);
-    
+    }, 250);
+
     // Initial setup
     this.setupCanvasSize(canvas, ctx);
-    // Delay initial update to ensure canvas is properly sized
-    setTimeout(() => updateNavigationBar(), 50);
+    setTimeout(debouncedRedrawAndSync, 100); // Initial draw
+
+    // --- Event Listeners ---
+    // 1. On scroll: Only update indicators for performance.
+    content.addEventListener('scroll', updateIndicators);
     
-    // Event listeners
+    // 2. On navigation bar click: scroll the content.
     navigationBar.addEventListener('click', (e) => {
         this.handleNavigationClick(e, content, canvas);
     });
-    
-    content.addEventListener('scroll', updateNavigationBar);
+
+    // 3. On resize: Update canvas size and redraw.
     window.addEventListener('resize', () => {
         this.setupCanvasSize(canvas, ctx);
-        updateNavigationBar();
+        debouncedRedrawAndSync();
     });
     
-    // Observe content changes for dynamic updates
-    this.observeContentChanges(content, updateNavigationBar);
+    // 4. On content change (e.g., expand/collapse): Redraw.
+    let lastScrollHeight = content.scrollHeight;
+    const mutationCallback = () => {
+        if (content.scrollHeight !== lastScrollHeight) {
+            lastScrollHeight = content.scrollHeight;
+            debouncedRedrawAndSync();
+        }
+    };
+    const observer = new MutationObserver(this.utils.debounce(mutationCallback, 100));
+    observer.observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+
+    // 5. Explicit redraw on fold/expand clicks after animation.
+    content.addEventListener('click', (e) => {
+        if (e.target.classList.contains('foldable') || e.target.classList.contains('expand-code-btn')) {
+            setTimeout(debouncedRedrawAndSync, 300);
+        }
+    });
 };
 
 TraceViewer.setupCanvasSize = function(canvas, ctx) {
     if (!canvas.parentElement) {
-        // Parent element not ready, retry later
         setTimeout(() => this.setupCanvasSize(canvas, ctx), 100);
         return;
     }
     
     const rect = canvas.parentElement.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) {
-        // Element has no size yet, retry later
         setTimeout(() => this.setupCanvasSize(canvas, ctx), 100);
         return;
     }
     
-    // Use the navigation bar's actual dimensions instead of canvas parent
     const navigationBar = canvas.closest('.navigation-bar');
     if (navigationBar) {
         const navRect = navigationBar.getBoundingClientRect();
-        canvas.width = navRect.width * 2; // High DPI
+        canvas.width = navRect.width * 2;
         canvas.height = navRect.height * 2;
-        console.log('Canvas size set using navigation bar:', navRect.width, 'x', navRect.height);
     } else {
-        // Fallback to canvas parent dimensions
-        canvas.width = rect.width * 2; // High DPI
+        canvas.width = rect.width * 2;
         canvas.height = rect.height * 2;
-        console.log('Canvas size set using parent:', rect.width, 'x', rect.height);
     }
     
-    // Scale context for high DPI
     ctx.scale(2, 2);
-};
-
-TraceViewer.updateNavigationBar = function(canvas, ctx, navViewport, navPosition, content, navigationBar) {
-    const contentHeight = content.scrollHeight;
-    const viewportHeight = content.clientHeight;
-    const scrollTop = content.scrollTop;
-
-    // With corrected CSS, if content is not scrollable, height difference will be minimal.
-    if (contentHeight <= viewportHeight + 2) { // Use a small threshold
-        navViewport.style.display = 'none';
-        navPosition.style.display = 'none';
-        return;
-    }
-    
-    navViewport.style.display = 'block';
-    navPosition.style.display = 'block';
-    
-    // With corrected CSS, the navigation bar's height is reliable.
-    const navHeight = navigationBar.getBoundingClientRect().height;
-    if (navHeight === 0) return; // Not visible yet
-
-    const viewportRatio = viewportHeight / contentHeight;
-    const scrollRatio = scrollTop / contentHeight;
-    
-    // Update viewport indicator
-    const viewportTop = scrollRatio * navHeight;
-    const viewportHeightPx = viewportRatio * navHeight;
-    
-    navViewport.style.top = viewportTop + 'px';
-    navViewport.style.height = Math.max(viewportHeightPx, 8) + 'px'; // Minimum height
-    
-    // Update position indicator
-    navPosition.style.top = viewportTop + 'px';
-    
-    // Draw thumbnail
-    this.drawThumbnail(ctx, canvas, content, navHeight);
 };
 
 TraceViewer.drawThumbnail = function(ctx, canvas, content, navHeight) {
@@ -2157,18 +2173,15 @@ TraceViewer.drawThumbnail = function(ctx, canvas, content, navHeight) {
     const scale = navHeight / contentHeight;
     const isDark = document.body.classList.contains('dark-theme');
     
-    // Clear canvas - use actual display dimensions (canvas is already scaled for high DPI)
     const displayWidth = canvas.parentElement.clientWidth;
     const displayHeight = canvas.parentElement.clientHeight;
     ctx.clearRect(0, 0, displayWidth, displayHeight);
     
-    // Draw background
     ctx.fillStyle = isDark ? 'rgba(30, 41, 59, 0.8)' : 'rgba(248, 250, 252, 0.8)';
     ctx.fillRect(0, 0, displayWidth, displayHeight);
     
-    // Sample elements for thumbnail
     const elements = content.querySelectorAll('.foldable');
-    const sampleCount = Math.min(elements.length, 200); // Limit for performance
+    const sampleCount = Math.min(elements.length, 200);
     
     for (let i = 0; i < sampleCount; i++) {
         const index = Math.floor(i * elements.length / sampleCount);
@@ -2180,7 +2193,6 @@ TraceViewer.drawThumbnail = function(ctx, canvas, content, navHeight) {
         const height = rect.height * scale;
         
         if (y >= 0 && y < navHeight) {
-            // Determine color based on element type
             let color;
             if (element.classList.contains('call')) {
                 color = isDark ? 'rgba(96, 165, 250, 0.6)' : 'rgba(59, 130, 246, 0.6)';
@@ -2192,7 +2204,6 @@ TraceViewer.drawThumbnail = function(ctx, canvas, content, navHeight) {
                 color = isDark ? 'rgba(156, 163, 175, 0.4)' : 'rgba(107, 114, 128, 0.4)';
             }
             
-            // Draw element marker
             ctx.fillStyle = color;
             ctx.fillRect(2, y, displayWidth - 4, Math.max(height, 1));
         }
@@ -2203,50 +2214,23 @@ TraceViewer.handleNavigationClick = function(e, content, canvas) {
     const rect = canvas.getBoundingClientRect();
     const clickY = e.clientY - rect.top;
     
-    // With corrected CSS, the navigation bar's height is reliable.
     const navHeight = rect.height;
     if (navHeight === 0) return;
 
     const contentHeight = content.scrollHeight;
     const viewportHeight = content.clientHeight;
     
-    // Calculate target scroll position. The click position relative to the
-    // nav bar's height corresponds to the position in the total content.
     const targetScroll = (clickY / navHeight) * contentHeight;
     
-    // Smooth scroll to the calculated position.
     content.scrollTo({
-        // Center the view on the clicked point by subtracting half the viewport height.
         top: Math.max(0, Math.min(targetScroll - (viewportHeight / 2), contentHeight - viewportHeight)),
         behavior: 'smooth'
     });
 };
 
-TraceViewer.observeContentChanges = function(content, callback) {
-    const observer = new MutationObserver(callback);
-    observer.observe(content, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class']
-    });
-    
-    // Also observe for folding events
-    content.addEventListener('click', (e) => {
-        if (e.target.classList.contains('foldable')) {
-            setTimeout(callback, 300); // Delay to allow animation
-        }
-    });
-    
-    // Force refresh on window resize
-    window.addEventListener('resize', callback);
-};
-
-// Initialize navigation bar in main init
 const originalInit = TraceViewer.init;
 TraceViewer.init = function(...args) {
     const result = originalInit.apply(this, args);
-    // Delay navigation bar initialization to ensure DOM is fully rendered
     setTimeout(() => this.initNavigationBar(), 100);
     return result;
 };

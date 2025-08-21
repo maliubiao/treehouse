@@ -520,24 +520,21 @@ button.secondary:hover {
 /* ===== Main Content ===== */
 .content-wrapper {
     flex: 1;
-    /* Removed padding and overflow, making it a clean positioning context */
     position: relative;
     overflow: hidden;
 }
 
 #content {
     background: var(--bg-secondary);
-    /* Moved padding here from wrapper */
     padding: var(--space-lg);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-sm);
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 0.875rem;
     line-height: 1.6;
-    /* Added height and overflow to make this the scrollable container */
     height: 100%;
     overflow-y: auto;
-    /* The scrollbar of this element will be on the far right */
+    overflow-x: auto; /* Allow horizontal scrolling for wide content */
 }
 
 /* ===== Summary Dropdown ===== */
