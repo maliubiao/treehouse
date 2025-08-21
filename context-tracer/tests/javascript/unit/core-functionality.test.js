@@ -23,6 +23,7 @@ describe('Core Functionality', () => {
     global.window.sourceFiles = mockTraceData.sourceFiles;
     global.window.commentsData = mockTraceData.commentsData;
     global.window.lineComment = mockTraceData.lineComment;
+    global.window.eventMetadata = mockTraceData.eventMetadata;
     
     // Initialize TraceViewer with mock elements
     global.TraceViewer.elements = {
@@ -35,11 +36,21 @@ describe('Core Functionality', () => {
       sourceDialog: mockElements.sourceDialog,
       dialogCloseBtn: mockElements.dialogCloseBtn,
       settingsDialog: mockElements.settingsDialog,
-      themeSelector: mockElements.themeSelector
+      themeSelector: mockElements.themeSelector,
+      searchBtn: mockElements.searchBtn
     };
     
     // Initialize search functionality
     global.TraceViewer.initSearch();
+    
+    // Initialize search modal functionality
+    global.TraceViewer.initSearchModal();
+    
+    // Initialize search database manually (since DOMContentLoaded won't fire in tests)
+    if (window.eventMetadata) {
+      global.TraceViewer.searchDatabase = new global.SearchDatabase();
+      global.TraceViewer.searchDatabase.initializeFromMetadata();
+    }
     
     // Initialize themes functionality
     global.TraceViewer.initThemes(mockElements.themeSelector);
@@ -149,6 +160,46 @@ describe('Core Functionality', () => {
       expect(highlighted.length).toBeGreaterThan(0);
       
       jest.useRealTimers();
+    });
+
+    test('should initialize search modal functionality', () => {
+      // Check that search modal was initialized
+      expect(global.TraceViewer.searchModal).toBeDefined();
+      expect(global.TraceViewer.searchModal instanceof global.TraceViewer.SearchModal).toBe(true);
+      
+      // Check that search button has click handler
+      const clickSpy = jest.spyOn(global.TraceViewer.searchModal, 'show');
+      mockElements.searchBtn.click();
+      
+      expect(clickSpy).toHaveBeenCalled();
+      clickSpy.mockRestore();
+    });
+
+    test('should respond to Ctrl+F keyboard shortcut', () => {
+      const showSpy = jest.spyOn(global.TraceViewer.searchModal, 'show');
+      
+      // Simulate Ctrl+F keypress
+      const event = new KeyboardEvent('keydown', {
+        key: 'f',
+        ctrlKey: true,
+        bubbles: true
+      });
+      document.dispatchEvent(event);
+      
+      expect(showSpy).toHaveBeenCalled();
+      showSpy.mockRestore();
+    });
+
+    test('should initialize search database with event metadata', () => {
+      expect(global.TraceViewer.searchDatabase).toBeDefined();
+      expect(global.TraceViewer.searchDatabase.events.length).toBe(5); // From mock data
+      
+      // Verify events are properly indexed
+      const testFunctionEvents = global.TraceViewer.searchDatabase.getEventsByFunction('test_function');
+      expect(testFunctionEvents.length).toBe(2); // CALL and RETURN
+      
+      const fileEvents = global.TraceViewer.searchDatabase.getEventsByFilename('/path/to/file.py');
+      expect(fileEvents.length).toBe(5); // All events from mock file
     });
   });
 

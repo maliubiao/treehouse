@@ -11,6 +11,7 @@
 - **推理感知路由**：智能地将带有 Anthropic `thinking` 参数的请求路由到明确支持推理/思维功能的提供商。代理正确地将流式 `reasoning_content` 转换为 Anthropic `thinking_delta` 事件
 - **动态模型映射**：将单个 Anthropic 模型别名（如 `claude-3-5-sonnet`）映射到不同提供商上的不同目标模型（如一个在 `openai/gpt-4o` 上，另一个在 `deepseek/deepseek-r1` 上）
 - **健壮性特性**：包含 `max_tokens_override` 设置，防止在有严格令牌限制的提供商上出现请求失败
+- **上下文感知路由**：自动检测请求的上下文长度要求，并智能路由到具有足够容量的提供商
 - **结构化日志**：为整个请求生命周期生成详细的 JSON 日志，便于调试路由决策和提供商错误
 
 
@@ -37,9 +38,25 @@
 3. **标准路由**：如果未请求推理功能（或未找到推理提供商），按以下顺序选择提供商：
    a. **特定模型映射**：`anthropic.model_providers` 中的模型条目
    b. **默认提供商**：`anthropic.default_provider`
-4. **转换并转发**：使用所选提供商的 `default_models` 映射中定义的目标模型名将请求转换为 OpenAI 格式，并发送到提供商的 `base_url`
+4. **上下文感知路由**：如果请求需要超过提供商定义容量的上下文长度，路由器会自动寻找具有足够容量的其他提供商
+5. **转换并转发**：使用所选提供商的 `default_models` 映射中定义的目标模型名将请求转换为 OpenAI 格式，并发送到提供商的 `base_url`
 
 整个过程通过唯一请求 ID 记录，因此您可以准确追踪为什么选择特定提供商
+
+### 🧠 上下文感知路由
+
+代理现在支持智能的上下文长度感知路由，自动检测请求的令牌需求并选择最合适的提供商：
+
+1. **自动令牌估算**：使用字符串长度 ÷ 4 的近似方法估算请求的上下文长度需求
+2. **容量检查**：在每个路由优先级级别检查提供商的 `max_context` 容量
+3. **智能降级**：如果首选提供商容量不足，自动寻找具有足够容量的其他提供商
+4. **最优选择**：选择具有最小足够容量的提供商，以节约资源
+
+**示例场景**：
+- 小请求（<4K tokens）→ 路由到标准容量提供商
+- 中等请求（4K-16K tokens）→ 路由到中等容量提供商  
+- 大请求（16K-32K tokens）→ 路由到大容量提供商
+- 超大请求（>32K tokens）→ 路由到无限制容量提供商
 
 ## ⚙️ 配置 (`config.yml`)
 
@@ -85,6 +102,9 @@ providers:
       # 如果用户请求的令牌多于上述值，则值将被限制
       # 这可防止具有严格限制的提供商出现错误
       max_tokens_override: 4096
+      # 该提供商支持的最大上下文长度（令牌数）
+      # 如果为 None，表示无限制容量
+      max_context: 16000
 
     # 第二个提供商，支持推理
     openai_provider3:
@@ -100,7 +120,14 @@ providers:
         thinking_budget_param: "thinking_budget"
         include_reasoning: true
       max_tokens_override: 8192
+      # 这个提供商支持更大的上下文容量
+      max_context: 32000
 ```
+
+**上下文长度配置说明**：
+- `max_context`：该提供商支持的最大上下文长度（令牌数）
+- 设置为 `null` 或省略表示无限制容量
+- 建议为每个提供商设置合适的容量限制，以启用智能路由功能
 
 ## 🔍 追踪与调试功能
 
@@ -153,6 +180,7 @@ python -m tests.claude_code_proxy_tests.test_response_translator_v2 -v
    - 调整 `base_url` 和 `default_models` 映射
    - 设置 `anthropic` 路由规则
    - 为需要令牌限制的提供商添加 `max_tokens_override`
+   - 为提供商设置合适的 `max_context` 上下文容量限制
 
 3. **运行服务器**：
    从项目根目录运行 `main` 模块，指向您的配置文件。
@@ -272,7 +300,7 @@ except Exception as e:
 - **响应转换器**：OpenAI → Anthropic 格式转换
 - **身份验证管理器**：多个提供商 API 密钥管理
 - **速率限制**：每个提供商的可配置节流
-- **日志系统**：用于调试和审计的结构化日志
+- **日志系统**：用于调试和审计的结构化日志，包括上下文路由决策的详细记录
 
 ## 🔧 开发与调试
 
@@ -287,6 +315,30 @@ python -m claude_code_proxy.main --config my_config.yml --reload
 # 启用全面调试功能
 export DEBUG_PROXY=true
 python -m claude_code_proxy.main --config my_config.yml --log-level DEBUG
+```
+
+### 上下文路由日志示例
+当启用详细日志时，你会看到如下的上下文路由决策记录：
+
+```json
+{
+  "level": "WARNING",
+  "message": "Specific provider 'Provider 1' lacks sufficient context (4000 < 7000 tokens). Continuing search...",
+  "timestamp": "2024-01-15T10:30:45.123Z",
+  "model": "claude-3-opus-20240229",
+  "required_context": 7000,
+  "provider_capacity": 4000
+}
+
+{
+  "level": "INFO", 
+  "message": "Selected provider 'Provider 2' with sufficient context (16000 >= 7000 tokens)",
+  "timestamp": "2024-01-15T10:30:45.125Z",
+  "model": "claude-3-opus-20240229",
+  "selected_provider": "provider2",
+  "provider_capacity": 16000,
+  "required_context": 7000
+}
 ```
 
 ### 自定义提供商集成

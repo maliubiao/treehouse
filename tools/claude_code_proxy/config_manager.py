@@ -29,6 +29,9 @@ class ProviderConfig(BaseModel):
     max_tokens_override: Optional[int] = Field(
         default=None, description="Override max_tokens if request value exceeds this limit"
     )
+    max_context: Optional[int] = Field(
+        default=None, description="Maximum context length (in tokens) supported by this provider"
+    )
 
 
 class AnthropicConfig(BaseModel):

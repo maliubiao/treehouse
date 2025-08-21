@@ -18,21 +18,79 @@ const mockTraceData = {
   },
   lineComment: {
     '1-/path/to/file.py-10': { var1: 'value1', var2: 'value2' }
+  },
+  // Event metadata for search functionality testing
+  eventMetadata: {
+    1: {
+      type: 'call',
+      filename: '/path/to/file.py',
+      lineno: 10,
+      func: 'test_function',
+      frame_id: 1,
+      args: '',
+      return_value: null,
+      tracked_vars: null,
+      thread_id: 1
+    },
+    2: {
+      type: 'line',
+      filename: '/path/to/file.py',
+      lineno: 10,
+      func: null,
+      frame_id: 1,
+      args: null,
+      return_value: null,
+      tracked_vars: { x: '42' },
+      thread_id: 1
+    },
+    3: {
+      type: 'line',
+      filename: '/path/to/file.py',
+      lineno: 15,
+      func: null,
+      frame_id: 1,
+      args: null,
+      return_value: null,
+      tracked_vars: { result: 'Hello' },
+      thread_id: 1
+    },
+    4: {
+      type: 'call',
+      filename: '/path/to/file.py',
+      lineno: 20,
+      func: 'nested_function',
+      frame_id: 2,
+      args: '',
+      return_value: null,
+      tracked_vars: null,
+      thread_id: 1
+    },
+    5: {
+      type: 'return',
+      filename: '/path/to/file.py',
+      lineno: 25,
+      func: 'test_function',
+      frame_id: 1,
+      args: null,
+      return_value: 'None',
+      tracked_vars: null,
+      thread_id: 1
+    }
   }
 };
 
 const mockHtmlContent = `
-<div class="foldable call" data-indent="0" data-subtree-size="3" style="--indent-space: 0ch;">
+<div class="foldable call" data-event-id="1" data-indent="0" data-subtree-size="3" style="--indent-space: 0ch;">
     ↘ CALL test_function() <span class="view-source-btn" onclick="showSource('/path/to/file.py', 10, 1)">view source</span> <span class="copy-subtree-btn" title="Copy subtree as text">📋</span> <span class="focus-subtree-btn" title="Focus on this subtree (crop)">🔍</span> <span class="explain-ai-btn" title="Explain with AI">🤖</span> <span class="toggle-details-btn" title="Show details for this subtree">👁️</span>
 </div>
 <div class="call-group collapsed">
-    <div class="line" data-indent="2" style="padding-left:2ch">
-        ▷ /path/to/file.py:10 print("Hello") <span class="view-source-btn" onclick="showSource('/path/to/file.py', 10, 1)">view source</span>
+    <div class="line" data-event-id="2" data-indent="2" style="padding-left:2ch">
+        ▷ /path/to/file.py:10 print("Hello") # Debug: x=42 <span class="view-source-btn" onclick="showSource('/path/to/file.py', 10, 1)">view source</span>
     </div>
-    <div class="line" data-indent="2" style="padding-left:2ch">
-        ▷ /path/to/file.py:15 x = 42 <span class="view-source-btn" onclick="showSource('/path/to/file.py', 15, 1)">view source</span>
+    <div class="line" data-event-id="3" data-indent="2" style="padding-left:2ch">
+        ▷ /path/to/file.py:15 x = 42 # Debug: result=Hello <span class="view-source-btn" onclick="showSource('/path/to/file.py', 15, 1)">view source</span>
     </div>
-    <div class="foldable call" data-indent="2" data-subtree-size="1" style="--indent-space: 2ch;">
+    <div class="foldable call" data-event-id="4" data-indent="2" data-subtree-size="1" style="--indent-space: 2ch;">
         ↘ CALL nested_function() <span class="view-source-btn" onclick="showSource('/path/to/file.py', 20, 2)">view source</span> <span class="copy-subtree-btn" title="Copy subtree as text">📋</span> <span class="focus-subtree-btn" title="Focus on this subtree (crop)">🔍</span> <span class="explain-ai-btn" title="Explain with AI">🤖</span> <span class="toggle-details-btn" title="Show details for this subtree">👁️</span>
         <div class="call-group collapsed">
             <div class="line" data-indent="4" style="padding-left:4ch">
@@ -41,7 +99,7 @@ const mockHtmlContent = `
         </div>
     </div>
 </div>
-<div class="return" data-indent="0" style="padding-left:0ch">
+<div class="return" data-event-id="5" data-indent="0" style="padding-left:0ch">
     ↗ RETURN test_function() -> None
 </div>
 `;
@@ -140,6 +198,10 @@ const createMockDom = () => {
   document.body.appendChild(settingsDialog);
   document.body.appendChild(themeSelector);
   
+  const searchBtn = document.createElement('button');
+  searchBtn.id = 'searchBtn';
+  document.body.appendChild(searchBtn);
+
   return {
     content,
     search,
@@ -150,7 +212,8 @@ const createMockDom = () => {
     sourceDialog,
     dialogCloseBtn,
     settingsDialog,
-    themeSelector
+    themeSelector,
+    searchBtn
   };
 };
 

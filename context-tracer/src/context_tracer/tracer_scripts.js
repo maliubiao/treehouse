@@ -811,139 +811,127 @@ const TraceViewer = {
             }
         });
     },
+
+    _nodeToTextLines(node) {
+        if (!node || node.nodeType !== Node.ELEMENT_NODE || !node.hasAttribute('data-indent')) {
+            return [];
+        }
     
+        const clone = node.cloneNode(true);
+    
+        // Remove all UI-only elements
+        clone.querySelectorAll('.view-source-btn, .copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn, .explain-ai-btn, .expand-code-btn').forEach(el => el.remove());
+    
+        // Handle new debug vars UI
+        let debugCommentText = '';
+        const debugVarsEl = clone.querySelector('.debug-vars');
+        if (debugVarsEl) {
+            const vars = [];
+            debugVarsEl.querySelectorAll('.list-view .var-entry').forEach(entry => {
+                const name = entry.querySelector('.var-name')?.textContent.trim();
+                const value = entry.querySelector('.var-value')?.innerText.trim();
+                if (name && value) {
+                    vars.push(`${name}=${value}`);
+                }
+            });
+            if (vars.length > 0) {
+                debugCommentText = ` # Debug: ${vars.join(', ')}`;
+            }
+            debugVarsEl.remove();
+        }
+    
+        // Handle legacy comments
+        clone.querySelectorAll('.comment').forEach(commentEl => {
+            const fullTextEl = commentEl.querySelector('.comment-full');
+            const content = (fullTextEl || commentEl).textContent.trim();
+            commentEl.replaceWith(document.createTextNode(` # ${content}`));
+        });
+    
+        let text;
+        const multiLineContainer = clone.querySelector('.multi-line-container');
+        if (multiLineContainer) {
+            const prefixEl = multiLineContainer.querySelector('.multi-line-prefix');
+            const codeEl = multiLineContainer.querySelector('.code-full code');
+            const prefix = prefixEl ? prefixEl.textContent.replace(/[\s\u00A0]+/g, ' ').trim() : '';
+            const code = codeEl ? codeEl.textContent : '';
+            // Reconstruct the line without collapsing whitespace from the code part itself
+            text = prefix + (prefix ? ' ' : '') + code;
+        } else {
+            // Use innerText to get a text representation that respects some whitespace,
+            // then trim only the outer edges.
+            text = clone.innerText.trim();
+        }
+    
+        const indent = parseInt(node.dataset.indent, 10) || 0;
+        const indentation = ' '.repeat(indent);
+    
+        // Handle multi-line text from the source code itself
+        const lines = text.split('\n').map(line => indentation + line);
+        
+        // Append debug comment to the last line
+        if (lines.length > 0 && debugCommentText) {
+            lines[lines.length - 1] += debugCommentText;
+        }
+    
+        return lines;
+    },
+
     // Initialize "Copy Subtree" functionality
     initCopySubtree() {
-        const { content } = this.elements;
-        content.addEventListener('click', async (e) => {
-            if (!e.target.classList.contains('copy-subtree-btn')) {
-                return;
-            }
-
+        this.elements.content.addEventListener('click', async (e) => {
+            if (!e.target.classList.contains('copy-subtree-btn')) return;
             e.preventDefault();
             e.stopPropagation();
-
+    
             const copyBtn = e.target;
             const foldable = copyBtn.closest('.foldable.call');
             if (!foldable) return;
-
+    
             const callGroup = foldable.nextElementSibling;
-            if (!callGroup || !callGroup.classList.contains('call-group')) {
-                return;
-            }
-
-            const lines = [];
-            const varState = {}; // State object to track variable values for deduplication
-            
-            // Helper function to process a single node into a clean text line, with variable state
-            const processNodeToText = (node, varState) => {
-                const clone = node.cloneNode(true);
-                // Remove all UI-only elements
-                clone.querySelector('.view-source-btn')?.remove();
-                clone.querySelector('.copy-subtree-btn')?.remove();
-                clone.querySelector('.focus-subtree-btn')?.remove();
-                clone.querySelector('.toggle-details-btn')?.remove();
-                clone.querySelector('.explain-ai-btn')?.remove();
-                clone.querySelector('.expand-code-btn')?.remove();
-
-                // Handle new debug vars UI: process it with state, then remove it
-                const debugVarsEl = clone.querySelector('.debug-vars');
-                let debugCommentText = '';
-                if (debugVarsEl) {
-                    const vars = [];
-                    // Use list-view as the reliable source of all vars
-                    debugVarsEl.querySelectorAll('.list-view .var-entry').forEach(entry => {
-                        const nameEl = entry.querySelector('.var-name');
-                        const valueEl = entry.querySelector('.var-value');
-                        if (nameEl && valueEl) {
-                            const name = nameEl.textContent.trim();
-                            const value = valueEl.textContent.trim();
-                            // Check if the value has changed compared to the state
-                            if (varState[name] !== value) {
-                                vars.push(`${name}=${value}`);
-                                varState[name] = value; // Update the state
-                            }
-                        }
-                    });
-                    if (vars.length > 0) {
-                        debugCommentText = ` # Debug: ${vars.join(', ')}`;
-                    }
-                    debugVarsEl.remove(); // Remove before textContent is called
-                }
-
-                // Handle legacy comment UI: just remove it
-                clone.querySelector('.comment')?.remove();
-            
-                let text;
-                const multiLineContainer = clone.querySelector('.multi-line-container');
-            
-                if (multiLineContainer) {
-                    const prefixEl = multiLineContainer.querySelector('.multi-line-prefix');
-                    const codeEl = multiLineContainer.querySelector('.code-full code');
-                    const prefix = prefixEl ? prefixEl.textContent : '';
-                    const code = codeEl ? codeEl.textContent : '';
-                    text = prefix + code;
-                } else {
-                    // For single-line events, trim whitespace from the ends but do not collapse
-                    // internal whitespace. This is crucial for preserving the indentation
-                    // of source code within the log line.
-                    text = clone.textContent.trim();
-                }
-
-                const indent = parseInt(node.dataset.indent, 10) || 0;
-                
-                // For multi-line text, indent each line correctly
-                const indentedLines = text.trim().split('\n').map(line => ' '.repeat(indent) + line);
-                return indentedLines.join('\n') + debugCommentText;
-            };
-
+            if (!callGroup || !callGroup.classList.contains('call-group')) return;
+    
+            let allLines = [];
+    
             // Process the main foldable 'call' line itself
-            lines.push(processNodeToText(foldable, varState));
-
+            allLines.push(...this._nodeToTextLines(foldable));
+    
             // Process all descendant log lines within the call group
             const descendants = callGroup.querySelectorAll('div[data-indent]');
             descendants.forEach(node => {
-                lines.push(processNodeToText(node, varState));
+                allLines.push(...this._nodeToTextLines(node));
             });
             
-            // Process the corresponding 'return' or 'exception' line
+            // Find and process the corresponding 'return' or 'exception' line
             let nextElement = callGroup.nextElementSibling;
+            const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
             while(nextElement) {
-                if (nextElement.classList.contains('return') || nextElement.classList.contains('error')) {
-                     const indent = parseInt(nextElement.dataset.indent, 10) || 0;
-                     const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
-                     if(indent === foldableIndent) {
-                        lines.push(processNodeToText(nextElement, varState));
-                        break;
-                     }
+                const nextIndent = parseInt(nextElement.dataset.indent, 10) || 0;
+                if (nextElement.classList.contains('foldable') && nextIndent <= foldableIndent) {
+                    break; // Stop if we hit another call at the same or higher level
                 }
-                // Stop if we hit another call at the same or higher level
-                if (nextElement.classList.contains('foldable')) {
+                if ((nextElement.classList.contains('return') || nextElement.classList.contains('error')) && nextIndent === foldableIndent) {
+                    allLines.push(...this._nodeToTextLines(nextElement));
                     break;
                 }
                 nextElement = nextElement.nextElementSibling;
             }
-
-            const fullText = lines.join('\n');
-
+    
+            const fullText = allLines.join('\n');
+    
             try {
                 await navigator.clipboard.writeText(fullText);
                 const originalContent = copyBtn.textContent;
                 copyBtn.textContent = TraceViewer.i18n.t('copiedText');
-                setTimeout(() => {
-                    copyBtn.textContent = originalContent;
-                }, 1500);
+                setTimeout(() => { copyBtn.textContent = originalContent; }, 1500);
             } catch (err) {
                 console.error('Failed to copy text: ', err);
                 const originalContent = copyBtn.textContent;
                 copyBtn.textContent = 'Error!';
-                setTimeout(() => {
-                    copyBtn.textContent = originalContent;
-                }, 1500);
+                setTimeout(() => { copyBtn.textContent = originalContent; }, 1500);
             }
         });
     },
-    
+
     // Initialize "Focus Subtree" functionality
     initFocusSubtree() {
         this.elements.content.addEventListener('click', e => {
@@ -1503,7 +1491,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         TraceViewer.aiExplainer = aiExplainer;
     },
 
-    // NEW: Intercept native copy events for better text representation
+    // Intercept native copy events for better text representation
     initClipboardInterceptor() {
         document.addEventListener('copy', (event) => {
             const selection = document.getSelection();
@@ -1514,76 +1502,35 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             const contentEl = this.elements.content;
             const range = selection.getRangeAt(0);
             if (!contentEl || !contentEl.contains(range.commonAncestorContainer)) {
-                // Selection is outside our scope, let the browser handle it.
-                return;
+                return; // Selection is outside our scope
             }
     
             const plainText = this.extractTextFromSelection(selection);
-    
-            // Set the clipboard data and prevent the default browser copy action.
             event.clipboardData.setData('text/plain', plainText);
             event.preventDefault();
         });
     },
     
-    // NEW: Helper to generate clean text from a selection fragment
+    // Helper to generate clean text from a selection fragment
     extractTextFromSelection(selection) {
         const range = selection.getRangeAt(0);
-        const fragment = range.cloneContents();
-        const tempContainer = document.createElement('div');
-        tempContainer.appendChild(fragment);
+        const ancestor = range.commonAncestorContainer;
     
-        // Phase 1: Clean up UI-only elements that shouldn't appear in copied text
-        tempContainer.querySelectorAll('.view-source-btn, .copy-subtree-btn, .focus-subtree-btn, .toggle-details-btn, .explain-ai-btn, .expand-code-btn').forEach(el => el.remove());
-    
-        // Phase 2: Transform custom components into their plain-text representations
+        // Find all log entry elements within the common ancestor
+        const allDivs = (ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentElement).querySelectorAll('div[data-indent]');
         
-        // Handle multi-line statements
-        tempContainer.querySelectorAll('.multi-line-container').forEach(container => {
-            const prefixEl = container.querySelector('.multi-line-prefix');
-            const codeEl = container.querySelector('.code-full code');
-            if (codeEl) {
-                const prefixText = prefixEl ? prefixEl.textContent : '';
-                const codeText = codeEl.textContent;
-                // Replace the complex container with a simple text node.
-                // Newlines within codeText will be preserved by the final .innerText call.
-                container.replaceWith(document.createTextNode(prefixText + codeText));
-            }
-        });
+        // Filter for divs that are actually within the selection range
+        const selectedDivs = Array.from(allDivs).filter(div => 
+            selection.containsNode(div, true) || range.intersectsNode(div)
+        );
     
-        // Handle new debug vars UI
-        tempContainer.querySelectorAll('.debug-vars').forEach(debugEl => {
-            const vars = [];
-            debugEl.querySelectorAll('.list-view .var-entry').forEach(entry => {
-                const name = entry.querySelector('.var-name')?.textContent.trim();
-                // Use innerText for value to handle potential <pre> tags correctly
-                const value = entry.querySelector('.var-value')?.innerText.trim();
-                if (name && value) {
-                    vars.push(`${name}=${value}`);
-                }
-            });
-            
-            if (vars.length > 0) {
-                // Prepend a space to ensure separation from the preceding code/text.
-                const debugText = ` # Debug: ${vars.join(', ')}`;
-                debugEl.replaceWith(document.createTextNode(debugText));
-            } else {
-                debugEl.remove();
-            }
-        });
-        
-        // Handle legacy comments
-        tempContainer.querySelectorAll('.comment').forEach(commentEl => {
-            const fullTextEl = commentEl.querySelector('.comment-full');
-            const content = (fullTextEl || commentEl).textContent.trim();
-            // Prepend a space for correct formatting.
-            commentEl.replaceWith(document.createTextNode(` # ${content}`));
-        });
-    
-        // Phase 3: Extract formatted text
-        // .innerText is great because it interprets line breaks from block elements (like our <div> log lines)
-        // and generally produces a more readable text output than .textContent.
-        return tempContainer.innerText;
+        if (selectedDivs.length === 0) {
+            // Fallback for simple text selection inside a single line
+            return selection.toString();
+        }
+
+        const allLines = selectedDivs.flatMap(div => this._nodeToTextLines(div));
+        return allLines.join('\n');
     },
 
     // Adjust line number styles based on theme

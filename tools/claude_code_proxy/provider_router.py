@@ -12,6 +12,32 @@ from .models_anthropic import AnthropicRequest
 logger = get_logger("provider_router")
 
 
+def estimate_context_length(request: AnthropicRequest) -> int:
+    """
+    Estimate the context length (in tokens) required for a request.
+    Uses a simple approximation: string length divided by 4.
+    """
+    total_length = 0
+
+    # Count messages content
+    if request.messages:
+        for message in request.messages:
+            if hasattr(message, "content") and message.content:
+                if isinstance(message.content, str):
+                    total_length += len(message.content)
+                elif isinstance(message.content, list):
+                    for content_item in message.content:
+                        if hasattr(content_item, "text") and content_item.text:
+                            total_length += len(content_item.text)
+
+    # Count system prompt if present
+    if request.system:
+        total_length += len(request.system)
+
+    # Simple approximation: divide by 4 to estimate tokens
+    return total_length // 4
+
+
 class ProviderRouter:
     """
     Manages multiple provider clients and routing logic based on configuration.
@@ -92,6 +118,32 @@ class ProviderRouter:
 
         return None
 
+    def _find_providers_with_sufficient_context(
+        self, required_context: int, model_name: str
+    ) -> List[Tuple[str, ProviderConfig]]:
+        """
+        Find all providers that support the required context length and model.
+        Returns list of (provider_key, provider_config) tuples sorted by context capacity.
+        """
+        if not self._config:
+            return []
+
+        suitable_providers = []
+        all_providers = self._config.openai_providers
+
+        for key, provider in all_providers.items():
+            # Check if provider supports the model
+            if model_name not in provider.default_models and not provider.default_model:
+                continue
+
+            # Check if provider has sufficient context capacity
+            if provider.max_context is None or provider.max_context >= required_context:
+                suitable_providers.append((key, provider))
+
+        # Sort by context capacity (ascending - smallest sufficient capacity first)
+        suitable_providers.sort(key=lambda x: x[1].max_context or float("inf"))
+        return suitable_providers
+
     def route_request(self, request: AnthropicRequest) -> Optional[str]:
         """
         Determines the correct provider key for a given Anthropic request,
@@ -113,7 +165,28 @@ class ProviderRouter:
 
             reasoning_provider = self._find_reasoning_provider(model_name)
             if reasoning_provider:
-                return reasoning_provider
+                # Check if reasoning provider has sufficient context capacity
+                reasoning_provider_config = all_providers.get(reasoning_provider)
+                if reasoning_provider_config:
+                    required_context = estimate_context_length(request)
+                    if (
+                        reasoning_provider_config.max_context is None
+                        or reasoning_provider_config.max_context >= required_context
+                    ):
+                        logger.info(
+                            "Selected reasoning provider '%s' with sufficient context",
+                            reasoning_provider_config.name,
+                            extra=log_extra,
+                        )
+                        return reasoning_provider
+                    else:
+                        logger.warning(
+                            "Reasoning provider '%s' lacks sufficient context (%d < %d tokens). Falling back to standard routing.",
+                            reasoning_provider_config.name,
+                            reasoning_provider_config.max_context or 0,
+                            required_context,
+                            extra=log_extra,
+                        )
 
             logger.warning("No reasoning-capable provider found. Falling back to standard routing.", extra=log_extra)
 
@@ -121,20 +194,61 @@ class ProviderRouter:
         # Priority 1: Specific model mapping
         specific_key = anthropic_cfg.model_providers.get(model_name)
         if specific_key and specific_key in all_providers:
-            logger.info(
-                "Selected provider '%s' via specific model mapping", all_providers[specific_key].name, extra=log_extra
-            )
-            return specific_key
+            specific_provider = all_providers[specific_key]
+            required_context = estimate_context_length(request)
+
+            if specific_provider.max_context is None or specific_provider.max_context >= required_context:
+                logger.info(
+                    "Selected provider '%s' via specific model mapping", specific_provider.name, extra=log_extra
+                )
+                return specific_key
+            else:
+                logger.warning(
+                    "Specific provider '%s' lacks sufficient context (%d < %d tokens). Continuing search...",
+                    specific_provider.name,
+                    specific_provider.max_context or 0,
+                    required_context,
+                    extra=log_extra,
+                )
 
         # Priority 2: Default provider
         default_key = anthropic_cfg.default_provider
         if default_key in all_providers:
-            logger.info("Selected provider '%s' via default setting", all_providers[default_key].name, extra=log_extra)
-            return default_key
+            # Check if default provider has sufficient context capacity
+            default_provider = all_providers[default_key]
+            required_context = estimate_context_length(request)
+
+            if default_provider.max_context is None or default_provider.max_context >= required_context:
+                logger.info("Selected provider '%s' via default setting", default_provider.name, extra=log_extra)
+                return default_key
+            else:
+                logger.warning(
+                    "Default provider '%s' lacks sufficient context (%d < %d tokens). Searching alternatives...",
+                    default_provider.name,
+                    default_provider.max_context or 0,
+                    required_context,
+                    extra=log_extra,
+                )
+
+        # --- Step 3: Context-aware routing ---
+        required_context = estimate_context_length(request)
+        suitable_providers = self._find_providers_with_sufficient_context(required_context, model_name)
+
+        if suitable_providers:
+            # Select the provider with the smallest sufficient context capacity
+            selected_key, selected_provider = suitable_providers[0]
+            logger.info(
+                "Selected provider '%s' with sufficient context (%s >= %d tokens)",
+                selected_provider.name,
+                "unlimited" if selected_provider.max_context is None else str(selected_provider.max_context),
+                required_context,
+                extra=log_extra,
+            )
+            return selected_key
 
         logger.error(
             "Could not determine a provider. Neither a specific mapping nor a default provider "
-            "is configured correctly or found.",
+            "is configured correctly or found, or no provider has sufficient context capacity.",
             extra=log_extra,
         )
         return None

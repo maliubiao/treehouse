@@ -209,6 +209,40 @@ class TestFilenameCollapsing(unittest.TestCase):
         self.assertIn(expected_html_part_3, result)
         self.assertNotIn(":11", result)
 
+    def test_filename_collapsing_with_different_lengths(self):
+        """Test filename collapsing with filenames of different lengths."""
+        # First file with short name
+        msg1 = self._create_line_event(1, "/short.py", 10, "print('Hello')")
+        self.renderer.add_raw_message(msg1, TraceTypes.COLOR_LINE)
+
+        # Second file with long name
+        long_filename = "/a/very/long/path/to/a/file/with/a/very_long_name.py"
+        msg2 = self._create_line_event(1, long_filename, 5, "x = 1")
+        self.renderer.add_raw_message(msg2, TraceTypes.COLOR_LINE)
+
+        # Another line from the long file
+        msg3 = self._create_line_event(1, long_filename, 8, "y = 2")
+        self.renderer.add_raw_message(msg3, TraceTypes.COLOR_LINE)
+
+        result = self.renderer.generate_html()
+
+        # First line should show full filename
+        self.assertIn("▷&nbsp;/short.py:10&nbsp;print(&#x27;Hello&#x27;)", result)
+
+        # Second line should show full filename for the long file
+        self.assertIn(f"▷&nbsp;{long_filename}:5&nbsp;x&nbsp;=&nbsp;1", result)
+
+        # Third line should collapse and be aligned based on the long filename
+        # The alignment should be calculated based on the long filename's length
+        first_lineno_long = 5
+        total_width_long = len(long_filename) + 1 + len(str(first_lineno_long))
+
+        third_lineno = 8
+        aligned_str_3 = f"▷ {third_lineno}".rjust(total_width_long + 2)  # +2 for "▷ "
+        expected_html_part_3 = f"{aligned_str_3.replace(' ', '&nbsp;')}&nbsp;y&nbsp;=&nbsp;2"
+        self.assertIn(expected_html_part_3, result)
+        self.assertNotIn(f"{long_filename}:8", result)
+
 
 if __name__ == "__main__":
     unittest.main()

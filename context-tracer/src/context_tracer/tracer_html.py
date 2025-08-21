@@ -54,6 +54,8 @@ class CallTreeHtmlRender:
         self._event_metadata: Dict[int, Dict[str, Any]] = {}
         self._next_event_id: int = 1
         self._last_frame_info: Dict[int, Tuple[str, str, int]] = {}
+        self._last_line_event_filename: Optional[str] = None
+        self._last_event_type: Optional[str] = None  # Tracks the type of the last processed event
         self.default_lang: str = "zh"
 
         # Load template and translation files
@@ -426,6 +428,14 @@ class CallTreeHtmlRender:
         """Adds a raw log data object and processes it for HTML rendering."""
         if self._size_exceeded:
             return
+
+        # On any non-line event (like CALL, RETURN), clean up the frame's anchor info.
+        # This makes the display logic more robust when functions exit.
+        if color_type != TraceTypes.COLOR_LINE and isinstance(log_data, dict):
+            frame_id = log_data.get("data", {}).get("frame_id")
+            if frame_id is not None and frame_id in self._last_frame_info:
+                del self._last_frame_info[frame_id]
+
         if isinstance(log_data, str):
             message = log_data
         else:
@@ -437,20 +447,28 @@ class CallTreeHtmlRender:
                 line_number = data.get("lineno")
                 formatted_filename = data.get("filename")
                 if frame_id is not None and original_filename and line_number is not None and formatted_filename:
-                    last_info = self._last_frame_info.get(frame_id)
-                    if last_info and last_info[0] == original_filename:
-                        last_formatted_filename, last_lineno = last_info[1], last_info[2]
-                        total_width = len(last_formatted_filename) + 1 + len(str(last_lineno))
+                    anchor_info = self._last_frame_info.get(frame_id)
+                    # Show full path if the last event wasn't a line, if the file changed, or if it's the first time for this frame.
+                    if (
+                        self._last_event_type != TraceTypes.COLOR_LINE
+                        or self._last_line_event_filename != original_filename
+                        or not anchor_info
+                    ):
+                        # Update the alignment anchor for this frame.
+                        self._last_frame_info[frame_id] = (original_filename, formatted_filename, line_number)
+                    else:
+                        # File is the same as the last line event, simplify the display.
+                        _anchor_orig_fn, anchor_formatted_filename, anchor_lineno = anchor_info
+                        total_width = len(anchor_formatted_filename) + 1 + len(str(anchor_lineno))
+                        # '§' is a placeholder for &nbsp; to avoid HTML space collapsing.
                         aligned_str = f"▷ {line_number}".rjust(total_width + 2, "§")
                         template = template.replace("▷ {filename}:{lineno}", "{aligned_location_str}")
                         data["aligned_location_str"] = aligned_str
-                    else:
-                        self._last_frame_info[frame_id] = (original_filename, formatted_filename, line_number)
+                    # Always update the last seen file to track changes for the next line event.
+                    self._last_line_event_filename = original_filename
+
             message = template.format(**data)
-        if color_type != TraceTypes.COLOR_LINE and isinstance(log_data, dict):
-            frame_id = log_data.get("data", {}).get("frame_id")
-            if frame_id is not None and frame_id in self._last_frame_info:
-                del self._last_frame_info[frame_id]
+
         if color_type == TraceTypes.COLOR_LINE and isinstance(log_data, dict) and "lineno" in log_data.get("data", {}):
             data: Dict[str, Any] = log_data["data"]
             original_filename: Optional[str] = data.get("original_filename")
@@ -462,6 +480,7 @@ class CallTreeHtmlRender:
                 self._executed_lines[original_filename][frame_id].add(lineno)
                 self._load_source_file(original_filename)
         self._messages.append((message, color_type, log_data))
+        self._last_event_type = color_type
 
     def generate_html(self) -> str:
         """Generates the final, complete HTML report."""
