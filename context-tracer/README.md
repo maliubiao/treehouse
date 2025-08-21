@@ -25,6 +25,7 @@ The generated HTML report is a key feature of `context-tracer`, turning a comple
 - **Skeleton View**: Hide all `line`, `var`, and `trace` events to show only the `call` and `return` skeleton, providing a quick overview of the program structure.
 - **Toggle Details (👁️)**: In skeleton mode, temporarily show the full details for a specific subtree.
 - **Global Search and Theme Switching**: Quickly search through log messages and change the code highlight theme to your preference.
+- **Navigation Bar**: Navigate long trace documents easily with the interactive scrollbar that shows a visual overview of the entire document structure and allows quick jumping to any position.
 
 ## 🚀 Quick Start
 

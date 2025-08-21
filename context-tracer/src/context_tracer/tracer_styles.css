@@ -266,6 +266,7 @@ h1 {
 .var,
 .error {
     font-weight: normal;
+    white-space: nowrap;
 }
 
 .call {
@@ -521,7 +522,9 @@ button.secondary:hover {
 .content-wrapper {
     flex: 1;
     position: relative;
-    overflow: hidden;
+    overflow-x: auto;
+    display: flex;
+    flex-direction: column;
 }
 
 #content {
@@ -533,8 +536,8 @@ button.secondary:hover {
     font-size: 0.875rem;
     line-height: 1.6;
     height: 100%;
-    overflow-y: auto;
-    overflow-x: auto; /* Allow horizontal scrolling for wide content */
+    /*overflow-y: auto;*/
+    overflow-x: scroll; /* Always show horizontal scrollbar when content is wide */
 }
 
 /* ===== Summary Dropdown ===== */

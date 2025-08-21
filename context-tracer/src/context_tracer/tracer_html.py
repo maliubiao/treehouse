@@ -587,20 +587,59 @@ class CallTreeHtmlRender:
         else:
             output_dir = report_dir
             final_report_path = output_dir / filename
+
         try:
             asset_dir: Path = Path(__file__).parent
-            assets: List[str] = ["tracer_styles.css", "tracer_scripts.js", "translations.json", "tracer_template.html"]
-            for asset in assets:
+
+            # Copy/Link core assets
+            core_assets: List[str] = ["tracer_styles.css", "tracer_scripts.js", "translations.json"]
+            for asset in core_assets:
                 source_asset = asset_dir / asset
                 if source_asset.exists():
-                    # We only need to copy/link css and js for the report to function
-                    if asset.endswith(".css") or asset.endswith(".js"):
-                        self._create_asset_link(source_asset, output_dir / asset)
+                    self._create_asset_link(source_asset, output_dir / asset)
+
+            # Copy/Link static resources
+            static_dir = asset_dir / "static"
+            if static_dir.exists():
+                output_static_dir = output_dir / "static"
+                output_static_dir.mkdir(exist_ok=True)
+
+                # Copy CSS files
+                css_dir = output_static_dir / "css"
+                css_dir.mkdir(exist_ok=True)
+                for css_file in static_dir.glob("css/*.css"):
+                    self._create_asset_link(css_file, css_dir / css_file.name)
+
+                # Copy JS files
+                js_dir = output_static_dir / "js"
+                js_dir.mkdir(exist_ok=True)
+                for js_file in static_dir.glob("js/*.js"):
+                    self._create_asset_link(js_file, js_dir / js_file.name)
+
+                # Copy fonts if they exist
+                fonts_dir = static_dir / "fonts"
+                if fonts_dir.exists():
+                    output_fonts_dir = output_static_dir / "fonts"
+                    output_fonts_dir.mkdir(exist_ok=True)
+                    for font_file in fonts_dir.glob("*"):
+                        self._create_asset_link(font_file, output_fonts_dir / font_file.name)
+
+                # Copy webfonts directory (for Font Awesome)
+                webfonts_dir = static_dir / "webfonts"
+                if webfonts_dir.exists():
+                    output_webfonts_dir = output_static_dir / "webfonts"
+                    output_webfonts_dir.mkdir(exist_ok=True)
+                    for font_file in webfonts_dir.glob("*"):
+                        self._create_asset_link(font_file, output_webfonts_dir / font_file.name)
+
+            # Update HTML content paths for core assets
             html_content = html_content.replace('href="../tracer_styles.css"', 'href="tracer_styles.css"')
             html_content = html_content.replace('src="../tracer_scripts.js"', 'src="tracer_scripts.js"')
+
         except Exception as e:
             logging.error(f"无法处理资源文件: {e}")
             print(f"ERROR: 无法处理资源文件: {e}")
+
         final_report_path.write_text(html_content, encoding="utf-8")
         print(f"正在生成HTML报告 {final_report_path} ...")
         return final_report_path
