@@ -1751,8 +1751,13 @@ body.skeleton-mode #content .call-group.show-details .var {
     background: rgba(59, 130, 246, 0.3);
     border: 1px solid var(--accent-primary);
     border-radius: 2px;
-    pointer-events: none;
+    pointer-events: auto;
     transition: top 0.1s ease, height 0.1s ease;
+    cursor: grab;
+}
+
+.nav-viewport:active {
+    cursor: grabbing;
 }
 
 .nav-position {

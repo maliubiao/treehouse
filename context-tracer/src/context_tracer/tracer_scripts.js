@@ -2077,15 +2077,15 @@ TraceViewer.initNavigationBar = function() {
     const navViewport = document.getElementById('navViewport');
     const navPosition = document.getElementById('navPosition');
     const content = this.elements.content;
-    
+
     if (!navigationBar || !content) return;
-    
+
     const canvas = document.createElement('canvas');
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     navThumbnail.appendChild(canvas);
     const ctx = canvas.getContext('2d');
-    
+
     let isRedrawing = false;
 
     // Fast, non-debounced function for smooth scroll feedback
@@ -2097,7 +2097,7 @@ TraceViewer.initNavigationBar = function() {
     const debouncedRedrawAndSync = this.utils.debounce(() => {
         if (isRedrawing) return;
         isRedrawing = true;
-        
+
         requestAnimationFrame(() => {
             this._redrawNavThumbnail(canvas, ctx, content, navigationBar);
             this._updateNavIndicators(navViewport, navPosition, content, navigationBar);
@@ -2112,19 +2112,72 @@ TraceViewer.initNavigationBar = function() {
     // --- Event Listeners ---
     // 1. On scroll: Only update indicators for performance.
     content.addEventListener('scroll', updateIndicators);
-    
+
     // 2. On navigation bar click: scroll the content.
     navigationBar.addEventListener('click', (e) => {
-        this.handleNavigationClick(e, content, canvas);
+        this.handleNavigationClick(e, content);
     });
 
-    // 3. On resize: Update canvas size and redraw.
+    // 3. Add drag-to-scroll functionality to the viewport handle.
+    let isDragging = false;
+    let startY;
+    let startScrollTop;
+
+    const onMouseDown = (e) => {
+        if (e.button !== 0) return; // Only for left mouse button
+
+        e.preventDefault();
+        e.stopPropagation(); // Prevent the navigationBar's click handler
+
+        isDragging = true;
+        startY = e.clientY;
+        startScrollTop = content.scrollTop;
+
+        document.body.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+        navViewport.style.transition = 'none'; // Disable transition for responsiveness
+        navPosition.style.transition = 'none';
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    };
+
+    const onMouseMove = (e) => {
+        if (!isDragging) return;
+
+        const deltaY = e.clientY - startY;
+        const navHeight = navigationBar.clientHeight;
+        const contentHeight = content.scrollHeight;
+
+        if (navHeight > 0) {
+            const scrollDelta = deltaY * (contentHeight / navHeight);
+            content.scrollTop = startScrollTop + scrollDelta;
+        }
+    };
+
+    const onMouseUp = () => {
+        if (!isDragging) return;
+        isDragging = false;
+
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        navViewport.style.transition = ''; // Re-enable transition
+        navPosition.style.transition = '';
+
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    navViewport.addEventListener('mousedown', onMouseDown);
+
+
+    // 4. On resize: Update canvas size and redraw.
     window.addEventListener('resize', () => {
         this.setupCanvasSize(canvas, ctx);
         debouncedRedrawAndSync();
     });
-    
-    // 4. On content change (e.g., expand/collapse): Redraw.
+
+    // 5. On content change (e.g., expand/collapse): Redraw.
     let lastScrollHeight = content.scrollHeight;
     const mutationCallback = () => {
         if (content.scrollHeight !== lastScrollHeight) {
@@ -2135,7 +2188,7 @@ TraceViewer.initNavigationBar = function() {
     const observer = new MutationObserver(this.utils.debounce(mutationCallback, 100));
     observer.observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
 
-    // 5. Explicit redraw on fold/expand clicks after animation.
+    // 6. Explicit redraw on fold/expand clicks after animation.
     content.addEventListener('click', (e) => {
         if (e.target.classList.contains('foldable') || e.target.classList.contains('expand-code-btn')) {
             setTimeout(debouncedRedrawAndSync, 300);
@@ -2210,18 +2263,21 @@ TraceViewer.drawThumbnail = function(ctx, canvas, content, navHeight) {
     }
 };
 
-TraceViewer.handleNavigationClick = function(e, content, canvas) {
-    const rect = canvas.getBoundingClientRect();
+TraceViewer.handleNavigationClick = function(e, content) {
+    if (e.target.id === 'navViewport' || e.target.id === 'navPosition') {
+        return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
     const clickY = e.clientY - rect.top;
-    
+
     const navHeight = rect.height;
     if (navHeight === 0) return;
 
     const contentHeight = content.scrollHeight;
     const viewportHeight = content.clientHeight;
-    
+
     const targetScroll = (clickY / navHeight) * contentHeight;
-    
+
     content.scrollTo({
         top: Math.max(0, Math.min(targetScroll - (viewportHeight / 2), contentHeight - viewportHeight)),
         behavior: 'smooth'
