@@ -16,12 +16,35 @@ class SearchDatabase {
     initializeFromMetadata() {
         if (!window.eventMetadata) return;
         
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(() => this._initializeFromMetadataImpl());
+        } else {
+            // Fallback to immediate execution if requestIdleCallback is not supported
+            setTimeout(() => this._initializeFromMetadataImpl(), 0);
+        }
+    }
+    
+    _initializeFromMetadataImpl() {
+        const allElements = document.querySelectorAll('[data-event-id]');
+        const elementMap = new Map();
+        allElements.forEach(el => {
+            const eventId = el.getAttribute('data-event-id');
+            if (eventId) {
+                elementMap.set(eventId, el);
+            }
+        });
+        
         Object.entries(window.eventMetadata).forEach(([eventId, metadata]) => {
-            this.addEvent({
-                id: parseInt(eventId),
-                ...metadata,
-                element: document.querySelector(`[data-event-id="${eventId}"]`)
-            });
+            const element = elementMap.get(eventId);
+            if (element) {
+                this.addEvent({
+                    id: parseInt(eventId),
+                    ...metadata,
+                    element: element
+                });
+            } else {
+                console.warn(`Element with data-event-id="${eventId}" not found.`);
+            }
         });
     }
     
