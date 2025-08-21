@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}}</title>
+    <link rel="stylesheet" href="../tracer_styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css"
+        rel="stylesheet" id="prism-theme">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.css"
+        rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.css"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- App Container -->
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2 class="sidebar-title">
+                    <i class="fas fa-bug"></i> Trace Explorer
+                </h2>
+            </div>
+            <div class="sidebar-content">
+                <!-- Search -->
+                <div class="sidebar-section">
+                    <input type="text" id="sidebarSearch" class="sidebar-search"
+                           data-i18n-placeholder="searchPlaceholder" placeholder="Search messages...">
+                </div>
+
+                <!-- Filters -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-section-title" data-i18n="filterByType">Filter by Type</h3>
+                    <div class="filter-group">
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterCall" checked>
+                            <span class="color-indicator" style="background-color: var(--call-color)"></span>
+                            <span data-i18n="calls">Calls</span>
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterReturn" checked>
+                            <span class="color-indicator" style="background-color: var(--return-color)"></span>
+                            <span data-i18n="returns">Returns</span>
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterLine" checked>
+                            <span class="color-indicator" style="background-color: var(--line-color)"></span>
+                            <span data-i18n="lines">Lines</span>
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterException" checked>
+                            <span class="color-indicator" style="background-color: var(--error-color)"></span>
+                            <span data-i18n="exceptions">Exceptions</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Statistics -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-section-title" data-i18n="statistics">Statistics</h3>
+                    <div class="filter-stats">
+                        <h3 data-i18n="summary">Summary</h3>
+                        <p><span data-i18n="totalMessages">Total Messages</span>: <span class="stat-value">{{message_count}}</span></p>
+                        <p><span data-i18n="errors">Errors</span>: <span class="stat-value">{{error_count}}</span></p>
+                        <p><span data-i18n="generated">Generated</span>: <span class="stat-value">{{generation_time}}</span></p>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-section-title" data-i18n="quickActions">Quick Actions</h3>
+                    <button id="expandAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="expandAllTitle" title="Expand all call stacks">
+                        <i class="fas fa-expand-alt"></i> <span data-i18n="expandAll">Expand All</span>
+                    </button>
+                    <button id="collapseAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="collapseAllTitle" title="Collapse all call stacks">
+                        <i class="fas fa-compress-alt"></i> <span data-i18n="collapseAll">Collapse All</span>
+                    </button>
+                    <button id="skeletonViewBtn" style="width: 100%;" data-i18n-title="skeletonViewTitle" title="Toggle skeleton view">
+                        <i class="fas fa-code-branch"></i> <span data-i18n="skeletonView">Skeleton View</span>
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Sidebar Overlay for Mobile -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="main-header">
+                <button class="toggle-sidebar icon-btn" id="toggleSidebar" data-i18n-title="toggleSidebarTitle" title="Toggle sidebar">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <h1 data-i18n="mainTitle">Python Trace Report</h1>
+                <nav id="controls" class="nav-controls">
+                    <div class="dropdown-container">
+                        <button id="summaryBtn" class="dropdown-toggle" data-i18n-title="summaryTitle" title="Show summary">
+                            <i class="fas fa-chart-bar"></i>
+                        </button>
+                        <div id="summaryDropdown" class="dropdown-menu">
+                            <p><strong data-i18n="generatedAt">Generated at:</strong> {{generation_time}}</p>
+                            <p><strong data-i18n="totalMessages">Total messages:</strong> {{message_count}}</p>
+                            <p><strong data-i18n="errors">Errors:</strong> {{error_count}}</p>
+                        </div>
+                    </div>
+                    <button id="settingsBtn" class="icon-btn" data-i18n-title="settingsTitle" title="Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    <button id="exportBtn" class="icon-btn" data-i18n-title="exportTitle" title="Export as HTML">
+                        <i class="fas fa-download"></i>
+                    </button>
+                    <button id="searchBtn" class="icon-btn" data-i18n-title="search" title="Advanced Search">
+                        <i class="fas fa-search"></i>
+                    </button>
+                </nav>
+            </header>
+
+            <div class="content-wrapper">
+                <div id="content">{{content}}</div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Source Dialog -->
+    <div id="sourceDialog" class="source-dialog" style="display: none;">
+        <div class="floating-close-btn" id="dialogCloseBtn">&times;</div>
+        <div class="close-overlay"></div>
+        <div class="source-header">
+            <div class="source-title" id="sourceTitle"></div>
+        </div>
+        <div class="source-content" id="sourceContent"></div>
+    </div>
+
+    <!-- Settings Dialog -->
+    <div id="settingsDialog" class="modal" style="display: none;">
+        <div class="modal-content wide">
+            <span class="modal-close-btn">&times;</span>
+            <h2 data-i18n="settingsTitle">Settings</h2>
+            <div class="modal-tabs">
+                <button class="tab-link active" data-tab="tab-display" data-i18n="displayTab">Display</button>
+                <button class="tab-link" data-tab="tab-help" data-i18n="helpTab">Help</button>
+            </div>
+
+            <!-- Display Tab -->
+            <div id="tab-display" class="tab-content active">
+                <div class="setting-item">
+                    <label for="languageSelector" data-i18n="languageLabel">Language:</label>
+                    <select id="languageSelector">
+                        <option value="en">English</option>
+                        <option value="zh">简体中文</option>
+                    </select>
+                </div>
+                <div class="setting-item">
+                    <label for="themeSelector" data-i18n="themeLabel">Theme:</label>
+                    <select id="themeSelector">
+                        <!-- Options will be populated by JavaScript -->
+                    </select>
+                </div>
+            </div>
+
+            <!-- Help Tab -->
+            <div id="tab-help" class="tab-content">
+                <h3 data-i18n="logEntrySymbolsTitle">Log Entry Symbols</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-i18n="tableHeaderSymbol">Symbol</th>
+                            <th data-i18n="tableHeaderType">Type</th>
+                            <th data-i18n="tableHeaderDescription">Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>↘ CALL</td><td data-i18n="typeFuncCall">Function Call</td><td data-i18n="descFuncCall">A function call, either within a traced file or to an external library.</td></tr>
+                        <tr><td>↗ RETURN</td><td data-i18n="typeFuncReturn">Function Return</td><td data-i18n="descFuncReturn">The return from a function.</td></tr>
+                        <tr><td>↘ C-CALL</td><td data-i18n="typeCCall">C Function Call</td><td data-i18n="descCCall">(Python 3.12+) A direct call to a C-language function or builtin.</td></tr>
+                        <tr><td>↗ C-RETURN</td><td data-i18n="typeCReturn">C Function Return</td><td data-i18n="descCReturn">(Python 3.12+) The return from a C function call.</td></tr>
+                        <tr><td>⚠ C-RAISE</td><td data-i18n="typeCRaise">C Function Raise</td><td data-i18n="descCRaise">(Python 3.12+) An exception raised from within a C function.</td></tr>
+                        <tr><td>▷ LINE</td><td data-i18n="typeLineExec">Line Execution</td><td data-i18n="descLineExec">A line of source code that was executed.</td></tr>
+                        <tr><td>⚠ EXCEPTION</td><td data-i18n="typeException">Exception</td><td data-i18n="descException">An exception that occurred within a function.</td></tr>
+                        <tr><td>↳ Debug</td><td data-i18n="typeDebugStmt">Debug Statement</td><td data-i18n="descDebugStmt">The result of a special <code># trace: expression</code> comment.</td></tr>
+                    </tbody>
+                </table>
+                <h3 data-i18n="interactiveFeaturesTitle">Interactive Features</h3>
+                <ul>
+                    <li data-i18n="featureFolding"><strong>Folding:</strong> Click on any <code>CALL</code> entry to expand or collapse its entire call stack.</li>
+                    <li data-i18n="featureViewSource"><strong>View Source:</strong> Hover over a log entry and click 'view source' to see the source code with executed lines highlighted.</li>
+                    <li data-i18n="featureCopySubtree"><strong>Copy Subtree (📋):</strong> Copies the text of a complete call subtree (from CALL to RETURN) to the clipboard.</li>
+                    <li data-i18n="featureFocusSubtree"><strong>Focus Subtree (🔍):</strong> Opens a new window showing only the selected call subtree.</li>
+                    <li data-i18n="featureExplainAI"><strong>Explain with AI (🤖):</strong> Sends the selected subtree to a Large Language Model for an explanation (requires a running LLM API).</li>
+                    <li data-i18n="featureSearch"><strong>Advanced Search (🔍):</strong> Press Ctrl+F or click the search button to open the advanced search modal. Search across filenames, function names, parameters, return values, variables, and more. Results are paginated with 20 items per page.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Explain Dialog -->
+    <div id="aiExplainDialog" class="ai-explain-dialog" style="display: none;">
+        <div class="ai-explain-dialog-content">
+            <div class="ai-explain-header">
+                <h2 data-i18n="aiDialogTitle">🤖 AI Code Trace Explanation</h2>
+                <span class="ai-explain-close-btn">&times;</span>
+            </div>
+            <div class="ai-explain-config">
+                <label for="llmApiUrl" data-i18n="aiApiUrlLabel">LLM API URL:</label>
+                <input type="text" id="llmApiUrl" data-i18n-placeholder="aiApiUrlPlaceholder" placeholder="e.g., http://127.0.0.1:8000">
+                <label for="llmModelSelect" data-i18n="aiModelLabel">Model:</label>
+                <select id="llmModelSelect"></select>
+                <button id="llmSettingsSaveBtn" data-i18n="aiSaveBtn">Save</button>
+                <button id="llmFetchModelsBtn" data-i18n="aiRefreshModelsBtn">Refresh Models</button>
+            </div>
+            <div class="ai-explain-body" id="aiExplainBody">
+                <!-- Log content will be injected here -->
+            </div>
+
+            <!-- Raw LLM Response Viewer -->
+            <div class="llm-raw-response-viewer">
+                <div class="llm-raw-response-header">
+                    <span data-i18n="aiRawResponseTitle">LLM Raw Response (for diagnosis)</span>
+                    <button id="llmRawResponseToggleBtn" data-i18n="aiShowBtn">Show</button>
+                </div>
+                <div class="llm-raw-response-content" id="llmRawResponseContent" style="display: none;">
+                    <div class="llm-panel">
+                        <h4 data-i18n="aiThinkingPanel">Thinking</h4>
+                        <pre id="llmThinkingOutput"></pre>
+                    </div>
+                    <div class="llm-panel">
+                        <h4 data-i18n="aiContentPanel">Content</h4>
+                        <pre id="llmContentOutput"></pre>
+                    </div>
+                </div>
+            </div>
+
+            <div class="ai-explain-footer">
+                <button id="startAiExplainBtn" data-i18n="aiStartExplanationBtn">Start Explanation</button>
+                <span id="aiExplainStatus"></span>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/toolbar/prism-toolbar.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+    <script>
+        window.translations = {{translations_data}};
+        window.executedLines = {{executed_lines_data}};
+        window.sourceFiles = {{source_files_data}};
+        window.commentsData = {{comments_data}};
+        window.lineComment = {{line_comment}};
+        window.eventMetadata = {{event_metadata_data}};
+    </script>
+    <script src="../tracer_scripts.js"></script>
+</body>
+</html>

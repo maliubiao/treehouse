@@ -1,3 +1,388 @@
+// Search Database - Advanced search functionality for trace events
+class SearchDatabase {
+    constructor() {
+        this.events = [];
+        this.index = {
+            byFilename: new Map(),
+            byFunction: new Map(),
+            byLine: new Map(),
+            byFrame: new Map(),
+            byType: new Map(),
+            byThread: new Map()
+        };
+    }
+    
+    // Initialize database from window.eventMetadata
+    initializeFromMetadata() {
+        if (!window.eventMetadata) return;
+        
+        Object.entries(window.eventMetadata).forEach(([eventId, metadata]) => {
+            this.addEvent({
+                id: parseInt(eventId),
+                ...metadata,
+                element: document.querySelector(`[data-event-id="${eventId}"]`)
+            });
+        });
+    }
+    
+    addEvent(eventData) {
+        const event = {
+            id: eventData.id,
+            type: eventData.type,
+            filename: eventData.filename,
+            lineno: eventData.lineno,
+            func: eventData.func,
+            frameId: eventData.frame_id,
+            threadId: eventData.thread_id,
+            args: this._parseArgs(eventData.args),
+            returnValue: eventData.return_value,
+            variables: eventData.tracked_vars,
+            element: eventData.element
+        };
+        
+        this.events.push(event);
+        this._indexEvent(event);
+    }
+    
+    _indexEvent(event) {
+        // Index by filename
+        if (event.filename) {
+            if (!this.index.byFilename.has(event.filename)) {
+                this.index.byFilename.set(event.filename, []);
+            }
+            this.index.byFilename.get(event.filename).push(event);
+        }
+        
+        // Index by function name
+        if (event.func) {
+            if (!this.index.byFunction.has(event.func)) {
+                this.index.byFunction.set(event.func, []);
+            }
+            this.index.byFunction.get(event.func).push(event);
+        }
+        
+        // Index by line number
+        if (event.lineno) {
+            const lineKey = `${event.filename}:${event.lineno}`;
+            if (!this.index.byLine.has(lineKey)) {
+                this.index.byLine.set(lineKey, []);
+            }
+            this.index.byLine.get(lineKey).push(event);
+        }
+        
+        // Index by frame ID
+        if (event.frameId) {
+            if (!this.index.byFrame.has(event.frameId)) {
+                this.index.byFrame.set(event.frameId, []);
+            }
+            this.index.byFrame.get(event.frameId).push(event);
+        }
+        
+        // Index by event type
+        if (event.type) {
+            if (!this.index.byType.has(event.type)) {
+                this.index.byType.set(event.type, []);
+            }
+            this.index.byType.get(event.type).push(event);
+        }
+        
+        // Index by thread ID
+        if (event.threadId) {
+            if (!this.index.byThread.has(event.threadId)) {
+                this.index.byThread.set(event.threadId, []);
+            }
+            this.index.byThread.get(event.threadId).push(event);
+        }
+    }
+    
+    _parseArgs(argsString) {
+        if (!argsString) return {};
+        
+        const args = {};
+        // Simple parsing of "arg1=value1, arg2=value2" format
+        const pairs = argsString.split(',').map(pair => pair.trim());
+        
+        pairs.forEach(pair => {
+            const [key, value] = pair.split('=').map(part => part.trim());
+            if (key && value) {
+                args[key] = value;
+            }
+        });
+        
+        return args;
+    }
+    
+    // Basic search functionality
+    search(query) {
+        if (!query || query.trim() === '') return [];
+        
+        const lowerQuery = query.toLowerCase();
+        const terms = lowerQuery.split(/\s+/).filter(term => term.length > 0);
+        
+        // Simple text search across all fields
+        return this.events.filter(event => {
+            // If multiple terms, all must match
+            if (terms.length > 1) {
+                return terms.every(term => 
+                    (event.filename && event.filename.toLowerCase().includes(term)) ||
+                    (event.func && event.func.toLowerCase().includes(term)) ||
+                    (event.lineno && event.lineno.toString().includes(term)) ||
+                    (event.args && Object.values(event.args).some(val => 
+                        val && val.toString().toLowerCase().includes(term))) ||
+                    (event.returnValue && event.returnValue.toLowerCase().includes(term)) ||
+                    (event.variables && Object.entries(event.variables).some(([key, val]) => 
+                        key.toLowerCase().includes(term) || 
+                        (val && val.toLowerCase().includes(term))))
+                );
+            }
+            
+            // Single term search
+            return (
+                (event.filename && event.filename.toLowerCase().includes(lowerQuery)) ||
+                (event.func && event.func.toLowerCase().includes(lowerQuery)) ||
+                (event.lineno && event.lineno.toString().includes(query)) ||
+                (event.args && Object.values(event.args).some(val => 
+                    val && val.toString().toLowerCase().includes(lowerQuery))) ||
+                (event.returnValue && event.returnValue.toLowerCase().includes(lowerQuery)) ||
+                (event.variables && Object.entries(event.variables).some(([key, val]) => 
+                    key.toLowerCase().includes(lowerQuery) || 
+                    (val && val.toLowerCase().includes(lowerQuery))))
+            );
+        });
+    }
+    
+    // Advanced query parsing (to be implemented)
+    parseQuery(query) {
+        // TODO: Implement advanced query parser with field-specific searching
+        return { type: 'TEXT', value: query };
+    }
+    
+    // Get event by ID
+    getEvent(eventId) {
+        return this.events.find(event => event.id === eventId);
+    }
+    
+    // Get all events for a specific file
+    getEventsByFilename(filename) {
+        return this.index.byFilename.get(filename) || [];
+    }
+    
+    // Get all events for a specific function
+    getEventsByFunction(funcName) {
+        return this.index.byFunction.get(funcName) || [];
+    }
+    
+    // Get all events for a specific line
+    getEventsByLine(filename, lineno) {
+        const lineKey = `${filename}:${lineno}`;
+        return this.index.byLine.get(lineKey) || [];
+    }
+}
+
+// Search Modal Component
+class SearchModal {
+    constructor(database) {
+        this.database = database;
+        this.currentPage = 1;
+        this.resultsPerPage = 20;
+        this.currentResults = [];
+        this.modal = null;
+    }
+    
+    show() {
+        if (!this.modal) {
+            this.modal = this._createModal();
+            document.body.appendChild(this.modal);
+        }
+        this.modal.style.display = 'flex';
+        this.modal.querySelector('.search-input').focus();
+    }
+    
+    hide() {
+        if (this.modal) {
+            this.modal.style.display = 'none';
+        }
+    }
+    
+    _createModal() {
+        const modal = document.createElement('div');
+        modal.className = 'search-modal';
+        modal.innerHTML = `
+            <div class="search-modal-content">
+                <div class="search-header">
+                    <h3 data-i18n="searchModalTitle">Advanced Search</h3>
+                    <button class="search-close-btn">&times;</button>
+                </div>
+                <div class="search-input-container">
+                    <input type="text" class="search-input" placeholder="Enter search query..." data-i18n-placeholder="searchQueryPlaceholder">
+                    <button class="search-button" data-i18n="searchButton">Search</button>
+                </div>
+                <div class="search-help">
+                    <p data-i18n="searchHelpText">Search examples: file:"*.py", func:"calculate", line:10-50, param:"user_id=123"</p>
+                </div>
+                <div class="results-container">
+                    <div class="results-info">
+                        <span class="results-count" data-i18n="resultsCount">0 results</span>
+                    </div>
+                    <div class="results-list"></div>
+                    <div class="pagination-controls">
+                        <button class="pagination-btn prev-btn" disabled data-i18n="prevPage">Previous</button>
+                        <span class="page-info" data-i18n="pageInfo">Page 1 of 1</span>
+                        <button class="pagination-btn next-btn" disabled data-i18n="nextPage">Next</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Add event listeners
+        const searchInput = modal.querySelector('.search-input');
+        const searchBtn = modal.querySelector('.search-button');
+        const closeBtn = modal.querySelector('.search-close-btn');
+        const prevBtn = modal.querySelector('.prev-btn');
+        const nextBtn = modal.querySelector('.next-btn');
+        
+        searchBtn.addEventListener('click', () => this._performSearch());
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this._performSearch();
+        });
+        closeBtn.addEventListener('click', () => this.hide());
+        prevBtn.addEventListener('click', () => this._prevPage());
+        nextBtn.addEventListener('click', () => this._nextPage());
+        
+        // Close modal when clicking outside
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) this.hide();
+        });
+        
+        return modal;
+    }
+    
+    _performSearch() {
+        const query = this.modal.querySelector('.search-input').value.trim();
+        if (!query) return;
+        
+        this.currentResults = this.database.search(query);
+        this.currentPage = 1;
+        this._renderResults();
+    }
+    
+    _renderResults() {
+        const resultsList = this.modal.querySelector('.results-list');
+        const resultsCount = this.modal.querySelector('.results-count');
+        const pageInfo = this.modal.querySelector('.page-info');
+        const prevBtn = this.modal.querySelector('.prev-btn');
+        const nextBtn = this.modal.querySelector('.next-btn');
+        
+        // Update results count
+        resultsCount.textContent = `${this.currentResults.length} results`;
+        
+        // Calculate pagination
+        const totalPages = Math.ceil(this.currentResults.length / this.resultsPerPage);
+        const start = (this.currentPage - 1) * this.resultsPerPage;
+        const end = start + this.resultsPerPage;
+        const pageResults = this.currentResults.slice(start, end);
+        
+        // Update pagination controls
+        pageInfo.textContent = TraceViewer.i18n.t('pageInfo', { 
+            page: this.currentPage, 
+            total: totalPages 
+        });
+        prevBtn.disabled = this.currentPage <= 1;
+        nextBtn.disabled = this.currentPage >= totalPages;
+        
+        // Render results
+        resultsList.innerHTML = pageResults.map(result => 
+            this._createResultItem(result)
+        ).join('');
+        
+        // Add click handlers to result items
+        resultsList.querySelectorAll('.result-item').forEach(item => {
+            item.addEventListener('click', () => this._jumpToResult(item.dataset.eventId));
+        });
+    }
+    
+    _createResultItem(result) {
+        const preview = this._formatEventPreview(result);
+        return `
+            <div class="result-item" data-event-id="${result.id}">
+                <div class="result-preview">${preview}</div>
+                <div class="result-meta">
+                    <span class="result-type">${result.type}</span>
+                    <span class="result-location">${result.filename}:${result.lineno}</span>
+                </div>
+            </div>
+        `;
+    }
+    
+    _formatEventPreview(event) {
+        let preview = '';
+        switch (event.type) {
+            case 'call':
+                preview = `↘ CALL ${event.func || 'unknown'}(${JSON.stringify(event.args)})`;
+                break;
+            case 'return':
+                preview = `↗ RETURN ${event.returnValue || 'None'}`;
+                break;
+            case 'line':
+                preview = `▷ LINE ${event.filename}:${event.lineno}`;
+                if (event.variables) {
+                    preview += ` # Debug: ${Object.entries(event.variables).map(([k, v]) => `${k}=${v}`).join(', ')}`;
+                }
+                break;
+            case 'exception':
+                preview = `⚠ EXCEPTION ${event.returnValue || 'Unknown error'}`;
+                break;
+            default:
+                preview = `${event.type.toUpperCase()} ${event.filename}:${event.lineno}`;
+        }
+        return preview;
+    }
+    
+    _jumpToResult(eventId) {
+        const event = this.database.getEvent(parseInt(eventId));
+        if (event && event.element) {
+            // Scroll to element
+            event.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // Highlight the element temporarily
+            event.element.classList.add('search-highlight');
+            setTimeout(() => {
+                event.element.classList.remove('search-highlight');
+            }, 2000);
+            
+            // Expand parent call groups if needed
+            let parent = event.element.parentElement;
+            while (parent && parent !== document.getElementById('content')) {
+                if (parent.classList.contains('call-group')) {
+                    parent.classList.remove('collapsed');
+                    const foldable = parent.previousElementSibling;
+                    if (foldable && foldable.classList.contains('foldable')) {
+                        foldable.classList.add('expanded');
+                    }
+                }
+                parent = parent.parentElement;
+            }
+            
+            this.hide();
+        }
+    }
+    
+    _prevPage() {
+        if (this.currentPage > 1) {
+            this.currentPage--;
+            this._renderResults();
+        }
+    }
+    
+    _nextPage() {
+        const totalPages = Math.ceil(this.currentResults.length / this.resultsPerPage);
+        if (this.currentPage < totalPages) {
+            this.currentPage++;
+            this._renderResults();
+        }
+    }
+}
+
 // TraceViewer - Core functionality for trace report visualization
 // Main namespace to avoid global pollution
 const TraceViewer = {
@@ -66,7 +451,8 @@ const TraceViewer = {
             filterCall: document.getElementById('filterCall'),
             filterReturn: document.getElementById('filterReturn'),
             filterLine: document.getElementById('filterLine'),
-            filterException: document.getElementById('filterException')
+            filterException: document.getElementById('filterException'),
+            searchBtn: document.getElementById('searchBtn')
         };
 
         // Initialize components
@@ -92,6 +478,37 @@ const TraceViewer = {
         // New sidebar and filter functionality
         this.initSidebar();
         this.initFilters();
+        
+        // Initialize search database if metadata is available
+        if (window.eventMetadata) {
+            this.searchDatabase = new SearchDatabase();
+            this.searchDatabase.initializeFromMetadata();
+        }
+        
+        // Initialize search functionality
+        this.initSearchModal();
+    },
+    
+    // Initialize search modal functionality
+    initSearchModal() {
+        const { searchBtn } = this.elements;
+        if (!searchBtn) return;
+        
+        // Create search modal instance
+        this.searchModal = new SearchModal(this.searchDatabase);
+        
+        // Add event listener to search button
+        searchBtn.addEventListener('click', () => {
+            this.searchModal.show();
+        });
+        
+        // Add keyboard shortcut (Ctrl+F)
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                e.preventDefault();
+                this.searchModal.show();
+            }
+        });
     },
 
     // Pre-calculates the size of each foldable section for smart expansion
@@ -338,18 +755,6 @@ const TraceViewer = {
         const tabContents = settingsDialog.querySelectorAll('.tab-content');
         const themeSelector = document.getElementById('themeSelector');
         
-        // Debug: log what elements were found
-        console.log('Settings dialog init - tabLinks:', tabLinks.length);
-        console.log('Settings dialog init - tabContents:', tabContents.length);
-        
-        // Debug: log the actual elements
-        tabLinks.forEach((link, index) => {
-            console.log(`Tab link ${index}:`, link.className, link.dataset);
-        });
-        tabContents.forEach((content, index) => {
-            console.log(`Tab content ${index}:`, content.id, content.className);
-        });
-        
         // Init themes inside the dialog
         this.initThemes(themeSelector);
 
@@ -370,7 +775,6 @@ const TraceViewer = {
         // Tab switching logic
         tabLinks.forEach(link => {
             link.addEventListener('click', () => {
-                console.log('Tab clicked:', link.dataset.tab);
                 const tabId = link.dataset.tab;
 
                 tabLinks.forEach(l => l.classList.remove('active'));
@@ -378,8 +782,6 @@ const TraceViewer = {
 
                 link.classList.add('active');
                 document.getElementById(tabId).classList.add('active');
-                
-                console.log('Tab switched to:', tabId);
             });
         });
     },
@@ -431,9 +833,10 @@ const TraceViewer = {
             }
 
             const lines = [];
+            const varState = {}; // State object to track variable values for deduplication
             
-            // Helper function to process a single node into a clean text line
-            const processNodeToText = (node) => {
+            // Helper function to process a single node into a clean text line, with variable state
+            const processNodeToText = (node, varState) => {
                 const clone = node.cloneNode(true);
                 // Remove all UI-only elements
                 clone.querySelector('.view-source-btn')?.remove();
@@ -443,7 +846,7 @@ const TraceViewer = {
                 clone.querySelector('.explain-ai-btn')?.remove();
                 clone.querySelector('.expand-code-btn')?.remove();
 
-                // Handle new debug vars UI: process it, then remove it
+                // Handle new debug vars UI: process it with state, then remove it
                 const debugVarsEl = clone.querySelector('.debug-vars');
                 let debugCommentText = '';
                 if (debugVarsEl) {
@@ -455,7 +858,11 @@ const TraceViewer = {
                         if (nameEl && valueEl) {
                             const name = nameEl.textContent.trim();
                             const value = valueEl.textContent.trim();
-                            vars.push(`${name}=${value}`);
+                            // Check if the value has changed compared to the state
+                            if (varState[name] !== value) {
+                                vars.push(`${name}=${value}`);
+                                varState[name] = value; // Update the state
+                            }
                         }
                     });
                     if (vars.length > 0) {
@@ -491,12 +898,12 @@ const TraceViewer = {
             };
 
             // Process the main foldable 'call' line itself
-            lines.push(processNodeToText(foldable));
+            lines.push(processNodeToText(foldable, varState));
 
             // Process all descendant log lines within the call group
             const descendants = callGroup.querySelectorAll('div[data-indent]');
             descendants.forEach(node => {
-                lines.push(processNodeToText(node));
+                lines.push(processNodeToText(node, varState));
             });
             
             // Process the corresponding 'return' or 'exception' line
@@ -506,7 +913,7 @@ const TraceViewer = {
                      const indent = parseInt(nextElement.dataset.indent, 10) || 0;
                      const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
                      if(indent === foldableIndent) {
-                        lines.push(processNodeToText(nextElement));
+                        lines.push(processNodeToText(nextElement, varState));
                         break;
                      }
                 }
@@ -1254,145 +1661,40 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
     // Internationalization (i18n) Module
     i18n: {
         currentLang: 'en',
-        translations: {
-            // Nav Controls
-            mainTitle: { en: 'Python Trace Report', zh: 'Python 追踪报告' },
-            searchPlaceholder: { en: 'Search messages...', zh: '搜索消息...' },
-            expandAll: { en: 'Expand All', zh: '全部展开' },
-            collapseAll: { en: 'Collapse All', zh: '全部折叠' },
-            skeletonView: { en: 'Skeleton View', zh: '框架模式' },
-            skeletonViewActive: { en: 'Full View', zh: '完整视图' },
-            summary: { en: 'Summary', zh: '摘要' },
-            settings: { en: 'Settings', zh: '设置' },
-            export: { en: 'Export as HTML', zh: '导出为HTML' },
-            // Title attributes for buttons
-            toggleSidebarTitle: { en: 'Toggle sidebar', zh: '切换侧边栏' },
-            summaryTitle: { en: 'Show summary', zh: '显示摘要' },
-            expandAllTitle: { en: 'Expand all call stacks', zh: '展开所有调用堆栈' },
-            collapseAllTitle: { en: 'Collapse all call stacks', zh: '折叠所有调用堆栈' },
-            skeletonViewTitle: { en: 'Toggle skeleton view', zh: '切换框架视图' },
-            settingsTitle: { en: 'Settings', zh: '设置' },
-            exportTitle: { en: 'Export as HTML', zh: '导出为HTML' },
-            // Summary Dropdown
-            generatedAt: { en: 'Generated at:', zh: '生成于:' },
-            totalMessages: { en: 'Total messages:', zh: '总消息数:' },
-            errors: { en: 'Errors:', zh: '错误数:' },
-            // Settings Dialog
-            settingsTitle: { en: 'Settings', zh: '设置' },
-            displayTab: { en: 'Display', zh: '显示' },
-            helpTab: { en: 'Help', zh: '帮助' },
-            languageLabel: { en: 'Language:', zh: '语言:' },
-            themeLabel: { en: 'Theme:', zh: '主题:' },
-            // Help Tab
-            logEntrySymbolsTitle: { en: 'Log Entry Symbols', zh: '日志条目符号' },
-            tableHeaderSymbol: { en: 'Symbol', zh: '符号' },
-            tableHeaderType: { en: 'Type', zh: '类型' },
-            tableHeaderDescription: { en: 'Description', zh: '描述' },
-            typeFuncCall: { en: 'Function Call', zh: '函数调用' },
-            descFuncCall: { en: 'A function call, either within a traced file or to an external library.', zh: '函数调用，可能在被追踪的文件内，也可能是对外部库的调用。' },
-            typeFuncReturn: { en: 'Function Return', zh: '函数返回' },
-            descFuncReturn: { en: 'The return from a function.', zh: '函数的返回。' },
-            typeCCall: { en: 'C Function Call', zh: 'C函数调用' },
-            descCCall: { en: '(Python 3.12+) A direct call to a C-language function or builtin.', zh: '（Python 3.12+）对C语言函数或内置函数的直接调用。' },
-            typeCReturn: { en: 'C Function Return', zh: 'C函数返回' },
-            descCReturn: { en: '(Python 3.12+) The return from a C function call.', zh: '（Python 3.12+）C函数调用的返回。' },
-            typeCRaise: { en: 'C Function Raise', zh: 'C函数异常' },
-            descCRaise: { en: '(Python 3.12+) An exception raised from within a C function.', zh: '（Python 3.12+）C函数内部抛出的异常。' },
-            typeLineExec: { en: 'Line Execution', zh: '行执行' },
-            descLineExec: { en: 'A line of source code that was executed.', zh: '被执行的一行源代码。' },
-            typeException: { en: 'Exception', zh: '异常' },
-            descException: { en: 'An exception that occurred within a function.', zh: '函数内发生的异常。' },
-            typeDebugStmt: { en: 'Debug Statement', zh: '调试语句' },
-            descDebugStmt: { en: 'The result of a special `# trace: expression` comment.', zh: '特殊的 `# trace: expression` 注释的结果。' },
-            interactiveFeaturesTitle: { en: 'Interactive Features', zh: '交互功能' },
-            featureFolding: { en: '<strong>Folding:</strong> Click on any <code>CALL</code> entry to expand or collapse its entire call stack.', zh: '<strong>折叠:</strong> 点击任何 <code>CALL</code> 条目可展开或折叠其完整的调用堆栈。' },
-            featureViewSource: { en: '<strong>View Source:</strong> Hover over a log entry and click \'view source\' to see the source code with executed lines highlighted.', zh: '<strong>查看源码:</strong> 鼠标悬停在日志条目上并点击“view source”可查看源码，已执行的行会被高亮。' },
-            featureCopySubtree: { en: '<strong>Copy Subtree (📋):</strong> Copies the text of a complete call subtree (from CALL to RETURN) to the clipboard.', zh: '<strong>复制子树 (📋):</strong> 将完整的调用子树（从CALL到RETURN）的文本复制到剪贴板。' },
-            featureFocusSubtree: { en: '<strong>Focus Subtree (🔍):</strong> Opens a new window showing only the selected call subtree.', zh: '<strong>聚焦子树 (🔍):</strong> 在新窗口中仅显示所选的调用子树。' },
-            featureExplainAI: { en: '<strong>Explain with AI (🤖):</strong> Sends the selected subtree to a Large Language Model for an explanation (requires a running LLM API).', zh: '<strong>AI 解释 (🤖):</strong> 将选定的子树发送给大语言模型进行解释（需要一个运行中的LLM API）。' },
-            // AI Dialog
-            aiDialogTitle: { en: '🤖 AI Code Trace Explanation', zh: '🤖 AI 代码追踪解释' },
-            aiApiUrlLabel: { en: 'LLM API URL:', zh: 'LLM API 地址:' },
-            aiApiUrlPlaceholder: { en: 'e.g., http://127.0.0.1:8000', zh: '例如: http://127.0.0.1:8000' },
-            aiModelLabel: { en: 'Model:', zh: '模型:' },
-            aiSaveBtn: { en: 'Save', zh: '保存' },
-            aiRefreshModelsBtn: { en: 'Refresh Models', zh: '刷新模型' },
-            aiRawResponseTitle: { en: 'LLM Raw Response (for diagnosis)', zh: 'LLM 原始响应 (用于诊断)' },
-            aiShowBtn: { en: 'Show', zh: '显示' },
-            aiHideBtn: { en: 'Hide', zh: '隐藏' },
-            aiThinkingPanel: { en: 'Thinking', zh: '思考过程' },
-            aiContentPanel: { en: 'Content', zh: '内容' },
-            aiStartExplanationBtn: { en: 'Start Explanation', zh: '开始解释' },
-            aiStatusReady: { en: 'Ready to explain.', zh: '准备解释。' },
-            aiStatusSaved: { en: 'Settings saved!', zh: '设置已保存！' },
-            aiApiUrlAlert: { en: 'Please enter the LLM API URL first.', zh: '请先输入LLM API地址。' },
-            aiStatusFetching: { en: 'Fetching models...', zh: '正在获取模型...' },
-            aiStatusLoaded: { en: 'Models loaded.', zh: '模型已加载。' },
-            aiStatusSending: { en: 'Sending request to LLM...', zh: '正在向LLM发送请求...' },
-            aiStatusReceiving: { en: 'Receiving explanation stream...', zh: '正在接收解释流...' },
-            aiStatusFinished: { en: 'Explanation finished.', zh: '解释完成。' },
-            // Sidebar translations
-            sidebarTraceExplorer: { en: 'Trace Explorer', zh: '追踪浏览器' },
-            filterByType: { en: 'Filter by Type', zh: '按类型过滤' },
-            statistics: { en: 'Statistics', zh: '统计信息' },
-            quickActions: { en: 'Quick Actions', zh: '快捷操作' },
-            calls: { en: 'Calls', zh: '调用' },
-            returns: { en: 'Returns', zh: '返回' },
-            lines: { en: 'Lines', zh: '行' },
-            exceptions: { en: 'Exceptions', zh: '异常' },
-            summary: { en: 'Summary', zh: '摘要' },
-            totalMessages: { en: 'Total Messages', zh: '总消息数' },
-            errors: { en: 'Errors', zh: '错误' },
-            generated: { en: 'Generated', zh: '生成于' },
-            viewSource: { en: 'view source', zh: '查看源码' },
-            copiedText: { en: 'Copied to clipboard', zh: '已复制到剪贴板' },
-            closeEsc: { en: 'Close (Esc)', zh: '关闭 (Esc)' },
-            loadingSyntax: { en: 'Loading syntax highlighting...', zh: '正在加载语法高亮...' },
-            sourceNotAvailable: { en: 'Source not available', zh: '源码不可用' },
-            errorMessagePrefix: { en: 'Error: ', zh: '错误：' },
-            // Error messages from Python backend
-            htmlSizeExceeded: { en: '⚠ HTML report size has exceeded {size_limit_mb}MB limit, subsequent content will be ignored', zh: '⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略' },
-            assetCopyError: { en: 'Failed to copy asset files: {error}', zh: '无法复制资源文件: {error}' },
-            // Button titles
-            expandAllTitle: { en: 'Expand all call stacks', zh: '展开所有调用堆栈' },
-            collapseAllTitle: { en: 'Collapse all call stacks', zh: '折叠所有调用堆栈' },
-            skeletonViewTitle: { en: 'Toggle skeleton view', zh: '切换框架视图' },
-            copySubtreeTitle: { en: 'Copy subtree as text', zh: '复制子树为文本' },
-            focusSubtreeTitle: { en: 'Focus on this subtree (crop)', zh: '聚焦此子树（裁剪）' },
-            explainAITitle: { en: 'Explain with AI', zh: '使用AI解释' },
-            toggleDetailsTitle: { en: 'Show details for this subtree', zh: '显示此子树的详细信息' },
-            toggleDetailsHideTitle: { en: 'Hide details for this subtree', zh: '隐藏此子树的详细信息' },
-            expandCodeTitle: { en: 'Toggle view', zh: '切换视图' },
-            debugVarsTitle: { en: 'Click to expand/collapse', zh: '点击展开/折叠' },
-        },
+        translations: {},
+
         init() {
-            const savedLang = localStorage.getItem('traceViewerLang');
-            const browserLang = navigator.language.startsWith('zh') ? 'zh' : 'en';
-            const initialLang = savedLang || browserLang;
+            // Load translations from the global window object injected by Python
+            this.translations = window.translations || {};
+            
+            // The initial language is set by the `lang` attribute on the <html> tag
+            this.currentLang = document.documentElement.lang || 'en';
 
             const langSelector = document.getElementById('languageSelector');
             if (langSelector) {
-                langSelector.value = initialLang;
+                langSelector.value = this.currentLang;
                 langSelector.addEventListener('change', (e) => this.setLang(e.target.value));
             }
-            
-            this.setLang(initialLang);
+            // NO initial apply() call, to prevent flashing. The HTML is pre-rendered.
         },
+
         setLang(lang) {
             this.currentLang = lang;
             localStorage.setItem('traceViewerLang', lang);
             document.documentElement.lang = lang;
             this.apply();
         },
+
         apply() {
             document.querySelectorAll('[data-i18n]').forEach(el => {
                 const key = el.dataset.i18n;
                 const translation = this.translations[key]?.[this.currentLang];
                 if (translation) {
+                    // Special handling for the skeleton view button text
                     if (key === 'skeletonView' && document.body.classList.contains('skeleton-mode')) {
-                        el.textContent = this.translations['skeletonViewActive'][this.currentLang];
+                        el.innerHTML = this.translations['skeletonViewActive'][this.currentLang] || translation;
                     } else {
-                        el.innerHTML = translation; // Use innerHTML to support <strong> etc.
+                        el.innerHTML = translation;
                     }
                 }
             });
@@ -1407,51 +1709,30 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 if (translation) el.title = translation;
             });
             
-            // Translate dynamic content from Python backend
+            // Translate dynamic content that might have been generated by Python
             this.translateDynamicContent();
         },
+
         t(key, params = {}) {
             let translation = this.translations[key]?.[this.currentLang] || key;
-            
-            // Replace template parameters
             Object.entries(params).forEach(([param, value]) => {
                 translation = translation.replace(`{${param}}`, value);
             });
-            
             return translation;
         },
         
-        // Translate dynamic content from Python backend
         translateDynamicContent() {
-            // Translate HTML size limit error messages
             const errorElements = document.querySelectorAll('.error, .exception');
             errorElements.forEach(element => {
-                const text = element.textContent;
-                
-                // Store original content if not already stored
                 if (!element.dataset.originalContent) {
-                    element.dataset.originalContent = text;
+                    element.dataset.originalContent = element.textContent;
                 }
-                
-                // If current language is Chinese, restore original content
-                if (this.currentLang === 'zh') {
-                    element.textContent = element.dataset.originalContent;
-                    return;
-                }
-                
-                // HTML size exceeded error
-                const sizeMatch = element.dataset.originalContent.match(/HTML报告大小已超过(\d+\.?\d*)MB限制，后续内容将被忽略/);
+                const originalText = element.dataset.originalContent;
+
+                const sizeMatch = originalText.match(/⚠ HTML报告大小已超过(\d+\.?\d*)MB限制，后续内容将被忽略/);
                 if (sizeMatch) {
                     const sizeLimitMb = sizeMatch[1];
                     element.textContent = this.t('htmlSizeExceeded', {size_limit_mb: sizeLimitMb});
-                    return;
-                }
-                
-                // Asset copy error (from console/logging)
-                const assetMatch = element.dataset.originalContent.match(/无法复制资源文件: (.+)/);
-                if (assetMatch) {
-                    const error = assetMatch[1];
-                    element.textContent = this.t('assetCopyError', {error: error});
                     return;
                 }
             });
@@ -1460,13 +1741,11 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
 
     // Source code viewer functionality
     sourceViewer: {
-        // Get executed lines for a specific frame
         getFrameLines(filename, frameId) {
             if (!window.executedLines || !window.executedLines[filename] || !window.executedLines[filename][frameId]) {
                 return null;
             }
             const rawLines = window.executedLines[filename][frameId];
-            // Extract just the line numbers from the [lineno, comment] pairs
             const lines = rawLines.map(pair => Array.isArray(pair) ? pair[0] : pair);
             return {
                 min: Math.min(...lines),
@@ -1486,7 +1765,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 container.classList.toggle('expanded');
             });
         
-            // Compact view
             const compactView = document.createElement('div');
             compactView.className = 'compact-view';
             const compactItems = [];
@@ -1498,7 +1776,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             compactView.innerHTML = compactItems.join(' ');
             container.appendChild(compactView);
         
-            // List view
             const listView = document.createElement('div');
             listView.className = 'list-view';
             const listItems = [];
@@ -1513,7 +1790,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             return container;
         },
 
-        // Show source code dialog
         showSource(filename, lineNumber, frameId) {
             const sourceContent = document.getElementById('sourceContent');
             const titleDiv = document.getElementById('sourceTitle');
@@ -1525,10 +1801,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 dialog.style.display = 'flex';
                 return;
             }
-            // Get source code, decode if it's Base64-encoded
             let originalText = window.sourceFiles[filename];
-        
-            // Attempt to decode Base64 with UTF-8 support
             const raw = atob(originalText);
             const bytes = new Uint8Array(raw.length);
             for (let i = 0; i < raw.length; i++) {
@@ -1536,7 +1809,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             }
             let text = new TextDecoder('utf-8').decode(bytes);
 
-            // START MODIFICATION: Inject debug info placeholders before highlighting
             const frameLines = this.getFrameLines(filename, frameId);
             const lines = text.split('\n');
             if (frameLines) {
@@ -1548,8 +1820,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                         if (commentData) {
                             try {
                                 const jsonData = JSON.stringify(commentData);
-                                // btoa requires a string of single-byte characters.
-                                // We first encode multi-byte characters (like Chinese) into a URI-like format.
                                 const encodedData = btoa(unescape(encodeURIComponent(jsonData)));
                                 lines[lineIdx] += ` # __CTX_DEBUG_PLACEHOLDER__${encodedData}`;
                             } catch (e) {
@@ -1560,20 +1830,12 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 });
                 text = lines.join('\n');
             }
-            // END MODIFICATION
 
-            // Setup dialog
             this.setupSourceDialog(dialog, titleDiv, sourceContent, filename, lineNumber);
-            
-            // Create content elements
             const container = this.createSourceContainer(lines, text);
             sourceContent.appendChild(container);
-            
-            // Add close controls
             this.addDialogCloseControls(dialog);
             
-            // The dialog is kept hidden until all its content is fully rendered to prevent flicker.
-            // We pass the dialog object to the processor, which will be responsible for making it visible.
             setTimeout(() => {
                 this.processSourceCode(
                     container.querySelector('.line-numbers'),
@@ -1582,47 +1844,33 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     lineNumber,
                     frameId,
                     filename,
-                    dialog // Pass the dialog to be shown later
+                    dialog
                 );
-            }, 10); // A small delay is enough.
+            }, 10);
         },
         
-        // Setup dialog header
         setupSourceDialog(dialog, titleDiv, sourceContent, filename, lineNumber) {
             titleDiv.textContent = `${filename} (Line ${lineNumber})`;
             sourceContent.innerHTML = '';
-
-            // Clean up any existing controls
             const existingCloseBtn = dialog.querySelector('.floating-close-btn');
-            if (existingCloseBtn) {
-                dialog.removeChild(existingCloseBtn);
-            }
-
+            if (existingCloseBtn) dialog.removeChild(existingCloseBtn);
             const existingOverlay = dialog.querySelector('.close-overlay');
-            if (existingOverlay) {
-                dialog.removeChild(existingOverlay);
-            }
+            if (existingOverlay) dialog.removeChild(existingOverlay);
         },
         
-        // Create source container with line numbers and code
         createSourceContainer(lines, text) {
             const container = document.createElement('div');
             container.className = 'source-container';
-            
             const lineNumbers = document.createElement('div');
             lineNumbers.className = 'line-numbers';
-            
             const codeContent = document.createElement('div');
             codeContent.className = 'code-content';
-            
             const pre = document.createElement('pre');
             const code = document.createElement('code');
             code.className = 'language-python';
             code.textContent = text;
             pre.appendChild(code);
             codeContent.appendChild(pre);
-            
-            // Generate line numbers
             for (let i = 1; i <= lines.length; i++) {
                 const lineNum = document.createElement('div');
                 lineNum.className = 'line-number';
@@ -1630,14 +1878,11 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 lineNum.setAttribute('data-line', i);
                 lineNumbers.appendChild(lineNum);
             }
-            
             container.appendChild(lineNumbers);
             container.appendChild(codeContent);
-            
             return container;
         },
         
-        // Add close button and overlay
         addDialogCloseControls(dialog) {
             const closeBtn = document.createElement('div');
             closeBtn.className = 'floating-close-btn';
@@ -1648,7 +1893,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                 dialog.style.display = 'none';
             });
             dialog.appendChild(closeBtn);
-
             const closeOverlay = document.createElement('div');
             closeOverlay.className = 'close-overlay';
             closeOverlay.addEventListener('click', (e) => {
@@ -1658,10 +1902,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             dialog.appendChild(closeOverlay);
         },
         
-        // Process source code after rendering
         processSourceCode(lineNumbers, code, frameLines, lineNumber, frameId, filename, dialog) {
-            // Add loading indicator. This will be added to a hidden element, so it's not visible
-            // to the user, but it's good practice.
             const loadingIndicator = document.createElement('div');
             loadingIndicator.style.position = 'absolute';
             loadingIndicator.style.top = '50%';
@@ -1675,10 +1916,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             lineNumbers.parentElement.appendChild(loadingIndicator);
 
             const doHighlight = () => {
-                // 1. Syntax highlighting must be done first to create the final DOM for the code.
                 Prism.highlightElement(code);
-
-                // 2. Synchronize line heights based on the now-highlighted code.
                 const codeLines = code.querySelectorAll('.token-line, .line');
                 if (!codeLines || codeLines.length === 0) {
                     this.synchronizeLineHeights(lineNumbers, code.parentElement);
@@ -1686,7 +1924,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     this.synchronizeWithPrismLines(lineNumbers, codeLines);
                 }
 
-                // START MODIFICATION: Find placeholders and replace them with debug info elements
                 const placeholderPrefix = '# __CTX_DEBUG_PLACEHOLDER__';
                 const comments = code.querySelectorAll('.token.comment');
                 comments.forEach(comment => {
@@ -1694,7 +1931,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                     if (text.startsWith(placeholderPrefix)) {
                         const encodedData = text.substring(placeholderPrefix.length);
                         try {
-                            // The reverse process of btoa encoding for multi-byte strings
                             const jsonData = decodeURIComponent(escape(atob(encodedData)));
                             const data = JSON.parse(jsonData);
                             const debugEl = this.createDebugVarsElementForSourceView(data);
@@ -1703,48 +1939,33 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                             }
                         } catch (e) {
                             console.error('Failed to decode or render debug placeholder:', e);
-                             // To avoid breaking the UI, just hide the broken placeholder
                             comment.style.display = 'none';
                         }
                     }
                 });
-                // END MODIFICATION
 
-                // 3. Highlight all lines that were executed in this frame.
                 if (frameLines) {
                     frameLines.all.forEach(line => {
                         const lineElement = lineNumbers.querySelector(`.line-number[data-line="${line}"]`);
-                        if (lineElement) {
-                            lineElement.classList.add('executed-line');
-                        }
+                        if (lineElement) lineElement.classList.add('executed-line');
                     });
                 }
                 
-                // Remove loading indicator before showing the dialog
                 loadingIndicator.remove();
-
-                // Make the dialog visible now that all content is ready.
                 dialog.style.display = 'flex';
 
-                // 4. Highlight the specific line that triggered the 'view source' action.
                 const targetLine = lineNumbers.querySelector(`.line-number[data-line="${lineNumber}"]`);
                 if (targetLine) {
                     targetLine.classList.add('current-line');
-                    
-                    // 5. Scroll the single parent container to the target line.
-                    // Use a minimal timeout to ensure the browser has rendered the dialog
-                    // before we try to scroll within it.
                     setTimeout(() => {
                         targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }, 0);
                 }
             };
             
-            // Check if Prism is loaded
             if (typeof Prism !== 'undefined') {
                 doHighlight();
             } else {
-                // Poll until Prism is available
                 const prismCheckInterval = setInterval(() => {
                     if (typeof Prism !== 'undefined') {
                         clearInterval(prismCheckInterval);
@@ -1754,14 +1975,11 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             }
         },
         
-        // Synchronize line number heights with code
         synchronizeLineHeights(lineNumbersContainer, codeContainer) {
             const computedStyle = window.getComputedStyle(codeContainer);
             const lineHeight = computedStyle.lineHeight;
             const fontSize = computedStyle.fontSize;
-            
             const lineNumberElements = lineNumbersContainer.querySelectorAll('.line-number');
-            
             lineNumberElements.forEach(el => {
                 el.style.height = lineHeight;
                 el.style.lineHeight = lineHeight;
@@ -1769,51 +1987,41 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             });
         },
 
-        // Synchronize with Prism-generated line elements
         synchronizeWithPrismLines(lineNumbersContainer, codeLines) {
             const lineNumberElements = lineNumbersContainer.querySelectorAll('.line-number');
             const count = Math.min(lineNumberElements.length, codeLines.length);
-            
-            // Get current theme info
             const themeSelector = document.getElementById('themeSelector');
             const selectedOption = themeSelector.options[themeSelector.selectedIndex];
             const isDark = selectedOption.dataset.isDark === 'true';
-            
-            // Set background color based on theme
             lineNumbersContainer.style.backgroundColor = isDark ? '#2d2d2d' : '#f5f5f5';
-            
-            // Adjust line heights to match
             for (let i = 0; i < count; i++) {
                 const codeLineHeight = codeLines[i].offsetHeight;
-                
                 if (lineNumberElements[i]) {
                     lineNumberElements[i].style.height = `${codeLineHeight}px`;
                     lineNumberElements[i].style.lineHeight = `${codeLineHeight}px`;
                 }
             }
-            
-            // Apply theme styles
             TraceViewer.adjustLineNumberStyles(isDark);
         }
     }
 };
 
-// Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
     TraceViewer.init();
+    if (window.eventMetadata) {
+        TraceViewer.searchDatabase = new SearchDatabase();
+        TraceViewer.searchDatabase.initializeFromMetadata();
+    }
 });
 
-// Sidebar functionality
 TraceViewer.initSidebar = function() {
     const { toggleSidebar, sidebar, sidebarOverlay } = this.elements;
-    
     if (toggleSidebar) {
         toggleSidebar.addEventListener('click', () => {
             sidebar.classList.toggle('open');
             sidebarOverlay.classList.toggle('show');
         });
     }
-    
     if (sidebarOverlay) {
         sidebarOverlay.addEventListener('click', () => {
             sidebar.classList.remove('open');
@@ -1822,89 +2030,52 @@ TraceViewer.initSidebar = function() {
     }
 };
 
-// Filter functionality
 TraceViewer.initFilters = function() {
     const { filterCall, filterReturn, filterLine, filterException } = this.elements;
-    const filters = {
-        call: filterCall,
-        return: filterReturn,
-        line: filterLine,
-        exception: filterException
-    };
-    
-    // Add change event listeners to all filters
+    const filters = { call: filterCall, return: filterReturn, line: filterLine, exception: filterException };
     Object.values(filters).forEach(filter => {
-        if (filter) {
-            filter.addEventListener('change', () => this.applyFilters());
-        }
+        if (filter) filter.addEventListener('change', () => this.applyFilters());
     });
-    
-    // Initial filter application
     this.applyFilters();
 };
 
-// Apply filters to content
 TraceViewer.applyFilters = function() {
     const { filterCall, filterReturn, filterLine, filterException, content } = this.elements;
-    
     const filterStates = {
         call: filterCall ? filterCall.checked : true,
         return: filterReturn ? filterReturn.checked : true,
         line: filterLine ? filterLine.checked : true,
         exception: filterException ? filterException.checked : true
     };
-    
-    // Get all elements that can be filtered
     const elements = content.querySelectorAll('div[class*="call"], div[class*="return"], div[class*="line"], div[class*="error"]');
-    
     elements.forEach(el => {
         let show = true;
-        
-        if (el.classList.contains('call') && !filterStates.call) {
-            show = false;
-        } else if (el.classList.contains('return') && !filterStates.return) {
-            show = false;
-        } else if (el.classList.contains('line') && !filterStates.line) {
-            show = false;
-        } else if (el.classList.contains('error') || el.classList.contains('exception')) {
-            if (!filterStates.exception) {
-                show = false;
-            }
-        }
-        
-        // Show/hide the element
+        if (el.classList.contains('call') && !filterStates.call) show = false;
+        else if (el.classList.contains('return') && !filterStates.return) show = false;
+        else if (el.classList.contains('line') && !filterStates.line) show = false;
+        else if ((el.classList.contains('error') || el.classList.contains('exception')) && !filterStates.exception) show = false;
         el.style.display = show ? '' : 'none';
     });
-    
-    // Also hide/show call groups based on their children
     const callGroups = content.querySelectorAll('.call-group');
     callGroups.forEach(group => {
-        const hasVisibleChildren = Array.from(group.children).some(child => child.style.display !== 'none');
-        group.style.display = hasVisibleChildren ? '' : 'none';
+        group.style.display = Array.from(group.children).some(child => child.style.display !== 'none') ? '' : 'none';
     });
 };
 
-// Make source viewer methods available globally to be used by inline event handlers
 function showSource(filename, lineNumber, frameId) {
     TraceViewer.sourceViewer.showSource(filename, lineNumber, frameId);
 }
-
 function getFrameLines(filename, frameId) {
     return TraceViewer.sourceViewer.getFrameLines(filename, frameId);
 }
-
-// 全局函数
 function toggleCommentExpand(commentId, event) {
     if (event) {
         event.stopPropagation();
         event.preventDefault();
     }
-    
     const commentEl = document.getElementById(commentId);
     if (commentEl) {
         commentEl.classList.toggle('expanded');
-        
-        // 如果展开，滚动到可见区域
         if (commentEl.classList.contains('expanded')) {
             setTimeout(() => {
                 commentEl.scrollIntoView({behavior: 'smooth', block: 'nearest'});
@@ -1912,10 +2083,14 @@ function toggleCommentExpand(commentId, event) {
         }
     }
 }
-// Export for Node.js environment
+TraceViewer.SearchModal = SearchModal;
+TraceViewer.SearchDatabase = SearchDatabase;
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = TraceViewer;
     global.TraceViewer = TraceViewer;
+    global.SearchDatabase = SearchDatabase;
+    global.SearchModal = SearchModal;
     global.showSource = showSource;
     global.getFrameLines = getFrameLines;
     global.toggleCommentExpand = toggleCommentExpand;
