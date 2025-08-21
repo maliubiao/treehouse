@@ -828,8 +828,8 @@ const TraceViewer = {
         if (debugVarsEl) {
             const vars = [];
             debugVarsEl.querySelectorAll('.list-view .var-entry').forEach(entry => {
-                const name = entry.querySelector('.var-name')?.textContent.trim();
-                const value = entry.querySelector('.var-value')?.innerText.trim();
+                const name = entry.querySelector('.var-name')?.textContent?.trim() || '';
+                const value = entry.querySelector('.var-value')?.innerText?.trim() || '';
                 if (name && value) {
                     vars.push(`${name}=${value}`);
                 }
@@ -859,7 +859,7 @@ const TraceViewer = {
         } else {
             // Use innerText to get a text representation that respects some whitespace,
             // then trim only the outer edges.
-            text = clone.innerText.trim();
+            text = clone.innerText ? clone.innerText.trim() : '';
         }
     
         const indent = parseInt(node.dataset.indent, 10) || 0;
@@ -1517,11 +1517,12 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
         const ancestor = range.commonAncestorContainer;
     
         // Find all log entry elements within the common ancestor
-        const allDivs = (ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentElement).querySelectorAll('div[data-indent]');
+        const allDivs = (ancestor && ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor?.parentElement)?.querySelectorAll('div[data-indent]') || [];
         
         // Filter for divs that are actually within the selection range
         const selectedDivs = Array.from(allDivs).filter(div => 
-            selection.containsNode(div, true) || range.intersectsNode(div)
+            (selection && selection.containsNode ? selection.containsNode(div, true) : false) || 
+            (range && range.intersectsNode ? range.intersectsNode(div) : false)
         );
     
         if (selectedDivs.length === 0) {
@@ -2032,6 +2033,223 @@ function toggleCommentExpand(commentId, event) {
 }
 TraceViewer.SearchModal = SearchModal;
 TraceViewer.SearchDatabase = SearchDatabase;
+
+// ===== Navigation Bar Functionality =====
+TraceViewer.initNavigationBar = function() {
+    const navigationBar = document.getElementById('navigationBar');
+    const navThumbnail = document.getElementById('navThumbnail');
+    const navViewport = document.getElementById('navViewport');
+    const navPosition = document.getElementById('navPosition');
+    const content = this.elements.content;
+    
+    if (!navigationBar || !content) return;
+    
+    // Create canvas for thumbnail
+    const canvas = document.createElement('canvas');
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    navThumbnail.appendChild(canvas);
+    
+    const ctx = canvas.getContext('2d');
+    let isUpdating = false;
+    
+    // Debounced update function
+    const updateNavigationBar = this.utils.debounce(() => {
+        if (isUpdating) return;
+        isUpdating = true;
+        
+        requestAnimationFrame(() => {
+            this.updateNavigationBar(canvas, ctx, navViewport, navPosition, content, navigationBar);
+            isUpdating = false;
+        });
+    }, 100);
+    
+    // Initial setup
+    this.setupCanvasSize(canvas, ctx);
+    // Delay initial update to ensure canvas is properly sized
+    setTimeout(() => updateNavigationBar(), 50);
+    
+    // Event listeners
+    navigationBar.addEventListener('click', (e) => {
+        this.handleNavigationClick(e, content, canvas);
+    });
+    
+    content.addEventListener('scroll', updateNavigationBar);
+    window.addEventListener('resize', () => {
+        this.setupCanvasSize(canvas, ctx);
+        updateNavigationBar();
+    });
+    
+    // Observe content changes for dynamic updates
+    this.observeContentChanges(content, updateNavigationBar);
+};
+
+TraceViewer.setupCanvasSize = function(canvas, ctx) {
+    if (!canvas.parentElement) {
+        // Parent element not ready, retry later
+        setTimeout(() => this.setupCanvasSize(canvas, ctx), 100);
+        return;
+    }
+    
+    const rect = canvas.parentElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+        // Element has no size yet, retry later
+        setTimeout(() => this.setupCanvasSize(canvas, ctx), 100);
+        return;
+    }
+    
+    // Use the navigation bar's actual dimensions instead of canvas parent
+    const navigationBar = canvas.closest('.navigation-bar');
+    if (navigationBar) {
+        const navRect = navigationBar.getBoundingClientRect();
+        canvas.width = navRect.width * 2; // High DPI
+        canvas.height = navRect.height * 2;
+        console.log('Canvas size set using navigation bar:', navRect.width, 'x', navRect.height);
+    } else {
+        // Fallback to canvas parent dimensions
+        canvas.width = rect.width * 2; // High DPI
+        canvas.height = rect.height * 2;
+        console.log('Canvas size set using parent:', rect.width, 'x', rect.height);
+    }
+    
+    // Scale context for high DPI
+    ctx.scale(2, 2);
+};
+
+TraceViewer.updateNavigationBar = function(canvas, ctx, navViewport, navPosition, content, navigationBar) {
+    const contentHeight = content.scrollHeight;
+    const viewportHeight = content.clientHeight;
+    const scrollTop = content.scrollTop;
+
+    // With corrected CSS, if content is not scrollable, height difference will be minimal.
+    if (contentHeight <= viewportHeight + 2) { // Use a small threshold
+        navViewport.style.display = 'none';
+        navPosition.style.display = 'none';
+        return;
+    }
+    
+    navViewport.style.display = 'block';
+    navPosition.style.display = 'block';
+    
+    // With corrected CSS, the navigation bar's height is reliable.
+    const navHeight = navigationBar.getBoundingClientRect().height;
+    if (navHeight === 0) return; // Not visible yet
+
+    const viewportRatio = viewportHeight / contentHeight;
+    const scrollRatio = scrollTop / contentHeight;
+    
+    // Update viewport indicator
+    const viewportTop = scrollRatio * navHeight;
+    const viewportHeightPx = viewportRatio * navHeight;
+    
+    navViewport.style.top = viewportTop + 'px';
+    navViewport.style.height = Math.max(viewportHeightPx, 8) + 'px'; // Minimum height
+    
+    // Update position indicator
+    navPosition.style.top = viewportTop + 'px';
+    
+    // Draw thumbnail
+    this.drawThumbnail(ctx, canvas, content, navHeight);
+};
+
+TraceViewer.drawThumbnail = function(ctx, canvas, content, navHeight) {
+    const contentHeight = content.scrollHeight;
+    const scale = navHeight / contentHeight;
+    const isDark = document.body.classList.contains('dark-theme');
+    
+    // Clear canvas - use actual display dimensions (canvas is already scaled for high DPI)
+    const displayWidth = canvas.parentElement.clientWidth;
+    const displayHeight = canvas.parentElement.clientHeight;
+    ctx.clearRect(0, 0, displayWidth, displayHeight);
+    
+    // Draw background
+    ctx.fillStyle = isDark ? 'rgba(30, 41, 59, 0.8)' : 'rgba(248, 250, 252, 0.8)';
+    ctx.fillRect(0, 0, displayWidth, displayHeight);
+    
+    // Sample elements for thumbnail
+    const elements = content.querySelectorAll('.foldable');
+    const sampleCount = Math.min(elements.length, 200); // Limit for performance
+    
+    for (let i = 0; i < sampleCount; i++) {
+        const index = Math.floor(i * elements.length / sampleCount);
+        const element = elements[index];
+        const rect = element.getBoundingClientRect();
+        const contentRect = content.getBoundingClientRect();
+        
+        const y = (rect.top - contentRect.top + content.scrollTop) * scale;
+        const height = rect.height * scale;
+        
+        if (y >= 0 && y < navHeight) {
+            // Determine color based on element type
+            let color;
+            if (element.classList.contains('call')) {
+                color = isDark ? 'rgba(96, 165, 250, 0.6)' : 'rgba(59, 130, 246, 0.6)';
+            } else if (element.classList.contains('return')) {
+                color = isDark ? 'rgba(52, 211, 153, 0.6)' : 'rgba(16, 185, 129, 0.6)';
+            } else if (element.classList.contains('error')) {
+                color = isDark ? 'rgba(248, 113, 113, 0.6)' : 'rgba(239, 68, 68, 0.6)';
+            } else {
+                color = isDark ? 'rgba(156, 163, 175, 0.4)' : 'rgba(107, 114, 128, 0.4)';
+            }
+            
+            // Draw element marker
+            ctx.fillStyle = color;
+            ctx.fillRect(2, y, displayWidth - 4, Math.max(height, 1));
+        }
+    }
+};
+
+TraceViewer.handleNavigationClick = function(e, content, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const clickY = e.clientY - rect.top;
+    
+    // With corrected CSS, the navigation bar's height is reliable.
+    const navHeight = rect.height;
+    if (navHeight === 0) return;
+
+    const contentHeight = content.scrollHeight;
+    const viewportHeight = content.clientHeight;
+    
+    // Calculate target scroll position. The click position relative to the
+    // nav bar's height corresponds to the position in the total content.
+    const targetScroll = (clickY / navHeight) * contentHeight;
+    
+    // Smooth scroll to the calculated position.
+    content.scrollTo({
+        // Center the view on the clicked point by subtracting half the viewport height.
+        top: Math.max(0, Math.min(targetScroll - (viewportHeight / 2), contentHeight - viewportHeight)),
+        behavior: 'smooth'
+    });
+};
+
+TraceViewer.observeContentChanges = function(content, callback) {
+    const observer = new MutationObserver(callback);
+    observer.observe(content, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class']
+    });
+    
+    // Also observe for folding events
+    content.addEventListener('click', (e) => {
+        if (e.target.classList.contains('foldable')) {
+            setTimeout(callback, 300); // Delay to allow animation
+        }
+    });
+    
+    // Force refresh on window resize
+    window.addEventListener('resize', callback);
+};
+
+// Initialize navigation bar in main init
+const originalInit = TraceViewer.init;
+TraceViewer.init = function(...args) {
+    const result = originalInit.apply(this, args);
+    // Delay navigation bar initialization to ensure DOM is fully rendered
+    setTimeout(() => this.initNavigationBar(), 100);
+    return result;
+};
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = TraceViewer;

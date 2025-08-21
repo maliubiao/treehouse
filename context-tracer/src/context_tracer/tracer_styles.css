@@ -520,18 +520,24 @@ button.secondary:hover {
 /* ===== Main Content ===== */
 .content-wrapper {
     flex: 1;
-    overflow-y: auto;
-    padding: var(--space-lg);
+    /* Removed padding and overflow, making it a clean positioning context */
+    position: relative;
+    overflow: hidden;
 }
 
 #content {
     background: var(--bg-secondary);
+    /* Moved padding here from wrapper */
     padding: var(--space-lg);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-sm);
     font-family: 'Menlo', 'Consolas', monospace;
     font-size: 0.875rem;
     line-height: 1.6;
+    /* Added height and overflow to make this the scrollable container */
+    height: 100%;
+    overflow-y: auto;
+    /* The scrollbar of this element will be on the far right */
 }
 
 /* ===== Summary Dropdown ===== */
@@ -1708,5 +1714,83 @@ body.skeleton-mode #content .call-group.show-details .var {
 @media (max-width: 768px) {
     .sidebar-overlay.show {
         display: block;
+    }
+}
+
+/* ===== Navigation Bar Styles ===== */
+.navigation-bar {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 20px;
+    /* The background now sits behind the content's own scrollbar, which is fine */
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border-left: 1px solid var(--border-primary);
+    z-index: 100;
+    cursor: pointer;
+    transition: width 0.2s ease;
+}
+
+.navigation-bar:hover {
+    width: 30px;
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.nav-thumbnail {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
+.nav-viewport {
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    background: rgba(59, 130, 246, 0.3);
+    border: 1px solid var(--accent-primary);
+    border-radius: 2px;
+    pointer-events: none;
+    transition: top 0.1s ease, height 0.1s ease;
+}
+
+.nav-position {
+    position: absolute;
+    left: 2px;
+    width: 16px;
+    height: 4px;
+    background: var(--accent-primary);
+    border-radius: 2px;
+    pointer-events: none;
+    transition: top 0.1s ease;
+}
+
+/* Dark theme adjustments */
+.dark-theme .navigation-bar {
+    background: rgba(0, 0, 0, 0.2);
+    border-left-color: var(--border-secondary);
+}
+
+.dark-theme .navigation-bar:hover {
+    background: rgba(0, 0, 0, 0.25);
+}
+
+.dark-theme .nav-viewport {
+    background: rgba(96, 165, 250, 0.3);
+    border-color: var(--accent-primary);
+}
+
+.dark-theme .nav-position {
+    background: var(--accent-primary);
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    .navigation-bar {
+        display: none; /* Hide on mobile for better usability */
     }
 }
