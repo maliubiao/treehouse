@@ -429,6 +429,7 @@ const TraceViewer = {
         ],
         INITIAL_LOAD_MAX_LINES: 2000, // Max lines to show on smart "Expand All"
         SMART_EXPAND_THRESHOLD: 1000,  // Subtrees smaller than this will be fully expanded on click
+        MAX_RECURSIVE_EXPAND_DEPTH: 100 // Safety limit for recursive expansion
     },
 
     // Utilities
@@ -561,7 +562,6 @@ const TraceViewer = {
         // Toggle folding on click
         content.addEventListener('click', e => {
             if (e.target.classList.contains('foldable')) {
-                console.log('[+] Foldable element clicked:', e.target.textContent.trim());
                 this.toggleFoldable(e.target);
             }
         });
@@ -583,22 +583,37 @@ const TraceViewer = {
     // Toggles a single foldable element's state
     toggleFoldable(foldable) {
         if (foldable.classList.contains('expanded')) {
-            console.log('Action: Collapsing subtree for', foldable.textContent.trim());
             this.collapseSubtree(foldable);
         } else {
-            console.log('Action: Expanding subtree for', foldable.textContent.trim());
-            this.expandSubtree(foldable);
+            // Start expansion with depth 0 and a new Set for path tracking
+            this.expandSubtree(foldable, 0, new Set());
         }
     },
 
     // Expands a subtree, intelligently deciding between full and partial expansion
-    expandSubtree(foldable) {
-        const label = `expandSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
-        console.group(label);
+    expandSubtree(foldable, depth = 0, path = new Set()) {
+        const label = `expandSubtree (depth: ${depth}): ${foldable.textContent.trim().substring(0, 100)}`;
+        console.groupCollapsed(label);
+
+        // --- SAFETY CHECKS ---
+        if (depth >= this.config.MAX_RECURSIVE_EXPAND_DEPTH) {
+            console.warn(`[!] Max recursion depth (${this.config.MAX_RECURSIVE_EXPAND_DEPTH}) reached. Stopping expansion to prevent crash. Element:`, foldable);
+            console.groupEnd();
+            return;
+        }
+
+        if (path.has(foldable)) {
+            console.error(`[!] Circular reference detected. Halting expansion to prevent infinite loop. Element:`, foldable);
+            console.groupEnd();
+            return;
+        }
+
+        path.add(foldable); // Add current node to the path before processing children
 
         const callGroup = foldable.nextElementSibling;
         if (!callGroup || !callGroup.classList.contains('call-group')) {
             console.warn('Could not find call-group for foldable:', foldable);
+            path.delete(foldable); // Backtrack
             console.groupEnd();
             return;
         }
@@ -622,19 +637,20 @@ const TraceViewer = {
             
             children.forEach(child => {
                 // The recursive call will create its own console group
-                this.expandSubtree(child);
+                this.expandSubtree(child, depth + 1, path);
             });
         } else {
-            console.log('Subtree is large, expanding only the first level.');
+            console.log('Subtree is large or empty, expanding only the first level.');
         }
-        // For large subtrees, only the first level is expanded by the lines above.
+        
+        path.delete(foldable); // Remove current node from path after its subtree is processed
         console.groupEnd();
     },
 
     // Recursively collapses a subtree
     collapseSubtree(foldable) {
         const label = `collapseSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
-        console.group(label);
+        console.groupCollapsed(label);
 
         foldable.classList.remove('expanded');
         const callGroup = foldable.nextElementSibling;
