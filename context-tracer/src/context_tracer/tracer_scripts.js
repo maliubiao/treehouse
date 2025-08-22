@@ -480,7 +480,6 @@ const TraceViewer = {
 
         // Initialize components
         this.i18n.init();
-        this.calculateSubtreeSizes(); // Must run before initFolding
         this.initFolding();
         this.initSearch();
         this.initExport();
@@ -534,26 +533,6 @@ const TraceViewer = {
         });
     },
 
-    // Pre-calculates the size of each foldable section for smart expansion
-    calculateSubtreeSizes() {
-        const foldables = this.elements.content.querySelectorAll('.foldable.call');
-        foldables.forEach(foldable => {
-            // Look for call group as next sibling or first child
-            let callGroup = foldable.nextElementSibling;
-            if (!callGroup || !callGroup.classList.contains('call-group')) {
-                callGroup = foldable.querySelector('.call-group');
-            }
-            
-            if (callGroup && callGroup.classList.contains('call-group')) {
-                // Count only direct children, excluding nested foldable elements
-                const directDescendants = callGroup.querySelectorAll(':scope > div[data-indent]:not(.foldable.call)');
-                foldable.dataset.subtreeSize = directDescendants.length;
-            } else {
-                foldable.dataset.subtreeSize = 0;
-            }
-        });
-    },
-
     // Initialize folding functionality
     initFolding() {
         const { content, expandAllBtn, collapseAllBtn } = this.elements;
@@ -591,7 +570,7 @@ const TraceViewer = {
         }
     },
 
-    // Expands a subtree, intelligently deciding between full and partial expansion
+    // Expands a subtree, showing only its direct children.
     expandSubtree(foldable) {
         const label = `expandSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
         console.group(label);
@@ -605,47 +584,8 @@ const TraceViewer = {
 
         foldable.classList.add('expanded');
         callGroup.classList.remove('collapsed');
-
-        const subtreeSize = parseInt(foldable.dataset.subtreeSize, 10) || 0;
-        console.log(`Subtree size: ${subtreeSize}. Smart expand threshold: ${this.config.SMART_EXPAND_THRESHOLD}`);
-
-        // If the subtree is small enough, perform a full recursive expansion for convenience.
-        // This is the performance-critical section.
-        if (subtreeSize > 0 && subtreeSize < this.config.SMART_EXPAND_THRESHOLD) {
-            console.log('Performing smart recursive expansion.');
-            const timerLabel = `SmartExpand for "${label}"`;
-            console.time(timerLabel);
-
-            // --- PERFORMANCE OPTIMIZATION START ---
-            // 1. Detach the callGroup from the DOM to prevent reflows during modification.
-            const parent = callGroup.parentNode;
-            const nextSibling = callGroup.nextSibling;
-            if (parent) {
-                parent.removeChild(callGroup);
-            }
-
-            // 2. Modify all descendant nodes while the group is "offline".
-            // This is much faster than the previous recursive approach.
-            const childrenToExpand = callGroup.querySelectorAll('.foldable.call');
-            childrenToExpand.forEach(child => {
-                child.classList.add('expanded');
-                const childCallGroup = child.nextElementSibling;
-                if (childCallGroup && childCallGroup.classList.contains('call-group')) {
-                    childCallGroup.classList.remove('collapsed');
-                }
-            });
-
-            // 3. Re-attach the modified group to the DOM in a single operation.
-            if (parent) {
-                parent.insertBefore(callGroup, nextSibling);
-            }
-            // --- PERFORMANCE OPTIMIZATION END ---
-
-            console.timeEnd(timerLabel);
-            console.log(`Expanded ${childrenToExpand.length} descendant foldable elements.`);
-        } else {
-            console.log('Subtree is large, expanding only the first level.');
-        }
+        
+        console.log('Expanding only the first level.');
         console.groupEnd();
     },
 
