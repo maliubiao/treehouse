@@ -2057,7 +2057,7 @@ function toggleCommentExpand(commentId, event) {
 TraceViewer.SearchModal = SearchModal;
 TraceViewer.SearchDatabase = SearchDatabase;
 
-// ===== Navigation Bar Functionality (Refactored for Performance) =====
+// ===== Navigation Bar Functionality (Refactored for Performance with Web Worker) =====
 
 TraceViewer._updateNavIndicators = function(navViewport, navPosition, content, navigationBar) {
     const contentHeight = content.scrollHeight;
@@ -2088,10 +2088,48 @@ TraceViewer._updateNavIndicators = function(navViewport, navPosition, content, n
     navPosition.style.top = viewportTop + 'px';
 };
 
-TraceViewer._redrawNavThumbnail = function(canvas, ctx, content, navigationBar) {
+TraceViewer._redrawNavThumbnail = function(canvas, content, navigationBar) {
+    if (!this.navWorker) return; // Worker not initialized
+
     const navHeight = navigationBar.getBoundingClientRect().height;
     if (navHeight === 0) return;
-    this.drawThumbnail(ctx, canvas, content, navHeight);
+
+    const contentHeight = content.scrollHeight;
+    const isDark = document.body.classList.contains('dark-theme');
+    
+    // This part still runs on the main thread, but it's just data collection.
+    const elementsData = [];
+    const elements = content.querySelectorAll('.foldable');
+    const sampleCount = Math.min(elements.length, 200);
+    const contentRect = content.getBoundingClientRect();
+
+    for (let i = 0; i < sampleCount; i++) {
+        const index = Math.floor(i * elements.length / sampleCount);
+        const element = elements[index];
+        const rect = element.getBoundingClientRect();
+        
+        let type = 'line'; // default
+        if (element.classList.contains('call')) type = 'call';
+        else if (element.classList.contains('return')) type = 'return';
+        else if (element.classList.contains('error')) type = 'error';
+
+        elementsData.push({
+            type: type,
+            top: rect.top - contentRect.top + content.scrollTop,
+            height: rect.height
+        });
+    }
+
+    // Post data to the worker for rendering
+    this.navWorker.postMessage({
+        type: 'render',
+        canvasWidth: canvas.width,
+        canvasHeight: canvas.height,
+        navHeight: navHeight,
+        contentHeight: contentHeight,
+        isDark: isDark,
+        elements: elementsData
+    });
 };
 
 TraceViewer.initNavigationBar = function() {
@@ -2109,6 +2147,26 @@ TraceViewer.initNavigationBar = function() {
     navThumbnail.appendChild(canvas);
     const ctx = canvas.getContext('2d');
 
+    // Initialize Web Worker for background rendering
+    try {
+        this.navWorker = new Worker('nav_worker.js');
+        this.navWorker.onmessage = (event) => {
+            if (event.data.type === 'rendered' && event.data.imageBitmap) {
+                const bitmap = event.data.imageBitmap;
+                // Ensure canvas is still valid before drawing
+                if (canvas && canvas.parentElement) {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(bitmap, 0, 0);
+                }
+                bitmap.close(); // Release memory
+            }
+        };
+    } catch (e) {
+        console.error("Failed to create navigation bar worker. Thumbnail will not be rendered.", e);
+        navigationBar.style.display = 'none';
+        return;
+    }
+
     let isRedrawing = false;
 
     // Fast, non-debounced function for smooth scroll feedback
@@ -2116,174 +2174,101 @@ TraceViewer.initNavigationBar = function() {
         this._updateNavIndicators(navViewport, navPosition, content, navigationBar);
     };
 
-    // Debounced, expensive function for redrawing thumbnail and syncing indicators
+    // Debounced function for triggering an asynchronous redraw and syncing indicators
     const debouncedRedrawAndSync = this.utils.debounce(() => {
         if (isRedrawing) return;
         isRedrawing = true;
 
         requestAnimationFrame(() => {
-            this._redrawNavThumbnail(canvas, ctx, content, navigationBar);
+            this._redrawNavThumbnail(canvas, content, navigationBar);
             this._updateNavIndicators(navViewport, navPosition, content, navigationBar);
             isRedrawing = false;
         });
     }, 250);
 
     // Initial setup
-    this.setupCanvasSize(canvas, ctx);
+    this.setupCanvasSize(canvas);
     setTimeout(debouncedRedrawAndSync, 100); // Initial draw
 
     // --- Event Listeners ---
-    // 1. On scroll: Only update indicators for performance.
     content.addEventListener('scroll', updateIndicators);
+    navigationBar.addEventListener('click', (e) => this.handleNavigationClick(e, content));
 
-    // 2. On navigation bar click: scroll the content.
-    navigationBar.addEventListener('click', (e) => {
-        this.handleNavigationClick(e, content);
-    });
-
-    // 3. Add drag-to-scroll functionality to the viewport handle.
-    let isDragging = false;
-    let startY;
-    let startScrollTop;
-
+    // Drag-to-scroll functionality
+    let isDragging = false, startY, startScrollTop;
     const onMouseDown = (e) => {
-        if (e.button !== 0) return; // Only for left mouse button
-
+        if (e.button !== 0) return;
         e.preventDefault();
-        e.stopPropagation(); // Prevent the navigationBar's click handler
-
+        e.stopPropagation();
         isDragging = true;
         startY = e.clientY;
         startScrollTop = content.scrollTop;
-
         document.body.style.cursor = 'grabbing';
         document.body.style.userSelect = 'none';
-        navViewport.style.transition = 'none'; // Disable transition for responsiveness
+        navViewport.style.transition = 'none';
         navPosition.style.transition = 'none';
-
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
     };
-
     const onMouseMove = (e) => {
         if (!isDragging) return;
-
         const deltaY = e.clientY - startY;
         const navHeight = navigationBar.clientHeight;
         const contentHeight = content.scrollHeight;
-
         if (navHeight > 0) {
-            const scrollDelta = deltaY * (contentHeight / navHeight);
-            content.scrollTop = startScrollTop + scrollDelta;
+            content.scrollTop = startScrollTop + (deltaY * (contentHeight / navHeight));
         }
     };
-
     const onMouseUp = () => {
         if (!isDragging) return;
         isDragging = false;
-
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
-        navViewport.style.transition = ''; // Re-enable transition
+        navViewport.style.transition = '';
         navPosition.style.transition = '';
-
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
     };
-
     navViewport.addEventListener('mousedown', onMouseDown);
 
-
-    // 4. On resize: Update canvas size and redraw.
     window.addEventListener('resize', () => {
-        this.setupCanvasSize(canvas, ctx);
+        this.setupCanvasSize(canvas);
         debouncedRedrawAndSync();
     });
 
-    // 5. On content change (e.g., expand/collapse): Redraw.
+    // Observe content changes to trigger redraw
     let lastScrollHeight = content.scrollHeight;
-    const mutationCallback = () => {
+    const observer = new MutationObserver(this.utils.debounce(() => {
         if (content.scrollHeight !== lastScrollHeight) {
             lastScrollHeight = content.scrollHeight;
             debouncedRedrawAndSync();
         }
-    };
-    const observer = new MutationObserver(this.utils.debounce(mutationCallback, 100));
+    }, 100));
     observer.observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
-
-    // 6. Explicit redraw on fold/expand clicks after animation.
+    
+    // Explicit redraw on user interactions that change content height
     content.addEventListener('click', (e) => {
         if (e.target.classList.contains('foldable') || e.target.classList.contains('expand-code-btn')) {
-            setTimeout(debouncedRedrawAndSync, 300);
+            setTimeout(debouncedRedrawAndSync, 300); // Delay to allow for animations
         }
     });
 };
 
-TraceViewer.setupCanvasSize = function(canvas, ctx) {
+TraceViewer.setupCanvasSize = function(canvas) {
     if (!canvas.parentElement) {
-        setTimeout(() => this.setupCanvasSize(canvas, ctx), 100);
+        setTimeout(() => this.setupCanvasSize(canvas), 100);
         return;
     }
-    
     const rect = canvas.parentElement.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) {
-        setTimeout(() => this.setupCanvasSize(canvas, ctx), 100);
+        setTimeout(() => this.setupCanvasSize(canvas), 100);
         return;
     }
     
-    const navigationBar = canvas.closest('.navigation-bar');
-    if (navigationBar) {
-        const navRect = navigationBar.getBoundingClientRect();
-        canvas.width = navRect.width * 2;
-        canvas.height = navRect.height * 2;
-    } else {
-        canvas.width = rect.width * 2;
-        canvas.height = rect.height * 2;
-    }
-    
-    ctx.scale(2, 2);
-};
-
-TraceViewer.drawThumbnail = function(ctx, canvas, content, navHeight) {
-    const contentHeight = content.scrollHeight;
-    const scale = navHeight / contentHeight;
-    const isDark = document.body.classList.contains('dark-theme');
-    
-    const displayWidth = canvas.parentElement.clientWidth;
-    const displayHeight = canvas.parentElement.clientHeight;
-    ctx.clearRect(0, 0, displayWidth, displayHeight);
-    
-    ctx.fillStyle = isDark ? 'rgba(30, 41, 59, 0.8)' : 'rgba(248, 250, 252, 0.8)';
-    ctx.fillRect(0, 0, displayWidth, displayHeight);
-    
-    const elements = content.querySelectorAll('.foldable');
-    const sampleCount = Math.min(elements.length, 200);
-    
-    for (let i = 0; i < sampleCount; i++) {
-        const index = Math.floor(i * elements.length / sampleCount);
-        const element = elements[index];
-        const rect = element.getBoundingClientRect();
-        const contentRect = content.getBoundingClientRect();
-        
-        const y = (rect.top - contentRect.top + content.scrollTop) * scale;
-        const height = rect.height * scale;
-        
-        if (y >= 0 && y < navHeight) {
-            let color;
-            if (element.classList.contains('call')) {
-                color = isDark ? 'rgba(96, 165, 250, 0.6)' : 'rgba(59, 130, 246, 0.6)';
-            } else if (element.classList.contains('return')) {
-                color = isDark ? 'rgba(52, 211, 153, 0.6)' : 'rgba(16, 185, 129, 0.6)';
-            } else if (element.classList.contains('error')) {
-                color = isDark ? 'rgba(248, 113, 113, 0.6)' : 'rgba(239, 68, 68, 0.6)';
-            } else {
-                color = isDark ? 'rgba(156, 163, 175, 0.4)' : 'rgba(107, 114, 128, 0.4)';
-            }
-            
-            ctx.fillStyle = color;
-            ctx.fillRect(2, y, displayWidth - 4, Math.max(height, 1));
-        }
-    }
+    // Set canvas pixel dimensions for high-DPI displays
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
 };
 
 TraceViewer.handleNavigationClick = function(e, content) {
@@ -2292,13 +2277,10 @@ TraceViewer.handleNavigationClick = function(e, content) {
     }
     const rect = e.currentTarget.getBoundingClientRect();
     const clickY = e.clientY - rect.top;
-
     const navHeight = rect.height;
     if (navHeight === 0) return;
-
     const contentHeight = content.scrollHeight;
     const viewportHeight = content.clientHeight;
-
     const targetScroll = (clickY / navHeight) * contentHeight;
 
     content.scrollTo({
@@ -2307,11 +2289,12 @@ TraceViewer.handleNavigationClick = function(e, content) {
     });
 };
 
+// Override original init to add the navigation bar initialization
 const originalInit = TraceViewer.init;
 TraceViewer.init = function(...args) {
-    const result = originalInit.apply(this, args);
+    originalInit.apply(this, args);
+    // Delay initialization to ensure layout is stable
     setTimeout(() => this.initNavigationBar(), 100);
-    return result;
 };
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -592,7 +592,12 @@ class CallTreeHtmlRender:
             asset_dir: Path = Path(__file__).parent
 
             # Copy/Link core assets
-            core_assets: List[str] = ["tracer_styles.css", "tracer_scripts.js", "translations.json"]
+            core_assets: List[str] = [
+                "tracer_styles.css",
+                "tracer_scripts.js",
+                "translations.json",
+                "nav_worker.js",
+            ]
             for asset in core_assets:
                 source_asset = asset_dir / asset
                 if source_asset.exists():
