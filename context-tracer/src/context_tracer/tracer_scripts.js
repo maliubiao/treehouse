@@ -429,7 +429,6 @@ const TraceViewer = {
         ],
         INITIAL_LOAD_MAX_LINES: 2000, // Max lines to show on smart "Expand All"
         SMART_EXPAND_THRESHOLD: 1000,  // Subtrees smaller than this will be fully expanded on click
-        MAX_RECURSIVE_EXPAND_DEPTH: 100 // Safety limit for recursive expansion
     },
 
     // Utilities
@@ -562,6 +561,7 @@ const TraceViewer = {
         // Toggle folding on click
         content.addEventListener('click', e => {
             if (e.target.classList.contains('foldable')) {
+                console.log('[+] Foldable element clicked:', e.target.textContent.trim());
                 this.toggleFoldable(e.target);
             }
         });
@@ -583,37 +583,22 @@ const TraceViewer = {
     // Toggles a single foldable element's state
     toggleFoldable(foldable) {
         if (foldable.classList.contains('expanded')) {
+            console.log('Action: Collapsing subtree for', foldable.textContent.trim());
             this.collapseSubtree(foldable);
         } else {
-            // Start expansion with depth 0 and a new Set for path tracking
-            this.expandSubtree(foldable, 0, new Set());
+            console.log('Action: Expanding subtree for', foldable.textContent.trim());
+            this.expandSubtree(foldable);
         }
     },
 
     // Expands a subtree, intelligently deciding between full and partial expansion
-    expandSubtree(foldable, depth = 0, path = new Set()) {
-        const label = `expandSubtree (depth: ${depth}): ${foldable.textContent.trim().substring(0, 100)}`;
-        console.groupCollapsed(label);
-
-        // --- SAFETY CHECKS ---
-        if (depth >= this.config.MAX_RECURSIVE_EXPAND_DEPTH) {
-            console.warn(`[!] Max recursion depth (${this.config.MAX_RECURSIVE_EXPAND_DEPTH}) reached. Stopping expansion to prevent crash. Element:`, foldable);
-            console.groupEnd();
-            return;
-        }
-
-        if (path.has(foldable)) {
-            console.error(`[!] Circular reference detected. Halting expansion to prevent infinite loop. Element:`, foldable);
-            console.groupEnd();
-            return;
-        }
-
-        path.add(foldable); // Add current node to the path before processing children
+    expandSubtree(foldable) {
+        const label = `expandSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
+        console.group(label);
 
         const callGroup = foldable.nextElementSibling;
         if (!callGroup || !callGroup.classList.contains('call-group')) {
             console.warn('Could not find call-group for foldable:', foldable);
-            path.delete(foldable); // Backtrack
             console.groupEnd();
             return;
         }
@@ -624,33 +609,50 @@ const TraceViewer = {
         const subtreeSize = parseInt(foldable.dataset.subtreeSize, 10) || 0;
         console.log(`Subtree size: ${subtreeSize}. Smart expand threshold: ${this.config.SMART_EXPAND_THRESHOLD}`);
 
-        // If the subtree is small enough, perform a full recursive expansion for convenience
+        // If the subtree is small enough, perform a full recursive expansion for convenience.
+        // This is the performance-critical section.
         if (subtreeSize > 0 && subtreeSize < this.config.SMART_EXPAND_THRESHOLD) {
             console.log('Performing smart recursive expansion.');
-            const query = '.foldable.call';
-            const timerLabel = `SmartExpand querySelectorAll for "${label}"`;
-            
+            const timerLabel = `SmartExpand for "${label}"`;
             console.time(timerLabel);
-            const children = callGroup.querySelectorAll(query);
-            console.timeEnd(timerLabel);
-            console.log(`Found ${children.length} descendant foldable elements to expand.`);
             
-            children.forEach(child => {
-                // The recursive call will create its own console group
-                this.expandSubtree(child, depth + 1, path);
+            // --- PERFORMANCE OPTIMIZATION START ---
+            // 1. Detach the callGroup from the DOM to prevent reflows during modification.
+            const parent = callGroup.parentNode;
+            const nextSibling = callGroup.nextSibling;
+            if (parent) {
+                parent.removeChild(callGroup);
+            }
+
+            // 2. Modify all descendant nodes while the group is "offline".
+            // This is much faster than the previous recursive approach.
+            const childrenToExpand = callGroup.querySelectorAll('.foldable.call');
+            childrenToExpand.forEach(child => {
+                child.classList.add('expanded');
+                const childCallGroup = child.nextElementSibling;
+                if (childCallGroup && childCallGroup.classList.contains('call-group')) {
+                    childCallGroup.classList.remove('collapsed');
+                }
             });
+
+            // 3. Re-attach the modified group to the DOM in a single operation.
+            if (parent) {
+                parent.insertBefore(callGroup, nextSibling);
+            }
+            // --- PERFORMANCE OPTIMIZATION END ---
+
+            console.timeEnd(timerLabel);
+            console.log(`Expanded ${childrenToExpand.length} descendant foldable elements.`);
         } else {
-            console.log('Subtree is large or empty, expanding only the first level.');
+            console.log('Subtree is large, expanding only the first level.');
         }
-        
-        path.delete(foldable); // Remove current node from path after its subtree is processed
         console.groupEnd();
     },
 
     // Recursively collapses a subtree
     collapseSubtree(foldable) {
         const label = `collapseSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
-        console.groupCollapsed(label);
+        console.group(label);
 
         foldable.classList.remove('expanded');
         const callGroup = foldable.nextElementSibling;
