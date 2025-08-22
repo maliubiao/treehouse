@@ -615,7 +615,7 @@ const TraceViewer = {
             console.log('Performing smart recursive expansion.');
             const timerLabel = `SmartExpand for "${label}"`;
             console.time(timerLabel);
-            
+
             // --- PERFORMANCE OPTIMIZATION START ---
             // 1. Detach the callGroup from the DOM to prevent reflows during modification.
             const parent = callGroup.parentNode;
@@ -663,14 +663,30 @@ const TraceViewer = {
         }
 
         callGroup.classList.add('collapsed');
-        
+
         // Also recursively collapse any children that were open
         const children = callGroup.querySelectorAll('.foldable.call.expanded');
         if(children.length > 0) {
             console.log(`Recursively collapsing ${children.length} expanded children.`);
-            children.forEach(child => this.collapseSubtree(child));
+            // --- PERFORMANCE OPTIMIZATION START ---
+            // Replace recursive calls with a single, non-recursive batch operation.
+            // Detaching is best practice to prevent any potential reflows during the loop.
+            const parent = callGroup.parentNode;
+            const nextSibling = callGroup.nextSibling;
+            if (parent) parent.removeChild(callGroup);
+
+            children.forEach(child => {
+                child.classList.remove('expanded');
+                const childCallGroup = child.nextElementSibling;
+                if (childCallGroup && childCallGroup.classList.contains('call-group')) {
+                    childCallGroup.classList.add('collapsed');
+                }
+            });
+
+            if (parent) parent.insertBefore(callGroup, nextSibling);
+            // --- PERFORMANCE OPTIMIZATION END ---
         }
-        
+
         console.groupEnd();
     },
 

@@ -283,8 +283,8 @@ async def main():
     """Main function to run the complex async operation"""
 
     # Setup monitoring
-    tracer = MonitoringTracer()
-    tracer.start_tracing()
+    # tracer = MonitoringTracer()
+    # tracer.start_tracing()
 
     try:
         print("=== Testing Complex Async Operations ===")
@@ -320,12 +320,12 @@ async def main():
             print(result)
 
     finally:
-        tracer.stop_tracing()
+        #    tracer.stop_tracing()
 
         print("\n" + "=" * 60)
         print("MONITORING EVENTS CAPTURED:")
         print("=" * 60)
-        tracer.print_events()
+        # tracer.print_events()
 
 
 if __name__ == "__main__":

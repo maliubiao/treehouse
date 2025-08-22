@@ -35,9 +35,16 @@ dev = [
 [project.scripts]
 context-tracer = "context_tracer.tracer_main:debug_main"
 
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["context_tracer"]
+packages = {find = {where = ["src"]}}
 
 [tool.setuptools.package-data]
-context_tracer = ["*.js", "*.css"]
+"context_tracer" = ["*.js", "*.css", "static/**/*", "utils/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "__pycache__/*", ".*/*"]
