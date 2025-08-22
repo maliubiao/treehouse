@@ -446,6 +446,41 @@ const TraceViewer = {
             const p = document.createElement('p');
             p.textContent = str;
             return p.innerHTML;
+        },
+        createDebugVarsElement(variables) {
+            if (!variables || Object.keys(variables).length === 0) return null;
+        
+            const container = document.createElement('div');
+            container.className = 'debug-vars';
+            container.title = TraceViewer.i18n.t('debugVarsTitle');
+            container.addEventListener('click', e => {
+                e.stopPropagation();
+                container.classList.toggle('expanded');
+            });
+        
+            const compactView = document.createElement('div');
+            compactView.className = 'compact-view';
+            const compactItems = [];
+            for (const [name, value] of Object.entries(variables)) {
+                const escapedName = TraceViewer.utils.escapeHTML(name);
+                const escapedValue = TraceViewer.utils.escapeHTML(value);
+                compactItems.push(`<span class="var-name">${escapedName}</span>=<span class="var-value">${escapedValue}</span>`);
+            }
+            compactView.innerHTML = compactItems.join(' ');
+            container.appendChild(compactView);
+        
+            const listView = document.createElement('div');
+            listView.className = 'list-view';
+            const listItems = [];
+            for (const [name, value] of Object.entries(variables)) {
+                const escapedName = TraceViewer.utils.escapeHTML(name);
+                const escapedValue = TraceViewer.utils.escapeHTML(value);
+                listItems.push(`<div class="var-entry"><span class="var-name">${escapedName}</span>: <span class="var-value"><pre>${escapedValue}</pre></span></div>`);
+            }
+            listView.innerHTML = listItems.join('');
+            container.appendChild(listView);
+        
+            return container;
         }
     },
     
@@ -559,6 +594,34 @@ const TraceViewer = {
         }
     },
 
+    renderDebugVarsForElement(element) {
+        if (element.dataset.debugRendered === 'true') {
+            return;
+        }
+    
+        const eventId = element.dataset.eventId;
+        if (!eventId) return;
+    
+        const metadata = window.eventMetadata[eventId];
+        // Only proceed for 'line' events that have variables
+        if (!metadata || metadata.type !== 'line' || !metadata.tracked_vars || Object.keys(metadata.tracked_vars).length === 0) {
+            element.dataset.debugRendered = 'true'; // Mark as checked to avoid re-processing
+            return;
+        }
+    
+        const debugVarsEl = this.utils.createDebugVarsElement(metadata.tracked_vars);
+        if (debugVarsEl) {
+            // Appending to the main line div, which is `element`
+            element.appendChild(debugVarsEl);
+        }
+        element.dataset.debugRendered = 'true';
+    },
+
+    renderDebugVarsForContainer(container) {
+        const elementsToRender = container.querySelectorAll('[data-event-id]:not([data-debug-rendered])');
+        elementsToRender.forEach(el => this.renderDebugVarsForElement(el));
+    },
+
     // Toggles a single foldable element's state
     toggleFoldable(foldable) {
         if (foldable.classList.contains('expanded')) {
@@ -584,6 +647,8 @@ const TraceViewer = {
 
         foldable.classList.add('expanded');
         callGroup.classList.remove('collapsed');
+        
+        this.renderDebugVarsForContainer(callGroup);
         
         console.log('Expanding only the first level.');
         console.groupEnd();
@@ -649,6 +714,8 @@ const TraceViewer = {
             
             if (callGroup && callGroup.classList.contains('call-group')) {
                 callGroup.classList.remove('collapsed');
+                
+                this.renderDebugVarsForContainer(callGroup);
                 
                 // Add the number of newly visible lines to the count
                 visibleCount += callGroup.children.length;
@@ -1737,42 +1804,6 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
             };
         },
 
-        createDebugVarsElementForSourceView(variables) {
-            if (!variables || Object.keys(variables).length === 0) return null;
-        
-            const container = document.createElement('div');
-            container.className = 'debug-vars';
-            container.title = TraceViewer.i18n.t('debugVarsTitle');
-            container.addEventListener('click', e => {
-                e.stopPropagation();
-                container.classList.toggle('expanded');
-            });
-        
-            const compactView = document.createElement('div');
-            compactView.className = 'compact-view';
-            const compactItems = [];
-            for (const [name, value] of Object.entries(variables)) {
-                const escapedName = TraceViewer.utils.escapeHTML(name);
-                const escapedValue = TraceViewer.utils.escapeHTML(value);
-                compactItems.push(`<span class="var-name">${escapedName}</span>=<span class="var-value">${escapedValue}</span>`);
-            }
-            compactView.innerHTML = compactItems.join(' ');
-            container.appendChild(compactView);
-        
-            const listView = document.createElement('div');
-            listView.className = 'list-view';
-            const listItems = [];
-            for (const [name, value] of Object.entries(variables)) {
-                const escapedName = TraceViewer.utils.escapeHTML(name);
-                const escapedValue = TraceViewer.utils.escapeHTML(value);
-                listItems.push(`<div class="var-entry"><span class="var-name">${escapedName}</span>: <span class="var-value"><pre>${escapedValue}</pre></span></div>`);
-            }
-            listView.innerHTML = listItems.join('');
-            container.appendChild(listView);
-        
-            return container;
-        },
-
         showSource(filename, lineNumber, frameId) {
             const sourceContent = document.getElementById('sourceContent');
             const titleDiv = document.getElementById('sourceTitle');
@@ -1916,7 +1947,7 @@ You MUST respond with a stream of JSON objects, one per line. Each JSON object m
                         try {
                             const jsonData = decodeURIComponent(escape(atob(encodedData)));
                             const data = JSON.parse(jsonData);
-                            const debugEl = this.createDebugVarsElementForSourceView(data);
+                            const debugEl = TraceViewer.utils.createDebugVarsElement(data);
                             if (debugEl && comment.parentNode) {
                                 comment.parentNode.replaceChild(debugEl, comment);
                             }

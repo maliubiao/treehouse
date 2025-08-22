@@ -260,14 +260,14 @@ class CallTreeHtmlRender:
         stripped_message = message.lstrip()
         indent = len(message) - len(stripped_message)
         is_multiline_stmt = False
-        debug_vars_html = ""
         if msg_type == TraceTypes.COLOR_LINE and log_data and isinstance(log_data, dict):
             raw_line = data.get("raw_line", "")
             if "\n" in raw_line:
                 is_multiline_stmt = True
             tracked_vars = data.get("tracked_vars")
             if tracked_vars:
-                debug_vars_html = self._build_debug_vars_html(tracked_vars)
+                # HTML for debug vars is no longer pre-rendered. It will be created by JS on demand.
+                # We still strip the debug comment from the message text.
                 debug_part_str = " # Debug: "
                 if debug_part_str in stripped_message:
                     stripped_message = stripped_message.split(debug_part_str, 1)[0]
@@ -310,7 +310,7 @@ class CallTreeHtmlRender:
             )
             toggle_details_html = ' <span class="toggle-details-btn" data-i18n-title="toggleDetailsTitle" title="Show details for this subtree">👁️</span>'
             actions_html = copy_subtree_html + focus_subtree_html + explain_ai_html + toggle_details_html
-        appended_html = f"{view_source_html}{comment_html}{debug_vars_html}{actions_html}"
+        appended_html = f"{view_source_html}{comment_html}{actions_html}"
         html_parts: List[str] = []
         if msg_type == TraceTypes.COLOR_CALL:
             html_parts.extend(
