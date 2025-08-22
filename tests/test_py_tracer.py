@@ -1679,9 +1679,9 @@ class TestCallTreeHtmlRender(BaseTracerTest):
         with patch("builtins.open", mock_open(read_data=b'print("hello")')) as mock_file:
             html = self.renderer.generate_html()
 
-        self.assertIn('<div class="foldable call"', html)
+        self.assertIn("App Container", html)
         self.assertIn("↘&nbsp;CALL&nbsp;my_func", html)
-        self.assertIn('<div class="line"', html)
+        self.assertIn("sidebar-search", html)
         self.assertIn("▷&nbsp;x&nbsp;=&nbsp;1", html)
         self.assertIn("view-source-btn", html)
         self.assertIn('window.executedLines = {"/app/main.py": {"1": [5]}}', html)

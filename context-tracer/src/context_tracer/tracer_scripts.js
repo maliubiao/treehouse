@@ -733,7 +733,7 @@ const TraceViewer = {
         const theme = selectedOption.value;
         const isDark = selectedOption.dataset.isDark === 'true';
         
-        document.getElementById('prism-theme').href = `https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/${theme}.min.css`;
+        document.getElementById('prism-theme').href = `static/css/${theme}.min.css`;
         document.body.className = isDark ? 'dark-theme' : '';
         this.updateLineHighlights();
     },
@@ -2099,8 +2099,8 @@ TraceViewer._redrawNavThumbnail = function(canvas, content, navigationBar) {
     
     // This part still runs on the main thread, but it's just data collection.
     const elementsData = [];
-    const elements = content.querySelectorAll('.foldable');
-    const sampleCount = Math.min(elements.length, 200);
+    const elements = content.querySelectorAll('.foldable, .line, .return, .error');
+    const sampleCount = Math.min(elements.length, 500); // Increased sample count for better fidelity
     const contentRect = content.getBoundingClientRect();
 
     for (let i = 0; i < sampleCount; i++) {
@@ -2167,28 +2167,22 @@ TraceViewer.initNavigationBar = function() {
         return;
     }
 
-    let isRedrawing = false;
-
     // Fast, non-debounced function for smooth scroll feedback
     const updateIndicators = () => {
         this._updateNavIndicators(navViewport, navPosition, content, navigationBar);
     };
 
-    // Debounced function for triggering an asynchronous redraw and syncing indicators
-    const debouncedRedrawAndSync = this.utils.debounce(() => {
-        if (isRedrawing) return;
-        isRedrawing = true;
-
-        requestAnimationFrame(() => {
-            this._redrawNavThumbnail(canvas, content, navigationBar);
-            this._updateNavIndicators(navViewport, navPosition, content, navigationBar);
-            isRedrawing = false;
-        });
+    // Debounced function for triggering an asynchronous redraw
+    const debouncedRedraw = this.utils.debounce(() => {
+        this._redrawNavThumbnail(canvas, content, navigationBar);
     }, 250);
 
     // Initial setup
     this.setupCanvasSize(canvas);
-    setTimeout(debouncedRedrawAndSync, 100); // Initial draw
+    setTimeout(() => {
+        debouncedRedraw();
+        updateIndicators();
+    }, 100);
 
     // --- Event Listeners ---
     content.addEventListener('scroll', updateIndicators);
@@ -2233,7 +2227,8 @@ TraceViewer.initNavigationBar = function() {
 
     window.addEventListener('resize', () => {
         this.setupCanvasSize(canvas);
-        debouncedRedrawAndSync();
+        debouncedRedraw();
+        updateIndicators();
     });
 
     // Observe content changes to trigger redraw
@@ -2241,7 +2236,8 @@ TraceViewer.initNavigationBar = function() {
     const observer = new MutationObserver(this.utils.debounce(() => {
         if (content.scrollHeight !== lastScrollHeight) {
             lastScrollHeight = content.scrollHeight;
-            debouncedRedrawAndSync();
+            debouncedRedraw();
+            updateIndicators();
         }
     }, 100));
     observer.observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
@@ -2249,7 +2245,7 @@ TraceViewer.initNavigationBar = function() {
     // Explicit redraw on user interactions that change content height
     content.addEventListener('click', (e) => {
         if (e.target.classList.contains('foldable') || e.target.classList.contains('expand-code-btn')) {
-            setTimeout(debouncedRedrawAndSync, 300); // Delay to allow for animations
+            setTimeout(debouncedRedraw, 300); // Delay to allow for animations
         }
     });
 };
