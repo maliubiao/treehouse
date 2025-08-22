@@ -561,6 +561,7 @@ const TraceViewer = {
         // Toggle folding on click
         content.addEventListener('click', e => {
             if (e.target.classList.contains('foldable')) {
+                console.log('[+] Foldable element clicked:', e.target.textContent.trim());
                 this.toggleFoldable(e.target);
             }
         });
@@ -582,40 +583,77 @@ const TraceViewer = {
     // Toggles a single foldable element's state
     toggleFoldable(foldable) {
         if (foldable.classList.contains('expanded')) {
+            console.log('Action: Collapsing subtree for', foldable.textContent.trim());
             this.collapseSubtree(foldable);
         } else {
+            console.log('Action: Expanding subtree for', foldable.textContent.trim());
             this.expandSubtree(foldable);
         }
     },
 
     // Expands a subtree, intelligently deciding between full and partial expansion
     expandSubtree(foldable) {
+        const label = `expandSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
+        console.group(label);
+
         const callGroup = foldable.nextElementSibling;
-        if (!callGroup || !callGroup.classList.contains('call-group')) return;
+        if (!callGroup || !callGroup.classList.contains('call-group')) {
+            console.warn('Could not find call-group for foldable:', foldable);
+            console.groupEnd();
+            return;
+        }
 
         foldable.classList.add('expanded');
         callGroup.classList.remove('collapsed');
 
         const subtreeSize = parseInt(foldable.dataset.subtreeSize, 10) || 0;
+        console.log(`Subtree size: ${subtreeSize}. Smart expand threshold: ${this.config.SMART_EXPAND_THRESHOLD}`);
+
         // If the subtree is small enough, perform a full recursive expansion for convenience
         if (subtreeSize > 0 && subtreeSize < this.config.SMART_EXPAND_THRESHOLD) {
-            const children = callGroup.querySelectorAll('.foldable.call');
-            children.forEach(child => this.expandSubtree(child));
+            console.log('Performing smart recursive expansion.');
+            const query = '.foldable.call';
+            const timerLabel = `SmartExpand querySelectorAll for "${label}"`;
+            
+            console.time(timerLabel);
+            const children = callGroup.querySelectorAll(query);
+            console.timeEnd(timerLabel);
+            console.log(`Found ${children.length} descendant foldable elements to expand.`);
+            
+            children.forEach(child => {
+                // The recursive call will create its own console group
+                this.expandSubtree(child);
+            });
+        } else {
+            console.log('Subtree is large, expanding only the first level.');
         }
         // For large subtrees, only the first level is expanded by the lines above.
+        console.groupEnd();
     },
 
     // Recursively collapses a subtree
     collapseSubtree(foldable) {
+        const label = `collapseSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
+        console.group(label);
+
         foldable.classList.remove('expanded');
         const callGroup = foldable.nextElementSibling;
-        if (!callGroup || !callGroup.classList.contains('call-group')) return;
+        if (!callGroup || !callGroup.classList.contains('call-group')) {
+            console.warn('Could not find call-group for foldable during collapse:', foldable);
+            console.groupEnd();
+            return;
+        }
 
         callGroup.classList.add('collapsed');
         
         // Also recursively collapse any children that were open
         const children = callGroup.querySelectorAll('.foldable.call.expanded');
-        children.forEach(child => this.collapseSubtree(child));
+        if(children.length > 0) {
+            console.log(`Recursively collapsing ${children.length} expanded children.`);
+            children.forEach(child => this.collapseSubtree(child));
+        }
+        
+        console.groupEnd();
     },
 
     // Expands top-level items level by level until a line threshold is met
