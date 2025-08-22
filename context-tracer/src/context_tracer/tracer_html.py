@@ -533,6 +533,13 @@ class CallTreeHtmlRender:
         # Perform server-side i18n rendering
         rendered_html = self._render_i18n(self._template, self.default_lang)
 
+        try:
+            nav_worker_path = Path(__file__).parent / "nav_worker.js"
+            nav_worker_script_content = nav_worker_path.read_text("utf-8")
+        except FileNotFoundError:
+            logging.error(f"Asset file not found: {nav_worker_path}")
+            nav_worker_script_content = "console.error('nav_worker.js not found');"
+
         # Inject data into the template
         final_html = rendered_html.replace("{{title}}", html.escape(title))
         final_html = final_html.replace("{{generation_time}}", generation_time)
@@ -547,6 +554,7 @@ class CallTreeHtmlRender:
         final_html = final_html.replace("{{comments_data}}", json.dumps(self._comments_data))
         final_html = final_html.replace("{{line_comment}}", json.dumps(self.line_comment))
         final_html = final_html.replace("{{event_metadata_data}}", json.dumps(self._event_metadata))
+        final_html = final_html.replace("{{nav_worker_script_content}}", nav_worker_script_content)
 
         return final_html
 
@@ -596,7 +604,6 @@ class CallTreeHtmlRender:
                 "tracer_styles.css",
                 "tracer_scripts.js",
                 "translations.json",
-                "nav_worker.js",
             ]
             for asset in core_assets:
                 source_asset = asset_dir / asset

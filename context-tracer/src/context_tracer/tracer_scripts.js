@@ -2149,7 +2149,15 @@ TraceViewer.initNavigationBar = function() {
 
     // Initialize Web Worker for background rendering
     try {
-        this.navWorker = new Worker('nav_worker.js');
+        const workerScriptElement = document.getElementById('nav-worker-script');
+        if (!workerScriptElement || !workerScriptElement.textContent.trim()) {
+            throw new Error("Worker script element not found or is empty.");
+        }
+        const workerScriptContent = workerScriptElement.textContent;
+        const blob = new Blob([workerScriptContent], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        this.navWorker = new Worker(workerUrl);
+
         this.navWorker.onmessage = (event) => {
             if (event.data.type === 'rendered' && event.data.imageBitmap) {
                 const bitmap = event.data.imageBitmap;
