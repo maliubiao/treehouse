@@ -1316,8 +1316,7 @@ body.skeleton-mode #content .call-group.show-details .var {
     align-items: center;
     justify-content: center;
 }
-.ai-toggle-subtree-btn i { transition: transform 0.3s ease; }
-.ai-subtree-section.collapsed .ai-toggle-subtree-btn i { transform: rotate(-180deg); }
+
 
 .ai-subtree-content {
     padding: var(--space-md);

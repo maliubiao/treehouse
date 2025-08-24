@@ -146,14 +146,14 @@ function initializeAiExplainer(TraceViewer) {
 
             // 2. Collapsible code subtree section
             const subtreeSection = document.createElement('div');
-            subtreeSection.className = 'ai-subtree-section';
+            subtreeSection.className = 'ai-subtree-section collapsed';
             
             const subtreeHeader = document.createElement('div');
             subtreeHeader.className = 'ai-subtree-header';
             subtreeHeader.innerHTML = `
                 <span class="ai-subtree-title">${TraceViewer.i18n.t('aiSubtreeTitle')}</span>
                 <button class="ai-toggle-subtree-btn" title="${TraceViewer.i18n.t('aiToggleSubtreeTitle')}">
-                    <i class="fas fa-chevron-up"></i>
+                    <i class="fas fa-chevron-down"></i>
                 </button>
             `;
 
