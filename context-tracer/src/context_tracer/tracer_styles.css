@@ -1710,7 +1710,6 @@ body.skeleton-mode #content .call-group.show-details .var {
     flex-direction: column;
     gap: 16px;
     min-height: 0;
-    max-height: 400px; /* Set a maximum height with scrolling */
 }
 
 /* Make response section flexible */
@@ -1719,6 +1718,7 @@ body.skeleton-mode #content .call-group.show-details .var {
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow-y: auto;
 }
 
 .ai-chat-container {
