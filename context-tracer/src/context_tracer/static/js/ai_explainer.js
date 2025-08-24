@@ -1,25 +1,39 @@
 /**
  * AI Explainer Module for TraceViewer.
  * This module encapsulates all functionality related to fetching AI-based explanations
- * for code trace subtrees.
+ * for code trace subtrees, supporting multi-turn conversations.
  */
 function initializeAiExplainer(TraceViewer) {
     const aiExplainer = {
+        // Main Dialog UI Elements
         dialog: document.getElementById('aiExplainDialog'),
         closeBtn: document.querySelector('.ai-explain-close-btn'),
+        body: document.getElementById('aiExplainBody'),
+        status: document.getElementById('aiExplainStatus'),
+        settingsBtn: document.getElementById('aiSettingsBtn'),
+        clearChatBtn: null, // Will be initialized in init()
+        currentModelDisplay: document.getElementById('aiCurrentModel'),
+
+        // Settings Dialog UI Elements
+        settingsDialog: document.getElementById('aiSettingsDialog'),
+        settingsCloseBtn: document.getElementById('aiSettingsCloseBtn'),
         apiUrlInput: document.getElementById('llmApiUrl'),
         modelSelect: document.getElementById('llmModelSelect'),
         saveBtn: document.getElementById('llmSettingsSaveBtn'),
         fetchModelsBtn: document.getElementById('llmFetchModelsBtn'),
-        body: document.getElementById('aiExplainBody'),
-        status: document.getElementById('aiExplainStatus'),
-
+        
+        // State Management
         currentLogText: '',
+        conversationHistory: [],
         abortController: null,
 
+        // References to dynamic UI parts for easy access
+        currentChatMessagesDiv: null,
+        currentThinkingSection: null,
+        currentResponseSection: null,
+
         init() {
-            this.abortController = null;
-            // Event listener for the main "Explain AI" button (delegated)
+            // Event listeners for main dialog actions (delegated where possible)
             TraceViewer.elements.content.addEventListener('click', e => {
                 if (e.target.classList.contains('explain-ai-btn')) {
                     e.preventDefault();
@@ -28,12 +42,22 @@ function initializeAiExplainer(TraceViewer) {
                 }
             });
 
-            // Dialog-specific event listeners
             this.closeBtn.addEventListener('click', () => this.hide());
             this.dialog.addEventListener('click', (e) => {
-                if (e.target === this.dialog) {
-                    this.hide();
-                }
+                if (e.target === this.dialog) this.hide();
+            });
+            this.settingsBtn.addEventListener('click', () => this.showSettings());
+            
+            // This button is added dynamically, so we need to get it after the DOM is ready
+            this.clearChatBtn = document.getElementById('aiClearChatBtn');
+            if (this.clearChatBtn) {
+                this.clearChatBtn.addEventListener('click', () => this.clearConversation());
+            }
+
+            // Settings dialog event listeners
+            this.settingsCloseBtn.addEventListener('click', () => this.hideSettings());
+            this.settingsDialog.addEventListener('click', (e) => {
+                if (e.target === this.settingsDialog) this.hideSettings();
             });
             this.saveBtn.addEventListener('click', () => this.saveSettings());
             this.fetchModelsBtn.addEventListener('click', () => this.fetchModels());
@@ -41,13 +65,23 @@ function initializeAiExplainer(TraceViewer) {
             this.loadSettings();
         },
 
+        updateCurrentModelDisplay() {
+            const model = localStorage.getItem('llmModel');
+            if(model) {
+                this.currentModelDisplay.textContent = model.length > 25 ? `${model.substring(0, 25)}...` : model;
+            } else {
+                this.currentModelDisplay.textContent = TraceViewer.i18n.t('aiModelNotSet');
+            }
+        },
+
         loadSettings() {
             const apiUrl = localStorage.getItem('llmApiUrl');
             const model = localStorage.getItem('llmModel');
             if (apiUrl) {
                 this.apiUrlInput.value = apiUrl;
-                this.fetchModels(model); // Fetch models and select the saved one
+                this.fetchModels(model);
             }
+            this.updateCurrentModelDisplay();
         },
 
         saveSettings() {
@@ -55,8 +89,9 @@ function initializeAiExplainer(TraceViewer) {
             const model = this.modelSelect.value;
             localStorage.setItem('llmApiUrl', apiUrl);
             localStorage.setItem('llmModel', model);
-            this.status.textContent = TraceViewer.i18n.t('aiStatusSaved');
-            setTimeout(() => this.status.textContent = '', 2000);
+            this.updateCurrentModelDisplay();
+            alert(TraceViewer.i18n.t('aiSettingsSaved'));
+            this.hideSettings();
         },
 
         async fetchModels(savedModel = null) {
@@ -65,8 +100,11 @@ function initializeAiExplainer(TraceViewer) {
                 alert(TraceViewer.i18n.t('aiApiUrlAlert'));
                 return;
             }
+            
+            const originalBtnContent = this.fetchModelsBtn.innerHTML;
+            this.fetchModelsBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            this.fetchModelsBtn.disabled = true;
 
-            this.status.textContent = TraceViewer.i18n.t('aiStatusFetching');
             try {
                 const response = await fetch(`${baseUrl}/models`);
                 if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
@@ -81,14 +119,16 @@ function initializeAiExplainer(TraceViewer) {
                     this.modelSelect.appendChild(option);
                 });
 
-                if (savedModel) {
-                    this.modelSelect.value = savedModel;
+                const currentSavedModel = savedModel || localStorage.getItem('llmModel');
+                if (currentSavedModel) {
+                    this.modelSelect.value = currentSavedModel;
                 }
-
-                this.status.textContent = TraceViewer.i18n.t('aiStatusLoaded');
             } catch (error) {
-                this.status.textContent = `Error: ${error.message}`;
+                alert(`${TraceViewer.i18n.t('aiFetchModelsError')}: ${error.message}`);
                 console.error('Failed to fetch models:', error);
+            } finally {
+                this.fetchModelsBtn.innerHTML = originalBtnContent;
+                this.fetchModelsBtn.disabled = false;
             }
         },
 
@@ -99,206 +139,37 @@ function initializeAiExplainer(TraceViewer) {
             const callGroup = foldable.nextElementSibling;
             if (!callGroup || !callGroup.classList.contains('call-group')) return;
 
-            // Use the same logic as copy subtree to get the text
             const logText = this.getSubtreeText(foldable, callGroup);
             this.show(logText);
         },
 
         getSubtreeText(foldable, callGroup) {
-            // Reuse the existing _nodeToTextLines method from TraceViewer
-            let allLines = [];
-
-            // Process the main foldable 'call' line itself
-            allLines.push(...TraceViewer._nodeToTextLines(foldable));
-
-            // Process all descendant log lines within the call group
+            let allLines = [...TraceViewer._nodeToTextLines(foldable)];
             const descendants = callGroup.querySelectorAll('div[data-indent]');
-            descendants.forEach(node => {
-                allLines.push(...TraceViewer._nodeToTextLines(node));
-            });
+            descendants.forEach(node => allLines.push(...TraceViewer._nodeToTextLines(node)));
             
-            // Find and process the corresponding 'return' or 'exception' line
             let nextElement = callGroup.nextElementSibling;
             const foldableIndent = parseInt(foldable.dataset.indent, 10) || 0;
             while(nextElement) {
                 const nextIndent = parseInt(nextElement.dataset.indent, 10) || 0;
-                if (nextElement.classList.contains('foldable') && nextIndent <= foldableIndent) {
-                    break; // Stop if we hit another call at the same or higher level
-                }
+                if (nextElement.classList.contains('foldable') && nextIndent <= foldableIndent) break;
                 if ((nextElement.classList.contains('return') || nextElement.classList.contains('error')) && nextIndent === foldableIndent) {
                     allLines.push(...TraceViewer._nodeToTextLines(nextElement));
                     break;
                 }
                 nextElement = nextElement.nextElementSibling;
             }
-
             return allLines.join('\n');
         },
-
-        show(logText) {
-            this.currentLogText = logText;
-            this.body.innerHTML = ''; // Clear previous content
-            this.status.textContent = TraceViewer.i18n.t('aiStatusReady');
-
-            // 1. Main container
-            const container = document.createElement('div');
-            container.className = 'ai-explain-container';
-
-            // 2. Collapsible code subtree section
-            const subtreeSection = document.createElement('div');
-            subtreeSection.className = 'ai-subtree-section ai-subtree-collapsed';
-            
-            const subtreeHeader = document.createElement('div');
-            subtreeHeader.className = 'ai-subtree-header';
-            subtreeHeader.innerHTML = `
-                <span class="ai-subtree-title">${TraceViewer.i18n.t('aiSubtreeTitle')}</span>
-                <button class="ai-toggle-subtree-btn" title="${TraceViewer.i18n.t('aiToggleSubtreeTitle')}">
-                    <i class="fas fa-chevron-down"></i>
-                </button>
-            `;
-
-            const subtreeContent = document.createElement('div');
-            subtreeContent.className = 'ai-subtree-content';
-            const pre = document.createElement('pre');
-            pre.textContent = logText;
-            subtreeContent.appendChild(pre);
-
-            subtreeSection.appendChild(subtreeHeader);
-            subtreeSection.appendChild(subtreeContent);
-            
-            // Toggle functionality for subtree
-            subtreeHeader.addEventListener('click', () => {
-                subtreeSection.classList.toggle('ai-subtree-collapsed');
-                const icon = subtreeHeader.querySelector('i');
-                icon.className = subtreeSection.classList.contains('ai-subtree-collapsed') ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
-            });
-
-
-            // 3. Chat messages area
-            const chatMessages = document.createElement('div');
-            chatMessages.id = 'aiChatMessages';
-            chatMessages.className = 'ai-chat-messages';
-            chatMessages.innerHTML = `<div class="ai-empty-state">${TraceViewer.i18n.t('aiEmptyState')}</div>`;
-            
-            // 4. User input section
-            const inputSection = document.createElement('div');
-            inputSection.className = 'ai-input-section';
-            inputSection.innerHTML = `
-                <div class="ai-input-wrapper">
-                    <textarea id="aiUserQuestion" class="ai-user-question" placeholder="${TraceViewer.i18n.t('aiUserQuestionPlaceholder')}" rows="3"></textarea>
-                    <button id="aiAskQuestionBtn" class="ai-ask-btn" title="Ctrl+Enter">
-                        <i class="fas fa-paper-plane"></i>
-                    </button>
-                </div>
-            `;
-
-            // Append all parts to the main container
-            container.appendChild(subtreeSection);
-            container.appendChild(chatMessages);
-            container.appendChild(inputSection);
-            this.body.appendChild(container);
-
-            // Add event listeners for the new elements
-            const askBtn = document.getElementById('aiAskQuestionBtn');
-            const questionTextarea = document.getElementById('aiUserQuestion');
-
-            askBtn.addEventListener('click', () => this.startExplanation());
-            questionTextarea.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    this.startExplanation();
-                }
-            });
-
-            this.dialog.style.display = 'flex';
-        },
-
-
-        hide() {
-            if (this.abortController) {
-                this.abortController.abort();
-            }
-            this.dialog.style.display = 'none';
-            this.body.innerHTML = '';
-            this.status.textContent = '';
-        },
-
-        async startExplanation() {
-            const baseUrl = this.apiUrlInput.value.trim();
-            const model = this.modelSelect.value;
-            const userQuestionInput = document.getElementById('aiUserQuestion');
-            const userQuestion = userQuestionInput.value.trim();
-            const askBtn = document.getElementById('aiAskQuestionBtn');
-
-            if (!baseUrl || !model) {
-                alert(TraceViewer.i18n.t('aiApiUrlAlert'));
-                return;
-            }
-
-            if (!userQuestion) {
-                alert(TraceViewer.i18n.t('aiQuestionRequiredAlert'));
-                return;
-            }
-
-            // Collapse subtree if not already collapsed
-            const subtreeSection = this.body.querySelector('.ai-subtree-section');
-            if (subtreeSection && !subtreeSection.classList.contains('ai-subtree-collapsed')) {
-                subtreeSection.classList.add('ai-subtree-collapsed');
-                const icon = subtreeSection.querySelector('.ai-subtree-header i');
-                if (icon) icon.className = 'fas fa-chevron-down';
-            }
-
-            const chatMessages = document.getElementById('aiChatMessages');
-            // Clear empty state if it exists
-            const emptyState = chatMessages.querySelector('.ai-empty-state');
-            if (emptyState) {
-                emptyState.remove();
-            }
-
-            // Add user message to chat
-            const userMsgDiv = document.createElement('div');
-            userMsgDiv.className = 'ai-chat-message user-message';
-            userMsgDiv.innerHTML = `<div class="ai-message-content">${this.escapeHtml(userQuestion)}</div>`;
-            chatMessages.appendChild(userMsgDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-
-            // Clear input and disable it
-            userQuestionInput.value = '';
-            userQuestionInput.disabled = true;
-            askBtn.disabled = true;
-
-            // Prepare and add AI message container
-            const aiMsgDiv = document.createElement('div');
-            aiMsgDiv.className = 'ai-chat-message ai-message';
-            aiMsgDiv.innerHTML = `
-                <div class="ai-message-header">
-                    <span class="ai-message-sender">🤖 AI Assistant</span>
-                </div>
-                <div class="ai-message-content">
-                    <div class="ai-thinking-section" style="display: none;">
-                        <div class="ai-section-label">
-                            <i class="fas fa-brain"></i> ${TraceViewer.i18n.t('aiThinkingProcess')}
-                        </div>
-                        <div class="ai-thinking-content"><pre></pre></div>
-                    </div>
-                    <div class="ai-response-section">
-                         <div class="ai-section-label">
-                            <i class="fas fa-comment-dots"></i> ${TraceViewer.i18n.t('aiAnswer')}
-                         </div>
-                        <div class="ai-response-content-body"></div>
-                    </div>
-                </div>
-            `;
-            chatMessages.appendChild(aiMsgDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-
-            const systemPrompt = `You are an expert Python code analysis assistant. Analyze the provided trace log subtree and answer the user's question.
+        
+        _buildInitialSystemPrompt(logText) {
+            const systemContent = `You are an expert Python code analysis assistant. Analyze the provided trace log subtree and answer the user's question.
 
 **Trace Log Context:**
 The following is a subtree from a Python execution trace, showing function calls, returns, and line executions with debug variables:
 
 \`\`\`
-${this.currentLogText}
+${logText}
 \`\`\`
 
 **Your Task:**
@@ -307,42 +178,164 @@ ${this.currentLogText}
 3. Answer the user's question specifically based on what actually happened in the code.
 4. Use Chinese for your response.
 5. Be concrete and reference actual values from the trace.
+6. Format your response using Markdown. Use code blocks for code snippets.
 
 **Response Format:**
 Provide a clear, well-structured response that directly answers the user's question based on the trace data.`;
+            return { role: 'system', content: systemContent };
+        },
+        
+        show(logText) {
+            this.currentLogText = logText;
+            this.conversationHistory = [this._buildInitialSystemPrompt(logText)];
+            this.updateCurrentModelDisplay();
+            this.renderFullUI();
+            this.dialog.style.display = 'flex';
+        },
+        
+        clearConversation() {
+            this.conversationHistory = [this._buildInitialSystemPrompt(this.currentLogText)];
+            this.renderFullUI();
+            if (this.currentChatMessagesDiv) {
+                this.currentChatMessagesDiv.innerHTML = `<div class="ai-empty-state">${TraceViewer.i18n.t('aiEmptyState')}</div>`;
+            }
+            this.status.textContent = "对话已重置。";
+            setTimeout(() => this.status.textContent = '', 3000);
+        },
 
-            const userPrompt = `User Question: ${userQuestion}\n\nPlease analyze the trace log above and answer my question.`;
-            const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
+        renderFullUI() {
+            this.resetDialogState();
+            this.body.innerHTML = ''; // Clear previous UI
+            
+            const container = document.createElement('div');
+            container.className = 'ai-explain-container';
 
+            // Subtree Section
+            const subtreeSection = document.createElement('div');
+            subtreeSection.className = 'ai-subtree-section ai-subtree-collapsed';
+            subtreeSection.innerHTML = `
+                <div class="ai-subtree-header">
+                    <span class="ai-subtree-title">${TraceViewer.i18n.t('aiSubtreeTitle')}</span>
+                    <button class="ai-toggle-subtree-btn" title="${TraceViewer.i18n.t('aiToggleSubtreeTitle')}">
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                </div>
+                <div class="ai-subtree-content"><pre></pre></div>`;
+            subtreeSection.querySelector('pre').textContent = this.currentLogText;
+            subtreeSection.querySelector('.ai-subtree-header').addEventListener('click', () => {
+                subtreeSection.classList.toggle('ai-subtree-collapsed');
+                const icon = subtreeSection.querySelector('i');
+                icon.className = subtreeSection.classList.contains('ai-subtree-collapsed') ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
+            });
+            
+            // Chat Messages Area
+            const chatMessages = document.createElement('div');
+            chatMessages.id = 'aiChatMessages';
+            chatMessages.className = 'ai-chat-messages';
+            chatMessages.innerHTML = `<div class="ai-empty-state">${TraceViewer.i18n.t('aiEmptyState')}</div>`;
+            this.currentChatMessagesDiv = chatMessages;
+
+            // Input Section
+            const inputSection = document.createElement('div');
+            inputSection.className = 'ai-input-section';
+            inputSection.innerHTML = `
+                <div class="ai-input-wrapper">
+                    <textarea id="aiUserQuestion" class="ai-user-question" placeholder="${TraceViewer.i18n.t('aiUserQuestionPlaceholder')}" rows="1"></textarea>
+                    <button id="aiAskQuestionBtn" class="ai-ask-btn" title="Send (Enter)">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>`;
+            
+            container.appendChild(subtreeSection);
+            container.appendChild(chatMessages);
+            container.appendChild(inputSection);
+            this.body.appendChild(container);
+
+            const askBtn = document.getElementById('aiAskQuestionBtn');
+            const questionTextarea = document.getElementById('aiUserQuestion');
+
+            askBtn.addEventListener('click', () => this.startExplanation());
+            questionTextarea.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.startExplanation();
+                }
+            });
+            questionTextarea.addEventListener('input', () => {
+                questionTextarea.style.height = 'auto';
+                questionTextarea.style.height = `${questionTextarea.scrollHeight}px`;
+            });
+        },
+
+        resetDialogState() {
+            this.status.textContent = '';
+            this.currentChatMessagesDiv = null;
+            this.currentThinkingSection = null;
+            this.currentResponseSection = null;
+            if (this.abortController) {
+                this.abortController.abort();
+                this.abortController = null;
+            }
+        },
+
+        hide() {
+            this.resetDialogState();
+            this.dialog.style.display = 'none';
+            this.hideSettings();
+        },
+
+        showSettings() {
+            this.settingsDialog.style.display = 'flex';
+        },
+
+        hideSettings() {
+            this.settingsDialog.style.display = 'none';
+        },
+
+        async startExplanation() {
+            const baseUrl = localStorage.getItem('llmApiUrl');
+            const model = localStorage.getItem('llmModel');
+            const userQuestionInput = document.getElementById('aiUserQuestion');
+            const userQuestion = userQuestionInput.value.trim();
+            const askBtn = document.getElementById('aiAskQuestionBtn');
+
+            if (!baseUrl || !model) {
+                alert(TraceViewer.i18n.t('aiApiUrlAlert'));
+                this.showSettings(); return;
+            }
+            if (!userQuestion) {
+                alert(TraceViewer.i18n.t('aiQuestionRequiredAlert')); return;
+            }
+            
+            // Add user message to history and UI
+            this.conversationHistory.push({ role: 'user', content: userQuestion });
+            this.renderUserMessage(userQuestion);
+
+            userQuestionInput.value = '';
+            userQuestionInput.style.height = 'auto';
+            userQuestionInput.disabled = true;
+            askBtn.disabled = true;
+            
             this.abortController = new AbortController();
             this.status.textContent = TraceViewer.i18n.t('aiStatusSending');
-
+            
             try {
-                const response = await fetch(`${baseUrl}/ask?model=${encodeURIComponent(model)}`, {
+                const response = await fetch(`${baseUrl}/ask`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ prompt: fullPrompt }),
+                    body: JSON.stringify({ messages: this.conversationHistory, model: model }),
                     signal: this.abortController.signal
                 });
 
                 if (!response.ok || !response.body) throw new Error(`HTTP error! Status: ${response.status}`);
 
                 this.status.textContent = TraceViewer.i18n.t('aiStatusReceiving');
-                
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let sseLineBuffer = '';
-                
-                let thinkingContent = '';
-                let responseContent = '';
-                let receivedChars = 0;
+                let fullResponseText = '';
 
-                const thinkingSection = aiMsgDiv.querySelector('.ai-thinking-section');
-                const thinkingPre = thinkingSection.querySelector('pre');
-                const responseContentDiv = aiMsgDiv.querySelector('.ai-response-content-body');
-                
-                // Show thinking section from the start to stream content into it
-                thinkingSection.style.display = 'block';
+                this.renderAssistantMessageShell();
 
                 while (true) {
                     const { value, done } = await reader.read();
@@ -357,48 +350,31 @@ Provide a clear, well-structured response that directly answers the user's quest
                         try {
                             const ssePayload = JSON.parse(sseLine);
                             
-                            receivedChars += (ssePayload.data || '').length;
-                            this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${receivedChars} chars)`;
-
-                            if (ssePayload.event === "thinking") {
-                                if (typeof ssePayload.data === 'string') {
-                                    thinkingContent += ssePayload.data;
-                                    thinkingPre.textContent = thinkingContent;
-                                    chatMessages.scrollTop = chatMessages.scrollHeight;
-                                }
-                            } else if (ssePayload.event === "content") {
-                                if (typeof ssePayload.data === 'string') {
-                                    responseContent += ssePayload.data;
-                                    responseContentDiv.innerHTML = this.formatResponse(responseContent);
-                                    chatMessages.scrollTop = chatMessages.scrollHeight;
-                                }
+                            this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${(fullResponseText.length / 1024).toFixed(1)} KB)`;
+                            
+                            if (ssePayload.event === "thinking" && ssePayload.data) {
+                                this.updateThinkingSection(ssePayload.data, true);
+                            } else if (ssePayload.event === "content" && ssePayload.data) {
+                                fullResponseText += ssePayload.data;
+                                this.updateResponseSection(fullResponseText);
                             } else if (ssePayload.event === "error") {
                                 throw new Error(ssePayload.data);
                             }
-                        } catch (e) {
-                            console.warn('Failed to parse SSE line:', sseLine, e);
-                        }
+                        } catch (e) { console.warn('Failed to parse SSE line:', sseLine, e); }
                     }
                 }
-
-                // Final update after stream ends
-                responseContentDiv.innerHTML = this.formatResponse(responseContent);
-                this.status.textContent = `${TraceViewer.i18n.t('aiStatusFinished')} (Total ${receivedChars} chars)`;
-
+                
+                // Add final assistant message to history
+                this.conversationHistory.push({ role: 'assistant', content: fullResponseText });
+                
+                this.status.textContent = `${TraceViewer.i18n.t('aiStatusFinished')} (Total ${(fullResponseText.length / 1024).toFixed(1)} KB)`;
 
             } catch (error) {
-                const errorMessage = error.name === 'AbortError' 
-                    ? 'Request aborted by user.' 
-                    : `${TraceViewer.i18n.t('errorMessagePrefix')}${error.message}`;
-                
+                const errorMessage = error.name === 'AbortError' ? 'Request aborted.' : `${TraceViewer.i18n.t('errorMessagePrefix')}${error.message}`;
                 this.status.textContent = errorMessage;
-                console.error('AI Explanation failed:', error);
-                
-                aiMsgDiv.querySelector('.ai-message-content').innerHTML = 
-                    `<div class="ai-error">❌ ${errorMessage}</div>`;
-
+                this.updateResponseSection(errorMessage, true);
+                this.conversationHistory.push({ role: 'assistant', content: `Error: ${errorMessage}` });
             } finally {
-                // Re-enable input
                 userQuestionInput.disabled = false;
                 askBtn.disabled = false;
                 this.abortController = null;
@@ -406,30 +382,82 @@ Provide a clear, well-structured response that directly answers the user's quest
             }
         },
 
-        escapeHtml(unsafe) {
-            if (!unsafe) return '';
-            return unsafe
-                 .replace(/&/g, "&amp;")
-                 .replace(/</g, "&lt;")
-                 .replace(/>/g, "&gt;")
-                 .replace(/"/g, "&quot;")
-                 .replace(/'/g, "&#039;");
+        renderUserMessage(content) {
+            const emptyState = this.currentChatMessagesDiv.querySelector('.ai-empty-state');
+            if (emptyState) emptyState.remove();
+            
+            const userMsgDiv = document.createElement('div');
+            userMsgDiv.className = 'ai-chat-message user-message';
+            const userMsgContent = document.createElement('div');
+            userMsgContent.className = 'ai-message-content';
+            userMsgContent.textContent = content;
+            userMsgDiv.appendChild(userMsgContent);
+            this.currentChatMessagesDiv.appendChild(userMsgDiv);
+            this.currentChatMessagesDiv.scrollTop = this.currentChatMessagesDiv.scrollHeight;
+        },
+
+        renderAssistantMessageShell() {
+            const aiMsgDiv = document.createElement('div');
+            aiMsgDiv.className = 'ai-chat-message ai-message';
+            
+            // Thinking section (initially hidden)
+            const thinkingSection = document.createElement('div');
+            thinkingSection.className = 'ai-thinking-section';
+            thinkingSection.style.display = 'none';
+            thinkingSection.innerHTML = `
+                <div class="ai-section-label">
+                    <i class="fas fa-brain"></i> ${TraceViewer.i18n.t('aiThinkingProcess')}
+                </div>
+                <div class="ai-thinking-content"><pre></pre></div>`;
+            this.currentThinkingSection = thinkingSection;
+
+            // Response section
+            const responseSection = document.createElement('div');
+            responseSection.className = 'ai-response-section ai-message-content';
+            responseSection.innerHTML = `<div class="ai-response-content-body"><span class="ai-cursor"></span></div>`;
+            this.currentResponseSection = responseSection;
+
+            aiMsgDiv.appendChild(thinkingSection);
+            aiMsgDiv.appendChild(responseSection);
+            this.currentChatMessagesDiv.appendChild(aiMsgDiv);
+            this.currentChatMessagesDiv.scrollTop = this.currentChatMessagesDiv.scrollHeight;
+        },
+
+        updateThinkingSection(contentChunk, append = false) {
+            if (!this.currentThinkingSection) return;
+            this.currentThinkingSection.style.display = 'block';
+            const pre = this.currentThinkingSection.querySelector('pre');
+            if (append) pre.textContent += contentChunk;
+            else pre.textContent = contentChunk;
+            this.currentChatMessagesDiv.scrollTop = this.currentChatMessagesDiv.scrollHeight;
+        },
+        
+        updateResponseSection(fullContent, isError = false) {
+            if (!this.currentResponseSection) return;
+            const contentBody = this.currentResponseSection.querySelector('.ai-response-content-body');
+            
+            if (isError) {
+                contentBody.innerHTML = `<div class="ai-error">❌ ${fullContent}</div>`;
+            } else {
+                contentBody.innerHTML = this.formatResponse(fullContent);
+                contentBody.querySelectorAll('pre code:not(.language-processed)').forEach((block) => {
+                    Prism.highlightElement(block, false, () => block.classList.add('language-processed'));
+                });
+            }
+            this.currentChatMessagesDiv.scrollTop = this.currentChatMessagesDiv.scrollHeight;
         },
 
         formatResponse(content) {
-            // Use marked.js for proper Markdown rendering
             try {
-                // Configure marked to handle line breaks correctly
-                return marked.parse(content, { breaks: true });
+                return marked.parse(content, { breaks: true, gfm: true });
             } catch (error) {
-                console.error('Markdown parsing error:', error);
-                // Fallback to simple HTML escaping and line breaks
-                return this.escapeHtml(content).replace(/\n/g, '<br>');
+                const pre = document.createElement('pre');
+                pre.textContent = content;
+                return pre.outerHTML;
             }
         }
     };
 
-    // Initialize the module and attach to the main viewer object
     aiExplainer.init();
     TraceViewer.aiExplainer = aiExplainer;
 }

@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 
 # Add the project root to sys.path to allow for module imports.
 # This is dynamically calculated based on the test file's location.
-project_root = str(Path(__file__).resolve().parent.parent / "debugger/lldb")
+project_root = str(Path(__file__).resolve().parent.parent / "native_context_tracer/src")
 print(project_root)
 sys.path.insert(0, str(project_root))
 
-from tracer import SourceRangeManager
+from native_context_tracer import SourceRangeManager
 
 
 # A base class to encapsulate common setup for SourceRangeManager tests.
@@ -60,8 +60,8 @@ class TestSourceRangeManagerInitialization(BaseTestSourceRangeManager):
         # the tracer.source_ranges module's namespace.
         # Also, patch the 'get' method on the mocked config_manager.config object.
         with (
-            patch("tracer.source_ranges.Console") as MockConsole,
-            patch("tracer.source_ranges.SourceCacheManager") as MockCacheManager,
+            patch("native_context_tracer.source_ranges.Console") as MockConsole,
+            patch("native_context_tracer.source_ranges.SourceCacheManager") as MockCacheManager,
             patch.object(self.mock_config_manager.config, "get") as MockConfigGet,
         ):
             # Define a new side_effect for MockConfigGet within this test's scope
@@ -138,7 +138,7 @@ class TestSourceRangeManagerFileSkipping(BaseTestSourceRangeManager):
         manager._file_skip_cache = {file_path: False}
 
         # Patch fnmatch.fnmatch to ensure it's not called, proving cache was used
-        with patch("tracer.source_ranges.fnmatch.fnmatch") as mock_fnmatch:
+        with patch("native_context_tracer.source_ranges.fnmatch.fnmatch") as mock_fnmatch:
             # Execute the method under test
             result = manager.should_skip_source_file_by_path(file_path)
 

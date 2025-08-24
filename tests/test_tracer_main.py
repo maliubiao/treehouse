@@ -6,19 +6,19 @@ from unittest.mock import MagicMock, call, patch
 
 # Add the project root to sys.path to allow for module imports.
 # This is dynamically calculated based on the test file's location.
-project_root = Path(__file__).resolve().parent.parent / "debugger/lldb"
+project_root = Path(__file__).resolve().parent.parent / "native_context_tracer/src"
 sys.path.insert(0, str(project_root))
 
 # Import the module under test and specific functions as needed
-import tracer_main
-from tracer_main import parse_args
+import native_context_tracer.tracer_main as tracer_main
+from native_context_tracer.tracer_main import parse_args
 
 
 class TestTracerMainFunction(unittest.TestCase):
     """Test suite for the main function in tracer_main.py"""
 
-    @patch("tracer_main.parse_args")
-    @patch("tracer_main.Tracer")
+    @patch("native_context_tracer.tracer_main.parse_args")
+    @patch("native_context_tracer.tracer_main.Tracer")
     def test_main_keyboard_interrupt_during_tracer_start(self, mock_tracer, mock_parse_args):
         """
         Tests that main function properly handles KeyboardInterrupt

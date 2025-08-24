@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-import subprocess
-import pdb
-import os
-import sys
 import json
+import os
+import pdb
+import subprocess
+import sys
 
 
 def get_external_python_paths():

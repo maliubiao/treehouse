@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "cffi", "cmake"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "op-parser"
+version = "0.1.0"
+description = "ARM instruction operand parser with C extensions"
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = [
+    "cffi>=1.15.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black>=22.0",
+    "mypy>=0.900",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = {find = {where = ["src"]}}
+
+[tool.setuptools.package-data]
+op_parser = ["*.so", "*.dylib", "*.dll", "include/*.h"]

@@ -231,7 +231,12 @@ def run_tests(
     extract_errors: bool = False,
     list_mode: bool = False,
 ) -> Union[Dict[str, Any], pytest.ExitCode]:
-    pytest_args = ["tests"]
+    # 根据是否提供test_name初始化pytest_args
+    if test_name:
+        # 直接使用测试节点ID作为参数
+        pytest_args = [test_name]
+    else:
+        pytest_args = ["tests"]
 
     if verbosity == 0:
         pytest_args.append("-q")
@@ -257,9 +262,6 @@ def run_tests(
         ]
         for module_name in lldb_test_modules:
             pytest_args.append(f"--ignore=tests/{module_name}.py")
-
-    if test_name:
-        pytest_args.extend(["-k", test_name])
 
     if list_mode:
         pytest_args.extend(["--collect-only", "-q"])

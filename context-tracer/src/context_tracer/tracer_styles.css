@@ -405,6 +405,14 @@ button:active {
     transform: translateY(0);
 }
 
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+
 button.secondary {
     background: var(--bg-tertiary);
     color: var(--text-primary);
@@ -423,10 +431,13 @@ button.secondary:hover {
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
 }
 
 .icon-btn:hover {
-    background: var(--bg-tertiary);
+    background: var(--border-primary);
+    color: var(--text-primary);
 }
 
 .icon-btn.active {
@@ -583,6 +594,7 @@ button.secondary:hover {
     background-color: rgba(0,0,0,0.5);
     align-items: center;
     justify-content: center;
+    display: flex;
 }
 
 .modal-content {
@@ -671,20 +683,28 @@ button.secondary:hover {
 .setting-item {
     display: flex;
     align-items: center;
+    gap: var(--space-sm);
     margin-bottom: 15px;
 }
 .setting-item label {
-    margin-right: 10px;
     font-weight: bold;
-    min-width: 100px;
+    min-width: 120px;
+    text-align: right;
+    flex-shrink: 0;
 }
+.setting-item input,
 .setting-item select {
+    flex-grow: 1;
     padding: 6px 8px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
     background-color: var(--bg-color);
     color: var(--text-color);
-    min-width: 200px;
+}
+.setting-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--space-lg);
 }
 
 
@@ -1216,7 +1236,7 @@ body.skeleton-mode #content .call-group.show-details .var {
 
 .ai-explain-dialog-content {
     background: var(--card-bg);
-    padding: var(--space-lg);
+    padding: 0; /* Remove padding to allow full-bleed sections */
     border-radius: var(--radius-lg);
     box-shadow: var(--dialog-shadow);
     width: 85%;
@@ -1232,48 +1252,52 @@ body.skeleton-mode #content .call-group.show-details .var {
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid var(--border-color);
-    padding-bottom: var(--space-md);
-    margin-bottom: var(--space-md);
+    padding: var(--space-sm) var(--space-lg);
     flex-shrink: 0;
+}
+.ai-explain-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ai-header-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-left: auto;
+    padding: 0 var(--space-md);
+}
+.ai-current-model {
+    font-size: 0.8rem;
+    padding: 4px 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: 'Menlo', 'Consolas', monospace;
+    max-width: 250px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .ai-explain-close-btn {
-    font-size: 28px;
+    font-size: 24px;
     font-weight: bold;
     cursor: pointer;
-    color: var(--text-color);
+    color: var(--text-secondary);
+    padding: 4px;
 }
+.ai-explain-close-btn:hover { color: var(--error-color); }
 
-.ai-explain-close-btn:hover {
-    color: var(--error-color);
-}
-
-.ai-explain-config {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    margin-bottom: var(--space-md);
-    flex-wrap: wrap;
-    flex-shrink: 0;
-}
-
-.ai-explain-config label { font-weight: bold; }
-.ai-explain-config input,
-.ai-explain-config select {
-    padding: 6px 10px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background-color: var(--bg-color);
-    color: var(--text-color);
-}
-.ai-explain-config input { flex-grow: 1; min-width: 250px; }
-.ai-explain-config select { min-width: 150px; }
 
 .ai-explain-body {
     flex-grow: 1;
     display: flex; /* Enable flex for internal layout */
     overflow: hidden; /* Contain flex children */
     min-height: 0; /* Fix flexbox overflow issue */
+    padding: var(--space-md);
 }
 
 /* New AI Chat Layout */
@@ -1347,7 +1371,7 @@ body.skeleton-mode #content .call-group.show-details .var {
     padding: var(--space-md);
     display: flex;
     flex-direction: column;
-    gap: var(--space-md);
+    gap: var(--space-lg);
     background-color: var(--bg-tertiary);
     border-radius: var(--radius-md);
     min-height: 0;
@@ -1372,7 +1396,7 @@ body.skeleton-mode #content .call-group.show-details .var {
 
 .ai-message-content {
     padding: var(--space-sm) var(--space-md);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background-color: var(--bg-secondary);
     color: var(--text-primary);
     line-height: 1.6;
@@ -1398,9 +1422,10 @@ body.skeleton-mode #content .call-group.show-details .var {
     color: var(--text-primary);
     font-family: inherit;
     font-size: 1rem;
-    resize: none; /* Let it grow with content via JS if needed */
+    resize: none;
     max-height: 200px;
     overflow-y: auto;
+    line-height: 1.4;
 }
 .ai-user-question:focus {
     outline: none;
@@ -1413,8 +1438,10 @@ body.skeleton-mode #content .call-group.show-details .var {
     padding: 0;
     flex-shrink: 0;
     font-size: 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.ai-ask-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* AI Message Content Structure */
 .ai-thinking-section {
@@ -1436,6 +1463,10 @@ body.skeleton-mode #content .call-group.show-details .var {
 }
 .ai-thinking-content pre { margin: 0; font-family: inherit; white-space: pre-wrap; word-break: break-word; }
 
+.ai-response-section {
+    padding: var(--space-sm) var(--space-md); /* Moved from ai-message-content */
+}
+
 .ai-response-content-body p:first-child { margin-top: 0; }
 .ai-response-content-body p:last-child { margin-bottom: 0; }
 .ai-response-content-body h1, .ai-response-content-body h2, .ai-response-content-body h3, .ai-response-content-body h4 { margin: 1.5em 0 0.5em 0; }
@@ -1455,13 +1486,14 @@ body.skeleton-mode #content .call-group.show-details .var {
 .ai-error { color: var(--error-color); font-weight: 500; }
 
 .ai-explain-footer {
-    padding-top: var(--space-sm);
+    padding: var(--space-xs) var(--space-lg);
     border-top: 1px solid var(--border-color);
     display: flex;
     justify-content: flex-end;
     align-items: center;
     flex-shrink: 0;
     min-height: 24px;
+    background-color: var(--bg-tertiary);
 }
 #aiExplainStatus { font-style: italic; color: var(--line-color); font-size: 0.875rem; }
 

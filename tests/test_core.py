@@ -14,13 +14,13 @@ import yaml
 
 # Add the project root to sys.path to allow for module imports.
 # This is dynamically calculated based on the test file's location.
-project_root = str(Path(__file__).resolve().parent.parent / "debugger/lldb")
+project_root = str(Path(__file__).resolve().parent.parent / "native_context_tracer/src")
 print(project_root)
 sys.path.insert(0, str(project_root))
 
 
-from tracer.config import ConfigManager
-from tracer.core import Tracer
+from native_context_tracer.config import ConfigManager
+from native_context_tracer.core import Tracer
 
 # Imported for ConfigManager-specific tests
 
@@ -70,17 +70,17 @@ class BaseTestTracer(unittest.TestCase):
 
         # Start patching core dependencies within the Tracer module
         self.patchers = [
-            patch("tracer.core.lldb", self.mock_lldb),
-            patch("tracer.core.LogManager", self.mock_log_manager_class),
-            patch("tracer.core.ConfigManager", self.mock_config_manager_class),
+            patch("native_context_tracer.core.lldb", self.mock_lldb),
+            patch("native_context_tracer.core.LogManager", self.mock_log_manager_class),
+            patch("native_context_tracer.core.ConfigManager", self.mock_config_manager_class),
             # Patch time.sleep globally for any Tracer calls
-            patch("tracer.core.time.sleep", return_value=None),
+            patch("native_context_tracer.core.time.sleep", return_value=None),
         ]
         for patcher in self.patchers:
             patcher.start()
 
         # Initialize Tracer after mocks are patched
-        from tracer.core import Tracer
+        from native_context_tracer.core import Tracer
 
         self.tracer = Tracer(program_path="/mock/program/path")  # Provide a dummy program_path
 
@@ -124,7 +124,7 @@ class TestTracerContinueToMain(unittest.TestCase):
         tracer.process = MagicMock()
 
         # Patch time.sleep to avoid actual sleeping
-        with patch("tracer.core.time.sleep") as mock_sleep:
+        with patch("native_context_tracer.core.time.sleep") as mock_sleep:
             tracer.continue_to_main()
 
         # Verify Continue called twice and sleep called with 0.1
@@ -142,7 +142,7 @@ class TestTracerContinueToMain(unittest.TestCase):
         tracer.process = None  # No process available
 
         # Patch time.sleep to avoid actual sleeping
-        with patch("tracer.core.time.sleep") as mock_sleep:
+        with patch("native_context_tracer.core.time.sleep") as mock_sleep:
             tracer.continue_to_main()
 
         # Verify sleep still occurs but no Continue attempted
@@ -235,7 +235,7 @@ class TestTracerStdinForwarding(BaseTestTracer):
         tracer.logger.warning.assert_called_once_with("Cannot start stdin forwarding - no valid process")
         self.assertIsNone(tracer.stdin_forwarding_thread)
 
-    @patch("tracer.core.threading.Thread")
+    @patch("native_context_tracer.core.threading.Thread")
     def test_start_stdin_forwarding_successful_start(self, mock_thread_class):
         """Tests successful stdin forwarding thread creation and start."""
         # Setup
@@ -257,7 +257,7 @@ class TestTracerStdinForwarding(BaseTestTracer):
         mock_thread_instance.start.assert_called_once()
         self.assertEqual(self.tracer.stdin_forwarding_thread, mock_thread_instance)
 
-    @patch("tracer.core.get_platform_stdin_listener")
+    @patch("native_context_tracer.core.get_platform_stdin_listener")
     def test_stdin_forwarding_loop_normal_operation(self, mock_get_listener):
         """Tests the stdin forwarding loop under normal operating conditions."""
         # Setup
@@ -282,7 +282,7 @@ class TestTracerStdinForwarding(BaseTestTracer):
         # time.sleep is already patched in BaseTestTracer setup
         # self.mock_time_sleep.assert_called_with(0.05) # If we had direct access to that mock
 
-    @patch("tracer.core.get_platform_stdin_listener")
+    @patch("native_context_tracer.core.get_platform_stdin_listener")
     def test_stdin_forwarding_loop_os_error(self, mock_get_listener):
         """Tests loop termination on OSError during input reading."""
         # Setup
@@ -303,7 +303,7 @@ class TestTracerStdinForwarding(BaseTestTracer):
         self.mock_logger.error.assert_called_once_with("OS error in stdin forwarding: %s", "Test error")
         self.mock_logger.info.assert_called_once_with("Stdin forwarding stopped")
 
-    @patch("tracer.core.get_platform_stdin_listener")
+    @patch("native_context_tracer.core.get_platform_stdin_listener")
     def test_stdin_forwarding_loop_generic_exception(self, mock_get_listener):
         """
         Tests that unexpected exceptions during input reading are properly handled
@@ -331,7 +331,7 @@ class TestTracerStdinForwarding(BaseTestTracer):
         self.tracer.process.PutSTDIN.assert_not_called()
         self.mock_logger.info.assert_called_once_with("Stdin forwarding stopped")
 
-    @patch("tracer.core.get_platform_stdin_listener")
+    @patch("native_context_tracer.core.get_platform_stdin_listener")
     def test_stdin_forwarding_loop_process_invalid(self, mock_get_listener):
         """Tests loop termination when process becomes invalid."""
         # Setup
@@ -368,7 +368,7 @@ class TestTracerRunCmd(BaseTestTracer):
         mock_result.GetOutput.return_value = "Command output"
         mock_result.GetError.return_value = ""
 
-        with patch("tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
+        with patch("native_context_tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
             self.tracer.run_cmd("valid command")
 
         self.tracer.logger.info.assert_any_call("Running LLDB command: %s", "valid command")
@@ -382,7 +382,7 @@ class TestTracerRunCmd(BaseTestTracer):
         mock_result.GetOutput.return_value = ""
         mock_result.GetError.return_value = ""
 
-        with patch("tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
+        with patch("native_context_tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
             self.tracer.run_cmd("valid command")
 
         self.tracer.logger.info.assert_called_once_with("Running LLDB command: %s", "valid command")
@@ -395,7 +395,7 @@ class TestTracerRunCmd(BaseTestTracer):
         mock_result.GetOutput.return_value = "Partial output"
         mock_result.GetError.return_value = "Command failed"
 
-        with patch("tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
+        with patch("native_context_tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
             with self.assertRaisesRegex(ValueError, "Command failed: Command failed"):
                 self.tracer.run_cmd("invalid command", raise_on_error=True)
 
@@ -409,7 +409,7 @@ class TestTracerRunCmd(BaseTestTracer):
         mock_result.GetOutput.return_value = "Partial output"
         mock_result.GetError.return_value = "Command failed"
 
-        with patch("tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
+        with patch("native_context_tracer.core.lldb.SBCommandReturnObject", return_value=mock_result):
             self.tracer.run_cmd("invalid command", raise_on_error=False)
 
         self.tracer.logger.info.assert_any_call("Running LLDB command: %s", "invalid command")
@@ -433,12 +433,12 @@ class TestTracerRunCmd(BaseTestTracer):
 class TestTracerInitializeComponents(BaseTestTracer):
     """Unit tests for the Tracer class component initialization."""
 
-    @patch("tracer.core.ModuleManager")
-    @patch("tracer.core.SourceRangeManager")
-    @patch("tracer.core.StepHandler")
-    @patch("tracer.core.BreakpointHandler")
-    @patch("tracer.core.EventLoop")
-    @patch("tracer.core.prepare_hooker")
+    @patch("native_context_tracer.core.ModuleManager")
+    @patch("native_context_tracer.core.SourceRangeManager")
+    @patch("native_context_tracer.core.StepHandler")
+    @patch("native_context_tracer.core.BreakpointHandler")
+    @patch("native_context_tracer.core.EventLoop")
+    @patch("native_context_tracer.core.prepare_hooker")
     def test_initialize_components_sets_all_dependencies(
         self,
         mock_prepare_hooker,
@@ -610,8 +610,8 @@ class TestTracerEntryPointBreakpoint(BaseTestTracer):
 class TestTracerSymbolTrace(BaseTestTracer):
     """Test cases for Tracer symbol tracing functionality."""
 
-    @patch("tracer.core.register_global_callbacks")
-    @patch("tracer.core.SymbolTrace")
+    @patch("native_context_tracer.core.register_global_callbacks")
+    @patch("native_context_tracer.core.SymbolTrace")
     def test_use_symbol_trace_registers_symbols(self, MockSymbolTrace, mock_register_callbacks):
         """Tests that symbol tracing is properly initialized and patterns are registered.
 
@@ -655,7 +655,7 @@ class TestTracerSymbolTrace(BaseTestTracer):
 class TestConfigManagerLoadingAndBasicValidation(unittest.TestCase):
     """Unit tests for ConfigManager configuration loading and basic validation."""
 
-    @patch("tracer.config.logging.getLogger")
+    @patch("native_context_tracer.config.logging.getLogger")
     def test_load_config_file_not_found(self, mock_get_logger):
         """Test that default config is used when config file is missing."""
         # Setup
@@ -673,9 +673,9 @@ class TestConfigManagerLoadingAndBasicValidation(unittest.TestCase):
         self.assertEqual(config_manager.config["max_steps"], 100)  # Default value
         self.assertEqual(config_manager.config["log_mode"], "instruction")  # Default value
 
-    @patch("tracer.config.open", new_callable=MagicMock)  # Using MagicMock for mock_open
-    @patch("tracer.config.os.path.exists", return_value=True)
-    @patch("tracer.config.yaml.safe_load")
+    @patch("native_context_tracer.config.open", new_callable=MagicMock)  # Using MagicMock for mock_open
+    @patch("native_context_tracer.config.os.path.exists", return_value=True)
+    @patch("native_context_tracer.config.yaml.safe_load")
     def test_load_config_valid_file(self, mock_safe_load, mock_exists, mock_open):
         """Test that valid config file updates default configuration."""
         # Setup
@@ -688,8 +688,8 @@ class TestConfigManagerLoadingAndBasicValidation(unittest.TestCase):
         self.assertEqual(config_manager.config["max_steps"], 500)
         self.assertEqual(config_manager.config["log_mode"], "source")
 
-    @patch("tracer.config.open", side_effect=OSError("Permission denied"))
-    @patch("tracer.config.os.path.exists", return_value=True)
+    @patch("native_context_tracer.config.open", side_effect=OSError("Permission denied"))
+    @patch("native_context_tracer.config.os.path.exists", return_value=True)
     def test_load_config_os_error(self, mock_exists, mock_open):
         """Test error handling when file exists but can't be opened."""
         # Setup
@@ -703,9 +703,9 @@ class TestConfigManagerLoadingAndBasicValidation(unittest.TestCase):
         mock_logger.error.assert_any_call("Error loading config file '%s': %s", "restricted.yaml", unittest.mock.ANY)
         self.assertEqual(config_manager.config["max_steps"], 100)  # Default value
 
-    @patch("tracer.config.open", new_callable=MagicMock)  # Using MagicMock for mock_open
-    @patch("tracer.config.os.path.exists", return_value=True)
-    @patch("tracer.config.yaml.safe_load", side_effect=yaml.YAMLError("Invalid YAML"))
+    @patch("native_context_tracer.config.open", new_callable=MagicMock)  # Using MagicMock for mock_open
+    @patch("native_context_tracer.config.os.path.exists", return_value=True)
+    @patch("native_context_tracer.config.yaml.safe_load", side_effect=yaml.YAMLError("Invalid YAML"))
     def test_load_config_yaml_error(self, mock_safe_load, mock_exists, mock_open):
         """Test error handling for invalid YAML files."""
         # Setup

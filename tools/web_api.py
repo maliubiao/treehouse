@@ -19,22 +19,15 @@ from typing import AsyncGenerator, Dict, List, Optional
 import uvicorn
 from fastapi import Body, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 # --- 动态路径设置，确保能找到项目根目录下的模块 ---
-# 将项目根目录添加到sys.path
-# 这是必要的，因为我们可能需要从其他地方导入llm_query中的类
-# 为了遵循不修改原则，我们直接从llm_query.py复制所需代码
-# 但保留这个结构以备将来重构
 current_dir = Path(__file__).parent
 project_root = current_dir.parent
 sys.path.insert(0, str(project_root))
 
 # --- 从 llm_query.py 和 shell.py 复制并改造的代码 ---
-# 注意：这是一个临时的解决方案，以遵守“不修改现有文件”的规则。
-# 理想情况下，这些共享的类和函数应该被重构到一个公共库中。
-
-# 从 llm_query.py 复制 ModelConfig 和 ModelSwitch
 import openai
 from openai import AsyncOpenAI
 
@@ -52,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 async def async_query_gpt_api(
     api_key: str,
-    prompt: str,
+    messages: List[Dict[str, str]],  # 接收消息列表
     model: str,
     base_url: str,
     model_config: "ModelConfig",
@@ -63,28 +56,15 @@ async def async_query_gpt_api(
 
     Args:
         api_key (str): OpenAI API密钥
-        prompt (str): 用户输入的提示词
+        messages (List[Dict[str, str]]): 对话历史消息列表
         model (str): 使用的模型名称
         base_url (str): API基础URL
         model_config (ModelConfig): 模型配置对象
 
     Yields:
         Dict[str, str]: 包含事件类型和数据的字典。
-                         例如: {"event": "thinking", "data": "..."}
-                               {"event": "content", "data": "..."}
     """
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-
-    # 准备多轮对话历史
-    # 在API模式下，我们通常处理无状态请求，但保留加载历史的能力
-    history = []
-    if not kwargs.get("disable_conversation_history"):
-        conversation_file = get_conversation_file(kwargs.get("conversation_file"))
-        if os.path.exists(conversation_file):
-            with open(conversation_file, "r", encoding="utf-8") as f:
-                history = json.load(f)
-
-    history.append({"role": "user", "content": prompt})
 
     extra_body = {}
     if model_config.is_thinking and model_config.thinking_budget > 0:
@@ -95,7 +75,7 @@ async def async_query_gpt_api(
 
     create_params = {
         "model": model,
-        "messages": history,
+        "messages": messages,  # 直接使用传入的消息列表
         "stream": True,
         "temperature": model_config.temperature,
         "top_p": model_config.top_p,
@@ -128,20 +108,12 @@ async def async_query_gpt_api(
 
 
 class ModelConfig(OriginalModelConfig):
-    """从 llm_query.py 继承并保持不变"""
-
     pass
 
 
 class ModelSwitch(OriginalModelSwitch):
-    """
-    继承并改造 ModelSwitch 以支持异步查询。
-    """
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # 将GLOBAL_MODEL_CONFIG设置为当前选中的模型
-        # 这是为了让GPTContextProcessor等复用的代码能正常工作
         if self.current_config:
             globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
@@ -150,29 +122,20 @@ class ModelSwitch(OriginalModelSwitch):
         if self.current_config:
             globals()["GLOBAL_MODEL_CONFIG"] = self.current_config
 
-    async def async_query(self, model_name: str, prompt: str, **kwargs) -> AsyncGenerator[Dict[str, str], None]:
-        """
-        异步查询API。
-
-        Args:
-            model_name (str): 模型名称
-            prompt (str): 提示词
-
-        Yields:
-            Dict[str, str]: SSE事件字典
-        """
+    async def async_query(
+        self, model_name: str, messages: List[Dict[str, str]], **kwargs
+    ) -> AsyncGenerator[Dict[str, str], None]:
         if self.test_mode:
             yield {"event": "content", "data": "test_response"}
             return
 
         config = self._get_model_config(model_name)
         self.current_config = config
-        # globals()["GLOBAL_MODEL_CONFIG"] = config  # 确保全局配置同步
 
         async for chunk in async_query_gpt_api(
             base_url=config.base_url,
             api_key=config.key,
-            prompt=prompt,
+            messages=messages,
             model=config.model_name,
             model_config=config,
             **kwargs,
@@ -181,48 +144,31 @@ class ModelSwitch(OriginalModelSwitch):
 
 
 def get_completion_suggestions(prefix: str) -> List[str]:
-    """
-    获取补全建议。
-    这是对 shell.py 中 handle_cmd_complete 的改造，使其返回列表而不是打印。
-    """
-    # 捕获 `handle_cmd_complete` 的标准输出
     import contextlib
     from io import StringIO
 
-    # 创建一个字符串IO来捕获输出
     output_catcher = StringIO()
-
-    # 备份原始的 sys.stdout
     original_stdout = sys.stdout
     try:
-        # 重定向 stdout
         sys.stdout = output_catcher
-        # 调用原始函数，它的输出会进入 output_catcher
         original_handle_cmd_complete(prefix)
-        # 获取捕获的输出
         captured_output = output_catcher.getvalue()
     finally:
-        # 恢复原始的 stdout
         sys.stdout = original_stdout
 
-    # 处理捕获的输出
     if captured_output:
         return [line for line in captured_output.strip().split("\n") if line]
     return []
 
 
 # --- FastAPI 应用定义 ---
-
-# 全局模型切换器实例
 model_switcher: Optional[ModelSwitch] = None
 default_model: Optional[str] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """管理应用生命周期的启动和关闭事件"""
     global model_switcher, default_model
-    # 确保GPT_PATH环境变量存在，以便找到model.json
     if "GPT_PATH" not in os.environ:
         logger.warning("GPT_PATH environment variable is not set. Using current directory as fallback.")
         os.environ["GPT_PATH"] = str(project_root)
@@ -230,12 +176,10 @@ async def lifespan(app: FastAPI):
     model_config_path = Path(os.environ["GPT_PATH"]) / "model.json"
     if not model_config_path.exists():
         logger.error(f"Model configuration file not found at {model_config_path}")
-        # 在这种情况下，应用可能无法正常工作
-        model_switcher = ModelSwitch(test_mode=True)  # 使用测试模式以避免崩溃
+        model_switcher = ModelSwitch(test_mode=True)
     else:
         model_switcher = ModelSwitch()
 
-    # 设置默认模型（如果提供）
     if default_model and model_switcher:
         try:
             model_switcher.select(default_model)
@@ -245,10 +189,6 @@ async def lifespan(app: FastAPI):
 
     logger.info("Model switcher initialized successfully.")
     yield
-    # 清理资源（如果需要）
-    if model_switcher:
-        # 可以在这里添加模型清理逻辑
-        pass
     logger.info("Application shutdown complete.")
 
 
@@ -259,21 +199,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS (Cross-Origin Resource Sharing)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源，生产环境应配置为特定前端域名
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有HTTP方法
-    allow_headers=["*"],  # 允许所有HTTP头
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+
+class AskRequest(BaseModel):
+    messages: List[Dict[str, str]]
+    model: Optional[str] = None
 
 
 @app.get("/models", summary="Get available models")
 def get_models() -> Dict[str, List[str]]:
-    """
-    获取所有可用的模型列表。
-    """
     if not model_switcher:
         return {"error": "Model switcher not initialized"}
     return {"models": model_switcher.models()}
@@ -283,22 +224,16 @@ def get_models() -> Dict[str, List[str]]:
 def get_completions(
     prefix: str = Query(..., description="The prefix to complete, e.g., '@file'"),
 ) -> Dict[str, List[str]]:
-    """
-    根据给定的前缀提供命令和路径补全。
-    """
     suggestions = get_completion_suggestions(prefix)
     return {"completions": suggestions}
 
 
 @app.post("/ask", summary="Ask a question to the LLM with streaming response")
-async def ask_llm(
-    prompt: str = Body(..., embed=True, description="The prompt to send to the LLM. Supports @-syntax."),
-    model: Optional[str] = Query(None, description="The model to use for the query. Uses default if not provided."),
-):
+async def ask_llm(request: AskRequest):
     """
-    向LLM发送一个prompt并以SSE事件流的形式接收响应。
+    向LLM发送一个包含对话历史的请求，并以SSE事件流的形式接收响应。
 
-    - **prompt**: The main question or instruction for the LLM.
+    - **messages**: The entire conversation history, including the latest user message.
     - **model**: Optional. The specific model configuration to use from `model.json`.
     """
     if not model_switcher:
@@ -308,36 +243,24 @@ async def ask_llm(
 
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
+    model = request.model
     if model:
         model_switcher.select(model)
 
-    # 默认使用第一个模型
     selected_model = model or model_switcher.models()[0]
-    logger.info(f"Using model: {selected_model}")
-
-    context_processor = GPTContextProcessor()
-    processed_prompt = prompt
-    # processed_prompt = context_processor.process_text(prompt)
+    logger.info(f"Using model: {selected_model} for a conversation with {len(request.messages)} messages.")
 
     async def sse_generator():
         try:
             full_response_content = ""
-            async for chunk in model_switcher.async_query(selected_model, processed_prompt):
+            async for chunk in model_switcher.async_query(selected_model, request.messages):
                 if chunk.get("event") == "error":
                     logger.error(f"Error from LLM stream: {chunk.get('data')}")
-
-                # 将字典转换为JSON字符串
                 json_data = json.dumps(chunk)
-
-                # 格式化为SSE
                 yield f"{json_data}\n"
-
-                # 刷新缓冲区
                 await asyncio.sleep(0)
-
                 if chunk.get("event") == "content":
                     full_response_content += chunk.get("data", "")
-
         except Exception as e:
             logger.error(f"Error during SSE generation: {e}", exc_info=True)
             error_payload = json.dumps({"event": "error", "data": str(e)})
@@ -347,14 +270,12 @@ async def ask_llm(
 
 
 def main():
-    """主函数，用于解析参数和启动服务。"""
     parser = argparse.ArgumentParser(description="Terminal LLM Web API Server")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind the server to.")
     parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")
     parser.add_argument("--default-model", type=str, default=None, help="Default model to use for queries.")
     args = parser.parse_args()
 
-    # 设置全局默认模型
     global default_model
     default_model = args.default_model
 

@@ -7,12 +7,12 @@ from unittest.mock import MagicMock, call, create_autospec, patch
 
 # Add the project root to sys.path to allow for module imports.
 # This is dynamically calculated based on the test file's location.
-project_root = str(Path(__file__).resolve().parent.parent / "debugger/lldb")
+project_root = str(Path(__file__).resolve().parent.parent / "native_context_tracer/src")
 print(project_root)
 sys.path.insert(0, str(project_root))
 
 # Import the class under test
-from tracer.debug_info_handler import DebugInfoHandler
+from native_context_tracer.debug_info_handler import DebugInfoHandler
 
 # Import other modules that DebugInfoHandler depends on,
 # which may be mocked during tests.
@@ -57,9 +57,11 @@ class BaseTestDebugInfoHandler(unittest.TestCase):
         cls.mock_lldb.SBFrame = MagicMock
         cls.mock_lldb.SBValue = MagicMock
 
-        # Patch the imports in `tracer.debug_info_handler` module's namespace.
-        cls.lldb_patcher = patch("tracer.debug_info_handler.lldb", cls.mock_lldb)
-        cls.sb_value_printer_patcher = patch("tracer.debug_info_handler.sb_value_printer", cls.mock_sb_value_printer)
+        # Patch the imports in `native_context_tracer.debug_info_handler` module's namespace.
+        cls.lldb_patcher = patch("native_context_tracer.debug_info_handler.lldb", cls.mock_lldb)
+        cls.sb_value_printer_patcher = patch(
+            "native_context_tracer.debug_info_handler.sb_value_printer", cls.mock_sb_value_printer
+        )
 
         # Start all patchers
         cls.lldb_patcher.start()

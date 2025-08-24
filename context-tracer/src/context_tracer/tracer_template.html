@@ -208,25 +208,46 @@
         <div class="ai-explain-dialog-content">
             <div class="ai-explain-header">
                 <h2 data-i18n="aiDialogTitle">🤖 AI Code Trace Explanation</h2>
+                <div class="ai-header-controls">
+                    <span id="aiCurrentModel" class="ai-current-model" title="Current LLM Model"></span>
+                    <button id="aiClearChatBtn" class="icon-btn" data-i18n-title="aiClearChatTitle" title="Clear Conversation">
+                        <i class="fas fa-broom"></i>
+                    </button>
+                    <button id="aiSettingsBtn" class="icon-btn" data-i18n-title="aiSettingsTitle" title="AI Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                </div>
                 <span class="ai-explain-close-btn">&times;</span>
-            </div>
-            <div class="ai-explain-config">
-                <label for="llmApiUrl" data-i18n="aiApiUrlLabel">LLM API URL:</label>
-                <input type="text" id="llmApiUrl" data-i18n-placeholder="aiApiUrlPlaceholder" placeholder="e.g., http://127.0.0.1:8000">
-                <label for="llmModelSelect" data-i18n="aiModelLabel">Model:</label>
-                <select id="llmModelSelect"></select>
-                <button id="llmSettingsSaveBtn" data-i18n="aiSaveBtn">Save</button>
-                <button id="llmFetchModelsBtn" data-i18n="aiRefreshModelsBtn">Refresh Models</button>
             </div>
             <div class="ai-explain-body" id="aiExplainBody">
                 <!-- Log content will be injected here -->
             </div>
-
             <div class="ai-explain-footer">
                 <span id="aiExplainStatus"></span>
             </div>
         </div>
     </div>
+
+    <!-- AI Settings Dialog -->
+    <div id="aiSettingsDialog" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="modal-close-btn" id="aiSettingsCloseBtn">&times;</span>
+            <h2 data-i18n="aiSettingsTitle">AI Settings</h2>
+            <div class="setting-item">
+                <label for="llmApiUrl" data-i18n="aiApiUrlLabel">LLM API URL:</label>
+                <input type="text" id="llmApiUrl" data-i18n-placeholder="aiApiUrlPlaceholder" placeholder="e.g., http://127.0.0.1:8000">
+            </div>
+            <div class="setting-item">
+                <label for="llmModelSelect" data-i18n="aiModelLabel">Model:</label>
+                <select id="llmModelSelect"></select>
+                <button id="llmFetchModelsBtn" class="icon-btn" data-i18n-title="aiRefreshModelsBtn" title="Refresh Models"><i class="fas fa-sync-alt"></i></button>
+            </div>
+            <div class="setting-actions">
+                <button id="llmSettingsSaveBtn" data-i18n="aiSaveBtn">Save</button>
+            </div>
+        </div>
+    </div>
+
 
     <script id="nav-worker-script" type="application/javascript">{{nav_worker_script_content}}</script>
     <script>

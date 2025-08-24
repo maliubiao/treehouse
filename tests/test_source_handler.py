@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, call, mock_open, patch
 
-project_root = Path(__file__).resolve().parent.parent / "debugger/lldb"
+project_root = Path(__file__).resolve().parent.parent / "native_context_tracer/src"
 
 sys.path.insert(0, str(project_root))
-from tracer.source_handler import SourceHandler
+from native_context_tracer.source_handler import SourceHandler
 
 # Add the project root to sys.path to allow for module imports.
 # This is dynamically calculated based on the test file's location.
@@ -157,7 +157,7 @@ class TestSourceHandlerPathResolution(unittest.TestCase):
         test_path = "/fake/abs/path/to/file.c"
 
         # Mock filesystem interactions specifically within source_handler's os.path usage
-        with patch("tracer.source_handler.os.path") as mock_os_path:
+        with patch("native_context_tracer.source_handler.os.path") as mock_os_path:
             mock_os_path.isabs.return_value = True
             mock_os_path.exists.return_value = True
             mock_os_path.resolve.side_effect = lambda x: x  # Mock resolve to return path itself
@@ -178,8 +178,8 @@ class TestSourceHandlerPathResolution(unittest.TestCase):
         self.source_handler._source_search_paths = ["/test/search/path1", "/test/search/path2"]
 
         with (
-            patch("tracer.source_handler.os.path.exists") as mock_exists,
-            patch("tracer.source_handler.Path") as MockPath,
+            patch("native_context_tracer.source_handler.os.path.exists") as mock_exists,
+            patch("native_context_tracer.source_handler.Path") as MockPath,
         ):
             # Mock Path.cwd() to control current working directory behavior
             MockPath.cwd.return_value = MagicMock(spec=Path)
@@ -225,8 +225,8 @@ class TestSourceHandlerPathResolution(unittest.TestCase):
         abs_path = str(Path.cwd() / rel_path)  # Use real Path for initial construction
 
         with (
-            patch("tracer.source_handler.os.path.exists") as mock_exists,
-            patch("tracer.source_handler.Path") as MockPath,
+            patch("native_context_tracer.source_handler.os.path.exists") as mock_exists,
+            patch("native_context_tracer.source_handler.Path") as MockPath,
         ):
             # Make MockPath act like real Path for .cwd() and division
             MockPath.cwd.return_value = Path.cwd()  # Actual Path object
@@ -245,7 +245,7 @@ class TestSourceHandlerPathResolution(unittest.TestCase):
         bad_path = "missing.py"
         self.source_handler._source_search_paths = ["/test/search/path1", "/test/search/path2"]
 
-        with patch("tracer.source_handler.os.path.exists", return_value=False):
+        with patch("native_context_tracer.source_handler.os.path.exists", return_value=False):
             result = self.source_handler.resolve_source_path(bad_path)
             self.assertIsNone(result)
             self.assertEqual(self.source_handler._resolved_path_cache[bad_path], None)
@@ -267,7 +267,7 @@ class TestSourceHandlerPathResolution(unittest.TestCase):
         # Verify
         self.assertEqual(result, test_path, "Should return cached path without file system checks")
         # Ensure no filesystem calls if cached
-        with patch("tracer.source_handler.os.path.isabs") as mock_isabs:
+        with patch("native_context_tracer.source_handler.os.path.isabs") as mock_isabs:
             self.source_handler.resolve_source_path(test_path)
             mock_isabs.assert_not_called()
 
@@ -283,11 +283,11 @@ class TestSourceHandlerLineMapBuilding(unittest.TestCase):
         self.mock_tracer.logger = MagicMock(spec=logging.Logger)
         self.source_handler = SourceHandler(self.mock_tracer)
 
-    # @patch("tracer.source_handler.Progress")
-    # @patch("tracer.source_handler.TextColumn")
-    # @patch("tracer.source_handler.BarColumn")
-    # @patch("tracer.source_handler.MofNCompleteColumn")
-    # @patch("tracer.source_handler.TimeRemainingColumn")
+    # @patch("native_context_tracer.source_handler.Progress")
+    # @patch("native_context_tracer.source_handler.TextColumn")
+    # @patch("native_context_tracer.source_handler.BarColumn")
+    # @patch("native_context_tracer.source_handler.MofNCompleteColumn")
+    # @patch("native_context_tracer.source_handler.TimeRemainingColumn")
     # def test_get_compile_unit_line_entries_large_compile_unit(self, *mocks):
     #     """
     #     Tests that _get_compile_unit_line_entries correctly handles large compile units

@@ -6,7 +6,8 @@ from collections import defaultdict
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-import tracer.symbol_trace_plugin as st_plugin
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "native_context_tracer/src"))
+import native_context_tracer.symbol_trace_plugin as st_plugin
 
 # Setup sys.path to allow module imports
 project_root = Path(__file__).resolve().parent
@@ -19,9 +20,9 @@ class TestSymbolTraceEvent(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test environment by patching lldb imports."""
-        cls.patcher = patch("tracer.symbol_trace_plugin.lldb", MagicMock())
+        cls.patcher = patch("native_context_tracer.symbol_trace_plugin.lldb", MagicMock())
         cls.patcher.start()
-        from tracer.symbol_trace_plugin import SymbolTraceEvent
+        from native_context_tracer.symbol_trace_plugin import SymbolTraceEvent
 
         cls.SymbolTraceEvent = SymbolTraceEvent
 
@@ -94,7 +95,7 @@ class TestSymbolTraceInitialization(unittest.TestCase):
         else:
             st_plugin._SYMBOL_TRACE_INSTANCE = self.original_instance
 
-    @patch("tracer.symbol_trace_plugin.register_global_callbacks")
+    @patch("native_context_tracer.symbol_trace_plugin.register_global_callbacks")
     def test_initialization_success(self, mock_register_global_callbacks):
         """Test successful initialization with valid dependencies and callbacks."""
         mock_register_global_callbacks.return_value = True
@@ -117,7 +118,7 @@ class TestSymbolTraceInitialization(unittest.TestCase):
         mock_tracer.run_cmd.assert_called_once_with(expected_cmd)
         mock_register_global_callbacks.assert_called_once_with(mock_tracer.run_cmd, mock_tracer.logger)
 
-    @patch("tracer.symbol_trace_plugin.register_global_callbacks")
+    @patch("native_context_tracer.symbol_trace_plugin.register_global_callbacks")
     def test_initialization_failure(self, mock_register_global_callbacks):
         """Test initialization failure when callback registration fails."""
         mock_register_global_callbacks.return_value = False
@@ -143,7 +144,9 @@ class TestSymbolTraceInitialization(unittest.TestCase):
         old_instance = getattr(st_plugin, "_SYMBOL_TRACE_INSTANCE", None)
         self.addCleanup(setattr, st_plugin, "_SYMBOL_TRACE_INSTANCE", old_instance)
 
-        with patch("tracer.symbol_trace_plugin.register_global_callbacks", return_value=True) as mock_register:
+        with patch(
+            "native_context_tracer.symbol_trace_plugin.register_global_callbacks", return_value=True
+        ) as mock_register:
             instance = st_plugin.SymbolTrace(mock_tracer, mock_notify_class, cache_file)
 
             self.assertEqual(instance.tracer, mock_tracer)
@@ -169,7 +172,7 @@ class TestSymbolTraceInitialization(unittest.TestCase):
         mock_notify_class = MagicMock()
         mock_tracer.logger = MagicMock()
 
-        with patch("tracer.symbol_trace_plugin.register_global_callbacks", return_value=False):
+        with patch("native_context_tracer.symbol_trace_plugin.register_global_callbacks", return_value=False):
             with self.assertRaises(RuntimeError):
                 st_plugin.SymbolTrace(mock_tracer, mock_notify_class, None)
 
@@ -179,7 +182,7 @@ class TestNotifyClass(unittest.TestCase):
 
     def test_notify_class_default_behavior(self):
         """Test that default NotifyClass methods can be called without errors."""
-        from tracer.symbol_trace_plugin import NotifyClass
+        from native_context_tracer.symbol_trace_plugin import NotifyClass
 
         notify = NotifyClass()
         mock_event = MagicMock()
@@ -193,7 +196,7 @@ class TestNotifyClass(unittest.TestCase):
 class TestRegisterGlobalCallbacks(unittest.TestCase):
     """Test cases for the register_global_callbacks function."""
 
-    @patch("tracer.symbol_trace_plugin._CALLBACKS_REGISTERED", False)
+    @patch("native_context_tracer.symbol_trace_plugin._CALLBACKS_REGISTERED", False)
     def test_successful_registration(self):
         """Test successful registration of global callbacks when not already registered."""
         mock_run_cmd = MagicMock(return_value=None)
@@ -215,7 +218,7 @@ class TestRegisterGlobalCallbacks(unittest.TestCase):
         self.assertEqual(mock_run_cmd.call_count, 3)
         mock_logger.error.assert_not_called()
 
-    @patch("tracer.symbol_trace_plugin._CALLBACKS_REGISTERED", True)
+    @patch("native_context_tracer.symbol_trace_plugin._CALLBACKS_REGISTERED", True)
     def test_already_registered(self):
         """Test that function returns True without running commands when callbacks are already registered."""
         mock_run_cmd = MagicMock()
@@ -228,7 +231,7 @@ class TestRegisterGlobalCallbacks(unittest.TestCase):
         mock_logger.error.assert_not_called()
         mock_logger.info.assert_called_once_with("Global callbacks already registered")
 
-    @patch("tracer.symbol_trace_plugin._CALLBACKS_REGISTERED", False)
+    @patch("native_context_tracer.symbol_trace_plugin._CALLBACKS_REGISTERED", False)
     def test_failure_during_registration(self):
         """Test that function returns False and logs error when command execution fails."""
         mock_run_cmd = MagicMock()

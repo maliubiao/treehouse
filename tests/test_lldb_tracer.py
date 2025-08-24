@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, call, patch
 import yaml
 
 # Add the tracer directory to the Python path to allow imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "debugger/lldb")))
-from tracer.config import ConfigManager
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "native_context_tracer/src")))
+from native_context_tracer.config import ConfigManager
 
 # --- Test Cases ---
 
@@ -52,11 +52,11 @@ class LLDBTracerBaseTestCase(unittest.TestCase):
 
         # With the mocks in place, we can now safely import the application modules.
         # They are assigned to class attributes for easy access in test methods.
-        from tracer.config import ConfigManager
-        from tracer.core import Tracer
-        from tracer.event_loop import EventLoop
-        from tracer.modules import ModuleManager
-        from tracer.step_handler import StepAction, StepHandler
+        from native_context_tracer.config import ConfigManager
+        from native_context_tracer.core import Tracer
+        from native_context_tracer.event_loop import EventLoop
+        from native_context_tracer.modules import ModuleManager
+        from native_context_tracer.step_handler import StepAction, StepHandler
 
         cls.ConfigManager = ConfigManager
         cls.Tracer = Tracer
@@ -195,7 +195,7 @@ class TestCore(LLDBTracerBaseTestCase):
 
     def _create_mock_tracer(self):
         """Helper to create a fully mocked Tracer instance."""
-        with patch("tracer.core.lldb.SBDebugger.Create", return_value=MagicMock()):
+        with patch("native_context_tracer.core.lldb.SBDebugger.Create", return_value=MagicMock()):
             tracer = self.Tracer(config_file=self.config_path, logfile=None)
         tracer.logger = self.mock_logger
         tracer.debugger = MagicMock()
@@ -207,9 +207,9 @@ class TestCore(LLDBTracerBaseTestCase):
         tracer.source_ranges = MagicMock()
         return tracer
 
-    @patch("tracer.core.LogManager")
-    @patch("tracer.core.ConfigManager")
-    @patch("tracer.core.lldb.SBDebugger.Create")
+    @patch("native_context_tracer.core.LogManager")
+    @patch("native_context_tracer.core.ConfigManager")
+    @patch("native_context_tracer.core.lldb.SBDebugger.Create")
     def test_core_init(self, mock_debugger_create, mock_config_manager, mock_log_manager):
         """Test the initialization of the Tracer class."""
         mock_debugger_instance = MagicMock()
@@ -245,9 +245,9 @@ class TestCore(LLDBTracerBaseTestCase):
         mock_bp.SetOneShot.assert_called_once_with(True)
         self.assertEqual(mock_tracer.breakpoint, mock_bp)
 
-    @patch("tracer.core.os.getcwd", return_value="/fake/dir")
+    @patch("native_context_tracer.core.os.getcwd", return_value="/fake/dir")
     @patch("threading.Thread")
-    @patch("tracer.lldb_console.show_console")
+    @patch("native_context_tracer.lldb_console.show_console")
     def test_start_launch_process(self, mock_show_console, mock_thread, mock_getcwd):
         """Test that the start method correctly launches a process."""
         from unittest.mock import ANY

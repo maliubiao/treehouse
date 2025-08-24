@@ -8,17 +8,17 @@ from unittest.mock import MagicMock, PropertyMock, call, patch
 
 # Add the project root to sys.path to allow for module imports.
 # This is dynamically calculated based on the test file's location.
-project_root = str(Path(__file__).resolve().parent.parent / "debugger/lldb")
+project_root = str(Path(__file__).resolve().parent.parent / "native_context_tracer/src")
 print(project_root)
 sys.path.insert(0, str(project_root))
 
 # Import the unit under test and related modules
-from tracer.breakpoint_handler import BreakpointHandler
-from tracer.core import Tracer
-from tracer.debugger_api import DebuggerApi, IOHandler, LldbDebuggerApi, SystemIOHandler
-from tracer.event_loop import EventLoop
-from tracer.events import StepAction
-from tracer.utils import get_state_str  # Only used in one test to patch
+from native_context_tracer.breakpoint_handler import BreakpointHandler
+from native_context_tracer.core import Tracer
+from native_context_tracer.debugger_api import DebuggerApi, IOHandler, LldbDebuggerApi, SystemIOHandler
+from native_context_tracer.event_loop import EventLoop
+from native_context_tracer.events import StepAction
+from native_context_tracer.utils import get_state_str  # Only used in one test to patch
 
 # Prepare a mock lldb module with necessary constants for common use.
 # This object will be used as the replacement for the actual `lldb` module
@@ -83,9 +83,9 @@ class TestEventLoopInitialization(TestEventLoopBase):
         mock_io_handler = MagicMock()
 
         # Instantiate EventLoop with provided dependencies
-        with patch("tracer.event_loop.lldb", MagicMock()):  # Prevent lldb import issues within EventLoop
+        with patch("native_context_tracer.event_loop.lldb", MagicMock()):  # Prevent lldb import issues within EventLoop
             # Import EventLoop here to ensure it uses the patched lldb during its own imports/initialization
-            from tracer.event_loop import EventLoop
+            from native_context_tracer.event_loop import EventLoop
 
             event_loop = EventLoop(
                 tracer=mock_tracer,
@@ -113,9 +113,9 @@ class TestEventLoopInitialization(TestEventLoopBase):
 
         # Mock the default dependency classes (these are imported into event_loop.py)
         with (
-            patch("tracer.event_loop.lldb", MagicMock()),
-            patch("tracer.event_loop.LldbDebuggerApi") as MockLldbDebuggerApi,
-            patch("tracer.event_loop.SystemIOHandler") as MockSystemIOHandler,
+            patch("native_context_tracer.event_loop.lldb", MagicMock()),
+            patch("native_context_tracer.event_loop.LldbDebuggerApi") as MockLldbDebuggerApi,
+            patch("native_context_tracer.event_loop.SystemIOHandler") as MockSystemIOHandler,
         ):
             # Create mock instances that the default classes should return
             mock_debugger_instance = MagicMock()
@@ -124,7 +124,7 @@ class TestEventLoopInitialization(TestEventLoopBase):
             MockSystemIOHandler.return_value = mock_io_instance
 
             # Import EventLoop here to ensure it uses the patched classes
-            from tracer.event_loop import EventLoop
+            from native_context_tracer.event_loop import EventLoop
 
             event_loop = EventLoop(
                 tracer=mock_tracer, listener=mock_listener, logger=mock_logger, debugger_api=None, io_handler=None
@@ -228,7 +228,7 @@ class TestEventLoopRunMethod(TestEventLoopBase):
         )  # It will be called once as die_event is set by the first event
 
     @patch(
-        "tracer.event_loop.lldb", _mock_lldb_constants
+        "native_context_tracer.event_loop.lldb", _mock_lldb_constants
     )  # Patch lldb where it's used in event_loop for process broadcater class name
     def test_processes_termination_event_and_sets_die_event(self):  # Removed mock_lldb argument
         """
@@ -277,7 +277,7 @@ class TestEventLoopRunMethod(TestEventLoopBase):
 class TestEventLoopProcessEvent(TestEventLoopBase):
     """Unit tests for the EventLoop's _process_event method."""
 
-    @patch("tracer.event_loop.lldb", _mock_lldb_constants)
+    @patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
     def test_process_event_handles_state_changed_event(self):  # Removed mock_lldb argument
         """
         Tests that _process_event correctly routes state changed events to the
@@ -318,7 +318,7 @@ class TestEventLoopProcessEvent(TestEventLoopBase):
             # Ensure no unexpected logging occurred
             self.mock_logger.warning.assert_not_called()
 
-    @patch("tracer.event_loop.lldb", _mock_lldb_constants)
+    @patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
     def test_process_event_logs_unhandled_event_type(self):  # Removed mock_lldb argument
         """
         Tests that _process_event logs a warning when encountering an event type
@@ -351,7 +351,7 @@ class TestEventLoopProcessEvent(TestEventLoopBase):
             mock_handle_stderr.assert_not_called()
             mock_handle_state_change.assert_not_called()
 
-    @patch("tracer.event_loop.lldb", _mock_lldb_constants)
+    @patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
     def test_stdout_event_calls_io_handler(self):  # Removed mock_lldb argument
         """Tests that _process_event correctly routes stdout events to the io_handler.
 
@@ -466,8 +466,8 @@ class TestEventLoopHandleStdoutEvent(TestEventLoopBase):
         self.mock_io_handler.write_stdout.assert_not_called()
 
 
-@patch("tracer.event_loop.lldb", _mock_lldb_constants)
-@patch("tracer.debugger_api.lldb", _mock_lldb_constants)
+@patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
+@patch("native_context_tracer.debugger_api.lldb", _mock_lldb_constants)
 class TestEventLoopHandleStateChangeEvent(TestEventLoopBase):
     """Unit tests for EventLoop's _handle_state_change_event method."""
 
@@ -545,7 +545,7 @@ class TestEventLoopHandleStateChangeEvent(TestEventLoopBase):
                 self.mock_debugger_api.get_process_state.assert_called_once_with(mock_process)
 
 
-@patch("tracer.event_loop.lldb", _mock_lldb_constants)
+@patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
 class TestEventLoopHandleProcessState(TestEventLoopBase):
     """Unit tests for EventLoop's _handle_process_state method."""
 
@@ -633,7 +633,9 @@ class TestEventLoopHandleProcessState(TestEventLoopBase):
             self.mock_logger.warning.assert_not_called()
             self.mock_logger.info.assert_not_called()
 
-    @patch("tracer.event_loop.get_state_str")  # Patch `get_state_str` where it's imported in `event_loop.py`
+    @patch(
+        "native_context_tracer.event_loop.get_state_str"
+    )  # Patch `get_state_str` where it's imported in `event_loop.py`
     def test_logs_unhandled_states(self, mock_get_state_str):  # Removed mock_lldb argument
         """Tests that unhandled process states are properly logged."""
         # Setup mock process
@@ -655,7 +657,7 @@ class TestEventLoopHandleProcessState(TestEventLoopBase):
         mock_get_state_str.assert_called_once_with(unhandled_state)
 
 
-@patch("tracer.event_loop.lldb", _mock_lldb_constants)
+@patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
 class TestEventLoopHandleStoppedState(TestEventLoopBase):
     """Test cases for the EventLoop's _handle_stopped_state method."""
 
@@ -825,7 +827,7 @@ class TestEventLoopHandleStoppedState(TestEventLoopBase):
             self.mock_logger.info.assert_called_once()
 
 
-@patch("tracer.event_loop.lldb", _mock_lldb_constants)
+@patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
 class TestEventLoopHandleBreakpointStop(TestEventLoopBase):
     """Test suite for EventLoop's _handle_breakpoint_stop method."""
 
@@ -1028,7 +1030,7 @@ class TestEventLoopHandlePlanComplete(TestEventLoopBase):
         # Mock action_handle method on the EventLoop instance for isolation
         self.event_loop.action_handle = MagicMock()
 
-    @patch("tracer.event_loop.lldb", _mock_lldb_constants)
+    @patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
     def test_handles_plan_complete_when_entry_point_set(self):  # Removed mock_lldb argument
         """
         Test that when `entry_point_breakpoint_event` is set,
@@ -1059,7 +1061,7 @@ class TestEventLoopHandlePlanComplete(TestEventLoopBase):
         # Verify `action_handle` was called with the correct action and thread
         self.event_loop.action_handle.assert_called_once_with(StepAction.STEP_OVER, mock_thread)
 
-    @patch("tracer.event_loop.lldb", _mock_lldb_constants)
+    @patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
     def test_handle_plan_complete_skips_processing_when_entry_point_not_set(self):  # Removed mock_lldb argument
         """Tests that `_handle_plan_complete` does nothing when `entry_point_breakpoint_event` isn't set."""
         # Ensure entry point is NOT set
@@ -1075,7 +1077,7 @@ class TestEventLoopHandlePlanComplete(TestEventLoopBase):
         self.mock_tracer.step_handler.on_step_hit.assert_not_called()
         self.event_loop.action_handle.assert_not_called()
 
-    @patch("tracer.event_loop.lldb", _mock_lldb_constants)
+    @patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
     def test_handle_plan_complete_handles_invalid_frame_gracefully(self):  # Removed mock_lldb argument
         """Tests that `_handle_plan_complete` handles invalid frame returns gracefully."""
         # Set entry point event (so it proceeds past the initial check)
@@ -1098,7 +1100,7 @@ class TestEventLoopHandlePlanComplete(TestEventLoopBase):
         self.event_loop.action_handle.assert_called_once_with(ANY, mock_thread)
 
 
-@patch("tracer.event_loop.lldb", _mock_lldb_constants)
+@patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
 class TestEventLoopActionHandle(TestEventLoopBase):
     """Test suite for EventLoop's action_handle method."""
 
@@ -1204,7 +1206,7 @@ class TestEventLoopActionHandle(TestEventLoopBase):
         self.mock_logger.warning.assert_not_called()
 
 
-@patch("tracer.event_loop.lldb", _mock_lldb_constants)
+@patch("native_context_tracer.event_loop.lldb", _mock_lldb_constants)
 class TestEventLoopHandleLrBreakpoint(TestEventLoopBase):
     """Unit tests for EventLoop's _handle_lr_breakpoint method."""
 

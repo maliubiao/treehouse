@@ -1,3 +1,4 @@
+import os
 import sys
 from enum import IntEnum
 from pathlib import Path
@@ -6,11 +7,35 @@ import cffi
 
 ffi = cffi.FFI()
 
+# Try to load the shared library from package location first
+try:
+    from importlib.resources import as_file, files
+except ImportError:
+    # Fallback for Python < 3.9
+    from importlib_resources import as_file, files
+
+
 # Load C definitions from header
-current_dir = Path(__file__).parent
-header_path = current_dir / "op_parser/include" / "op_parser_ffi.h"
-with open(header_path, encoding="utf-8") as f:
-    ffi.cdef(f.read())
+def load_header():
+    try:
+        # Try to get header from package resources
+        header_resource = files("op_parser").joinpath("include/op_parser_ffi.h")
+        with as_file(header_resource) as header_path:
+            if header_path.exists():
+                with open(header_path, encoding="utf-8") as f:
+                    return f.read()
+    except (ImportError, FileNotFoundError):
+        # Fallback to direct file access for development
+        current_dir = Path(__file__).parent
+        header_path = current_dir / "include" / "op_parser_ffi.h"
+        if header_path.exists():
+            with open(header_path, encoding="utf-8") as f:
+                return f.read()
+
+    raise RuntimeError("Could not find op_parser_ffi.h header file")
+
+
+ffi.cdef(load_header())
 
 
 # Define Python-side OperandType enum to match C definition
@@ -22,14 +47,41 @@ class OperandType(IntEnum):
     OTHER = 4  # unclassified
 
 
-# Determine library path based on build type
-LIB_NAME = "libop_parser.so" if sys.platform != "darwin" else "libop_parser.dylib"
-LIB_PATH = current_dir / f"{LIB_NAME}"
+def load_library():
+    """Load the shared library from the package installation"""
+    lib_name = "libop_parser.so" if sys.platform != "darwin" else "libop_parser.dylib"
 
-if not LIB_PATH.exists():
-    raise RuntimeError(f"Shared library not found at {LIB_PATH}. Please build the project first.")
+    # First try to load from package resources
+    try:
+        lib_resource = files("op_parser").joinpath(lib_name)
+        with as_file(lib_resource) as lib_path:
+            if lib_path.exists():
+                return ffi.dlopen(str(lib_path))
+    except (ImportError, FileNotFoundError, OSError):
+        pass
 
-op_parser_lib = ffi.dlopen(str(LIB_PATH))
+    # Fallback: try relative to current file (for development)
+    current_dir = Path(__file__).parent
+    lib_path = current_dir / lib_name
+    if lib_path.exists():
+        return ffi.dlopen(str(lib_path))
+
+    # Fallback: try in the parent directory (for egg installs)
+    parent_dir = current_dir.parent
+    lib_path = parent_dir / lib_name
+    if lib_path.exists():
+        return ffi.dlopen(str(lib_path))
+
+    # Fallback: try system paths
+    try:
+        return ffi.dlopen(lib_name)
+    except OSError:
+        raise RuntimeError(
+            f"Shared library '{lib_name}' not found. Please ensure the package is properly installed and built."
+        )
+
+
+op_parser_lib = load_library()
 
 
 class Operand:

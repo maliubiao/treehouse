@@ -1,6 +1,6 @@
-import subprocess
-import re
 import os
+import re
+import subprocess
 
 
 class DebugEnvironment:

@@ -40,9 +40,10 @@
 
 ### 2. 输出内容 (第二部分，严格按需输出)
 
-我应该想的是, 首先代码需要写到一个文件名里，这时就需要[created file], [overwrite whole file], [replace]这些指令，把文件path给这个指令, 然后要思考, 阅读者如何确认哪里是文件内容呢，那当然是用[start]表示内容的开始，[end]表示内容的结束   
-应该想的是[file name]: /absolute/to/file.py 不是正确的指令   
-应该想的是```python: /absolute/to/file.py 不是正确的指令   
+我应该想的是, 首先代码需要写到一个文件名里，这时就需要[created file], [overwrite whole file], [replace]这些指令，把文件path给这个指令, 然后要思考, 阅读者如何确认哪里是文件内容呢，那当然是用[start]表示内容的开始，[end]表示内容的结束.  
+应该想的是replace需要两组[start][end]标签，被替换的内容，新的内容.  
+应该想的是[file name]: /absolute/to/file.py 不是正确的指令.  
+应该想的是```python: /absolute/to/file.py 不是正确的指令.   
 所有代码和文件操作都必须使用下述标签包裹。   
 
 

@@ -7,22 +7,23 @@ from unittest.mock import ANY, MagicMock, PropertyMock, call, mock_open, patch
 
 # Add the project root to sys.path to allow for module imports.
 # This is dynamically calculated based on the test file's location.
-project_root = str(Path(__file__).resolve().parent.parent / "debugger/lldb")
+project_root = str(Path(__file__).resolve().parent.parent / "native_context_tracer/src")
 print(project_root)
 sys.path.insert(0, str(project_root))
 
 # Import the modules under test and their dependencies
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "native_context_tracer/op_parser_package/src"))
 from op_parser import Operand, OperandType
-from tracer.config import ConfigManager
-from tracer.core import Tracer
-from tracer.events import StepAction
-from tracer.expr_extractor import ExpressionExtractor
-from tracer.step_handler import StepHandler, SymbolHookMode
 
+from native_context_tracer.config import ConfigManager
+from native_context_tracer.core import Tracer
+from native_context_tracer.events import StepAction
+from native_context_tracer.expr_extractor import ExpressionExtractor
+from native_context_tracer.step_handler import StepHandler, SymbolHookMode
 from tree_libs.ast import ParserLoader, parse_code_file
 
 # Note on lldb: The tests are designed to mock `lldb` where it's used within `tracer.step_handler`.
-# This is done using `patch('tracer.step_handler.lldb')` or similar, ensuring mocks are scoped
+# This is done using `patch('native_context_tracer.step_handler.lldb')` or similar, ensuring mocks are scoped
 # and follow the strict prohibition against global mocks.
 
 
@@ -50,8 +51,8 @@ class TestStepHandlerInitialization(unittest.TestCase):
 
         # Mock the handler classes to avoid actual initialization
         with (
-            patch("tracer.step_handler.SourceHandler") as MockSourceHandler,
-            patch("tracer.step_handler.DebugInfoHandler") as MockDebugInfoHandler,
+            patch("native_context_tracer.step_handler.SourceHandler") as MockSourceHandler,
+            patch("native_context_tracer.step_handler.DebugInfoHandler") as MockDebugInfoHandler,
             patch.object(mock_tracer, "run_cmd") as mock_run_cmd,
         ):
             # Instantiate StepHandler with mock dependencies
@@ -251,7 +252,7 @@ class TestStepHandlerOnStepHitMain(TestStepHandlerOnStepHitBase):
         logged_pc = args[2]
         self.assertEqual(logged_pc, 0x1000, "Should log PC address as 0x1000")
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_non_branch_instruction_returns_step_in(self, mock_lldb):
         """
         Tests that on_step_hit returns STEP_IN for a non-branch instruction
@@ -287,7 +288,7 @@ class TestStepHandlerOnStepHitMain(TestStepHandlerOnStepHitBase):
         # Verify correct step action is returned
         self.assertEqual(result, StepAction.STEP_IN)
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_on_step_hit_with_bl_instruction_returns_step_in(self, mock_lldb):
         """Tests that StepHandler returns STEP_IN for a 'bl' instruction.
 
@@ -355,7 +356,7 @@ class TestStepHandlerOnStepHitMain(TestStepHandlerOnStepHitBase):
 
         # Mock dependencies
         with (
-            patch("tracer.step_handler.parse_operands") as mock_parse_operands,
+            patch("native_context_tracer.step_handler.parse_operands") as mock_parse_operands,
             patch.object(self.handler, "_process_debug_info") as mock_process_debug_info,
             patch.object(self.handler, "_log_step_info") as mock_log_step_info,
         ):
@@ -373,7 +374,7 @@ class TestStepHandlerOnStepHitMain(TestStepHandlerOnStepHitBase):
             mock_log_step_info.assert_called_once()
 
     @patch("op_parser.Operand")
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_on_step_hit_with_invalid_line_entry_and_instruction_mode(self, mock_lldb, MockOperand):
         """
         Tests StepHandler.on_step_hit behavior when:
@@ -398,7 +399,7 @@ class TestStepHandlerOnStepHitMain(TestStepHandlerOnStepHitBase):
         MockOperand.type = OperandType.REGISTER
         MockOperand.value = "x16"
         with (
-            patch("tracer.step_handler.parse_operands", return_value=[MockOperand]),
+            patch("native_context_tracer.step_handler.parse_operands", return_value=[MockOperand]),
             patch.object(self.handler, "_process_debug_info", return_value=["debug_value"]),
             patch.object(self.handler, "_log_step_info"),
         ):
@@ -461,7 +462,7 @@ class TestStepHandlerDetermineStepAction(TestStepHandlerOnStepHitBase):
         mock_log.assert_called()
         self.assertEqual(action, StepAction.STEP_OUT, "Should step out after return when flagged")
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_non_branch_non_return_instruction_returns_step_in(self, mock_lldb):
         """
         Non-branch/non-return instructions should default to STEP_IN action.
@@ -488,7 +489,7 @@ class TestStepHandlerDetermineStepAction(TestStepHandlerOnStepHitBase):
 
     # Removed incorrect patch path for Operand and created a mock instance directly.
     # This assumes OperandType is imported at the file level of test_step_handler.py.
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_bl_instruction_not_skipped_returns_step_in(self, mock_lldb):  # Removed MockOperand arg
         """
         Test that a 'bl' instruction to a non-skipped address returns STEP_IN.
@@ -874,7 +875,7 @@ class TestStepHandlerSourceInfoProcessing(unittest.TestCase):
         self.mock_source_handler.resolve_source_path.assert_not_called()
         self.mock_source_handler.get_source_code_for_statement.assert_not_called()
 
-    @patch("tracer.step_handler.StepHandler._build_source_info_string")
+    @patch("native_context_tracer.step_handler.StepHandler._build_source_info_string")
     def test_source_base_dir_handling(self, mock_build_info):
         """
         Tests that source base directory is properly handled when configured.
@@ -1116,8 +1117,8 @@ class TestStepHandlerEvaluateSourceExpressions(unittest.TestCase):
         )
         self.assertEqual(result, [])
 
-    @patch("tracer.step_handler.parse_code_file")
-    @patch("tracer.step_handler.ParserLoader.get_parser")
+    @patch("native_context_tracer.step_handler.parse_code_file")
+    @patch("native_context_tracer.step_handler.ParserLoader.get_parser")
     def test_returns_empty_list_when_extractor_returns_no_expressions(self, mock_get_parser, mock_parse_code_file):
         """
         Test returns empty list when expression extractor finds no expressions.
@@ -1145,8 +1146,8 @@ class TestStepHandlerEvaluateSourceExpressions(unittest.TestCase):
         # Verify final result is empty list
         self.assertEqual(result, [])
 
-    @patch("tracer.step_handler.parse_code_file")
-    @patch("tracer.step_handler.ParserLoader.get_parser")
+    @patch("native_context_tracer.step_handler.parse_code_file")
+    @patch("native_context_tracer.step_handler.ParserLoader.get_parser")
     def test_returns_expressions_when_extractor_finds_valid_data(self, mock_get_parser, mock_parse_code_file):
         """Test returns expressions when extractor finds valid expressions for line."""
         # Configure test parameters
@@ -1212,7 +1213,7 @@ class TestStepHandlerEvaluateSourceExpressions(unittest.TestCase):
         self.assertEqual(self.step_handler.expression_cache["valid.c"], {})
         self.mock_tracer.logger.warning.assert_called()
 
-    @patch("tracer.step_handler.parse_code_file")
+    @patch("native_context_tracer.step_handler.parse_code_file")
     def test_syntax_error_handling_and_caching(self, mock_parse_code_file):
         """Test SyntaxError during parsing is handled and empty cache is set."""
         # Mock file operations to raise SyntaxError
@@ -1491,7 +1492,7 @@ class TestStepHandlerBranchHandling(unittest.TestCase):
         self.mock_frame.symbol.GetStartAddress.return_value.GetLoadAddress.return_value = 0x100000000
         self.mock_frame.symbol.GetEndAddress.return_value.GetLoadAddress.return_value = 0x100100000
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_handle_branch_case_bl_non_skipped(self, mock_lldb):
         """
         Test that BL instructions to non-skipped addresses
@@ -1767,7 +1768,7 @@ class TestStepHandlerFunctionAddressRangeBase(unittest.TestCase):
         self.step_handler = StepHandler(self.mock_tracer)
 
         # Patch lldb module with invalid address constant
-        self.mock_lldb_patcher = patch("tracer.step_handler.lldb")
+        self.mock_lldb_patcher = patch("native_context_tracer.step_handler.lldb")
         self.mock_lldb = self.mock_lldb_patcher.start()
         self.mock_lldb.LLDB_INVALID_ADDRESS = 0xFFFFFFFFFFFFFFFF
         self.addCleanup(self.mock_lldb_patcher.stop)
@@ -1979,7 +1980,7 @@ class TestStepHandlerGetAddressInfo(unittest.TestCase):
         # Reset cache for each test
         self.step_handler.addr_to_symbol_cache = {}
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_get_address_info_returns_correct_values_when_symbol_not_found(self, mock_lldb):
         """
         Tests that _get_address_info returns the correct tuple when:
@@ -2035,7 +2036,7 @@ class TestStepHandlerGetAddressInfo(unittest.TestCase):
         self.assertEqual(result, cached_value)
         self.mock_tracer.target.ResolveLoadAddress.assert_not_called()
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_cache_miss_with_valid_symbol_info(self, mock_lldb):
         """
         Tests cache miss scenario where valid symbol information is resolved.
@@ -2087,7 +2088,7 @@ class TestStepHandlerGetAddressInfo(unittest.TestCase):
         self.assertEqual(result[1], "unknown")
         self.mock_target.ResolveLoadAddress.assert_called_once_with(test_addr)
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_missing_module_returns_unknown(self, mock_lldb):
         """
         Tests scenario where resolved address has no module information.
@@ -2111,7 +2112,7 @@ class TestStepHandlerGetAddressInfo(unittest.TestCase):
         self.assertEqual(result[1], "unknown")
         self.assertEqual(result, ("printf", "unknown", 2))
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_get_address_info_uncached_invalid_symbol(self, mock_lldb):
         """Tests resolution when address has no valid symbol."""
         # Configure lldb enum
@@ -2223,7 +2224,7 @@ class TestStepHandlerSkipBranchAddress(unittest.TestCase):
         # is NOT called due to the short-circuiting 'if' in _should_skip_branch_address.
         self.mock_source_range_manager.should_skip_source_address_dynamic.assert_not_called()
 
-    @patch("tracer.step_handler.lldb")  # Patch lldb where used in StepHandler
+    @patch("native_context_tracer.step_handler.lldb")  # Patch lldb where used in StepHandler
     def test_skip_module_path_should_return_true(self, mock_lldb):
         """Test returns True when module path matches skip pattern.
 
@@ -2246,7 +2247,7 @@ class TestStepHandlerSkipBranchAddress(unittest.TestCase):
         # assert_not_called because modules check short-circuits the evaluation
         self.mock_tracer.source_ranges.should_skip_source_address_dynamic.assert_not_called()
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_skip_source_address_should_return_true(self, mock_lldb):
         """Test returns True when source address matches skip pattern.
 
@@ -2268,7 +2269,7 @@ class TestStepHandlerSkipBranchAddress(unittest.TestCase):
         self.mock_tracer.modules.should_skip_address.assert_called_once_with(target_addr, module_path)
         self.mock_tracer.source_ranges.should_skip_source_address_dynamic.assert_called_once_with(target_addr)
 
-    @patch("tracer.step_handler.lldb")
+    @patch("native_context_tracer.step_handler.lldb")
     def test_no_skip_conditions_should_return_false(self, mock_lldb):
         """Test returns False when no skip conditions are met.
 
