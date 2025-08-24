@@ -334,11 +334,15 @@ Provide a clear, well-structured response that directly answers the user's quest
                 const aiMessages = chatMessages.querySelectorAll('.ai-message');
                 currentAiMessage = aiMessages[aiMessages.length - 1];
                 
-                // Get the content sections
+                // Get the content sections and ensure they are visible
                 const thinkingSection = currentAiMessage.querySelector('.ai-thinking-section');
                 const thinkingPre = thinkingSection.querySelector('pre');
                 const responseSection = currentAiMessage.querySelector('.ai-response-section');
                 const responseContentDiv = responseSection.querySelector('.ai-response-content');
+                
+                // Ensure sections are visible from the start
+                thinkingSection.style.display = 'block';
+                responseSection.style.display = 'block';
 
                 while (true) {
                     const { value, done } = await reader.read();
@@ -360,7 +364,6 @@ Provide a clear, well-structured response that directly answers the user's quest
                                     this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${receivedChars} chars)`;
                                     
                                     // Real-time update thinking content
-                                    thinkingSection.style.display = 'block';
                                     thinkingPre.textContent = thinkingContent;
                                     chatMessages.scrollTop = chatMessages.scrollHeight;
                                 }
@@ -371,7 +374,6 @@ Provide a clear, well-structured response that directly answers the user's quest
                                     this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${receivedChars} chars)`;
                                     
                                     // Real-time update response content with markdown rendering
-                                    responseSection.style.display = 'block';
                                     responseContentDiv.innerHTML = this.formatResponse(responseContent);
                                     chatMessages.scrollTop = chatMessages.scrollHeight;
                                 }
