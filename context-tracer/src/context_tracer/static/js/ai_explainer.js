@@ -11,11 +11,8 @@ function initializeAiExplainer(TraceViewer) {
         modelSelect: document.getElementById('llmModelSelect'),
         saveBtn: document.getElementById('llmSettingsSaveBtn'),
         fetchModelsBtn: document.getElementById('llmFetchModelsBtn'),
-        startBtn: document.getElementById('startAiExplainBtn'),
         body: document.getElementById('aiExplainBody'),
         status: document.getElementById('aiExplainStatus'),
-
-        // Raw response elements (removed - now integrated into chat UI)
 
         currentLogText: '',
         abortController: null,
@@ -40,9 +37,6 @@ function initializeAiExplainer(TraceViewer) {
             });
             this.saveBtn.addEventListener('click', () => this.saveSettings());
             this.fetchModelsBtn.addEventListener('click', () => this.fetchModels());
-            this.startBtn.addEventListener('click', () => this.startExplanation());
-
-            // Raw response toggle removed - now integrated into chat UI
 
             this.loadSettings();
         },
@@ -143,82 +137,73 @@ function initializeAiExplainer(TraceViewer) {
 
         show(logText) {
             this.currentLogText = logText;
-            this.body.innerHTML = '';
+            this.body.innerHTML = ''; // Clear previous content
             this.status.textContent = TraceViewer.i18n.t('aiStatusReady');
 
-            // Create new UI layout with flex container
+            // 1. Main container
             const container = document.createElement('div');
             container.className = 'ai-explain-container';
-            
-            // Compact header with minimal footprint
-            const compactHeader = document.createElement('div');
-            compactHeader.className = 'ai-compact-header';
-            compactHeader.innerHTML = `
-                <button class="ai-subtree-toggle" data-i18n-title="aiToggleSubtreeTitle">
-                    <span class="toggle-icon">◀</span>
-                    <span class="toggle-text">${TraceViewer.i18n.t('aiSubtreeTitle')}</span>
-                </button>
-            `;
-            
-            // Code subtree (always visible)
+
+            // 2. Collapsible code subtree section
             const subtreeSection = document.createElement('div');
             subtreeSection.className = 'ai-subtree-section';
-            subtreeSection.innerHTML = `<pre class="ai-subtree-content">${logText}</pre>`;
             
-            // Toggle functionality
-            compactHeader.querySelector('.ai-subtree-toggle').addEventListener('click', () => {
+            const subtreeHeader = document.createElement('div');
+            subtreeHeader.className = 'ai-subtree-header';
+            subtreeHeader.innerHTML = `
+                <span class="ai-subtree-title">${TraceViewer.i18n.t('aiSubtreeTitle')}</span>
+                <button class="ai-toggle-subtree-btn" title="${TraceViewer.i18n.t('aiToggleSubtreeTitle')}">
+                    <i class="fas fa-chevron-up"></i>
+                </button>
+            `;
+
+            const subtreeContent = document.createElement('div');
+            subtreeContent.className = 'ai-subtree-content';
+            const pre = document.createElement('pre');
+            pre.textContent = logText;
+            subtreeContent.appendChild(pre);
+
+            subtreeSection.appendChild(subtreeHeader);
+            subtreeSection.appendChild(subtreeContent);
+            
+            // Toggle functionality for subtree
+            subtreeHeader.addEventListener('click', () => {
                 subtreeSection.classList.toggle('collapsed');
-                const icon = compactHeader.querySelector('.toggle-icon');
-                icon.textContent = subtreeSection.classList.contains('collapsed') ? '▶' : '▼';
+                const icon = subtreeHeader.querySelector('i');
+                icon.className = subtreeSection.classList.contains('collapsed') ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
             });
+
+
+            // 3. Chat messages area
+            const chatMessages = document.createElement('div');
+            chatMessages.id = 'aiChatMessages';
+            chatMessages.className = 'ai-chat-messages';
+            chatMessages.innerHTML = `<div class="ai-empty-state">${TraceViewer.i18n.t('aiEmptyState')}</div>`;
             
-            // User input section (more prominent)
+            // 4. User input section
             const inputSection = document.createElement('div');
             inputSection.className = 'ai-input-section';
             inputSection.innerHTML = `
                 <div class="ai-input-wrapper">
-                    <textarea 
-                        id="aiUserQuestion" 
-                        class="ai-user-question" 
-                        placeholder="${TraceViewer.i18n.t('aiUserQuestionPlaceholder')}"
-                        rows="4"
-                    ></textarea>
-                    <button id="aiAskQuestionBtn" class="ai-ask-btn" data-i18n="aiAskButton">
-                        ${TraceViewer.i18n.t('aiAskButton')}
+                    <textarea id="aiUserQuestion" class="ai-user-question" placeholder="${TraceViewer.i18n.t('aiUserQuestionPlaceholder')}" rows="3"></textarea>
+                    <button id="aiAskQuestionBtn" class="ai-ask-btn" title="Ctrl+Enter">
+                        <i class="fas fa-paper-plane"></i>
                     </button>
                 </div>
             `;
-            
-            // Response section with flexible scrolling
-            const responseSection = document.createElement('div');
-            responseSection.className = 'ai-response-section';
-            responseSection.innerHTML = `
-                <div class="ai-response-header">
-                    <span class="ai-response-title">${TraceViewer.i18n.t('aiResponseTitle')}</span>
-                </div>
-                <div class="ai-response-content">
-                    <div class="ai-chat-container">
-                        <div class="ai-chat-messages" id="aiChatMessages">
-                            <div class="ai-empty-state">${TraceViewer.i18n.t('aiEmptyState')}</div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            container.appendChild(compactHeader);
+
+            // Append all parts to the main container
             container.appendChild(subtreeSection);
+            container.appendChild(chatMessages);
             container.appendChild(inputSection);
-            container.appendChild(responseSection);
             this.body.appendChild(container);
-            
-            // Add event listener for ask button
-            document.getElementById('aiAskQuestionBtn').addEventListener('click', () => {
-                this.startExplanation();
-            });
-            
-            // Add enter key support for textarea
-            const textarea = document.getElementById('aiUserQuestion');
-            textarea.addEventListener('keydown', (e) => {
+
+            // Add event listeners for the new elements
+            const askBtn = document.getElementById('aiAskQuestionBtn');
+            const questionTextarea = document.getElementById('aiUserQuestion');
+
+            askBtn.addEventListener('click', () => this.startExplanation());
+            questionTextarea.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
                     this.startExplanation();
@@ -228,20 +213,22 @@ function initializeAiExplainer(TraceViewer) {
             this.dialog.style.display = 'flex';
         },
 
+
         hide() {
             if (this.abortController) {
                 this.abortController.abort();
             }
             this.dialog.style.display = 'none';
             this.body.innerHTML = '';
-            this.status.textContent = TraceViewer.i18n.t('aiStatusReady');
-            this.startBtn.disabled = false;
+            this.status.textContent = '';
         },
 
         async startExplanation() {
             const baseUrl = this.apiUrlInput.value.trim();
             const model = this.modelSelect.value;
-            const userQuestion = document.getElementById('aiUserQuestion').value.trim();
+            const userQuestionInput = document.getElementById('aiUserQuestion');
+            const userQuestion = userQuestionInput.value.trim();
+            const askBtn = document.getElementById('aiAskQuestionBtn');
 
             if (!baseUrl || !model) {
                 alert(TraceViewer.i18n.t('aiApiUrlAlert'));
@@ -253,17 +240,34 @@ function initializeAiExplainer(TraceViewer) {
                 return;
             }
 
-            // Clear previous responses and show loading state
-            const chatMessages = document.getElementById('aiChatMessages');
-            chatMessages.innerHTML = '';
+            // Collapse subtree if not already collapsed
+            const subtreeSection = this.body.querySelector('.ai-subtree-section');
+            if (subtreeSection && !subtreeSection.classList.contains('collapsed')) {
+                subtreeSection.classList.add('collapsed');
+                const icon = subtreeSection.querySelector('.ai-subtree-header i');
+                if (icon) icon.className = 'fas fa-chevron-down';
+            }
 
-            // Add user message
+            const chatMessages = document.getElementById('aiChatMessages');
+            // Clear empty state if it exists
+            const emptyState = chatMessages.querySelector('.ai-empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            // Add user message to chat
             const userMsgDiv = document.createElement('div');
             userMsgDiv.className = 'ai-chat-message user-message';
-            userMsgDiv.innerHTML = `<div class="ai-message-content">${userQuestion}</div>`;
+            userMsgDiv.innerHTML = `<div class="ai-message-content">${this.escapeHtml(userQuestion)}</div>`;
             chatMessages.appendChild(userMsgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            // Add AI message with structured sections
+            // Clear input and disable it
+            userQuestionInput.value = '';
+            userQuestionInput.disabled = true;
+            askBtn.disabled = true;
+
+            // Prepare and add AI message container
             const aiMsgDiv = document.createElement('div');
             aiMsgDiv.className = 'ai-chat-message ai-message';
             aiMsgDiv.innerHTML = `
@@ -272,12 +276,16 @@ function initializeAiExplainer(TraceViewer) {
                 </div>
                 <div class="ai-message-content">
                     <div class="ai-thinking-section" style="display: none;">
-                        <div class="ai-section-label">💭 思考过程</div>
+                        <div class="ai-section-label">
+                            <i class="fas fa-brain"></i> ${TraceViewer.i18n.t('aiThinkingProcess')}
+                        </div>
                         <div class="ai-thinking-content"><pre></pre></div>
                     </div>
-                    <div class="ai-response-section" style="display: none;">
-                        <div class="ai-section-label">📝 回答</div>
-                        <div class="ai-response-content"></div>
+                    <div class="ai-response-section">
+                         <div class="ai-section-label">
+                            <i class="fas fa-comment-dots"></i> ${TraceViewer.i18n.t('aiAnswer')}
+                         </div>
+                        <div class="ai-response-content-body"></div>
                     </div>
                 </div>
             `;
@@ -294,11 +302,11 @@ ${this.currentLogText}
 \`\`\`
 
 **Your Task:**
-1. Understand the entire code execution flow shown in the trace
-2. Pay special attention to the debug variable values (# Debug: ...)
-3. Answer the user's question specifically based on what actually happened in the code
-4. Use Chinese for your response
-5. Be concrete and reference actual values from the trace
+1. Understand the entire code execution flow shown in the trace.
+2. Pay special attention to the debug variable values (# Debug: ...).
+3. Answer the user's question specifically based on what actually happened in the code.
+4. Use Chinese for your response.
+5. Be concrete and reference actual values from the trace.
 
 **Response Format:**
 Provide a clear, well-structured response that directly answers the user's question based on the trace data.`;
@@ -308,7 +316,6 @@ Provide a clear, well-structured response that directly answers the user's quest
 
             this.abortController = new AbortController();
             this.status.textContent = TraceViewer.i18n.t('aiStatusSending');
-            document.getElementById('aiAskQuestionBtn').disabled = true;
 
             try {
                 const response = await fetch(`${baseUrl}/ask?model=${encodeURIComponent(model)}`, {
@@ -321,28 +328,21 @@ Provide a clear, well-structured response that directly answers the user's quest
                 if (!response.ok || !response.body) throw new Error(`HTTP error! Status: ${response.status}`);
 
                 this.status.textContent = TraceViewer.i18n.t('aiStatusReceiving');
-                let receivedChars = 0;
-
+                
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let sseLineBuffer = '';
-                let currentAiMessage = null;
+                
                 let thinkingContent = '';
                 let responseContent = '';
+                let receivedChars = 0;
 
-                // Find the AI message element
-                const aiMessages = chatMessages.querySelectorAll('.ai-message');
-                currentAiMessage = aiMessages[aiMessages.length - 1];
-                
-                // Get the content sections and ensure they are visible
-                const thinkingSection = currentAiMessage.querySelector('.ai-thinking-section');
+                const thinkingSection = aiMsgDiv.querySelector('.ai-thinking-section');
                 const thinkingPre = thinkingSection.querySelector('pre');
-                const responseSection = currentAiMessage.querySelector('.ai-response-section');
-                const responseContentDiv = responseSection.querySelector('.ai-response-content');
+                const responseContentDiv = aiMsgDiv.querySelector('.ai-response-content-body');
                 
-                // Ensure sections are visible from the start
+                // Show thinking section from the start to stream content into it
                 thinkingSection.style.display = 'block';
-                responseSection.style.display = 'block';
 
                 while (true) {
                     const { value, done } = await reader.read();
@@ -356,24 +356,19 @@ Provide a clear, well-structured response that directly answers the user's quest
                         if (sseLine.trim() === '') continue;
                         try {
                             const ssePayload = JSON.parse(sseLine);
+                            
+                            receivedChars += (ssePayload.data || '').length;
+                            this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${receivedChars} chars)`;
 
                             if (ssePayload.event === "thinking") {
                                 if (typeof ssePayload.data === 'string') {
                                     thinkingContent += ssePayload.data;
-                                    receivedChars += ssePayload.data.length;
-                                    this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${receivedChars} chars)`;
-                                    
-                                    // Real-time update thinking content
                                     thinkingPre.textContent = thinkingContent;
                                     chatMessages.scrollTop = chatMessages.scrollHeight;
                                 }
                             } else if (ssePayload.event === "content") {
                                 if (typeof ssePayload.data === 'string') {
                                     responseContent += ssePayload.data;
-                                    receivedChars += ssePayload.data.length;
-                                    this.status.textContent = `${TraceViewer.i18n.t('aiStatusReceiving')} (${receivedChars} chars)`;
-                                    
-                                    // Real-time update response content with markdown rendering
                                     responseContentDiv.innerHTML = this.formatResponse(responseContent);
                                     chatMessages.scrollTop = chatMessages.scrollHeight;
                                 }
@@ -386,63 +381,52 @@ Provide a clear, well-structured response that directly answers the user's quest
                     }
                 }
 
+                // Final update after stream ends
+                responseContentDiv.innerHTML = this.formatResponse(responseContent);
+                this.status.textContent = `${TraceViewer.i18n.t('aiStatusFinished')} (Total ${receivedChars} chars)`;
+
+
             } catch (error) {
-                if (error.name === 'AbortError') {
-                    console.log('Fetch aborted by user.');
-                } else {
-                    this.status.textContent = `${TraceViewer.i18n.t('errorMessagePrefix')}${error.message}`;
-                    console.error('AI Explanation failed:', error);
-                    
-                    // Show error in chat
-                    if (currentAiMessage) {
-                        currentAiMessage.querySelector('.ai-message-content').innerHTML = 
-                            `<div class="ai-error">❌ ${error.message}</div>`;
-                    }
-                }
-            } finally {
-                // Handle stream completion (even without explicit end event)
-                if (currentAiMessage) {
-                    // Show completion status
-                    if (thinkingContent || responseContent) {
-                        this.status.textContent = `${TraceViewer.i18n.t('aiStatusFinished')} (Total ${receivedChars} chars)`;
-                    }
-                    
-                    // Ensure at least one section is visible
-                    if (!thinkingSection.style.display || thinkingSection.style.display === 'none') {
-                        if (thinkingContent) {
-                            thinkingSection.style.display = 'block';
-                            thinkingPre.textContent = thinkingContent;
-                        }
-                    }
-                    
-                    if (!responseSection.style.display || responseSection.style.display === 'none') {
-                        if (responseContent) {
-                            responseSection.style.display = 'block';
-                            responseContentDiv.innerHTML = this.formatResponse(responseContent);
-                        }
-                    }
-                }
+                const errorMessage = error.name === 'AbortError' 
+                    ? 'Request aborted by user.' 
+                    : `${TraceViewer.i18n.t('errorMessagePrefix')}${error.message}`;
                 
-                document.getElementById('aiAskQuestionBtn').disabled = false;
+                this.status.textContent = errorMessage;
+                console.error('AI Explanation failed:', error);
+                
+                aiMsgDiv.querySelector('.ai-message-content').innerHTML = 
+                    `<div class="ai-error">❌ ${errorMessage}</div>`;
+
+            } finally {
+                // Re-enable input
+                userQuestionInput.disabled = false;
+                askBtn.disabled = false;
                 this.abortController = null;
+                setTimeout(() => this.status.textContent = '', 5000);
             }
         },
 
-        
-    formatResponse(content) {
-        // Use marked.js for proper Markdown rendering
-        try {
-            return marked.parse(content);
-        } catch (error) {
-            console.error('Markdown parsing error:', error);
-            // Fallback to simple HTML escaping
-            return content
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/\n/g, '<br>');
+        escapeHtml(unsafe) {
+            if (!unsafe) return '';
+            return unsafe
+                 .replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
+        },
+
+        formatResponse(content) {
+            // Use marked.js for proper Markdown rendering
+            try {
+                // Configure marked to handle line breaks correctly
+                return marked.parse(content, { breaks: true });
+            } catch (error) {
+                console.error('Markdown parsing error:', error);
+                // Fallback to simple HTML escaping and line breaks
+                return this.escapeHtml(content).replace(/\n/g, '<br>');
+            }
         }
-    }
     };
 
     // Initialize the module and attach to the main viewer object
