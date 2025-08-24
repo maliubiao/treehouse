@@ -6,7 +6,7 @@ import atexit
 import logging
 import sys
 
-from tracer import Tracer
+from .core import Tracer
 
 
 def parse_args():

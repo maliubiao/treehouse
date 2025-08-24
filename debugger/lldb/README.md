@@ -2,6 +2,8 @@
 
 高级LLDB调试工具，提供源代码行级变量跟踪，提供汇编级指令跟踪及寄存器内存使用跟踪
 
+> **注意**: tracer模块已从 `tracer/` 重命名为 `native_context_tracer/`，以更好地反映其原生上下文跟踪功能。
+
 ## 目录
 - [使用示例](#使用示例)
 - [功能特性](#功能特性)
@@ -27,17 +29,17 @@
 
 基本使用：
 ```bash
-./tracer_main.py -e /path/to/program -a arg1 -a arg2
+python -m native_context_tracer.tracer_main -e /path/to/program -a arg1 -a arg2
 ```
 
 启用详细日志：
 ```bash
-./tracer_main.py -e /path/to/program --verbose
+python -m native_context_tracer.tracer_main -e /path/to/program --verbose
 ```
 
 生成跳过模块配置：
 ```bash
-./tracer_main.py -e /path/to/program --dump-modules-for-skip
+python -m native_context_tracer.tracer_main -e /path/to/program --dump-modules-for-skip
 ```
 
 ## 功能特性
@@ -77,7 +79,7 @@ step_action:
 1. 当同一行代码被命中超过10次时，自动执行`step_out`退出当前帧
 2. 当同一分支目标地址被命中超过10次时，自动跳出循环
 
-阈值可通过修改`BRANCH_MAX_TOLERANCE`常量（位于`tracer/step_handler.py`）调整：
+阈值可通过修改`BRANCH_MAX_TOLERANCE`常量（位于`native_context_tracer/step_handler.py`）调整：
 ```python
 # 默认循环检测阈值
 BRANCH_MAX_TOLERANCE = 10
@@ -127,7 +129,7 @@ libc_functions:
 ```yaml
 source_base_dir: "/path/to/your/project/src" # 例如：/Users/richard/code/terminal-llm
 ```
-- **效果**: 如果 `source_base_dir` 设置为 `/Users/richard/code/terminal-llm`，那么 `/Users/richard/code/terminal-llm/debugger/lldb/tracer/step_handler.py` 将显示为 `debugger/lldb/tracer/step_handler.py`。
+- **效果**: 如果 `source_base_dir` 设置为 `/Users/richard/code/terminal-llm`，那么 `/Users/richard/code/terminal-llm/debugger/lldb/native_context_tracer/step_handler.py` 将显示为 `debugger/lldb/native_context_tracer/step_handler.py`。
 
 ### 符号追踪
 除了行级追踪，还支持对特定函数符号的进入和退出进行追踪，这对于理解程序执行流程和性能分析非常有用。
