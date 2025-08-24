@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trace UI Test</title>
+    <link rel="stylesheet" href="context_tracer/tracer_styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- App Container -->
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h2 class="sidebar-title">
+                    <i class="fas fa-bug"></i> Trace Explorer
+                </h2>
+            </div>
+            <div class="sidebar-content">
+                <!-- Search -->
+                <div class="sidebar-section">
+                    <input type="text" id="sidebarSearch" class="sidebar-search" placeholder="Search messages...">
+                </div>
+
+                <!-- Filters -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-section-title">Filter by Type</h3>
+                    <div class="filter-group">
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterCall" checked>
+                            <span class="color-indicator" style="background-color: var(--call-color)"></span>
+                            Calls
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterReturn" checked>
+                            <span class="color-indicator" style="background-color: var(--return-color)"></span>
+                            Returns
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterLine" checked>
+                            <span class="color-indicator" style="background-color: var(--line-color)"></span>
+                            Lines
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="checkbox" id="filterException" checked>
+                            <span class="color-indicator" style="background-color: var(--error-color)"></span>
+                            Exceptions
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Statistics -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-section-title">Statistics</h3>
+                    <div class="filter-stats">
+                        <h3>Summary</h3>
+                        <p>Total Messages: <span class="stat-value">1,234</span></p>
+                        <p>Errors: <span class="stat-value">5</span></p>
+                        <p>Generated: <span class="stat-value">2024-01-15 10:30:45</span></p>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-section-title">Quick Actions</h3>
+                    <button id="expandAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="expandAllTitle" title="Expand all call stacks">
+                        <i class="fas fa-expand-alt"></i> Expand All
+                    </button>
+                    <button id="collapseAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="collapseAllTitle" title="Collapse all call stacks">
+                        <i class="fas fa-compress-alt"></i> Collapse All
+                    </button>
+                    <button id="skeletonViewBtn" style="width: 100%;" data-i18n-title="skeletonViewTitle" title="Toggle skeleton view">
+                        <i class="fas fa-code-branch"></i> Skeleton View
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Sidebar Overlay for Mobile -->
+        <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="main-header">
+                <button class="toggle-sidebar icon-btn" id="toggleSidebar" data-i18n-title="toggleSidebarTitle" title="Toggle sidebar">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <h1>Python Trace Report</h1>
+                <nav id="controls" class="nav-controls">
+                    <div class="dropdown-container">
+                        <button id="summaryBtn" class="dropdown-toggle" data-i18n-title="summaryTitle" title="Show summary">
+                            <i class="fas fa-chart-bar"></i>
+                        </button>
+                        <div id="summaryDropdown" class="dropdown-menu">
+                            <p><strong>Generated at:</strong> 2024-01-15 10:30:45</p>
+                            <p><strong>Total messages:</strong> 1,234</p>
+                            <p><strong>Errors:</strong> 5</p>
+                        </div>
+                    </div>
+                    <button id="settingsBtn" class="icon-btn" data-i18n-title="settingsTitle" title="Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    <button id="exportBtn" class="icon-btn" data-i18n-title="exportTitle" title="Export as HTML">
+                        <i class="fas fa-download"></i>
+                    </button>
+                </nav>
+            </header>
+
+            <div class="content-wrapper">
+                <div id="content">
+                    <!-- Sample trace content -->
+                    <div class="foldable call" data-indent="0" style="--indent-space: 0ch;">
+                        ↘ CALL main()
+                        <span class="view-source-btn">view source</span>
+                    </div>
+                    <div class="call-group collapsed">
+                        <div class="line" data-indent="4" style="padding-left:4ch">
+                            ▷ /app/main.py:1 def main(): # Debug: None
+                            <span class="view-source-btn">view source</span>
+                        </div>
+                        <div class="foldable call" data-indent="4" style="--indent-space: 4ch;">
+                            ↘ CALL process_data()
+                            <span class="view-source-btn">view source</span>
+                        </div>
+                        <div class="call-group collapsed">
+                            <div class="line" data-indent="8" style="padding-left:8ch">
+                                ▷ /app/main.py:5 data = load_data() # Debug: data={'key': 'value'}
+                                <span class="view-source-btn">view source</span>
+                            </div>
+                            <div class="return" data-indent="4" style="padding-left:4ch">
+                                ↗ RETURN: None
+                            </div>
+                        </div>
+                        <div class="return" data-indent="0" style="padding-left:0ch">
+                            ↗ RETURN: None
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="context_tracer/static/js/ai_explainer.js"></script>
+    <script src="context_tracer/static/js/tracer_scripts.js"></script>
+    <script>
+        // Initialize sidebar functionality
+        document.addEventListener('DOMContentLoaded', () => {
+            const toggleSidebar = document.getElementById('toggleSidebar');
+            const sidebar = document.getElementById('sidebar');
+            const sidebarOverlay = document.getElementById('sidebarOverlay');
+            
+            if (toggleSidebar) {
+                toggleSidebar.addEventListener('click', () => {
+                    sidebar.classList.toggle('open');
+                    sidebarOverlay.classList.toggle('show');
+                });
+            }
+            
+            if (sidebarOverlay) {
+                sidebarOverlay.addEventListener('click', () => {
+                    sidebar.classList.remove('open');
+                    sidebarOverlay.classList.remove('show');
+                });
+            }
+            
+            // Initialize filters
+            const filters = ['filterCall', 'filterReturn', 'filterLine', 'filterException'];
+            filters.forEach(id => {
+                const filter = document.getElementById(id);
+                if (filter) {
+                    filter.addEventListener('change', applyFilters);
+                }
+            });
+            
+            function applyFilters() {
+                const filterStates = {
+                    call: document.getElementById('filterCall').checked,
+                    return: document.getElementById('filterReturn').checked,
+                    line: document.getElementById('filterLine').checked,
+                    exception: document.getElementById('filterException').checked
+                };
+                
+                const elements = document.querySelectorAll('div[class*="call"], div[class*="return"], div[class*="line"], div[class*="error"]');
+                
+                elements.forEach(el => {
+                    let show = true;
+                    
+                    if (el.classList.contains('call') && !filterStates.call) {
+                        show = false;
+                    } else if (el.classList.contains('return') && !filterStates.return) {
+                        show = false;
+                    } else if (el.classList.contains('line') && !filterStates.line) {
+                        show = false;
+                    } else if (el.classList.contains('error') || el.classList.contains('exception')) {
+                        if (!filterStates.exception) {
+                            show = false;
+                        }
+                    }
+                    
+                    el.style.display = show ? '' : 'none';
+                });
+                
+                // Also hide/show call groups based on their children
+                const callGroups = document.querySelectorAll('.call-group');
+                callGroups.forEach(group => {
+                    const hasVisibleChildren = Array.from(group.children).some(child => child.style.display !== 'none');
+                    group.style.display = hasVisibleChildren ? '' : 'none';
+                });
+            }
+        });
+    </script>
+</body>
+</html>

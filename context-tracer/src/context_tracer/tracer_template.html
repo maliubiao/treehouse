@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{title}}</title>
-    <link rel="stylesheet" href="../tracer_styles.css">
+    <link rel="stylesheet" href="tracer_styles.css">
     <link href="static/css/prism.min.css"
         rel="stylesheet" id="prism-theme">
     <link href="static/css/prism-line-numbers.min.css"
@@ -222,24 +222,6 @@
                 <!-- Log content will be injected here -->
             </div>
 
-            <!-- Raw LLM Response Viewer -->
-            <div class="llm-raw-response-viewer">
-                <div class="llm-raw-response-header">
-                    <span data-i18n="aiRawResponseTitle">LLM Raw Response (for diagnosis)</span>
-                    <button id="llmRawResponseToggleBtn" data-i18n="aiShowBtn">Show</button>
-                </div>
-                <div class="llm-raw-response-content" id="llmRawResponseContent" style="display: none;">
-                    <div class="llm-panel">
-                        <h4 data-i18n="aiThinkingPanel">Thinking</h4>
-                        <pre id="llmThinkingOutput"></pre>
-                    </div>
-                    <div class="llm-panel">
-                        <h4 data-i18n="aiContentPanel">Content</h4>
-                        <pre id="llmContentOutput"></pre>
-                    </div>
-                </div>
-            </div>
-
             <div class="ai-explain-footer">
                 <button id="startAiExplainBtn" data-i18n="aiStartExplanationBtn">Start Explanation</button>
                 <span id="aiExplainStatus"></span>
@@ -253,6 +235,7 @@
       Prism.manual = true;
     </script>
     <script src="static/js/prism-core.min.js"></script>
+    <script src="static/js/components/prism-python.min.js"></script>
     <script src="static/js/prism-autoloader.min.js"></script>
     <script src="static/js/prism-line-numbers.min.js"></script>
     <script src="static/js/prism-toolbar.min.js"></script>
@@ -265,6 +248,8 @@
         window.lineComment = {{line_comment}};
         window.eventMetadata = {{event_metadata_data}};
     </script>
-    <script src="../tracer_scripts.js"></script>
+    <script src="static/js/marked.min.js"></script>
+    <script src="static/js/ai_explainer.js"></script>
+    <script src="static/js/tracer_scripts.js"></script>
 </body>
 </html>

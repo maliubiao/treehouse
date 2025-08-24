@@ -292,7 +292,7 @@ class Tracer:
         from .lldb_console import show_console
 
         self.run_cmd("settings set use-color true", raise_on_error=False)
-        show_console(self.debugger)
+        # show_console(self.debugger)
         self.run_cmd("settings set use-color false", raise_on_error=False)
         assert self.process.GetState() == lldb.eStateStopped
 

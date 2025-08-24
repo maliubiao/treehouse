@@ -534,7 +534,7 @@ class CallTreeHtmlRender:
         rendered_html = self._render_i18n(self._template, self.default_lang)
 
         try:
-            nav_worker_path = Path(__file__).parent / "nav_worker.js"
+            nav_worker_path = Path(__file__).parent / "static" / "js" / "nav_worker.js"
             nav_worker_script_content = nav_worker_path.read_text("utf-8")
         except FileNotFoundError:
             logging.error(f"Asset file not found: {nav_worker_path}")
@@ -562,7 +562,11 @@ class CallTreeHtmlRender:
         """
         Creates a symbolic link from source to destination if supported,
         otherwise falls back to copying the file. Skips if link already exists and points to source.
+        Ensures parent directories exist before creating the link.
         """
+        # Ensure parent directory exists
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
         abs_source = source.resolve()
         if destination.exists():
             if destination.is_symlink():
@@ -602,7 +606,6 @@ class CallTreeHtmlRender:
             # Copy/Link core assets
             core_assets: List[str] = [
                 "tracer_styles.css",
-                "tracer_scripts.js",
                 "translations.json",
             ]
             for asset in core_assets:
@@ -610,43 +613,19 @@ class CallTreeHtmlRender:
                 if source_asset.exists():
                     self._create_asset_link(source_asset, output_dir / asset)
 
-            # Copy/Link static resources
+            # Copy/Link static resources recursively
             static_dir = asset_dir / "static"
             if static_dir.exists():
                 output_static_dir = output_dir / "static"
                 output_static_dir.mkdir(exist_ok=True)
 
-                # Copy CSS files
-                css_dir = output_static_dir / "css"
-                css_dir.mkdir(exist_ok=True)
-                for css_file in static_dir.glob("css/*.css"):
-                    self._create_asset_link(css_file, css_dir / css_file.name)
-
-                # Copy JS files
-                js_dir = output_static_dir / "js"
-                js_dir.mkdir(exist_ok=True)
-                for js_file in static_dir.glob("js/*.js"):
-                    self._create_asset_link(js_file, js_dir / js_file.name)
-
-                # Copy fonts if they exist
-                fonts_dir = static_dir / "fonts"
-                if fonts_dir.exists():
-                    output_fonts_dir = output_static_dir / "fonts"
-                    output_fonts_dir.mkdir(exist_ok=True)
-                    for font_file in fonts_dir.glob("*"):
-                        self._create_asset_link(font_file, output_fonts_dir / font_file.name)
-
-                # Copy webfonts directory (for Font Awesome)
-                webfonts_dir = static_dir / "webfonts"
-                if webfonts_dir.exists():
-                    output_webfonts_dir = output_static_dir / "webfonts"
-                    output_webfonts_dir.mkdir(exist_ok=True)
-                    for font_file in webfonts_dir.glob("*"):
-                        self._create_asset_link(font_file, output_webfonts_dir / font_file.name)
-
-            # Update HTML content paths for core assets
-            html_content = html_content.replace('href="../tracer_styles.css"', 'href="tracer_styles.css"')
-            html_content = html_content.replace('src="../tracer_scripts.js"', 'src="tracer_scripts.js"')
+                # Recursively copy all static files and directories
+                for item in static_dir.rglob("*"):
+                    if item.is_file():
+                        relative_path = item.relative_to(static_dir)
+                        target_path = output_static_dir / relative_path
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        self._create_asset_link(item, target_path)
 
         except Exception as e:
             logging.error(f"无法处理资源文件: {e}")
