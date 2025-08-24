@@ -1333,7 +1333,7 @@ body.skeleton-mode #content .call-group.show-details .var {
     white-space: pre-wrap;
     word-break: break-all;
 }
-.ai-subtree-section.collapsed .ai-subtree-content {
+.ai-subtree-section.ai-subtree-collapsed .ai-subtree-content {
     max-height: 0;
     padding-top: 0;
     padding-bottom: 0;

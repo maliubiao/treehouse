@@ -146,7 +146,7 @@ function initializeAiExplainer(TraceViewer) {
 
             // 2. Collapsible code subtree section
             const subtreeSection = document.createElement('div');
-            subtreeSection.className = 'ai-subtree-section collapsed';
+            subtreeSection.className = 'ai-subtree-section ai-subtree-collapsed';
             
             const subtreeHeader = document.createElement('div');
             subtreeHeader.className = 'ai-subtree-header';
@@ -168,9 +168,9 @@ function initializeAiExplainer(TraceViewer) {
             
             // Toggle functionality for subtree
             subtreeHeader.addEventListener('click', () => {
-                subtreeSection.classList.toggle('collapsed');
+                subtreeSection.classList.toggle('ai-subtree-collapsed');
                 const icon = subtreeHeader.querySelector('i');
-                icon.className = subtreeSection.classList.contains('collapsed') ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
+                icon.className = subtreeSection.classList.contains('ai-subtree-collapsed') ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
             });
 
 
@@ -242,8 +242,8 @@ function initializeAiExplainer(TraceViewer) {
 
             // Collapse subtree if not already collapsed
             const subtreeSection = this.body.querySelector('.ai-subtree-section');
-            if (subtreeSection && !subtreeSection.classList.contains('collapsed')) {
-                subtreeSection.classList.add('collapsed');
+            if (subtreeSection && !subtreeSection.classList.contains('ai-subtree-collapsed')) {
+                subtreeSection.classList.add('ai-subtree-collapsed');
                 const icon = subtreeSection.querySelector('.ai-subtree-header i');
                 if (icon) icon.className = 'fas fa-chevron-down';
             }
