@@ -146,7 +146,7 @@ function initializeAiExplainer(TraceViewer) {
             this.body.innerHTML = '';
             this.status.textContent = TraceViewer.i18n.t('aiStatusReady');
 
-            // Create new UI layout
+            // Create new UI layout with flex container
             const container = document.createElement('div');
             container.className = 'ai-explain-container';
             
@@ -189,7 +189,7 @@ function initializeAiExplainer(TraceViewer) {
                 </div>
             `;
             
-            // Response section
+            // Response section with flexible scrolling
             const responseSection = document.createElement('div');
             responseSection.className = 'ai-response-section';
             responseSection.innerHTML = `

@@ -1701,6 +1701,33 @@ body.skeleton-mode #content .call-group.show-details .var {
     padding: 0;
 }
 
+/* Ensure chat messages container is scrollable */
+.ai-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    max-height: 400px; /* Set a maximum height with scrolling */
+}
+
+/* Make response section flexible */
+.ai-response-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.ai-chat-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
 /* Streaming content animation */
 .ai-thinking-content pre,
 .ai-response-content {
