@@ -57,13 +57,13 @@ jobs:
       - name: Build op_parser shared library
         # This step builds the C/C++ shared library required by Python modules
         run: |
-          mkdir -p debugger/lldb/op_parser/build
-          cmake -S debugger/lldb/op_parser -B debugger/lldb/op_parser/build
-          cmake --build debugger/lldb/op_parser/build
+          mkdir -p native_context_tracer/op_parser_package/src/op_parser/build
+          cmake -S native_context_tracer/op_parser_package/src/op_parser -B native_context_tracer/op_parser_package/src/op_parser/build
+          cmake --build native_context_tracer/op_parser_package/src/op_parser/build
         working-directory: ${{ github.workspace }} # Ensure this runs from the repository root
 
       - name: Copy op_parser shared library
-        run: cp debugger/lldb/op_parser/build/libop_parser.so debugger/lldb/libop_parser.so
+        run: cp native_context_tracer/op_parser_package/src/op_parser/build/libop_parser.so native_context_tracer/op_parser_package/src/op_parser/libop_parser.so
 
       - name: Run Unittest tests
         # tests/test_main.py exits with non-zero code on failure
