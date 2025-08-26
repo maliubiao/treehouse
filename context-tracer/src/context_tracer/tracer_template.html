@@ -71,8 +71,11 @@
                 <!-- Quick Actions -->
                 <div class="sidebar-section">
                     <h3 class="sidebar-section-title" data-i18n="quickActions">Quick Actions</h3>
-                    <button id="expandAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="expandAllTitle" title="Expand all call stacks">
-                        <i class="fas fa-expand-alt"></i> <span data-i18n="expandAll">Expand All</span>
+                    <button id="expandAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="expandAllTitle" title="Expand call stacks level-by-level smartly">
+                        <i class="fas fa-magic"></i> <span data-i18n="expandAll">Smart Expand</span>
+                    </button>
+                    <button id="trueExpandAllBtn" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="trueExpandAllTitle" title="Warning: Forcibly expands all nodes, which may cause performance issues on large reports.">
+                        <i class="fas fa-expand-arrows-alt"></i> <span data-i18n="trueExpandAll">Force Expand All</span>
                     </button>
                     <button id="collapseAll" style="width: 100%; margin-bottom: 0.5rem;" data-i18n-title="collapseAllTitle" title="Collapse all call stacks">
                         <i class="fas fa-compress-alt"></i> <span data-i18n="collapseAll">Collapse All</span>
@@ -121,6 +124,10 @@
                 <div id="content">
                     {{content}}
                 </div>
+                <!-- Floating collapse button -->
+                <button id="collapseCurrentFuncBtn" class="floating-action-btn" data-i18n-title="collapseCurrentFuncBtnTitle" title="Collapse current function">
+                    <i class="fas fa-compress-alt"></i>&nbsp;<span data-i18n="collapseCurrentFuncBtnText">Collapse Current</span>
+                </button>
                 <!-- Navigation Bar -->
                 <div class="navigation-bar" id="navigationBar">
                     <div class="nav-thumbnail" id="navThumbnail"></div>

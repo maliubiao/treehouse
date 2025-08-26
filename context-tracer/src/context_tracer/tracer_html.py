@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Set, T
 from .tracer_common import TraceTypes, truncate_repr_value
 
 if TYPE_CHECKING:
-    from .tracer import TraceLogic
+    from .tracer import TraceConfig, TraceLogic
 
 
 class CallTreeHtmlRender:
@@ -33,14 +33,23 @@ class CallTreeHtmlRender:
     interactivity (e.g., searching, folding/unfolding call stacks, viewing source).
     """
 
-    def __init__(self, trace_logic: "TraceLogic"):
+    def __init__(self, trace_logic: Optional["TraceLogic"] = None, config: Optional["TraceConfig"] = None):
         """
         Initializes the CallTreeHtmlRender instance.
 
         Args:
-            trace_logic: The parent TraceLogic instance that holds the trace configuration and state.
+            trace_logic: The parent TraceLogic instance. (Legacy, for backward compatibility)
+            config: A TraceConfig object. If provided, it is used directly.
+                    If not, it's retrieved from trace_logic.
         """
-        self.trace_logic: "TraceLogic" = trace_logic
+        if config:
+            self.config = config
+        elif trace_logic:
+            self.config = trace_logic.config
+        else:
+            # Create a default minimal config if none provided
+            self.config = None
+
         self._messages: List[Tuple[str, str, Optional[Dict[str, Any]]]] = []
         self._executed_lines: DefaultDict[str, DefaultDict[int, Set[int]]] = defaultdict(lambda: defaultdict(set))
         self._source_files: Dict[str, str] = {}
@@ -352,7 +361,12 @@ class CallTreeHtmlRender:
         if self._current_size > self._size_limit and not self._size_exceeded:
             self._size_exceeded = True
             size_limit_mb = self._size_limit / (1024 * 1024)
-            return f'<div class="{TraceTypes.HTML_ERROR}">⚠ HTML报告大小已超过{size_limit_mb}MB限制，后续内容将被忽略</div>\n'
+            error_message_template = self._translations.get("htmlSizeExceeded", {}).get(
+                self.default_lang,
+                "⚠ HTML report size has exceeded {size_limit_mb}MB limit, subsequent content will be ignored",
+            )
+            error_message = error_message_template.format(size_limit_mb=size_limit_mb)
+            return f'<div class="{TraceTypes.HTML_ERROR}">{html.escape(error_message)}</div>\n'
         return html_content
 
     def _build_debug_vars_html(self, variables: Dict[str, str]) -> str:
@@ -511,17 +525,9 @@ class CallTreeHtmlRender:
                 error_count += 1
 
         title: str
-        try:
-            config = getattr(self.trace_logic, "config", None)
-            target_script: Optional[Path] = getattr(config, "target_script", None)
-            target_module: Optional[str] = getattr(config, "target_module", None)
-            if target_script and isinstance(target_script, Path):
-                title = f"Trace Report for {target_script.name}"
-            elif target_module:
-                title = f"Trace Report for module {target_module}"
-            else:
-                title = "Python Trace Report"
-        except Exception:
+        if self.config:
+            title = f"Trace Report for {self.config.report_name}"
+        else:
             title = "Python Trace Report"
 
         generation_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -628,9 +634,9 @@ class CallTreeHtmlRender:
                         self._create_asset_link(item, target_path)
 
         except Exception as e:
-            logging.error(f"无法处理资源文件: {e}")
-            print(f"ERROR: 无法处理资源文件: {e}")
+            logging.error(f"Failed to copy asset files: {e}")
+            print(f"ERROR: Failed to copy asset files: {e}")
 
         final_report_path.write_text(html_content, encoding="utf-8")
-        print(f"正在生成HTML报告 {final_report_path} ...")
+        print(f"Generating HTML report {final_report_path} ...")
         return final_report_path

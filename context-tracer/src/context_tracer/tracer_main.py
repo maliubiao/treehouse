@@ -168,6 +168,21 @@ def create_parser() -> ArgumentParser:
         type=Path,
         help="源代码的根目录，用于在报告中显示相对路径",
     )
+    parser.add_argument(
+        "--enable-container",
+        action="store_true",
+        help="启用容器模式，将跟踪数据写入二进制容器文件",
+    )
+    parser.add_argument(
+        "--container-key",
+        type=str,
+        help="容器文件的加密密钥（32字节十六进制字符串）",
+    )
+    parser.add_argument(
+        "--container-path",
+        type=Path,
+        help="容器文件的输出路径",
+    )
     return parser
 
 
@@ -273,6 +288,9 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "source_base_dir": args.source_base_dir,
         "include_stdlibs": args.include_stdlibs or [],
         "trace_c_calls": args.trace_c_calls,
+        "enable_container": args.enable_container,
+        "container_key": args.container_key,
+        "container_path": args.container_path,
     }
 
 
@@ -368,6 +386,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             print(color_wrap(f"📝 源码根目录: {args['source_base_dir'].resolve()}", "var"))
         if args["include_stdlibs"]:
             print(color_wrap(f"📝 包含标准库: {', '.join(args['include_stdlibs'])}", "var"))
+        if args["enable_container"]:
+            print(color_wrap(f"📝 容器模式已启用: {args['container_path']}", "var"))
 
         # 创建 TraceConfig 实例
         config = TraceConfig(
@@ -385,6 +405,9 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             source_base_dir=args["source_base_dir"],
             include_stdlibs=args["include_stdlibs"],
             trace_c_calls=args["trace_c_calls"],
+            enable_container=args["enable_container"],
+            container_path=str(args["container_path"]) if args["container_path"] else None,
+            container_key=args["container_key"],
         )
 
         log_dir = Path.cwd() / "tracer-logs"

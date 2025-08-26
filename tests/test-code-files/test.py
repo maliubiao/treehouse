@@ -1,151 +1,140 @@
-# pylint: skip-file
-"""
-aaa
-bbb
-"""
+import time
 
-import os
-import sys
+from debugger import tracer
 
-print(os.listdir("."))
+a = 1
+
+x = 1
 
 
-def n(arg):
-    def decorator(func):
-        return func
-
-    return decorator
+def e():
+    pass
 
 
-def decorator1(func):
-    return func
+s = set()
 
 
-def decorator2(arg):
-    def decorator(func):
-        return func
-
-    return decorator
-
-
-def b():
-    sys.exit(0)
-
-
-class SomeAsyncObj:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args, **kwargs):
-        pass
-
-
-class AsyncIter:
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        raise StopAsyncIteration
-
-
-async_iter = AsyncIter()
-
-
-class C:
-    def a(self):
-        """hello"""
-        b()
-
-    @n(1)
-    def d(self):
-        self.e()
-        self.z()
-
-    def e(self):
-        return 1
-
-    async def f(self):
-        pass
-
-    def z(self):
-        """aaa"""
+class TestClass:
+    def instance_method(self):
+        return "instance"
 
     @staticmethod
-    def static_m():
-        print("static")
-
-    @classmethod
-    def class_m(cls):
-        def inner_func():
-            return list(range(5))
-
-        return inner_func()
-
-    async def async_with_example(self):
-        async with SomeAsyncObj() as obj:
-            yield obj
-
-
-def f():
-    pass
-
-
-@n(1)
-@n(2)
-async def f3():
-    pass
-
-
-def f1():
-    pass
-
-
-def annotated_func(a: int, b: str = "test") -> bool:
-    """Docstring with triple quotes"""
-    if a > 0:
-        return b.isdigit()
-    return False
+    def static_method():
+        return "static"
 
 
 def gen_func():
     yield 1
-    yield from [2, 3]
+    yield 2
 
 
-def default_args(a, *args, b=1, **kwargs):
+def func_args(a, b=2):
+    return a + b
+
+
+def nested_call():
+    func_args(1)
+    TestClass.static_method()
+
+
+def raise_again():
     try:
-        return a + b + sum(args) + sum(kwargs.values())
-    except TypeError as exc:
-        raise ValueError("Invalid arguments") from exc
+        raise ValueError("again")
+    except ValueError as e:
+        raise RuntimeError("wrapped") from e
 
 
-@decorator1
-@decorator2(arg=2)
-def multi_deco():
-    def lambda_func(x):
-        return x**2
-
-    return lambda_func(5)
-
-
-def nested_scope():
-    def level1():
-        var = [x * 2 for x in range(10) if x % 2 == 0]
-
-        def level2():
-            return var + [True, False]
-
-        return level2()
-
-    return level1()
+def exc(x):
+    if x == 1:
+        raise ValueError("1")
+    elif x == 3:
+        nested_call()
+    else:
+        return x
 
 
-async def async_for_example():
-    async for item in async_iter:
-        with open(item, encoding="utf-8") as file:
-            content = file.read()
-            print(content.splitlines())
+def handle_exceptions():
+    try:
+        exc(1)
+    except ValueError:
+        pass
+
+    try:
+        raise_again()
+    except RuntimeError:
+        pass
+
+    try:
+        next(iter([]))
+    except StopIteration:
+        pass
+
+    # New complex exception handling cases
+    try:
+        # Case 1: Handle exception then raise new type
+        raise ValueError("initial error")
+    except ValueError as e:
+        print("Handling ValueError, performing calculations")
+        result = 10 + 5
+        s.add(result)
+        raise RuntimeError("New error after handling") from e
+
+    try:
+        # Case 2: Handle and re-raise with modification
+        next(iter([]))
+    except StopIteration as e:
+        print("Handling StopIteration, modifying state")
+        global x
+        x += 10
+        raise KeyError("KeyError after cleanup") from e
+
+    try:
+        # Case 3: Nested handling and re-raise
+        func_args(1, "invalid")  # TypeError
+    except TypeError as e:
+        print("Handling TypeError, executing valid code")
+        TestClass.static_method()
+        raise ValueError("Final error") from e
+
+
+def c(u=2):
+    t = tracer.start_trace(config=tracer.TraceConfig(target_files=["*.py"], enable_var_trace=True, trace_c_calls=True))
+    try:
+        e()
+        for i in range(3):
+            if i % 2 == 0:
+                print("even")
+            else:
+                print("odd")
+            s.add(i)
+
+        g = gen_func()
+        for i in g:
+            print(i)
+        func_args(1)
+        func_args(1, 3)
+
+        obj = TestClass()
+        obj.instance_method()
+        TestClass.static_method()
+
+        # handle_exceptions()
+        nested_call()
+
+        # Add a generator expression similar to the log to observe its trace behavior
+        _ = any(item > 0 for item in [1, 2, 3, 4])  # This creates a <genexpr>
+
+        [i for i in range(3)]
+        {i: i for i in range(2)}
+
+        exc(3)
+        exc(2)
+
+    finally:
+        tracer.stop_trace(t)
 
 
 if __name__ == "__main__":
-    multi_deco()
+    while True:
+        c()
+        time.sleep(1)

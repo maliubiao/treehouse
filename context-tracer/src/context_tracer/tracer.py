@@ -17,6 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
+from .container import DataContainerWriter, EventType, FileManager, TraceEvent
 from .source_cache import get_statement_info
 from .tracer_common import TraceTypes, truncate_repr_value
 from .tracer_html import CallTreeHtmlRender
@@ -111,6 +112,10 @@ class TraceConfig:
         disable_html: bool = False,
         include_stdlibs: Optional[List[str]] = None,
         trace_c_calls: bool = False,
+        # New container-related settings
+        enable_container: bool = False,
+        container_path: Optional[str] = None,
+        container_key: Optional[str] = None,
     ):
         """
         初始化跟踪配置
@@ -131,6 +136,9 @@ class TraceConfig:
             disable_html: 是否禁用HTML报告生成
             include_stdlibs: 特别包含的标准库模块列表（即使ignore_system_paths=True）
             trace_c_calls: 是否启用C函数调用跟踪
+            enable_container: 是否启用持久化数据容器
+            container_path: 数据容器文件路径
+            container_key: 用于加密数据容器的密钥 (16, 24, or 32 bytes as a hex string)
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
@@ -151,6 +159,15 @@ class TraceConfig:
         self.include_stdlibs = include_stdlibs or []
         self.trace_c_calls = trace_c_calls
         self._skip_vars_cache: Dict[str, bool] = {}
+
+        # Container settings
+        self.enable_container = enable_container
+        self.container_path = container_path or str(_LOG_DIR / "trace_data.bin")
+        if enable_container and not container_key:
+            raise ValueError("A 'container_key' (hex string) is required when 'enable_container' is True.")
+        self.container_key_bytes: Optional[bytes] = bytes.fromhex(container_key) if container_key else None
+        if self.container_key_bytes and len(self.container_key_bytes) not in [16, 24, 32]:
+            raise ValueError("Container key must be 16, 24, or 32 bytes (32, 48, or 64 hex characters).")
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -277,6 +294,9 @@ class TraceConfig:
             include_stdlibs=config_data.get("include_stdlibs", []),
             disable_html=config_data.get("disable_html", False),
             trace_c_calls=config_data.get("trace_c_calls", False),
+            enable_container=config_data.get("enable_container", False),
+            container_path=config_data.get("container_path"),
+            container_key=config_data.get("container_key"),
         )
 
     @staticmethod
@@ -1061,8 +1081,9 @@ class TraceLogic:
                 "console": parent._console_output,
                 "file": parent._file_output,
                 "html": parent._html_output,
+                "container": parent._container_output,
             }
-            self._active_outputs = set(["html", "file"])
+            self._active_outputs = set(["file"])
             self._log_file = None
             self._log_file_index = None
 
@@ -1073,7 +1094,7 @@ class TraceLogic:
         self._flush_event = threading.Event()
         self._timer_thread = None
         self._running_flag = False
-        self._html_render = CallTreeHtmlRender(self)
+        self._html_render = CallTreeHtmlRender(config=self.config)
         self._stack_variables = {}
         self._message_id = 0
         self.exception_chain = []
@@ -1083,9 +1104,22 @@ class TraceLogic:
         self._frame_data = self._FrameData()
         self._output = self._OutputHandlers(self)
         self._last_vars_by_frame = {}  # Cache for tracking variable changes
+
+        # Container state
+        self._file_manager: Optional[FileManager] = None
+        self._container_writer: Optional[DataContainerWriter] = None
+
+        if not self.config.disable_html:
+            self._output._active_outputs.add("html")
+
+        if self.config.enable_container:
+            self._output._active_outputs.add("container")
+            self._file_manager = FileManager()
+            if self.config.container_key_bytes:
+                self._container_writer = DataContainerWriter(
+                    self.config.container_path, self.config.container_key_bytes, self._file_manager
+                )
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
-        if self.config.disable_html:
-            self.disable_output("html")
         self._local = threading.local()
         self.init_stack_variables()
 
@@ -1204,6 +1238,67 @@ class TraceLogic:
         """HTML输出处理"""
         self._html_render.add_raw_message(log_data, color_type)
 
+    def _container_output(self, log_data: Dict[str, Any], color_type: str) -> None:
+        """Container output handler."""
+        if not self._container_writer or not self._file_manager:
+            return
+
+        data = log_data.get("data", {})
+        original_filename = data.get("original_filename")
+        if not original_filename:
+            return
+
+        # Handle dynamic code by getting its source content if available
+        content = data.get("dynamic_source")
+        file_id = self._file_manager.get_id(original_filename, content)
+
+        event_map = {
+            TraceTypes.COLOR_CALL: EventType.CALL,
+            TraceTypes.COLOR_RETURN: EventType.RETURN,
+            TraceTypes.COLOR_LINE: EventType.LINE,
+            TraceTypes.COLOR_EXCEPTION: EventType.EXCEPTION,
+            TraceTypes.COLOR_TRACE: EventType.C_CALL,  # Default for now
+        }
+        event_type_enum = event_map.get(color_type)
+        if not event_type_enum:
+            return
+
+        # Refine event type for C calls based on subtype
+        event_subtype = data.get("event_subtype")
+        if event_subtype == "c_call":
+            event_type_enum = EventType.C_CALL
+        elif event_subtype == "c_return":
+            event_type_enum = EventType.C_RETURN
+        elif event_subtype == "c_raise":
+            event_type_enum = EventType.C_RAISE
+
+        event_data: Dict[str, Any] = {}
+        if event_type_enum == EventType.CALL:
+            event_data["func"] = data.get("func")
+            event_data["args"] = data.get("args")
+        elif event_type_enum == EventType.RETURN:
+            event_data["func"] = data.get("func")
+            event_data["return_value"] = data.get("return_value")
+        elif event_type_enum == EventType.EXCEPTION:
+            event_data["func"] = data.get("func")
+            event_data["exc_type"] = data.get("exc_type")
+            event_data["exc_value"] = data.get("exc_value")
+        elif event_type_enum == EventType.LINE:
+            event_data["tracked_vars"] = data.get("tracked_vars")
+        elif event_type_enum in (EventType.C_CALL, EventType.C_RETURN, EventType.C_RAISE):
+            event_data["func_name"] = data.get("func_name")
+
+        event: TraceEvent = {
+            "event_type": event_type_enum.value,
+            "timestamp": time.time(),
+            "thread_id": data.get("thread_id", 0),
+            "frame_id": data.get("frame_id", 0),
+            "file_id": file_id,
+            "lineno": data.get("lineno", 0),
+            "data": event_data,
+        }
+        self._container_writer.add_event(event)
+
     def _format_log_message(self, log_data):
         """格式化日志消息"""
         if isinstance(log_data, str):
@@ -1225,7 +1320,9 @@ class TraceLogic:
                 log_data, color_type = self._log_queue.get_nowait()
                 for output_type in self._output._active_outputs:
                     if output_type in self._output._output_handlers:
-                        self._output._output_handlers[output_type](log_data, color_type)
+                        handler = self._output._output_handlers[output_type]
+                        if isinstance(log_data, dict):  # Ensure log_data is a dict for container
+                            handler(log_data, color_type)
             except queue.Empty:
                 break
 
@@ -1304,6 +1401,18 @@ class TraceLogic:
         self._file_cache._ast_cache[expr] = (node, compiled)
         return node, compiled
 
+    def _prepare_log_data(self, frame: types.FrameType) -> Dict[str, Any]:
+        """Prepares common data for a log entry, including dynamic source."""
+        filename = frame.f_code.co_filename
+        data: Dict[str, Any] = {"original_filename": filename}
+        if self.config.enable_container and filename.startswith("<"):
+            try:
+                # Attempt to get source for dynamic code objects
+                data["dynamic_source"] = inspect.getsource(frame.f_code)
+            except (TypeError, OSError):
+                data["dynamic_source"] = f"# Source for {filename} not available"
+        return data
+
     def handle_call(self, frame, is_simple: bool = False):
         """增强参数捕获逻辑"""
         self.init_stack_variables()
@@ -1336,22 +1445,27 @@ class TraceLogic:
             filename = self._get_formatted_filename(frame.f_code.co_filename)
             frame_id = self.get_or_reuse_frame_id(frame)
             self._frame_data._frame_locals_map[frame_id] = frame.f_locals
+
+            log_data_payload = self._prepare_log_data(frame)
+            log_data_payload.update(
+                {
+                    "indent": _INDENT * self._local.stack_depth,
+                    "prefix": log_prefix,
+                    "filename": filename,
+                    "lineno": frame.f_lineno,
+                    "func": frame.f_code.co_name,
+                    "args": ", ".join(args_info),
+                    "frame_id": frame_id,
+                    "parent_frame_id": parent_frame_id,
+                    "caller_lineno": parent_lineno,
+                    "thread_id": threading.get_native_id(),
+                }
+            )
+
             self._add_to_buffer(
                 {
                     "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}][thread:{thread_id}]",
-                    "data": {
-                        "indent": _INDENT * self._local.stack_depth,
-                        "prefix": log_prefix,
-                        "filename": filename,
-                        "original_filename": frame.f_code.co_filename,
-                        "lineno": frame.f_lineno,
-                        "func": frame.f_code.co_name,
-                        "args": ", ".join(args_info),
-                        "frame_id": frame_id,
-                        "parent_frame_id": parent_frame_id,
-                        "caller_lineno": parent_lineno,
-                        "thread_id": threading.get_native_id(),
-                    },
+                    "data": log_data_payload,
                 },
                 TraceTypes.COLOR_CALL,
             )
@@ -1381,9 +1495,9 @@ class TraceLogic:
         frame_id = self.get_or_reuse_frame_id(frame)
         log_prefix = TraceTypes.PREFIX_RETURN
 
-        log_data = {
-            "template": "{indent}↗ {prefix} {filename} {func}() → {return_value} [frame:{frame_id}]",
-            "data": {
+        log_data_payload = self._prepare_log_data(frame)
+        log_data_payload.update(
+            {
                 "indent": _INDENT * (self._local.stack_depth - 1),
                 "prefix": log_prefix,
                 "filename": filename,
@@ -1391,10 +1505,14 @@ class TraceLogic:
                 "return_value": return_str,
                 "frame_id": frame_id,
                 "func": frame.f_code.co_name,
-                "original_filename": frame.f_code.co_filename,
                 "thread_id": threading.get_native_id(),
                 "tracked_vars": {},
-            },
+            }
+        )
+
+        log_data = {
+            "template": "{indent}↗ {prefix} {filename} {func}() → {return_value} [frame:{frame_id}]",
+            "data": log_data_payload,
         }
         # 使用统一的方法处理消息
         self._process_message_with_vars(frame, log_data, TraceTypes.COLOR_RETURN)
@@ -1496,21 +1614,25 @@ class TraceLogic:
 
         indented_statement = full_statement.replace("\n", "\n" + _INDENT * (self._local.stack_depth + 1))
 
-        log_data = {
-            "idx": self._message_id,
-            "template": "{indent}▷ {filename}:{lineno} {line}",
-            "data": {
+        log_data_payload = self._prepare_log_data(frame)
+        log_data_payload.update(
+            {
                 "indent": _INDENT * self._local.stack_depth,
                 "filename": formatted_filename,
                 "lineno": start_line,
                 "line": indented_statement,
                 "raw_line": full_statement,
                 "frame_id": frame_id,
-                "original_filename": filename,
                 "tracked_vars": {},
                 "thread_id": threading.get_native_id(),
-            },
+            }
+        )
+        log_data = {
+            "idx": self._message_id,
+            "template": "{indent}▷ {filename}:{lineno} {line}",
+            "data": log_data_payload,
         }
+
         if self.config.enable_var_trace:
             current_statement_vars = self._get_vars_in_range(frame.f_code, start_line, end_line)
         else:
@@ -1660,11 +1782,10 @@ class TraceLogic:
         if len(self.exception_chain) > 0:
             if self.exception_chain[-1][0]["data"]["frame_id"] == frame_id:
                 return
-        log_data = {
-            "template": (
-                "{indent}⚠ {prefix} IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
-            ),
-            "data": {
+
+        log_data_payload = self._prepare_log_data(frame)
+        log_data_payload.update(
+            {
                 "indent": _INDENT * (self._local.stack_depth - 1),
                 "prefix": log_prefix,
                 "filename": filename,
@@ -1673,10 +1794,16 @@ class TraceLogic:
                 "exc_value": str(exc_value),
                 "frame_id": frame_id,
                 "func": frame.f_code.co_name,
-                "original_filename": frame.f_code.co_filename,
                 "thread_id": threading.get_native_id(),
                 "tracked_vars": {},
-            },
+            }
+        )
+
+        log_data = {
+            "template": (
+                "{indent}⚠ {prefix} IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]"
+            ),
+            "data": log_data_payload,
         }
 
         # 对于 sys.monitoring 模式，需要特殊处理
@@ -1709,19 +1836,25 @@ class TraceLogic:
             func_name = repr(callable_obj)
 
         is_safe = self.config.should_skip_vars(frame.f_code.co_filename, frame.f_lineno)
+
+        log_data_payload = self._prepare_log_data(frame)
+        log_data_payload.update(
+            {
+                "indent": _INDENT * self._local.stack_depth,
+                "func_name": func_name,
+                "arg0": truncate_repr_value(arg0, safe=is_safe),
+                "filename": self._get_formatted_filename(frame.f_code.co_filename),
+                "lineno": frame.f_lineno,
+                "frame_id": self.get_or_reuse_frame_id(frame),
+                "thread_id": threading.get_native_id(),
+                "event_subtype": "c_call",
+            }
+        )
+
         self._add_to_buffer(
             {
                 "template": "{indent}↘ C-CALL {func_name}({arg0}) at {filename}:{lineno} [frame:{frame_id}][thread:{thread_id}]",
-                "data": {
-                    "indent": _INDENT * self._local.stack_depth,
-                    "func_name": func_name,
-                    "arg0": truncate_repr_value(arg0, safe=is_safe),
-                    "filename": self._get_formatted_filename(frame.f_code.co_filename),
-                    "lineno": frame.f_lineno,
-                    "original_filename": frame.f_code.co_filename,
-                    "frame_id": self.get_or_reuse_frame_id(frame),
-                    "thread_id": threading.get_native_id(),
-                },
+                "data": log_data_payload,
             },
             TraceTypes.COLOR_TRACE,
         )
@@ -1737,17 +1870,22 @@ class TraceLogic:
         except AttributeError:
             func_name = repr(callable_obj)
 
+        log_data_payload = self._prepare_log_data(frame)
+        log_data_payload.update(
+            {
+                "indent": _INDENT * self._local.stack_depth,
+                "func_name": func_name,
+                "lineno": frame.f_lineno,
+                "frame_id": self.get_or_reuse_frame_id(frame),
+                "thread_id": threading.get_native_id(),
+                "event_subtype": "c_return",
+            }
+        )
+
         self._add_to_buffer(
             {
                 "template": "{indent}↗ C-RETURN from {func_name} [frame:{frame_id}][thread:{thread_id}]",
-                "data": {
-                    "indent": _INDENT * self._local.stack_depth,
-                    "func_name": func_name,
-                    "original_filename": frame.f_code.co_filename,
-                    "lineno": frame.f_lineno,
-                    "frame_id": self.get_or_reuse_frame_id(frame),
-                    "thread_id": threading.get_native_id(),
-                },
+                "data": log_data_payload,
             },
             TraceTypes.COLOR_TRACE,
         )
@@ -1761,17 +1899,23 @@ class TraceLogic:
             func_name = callable_obj.__name__
         except AttributeError:
             func_name = repr(callable_obj)
+
+        log_data_payload = self._prepare_log_data(frame)
+        log_data_payload.update(
+            {
+                "indent": _INDENT * self._local.stack_depth,
+                "func_name": func_name,
+                "lineno": frame.f_lineno,
+                "frame_id": self.get_or_reuse_frame_id(frame),
+                "thread_id": threading.get_native_id(),
+                "event_subtype": "c_raise",
+            }
+        )
+
         self._add_to_buffer(
             {
                 "template": "{indent}⚠ C-RAISE from {func_name} [frame:{frame_id}][thread:{thread_id}]",
-                "data": {
-                    "indent": _INDENT * self._local.stack_depth,
-                    "func_name": func_name,
-                    "original_filename": frame.f_code.co_filename,
-                    "lineno": frame.f_lineno,
-                    "frame_id": self.get_or_reuse_frame_id(frame),
-                    "thread_id": threading.get_native_id(),
-                },
+                "data": log_data_payload,
             },
             TraceTypes.COLOR_EXCEPTION,
         )
@@ -1822,6 +1966,8 @@ class TraceLogic:
 
     def start(self):
         """启动逻辑处理"""
+        if self._container_writer:
+            self._container_writer.open()
         self._running_flag = True
 
     def stop(self) -> Optional[Path]:
@@ -1836,6 +1982,9 @@ class TraceLogic:
         while not self._log_queue.empty():
             self._log_queue.get_nowait()
         self.disable_output("file")
+
+        if self._container_writer:
+            self._container_writer.close()
 
         report_path = None
         if "html" in self._output._active_outputs:
@@ -1971,6 +2120,10 @@ def trace(
     disable_html: bool = False,
     include_stdlibs: Optional[List[str]] = None,
     trace_c_calls: bool = False,
+    # Container args
+    enable_container: bool = False,
+    container_path: Optional[str] = None,
+    container_key: Optional[str] = None,
 ):
     """函数跟踪装饰器
 
@@ -1990,6 +2143,9 @@ def trace(
         disable_html: 是否禁用HTML报告
         include_stdlibs: 同时trace一些标准库模块 ["unittest"] 比如
         trace_c_calls: 是否启用C函数调用跟踪
+        enable_container: 是否启用持久化数据容器
+        container_path: 数据容器文件路径
+        container_key: 用于加密数据容器的密钥 (16, 24, or 32 bytes as a hex string)
     """
     if not target_files:
         try:
@@ -2023,6 +2179,9 @@ def trace(
             disable_html=disable_html,
             include_stdlibs=include_stdlibs,
             trace_c_calls=trace_c_calls,
+            enable_container=enable_container,
+            container_path=container_path,
+            container_key=container_key,
         )
         # 您在文件中添加的 pdb.set_trace()，保留它以便您调试，生产时可移除
 

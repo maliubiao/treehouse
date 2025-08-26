@@ -5,7 +5,13 @@ import threading
 import time
 
 import lldb
-from tracer.symbol_trace_plugin import NotifyClass, SymbolTrace, SymbolTraceEvent, register_global_callbacks
+
+from native_context_tracer.symbol_trace_plugin import (
+    NotifyClass,
+    SymbolTrace,
+    SymbolTraceEvent,
+    register_global_callbacks,
+)
 
 
 class TraceNotify(NotifyClass):

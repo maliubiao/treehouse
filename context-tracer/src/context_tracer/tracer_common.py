@@ -53,7 +53,7 @@ class TraceTypes:
     HTML_VAR = "var"
 
 
-def _truncate_sequence(value: Union[list, tuple], keep_elements: int, safe: bool) -> str:
+def _truncate_sequence(value: Union[list, tuple], keep_elements: int, safe: bool, max_depth: int, _depth: int) -> str:
     """Helper to truncate list or tuple representations."""
     is_tuple = isinstance(value, tuple)
     open_bracket, close_bracket = ("(", ")") if is_tuple else ("[", "]")
@@ -67,7 +67,10 @@ def _truncate_sequence(value: Union[list, tuple], keep_elements: int, safe: bool
 
     # Recursively call truncate_repr_value for each item.
     # The 'safe' flag is important for nested structures to avoid side-effects.
-    rendered_items = [truncate_repr_value(item, keep_elements=keep_elements, safe=safe) for item in items_to_render]
+    rendered_items = [
+        truncate_repr_value(item, keep_elements=keep_elements, safe=safe, max_depth=max_depth, _depth=_depth + 1)
+        for item in items_to_render
+    ]
 
     body = ", ".join(rendered_items)
 
@@ -78,7 +81,7 @@ def _truncate_sequence(value: Union[list, tuple], keep_elements: int, safe: bool
     return f"{open_bracket}{body}{suffix}{close_bracket}"
 
 
-def _truncate_dict(value: dict, keep_elements: int, safe: bool) -> str:
+def _truncate_dict(value: dict, keep_elements: int, safe: bool, max_depth: int, _depth: int) -> str:
     """Helper to truncate dict representations."""
     if len(value) <= keep_elements:
         items_to_render = value.items()
@@ -90,15 +93,15 @@ def _truncate_dict(value: dict, keep_elements: int, safe: bool) -> str:
     rendered_items = []
     for k, v in items_to_render:
         # Recursively call for both key and value
-        k_repr = truncate_repr_value(k, keep_elements=keep_elements, safe=safe)
-        v_repr = truncate_repr_value(v, keep_elements=keep_elements, safe=safe)
+        k_repr = truncate_repr_value(k, keep_elements=keep_elements, safe=safe, max_depth=max_depth, _depth=_depth + 1)
+        v_repr = truncate_repr_value(v, keep_elements=keep_elements, safe=safe, max_depth=max_depth, _depth=_depth + 1)
         rendered_items.append(f"{k_repr}: {v_repr}")
 
     body = ", ".join(rendered_items)
     return f"{{{body}{suffix}}}"
 
 
-def _truncate_object(value: object, keep_elements: int, safe: bool) -> str:
+def _truncate_object(value: object, keep_elements: int, safe: bool, max_depth: int, _depth: int) -> str:
     """Helper to truncate object attribute representations."""
     attributes = getattr(value, "__dict__", {})
     if not attributes:
@@ -111,7 +114,7 @@ def _truncate_object(value: object, keep_elements: int, safe: bool) -> str:
 
     if not all_keys_are_identifiers:
         # Fallback to a dict representation of attributes, suggesting **kwargs.
-        dict_repr = _truncate_dict(attributes, keep_elements, safe)
+        dict_repr = _truncate_dict(attributes, keep_elements, safe, max_depth, _depth + 1)
         return f"{class_name}(**{dict_repr})"
 
     # All keys are identifiers, so we can use `key=value` format.
@@ -125,17 +128,20 @@ def _truncate_object(value: object, keep_elements: int, safe: bool) -> str:
     rendered_items = []
     for k, v in items_to_render:
         # Key is already known to be a string and identifier.
-        v_repr = truncate_repr_value(v, keep_elements=keep_elements, safe=True)
+        v_repr = truncate_repr_value(v, keep_elements=keep_elements, safe=True, max_depth=max_depth, _depth=_depth + 1)
         rendered_items.append(f"{k}={v_repr}")
 
     body = ", ".join(rendered_items)
     return f"{class_name}({body}{suffix})"
 
 
-def truncate_repr_value(value: Any, keep_elements: int = 10, safe: bool = False) -> str:
+def truncate_repr_value(
+    value: Any, keep_elements: int = 10, safe: bool = False, max_depth: int = 2, _depth: int = 1
+) -> str:
     """
     Intelligently truncates a value and creates a suitable string representation for it,
-    while preserving key type information.
+    while preserving key type information. It prevents infinite recursion by limiting
+    the depth of nested structures.
 
     This function is specifically tuned to handle strings correctly, avoiding the
     "double-quoting" issue caused by applying `repr()` to a value that is already a string.
@@ -145,6 +151,8 @@ def truncate_repr_value(value: Any, keep_elements: int = 10, safe: bool = False)
         keep_elements: The maximum number of elements to keep for sequences and dicts.
         safe: If True, avoids calling custom __repr__ or __str__ methods on objects
               to prevent side effects.
+        max_depth: The maximum recursion depth for nested structures.
+        _depth: Internal counter for the current recursion depth.
     """
     if inspect.isframe(value):
         return "<frame object>"
@@ -180,9 +188,13 @@ def truncate_repr_value(value: Any, keep_elements: int = 10, safe: bool = False)
             spec_part = f"spec={getattr(spec_class, '__name__', '(unknown)')}" if spec_class is not None else ""
             preview = f"mock.Mock({', '.join(filter(None, [name_part, spec_part]))})"
         elif isinstance(value, (list, tuple)):
-            preview = _truncate_sequence(value, keep_elements, safe)
+            if _depth >= max_depth:
+                return "[...]"
+            preview = _truncate_sequence(value, keep_elements, safe, max_depth, _depth)
         elif isinstance(value, dict):
-            preview = _truncate_dict(value, keep_elements, safe)
+            if _depth >= max_depth:
+                return "{...}"
+            preview = _truncate_dict(value, keep_elements, safe, max_depth, _depth)
         # For other objects with a custom __repr__, use it as it's the developer's intended representation.
         elif hasattr(value, "__repr__") and value.__repr__.__qualname__ != "object.__repr__":
             if not safe:
@@ -204,7 +216,9 @@ def truncate_repr_value(value: Any, keep_elements: int = 10, safe: bool = False)
                 return f"<module '{value.__name__}'>"
             if inspect.isclass(value):
                 return f"<class '{getattr(value, '__module__', '?')}.{value.__name__}'>"
-            preview = _truncate_object(value, keep_elements, safe)
+            if _depth >= max_depth:
+                return "..."
+            preview = _truncate_object(value, keep_elements, safe, max_depth, _depth)
         else:
             preview = repr(value)
     except Exception as e:

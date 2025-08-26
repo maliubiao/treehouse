@@ -22,7 +22,9 @@ classifiers = [
 dependencies = [
     "pyyaml>=6.0.0",
     "colorama>=0.4.6",
-    "pygments>=2.15.0"
+    "pygments>=2.15.0",
+    "pycryptodome>=3.23.0",
+    "msgpack>=1.1.1",
 ]
 
 [project.optional-dependencies]

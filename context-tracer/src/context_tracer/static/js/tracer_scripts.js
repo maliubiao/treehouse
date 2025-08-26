@@ -431,6 +431,10 @@ const TraceViewer = {
         SMART_EXPAND_THRESHOLD: 1000,  // Subtrees smaller than this will be fully expanded on click
     },
 
+    currentState: {
+        activeFoldable: null
+    },
+
     // Utilities
     utils: {
         debounce(func, delay) {
@@ -494,6 +498,7 @@ const TraceViewer = {
             content: document.getElementById('content'),
             search: document.getElementById('sidebarSearch') || document.getElementById('search'),
             expandAllBtn: document.getElementById('expandAll'),
+            trueExpandAllBtn: document.getElementById('trueExpandAllBtn'),
             collapseAllBtn: document.getElementById('collapseAll'),
             skeletonViewBtn: document.getElementById('skeletonViewBtn'),
             exportBtn: document.getElementById('exportBtn'),
@@ -510,7 +515,8 @@ const TraceViewer = {
             filterReturn: document.getElementById('filterReturn'),
             filterLine: document.getElementById('filterLine'),
             filterException: document.getElementById('filterException'),
-            searchBtn: document.getElementById('searchBtn')
+            searchBtn: document.getElementById('searchBtn'),
+            collapseCurrentFuncBtn: document.getElementById('collapseCurrentFuncBtn')
         };
 
         // Initialize components
@@ -534,6 +540,7 @@ const TraceViewer = {
         }
         this.initClipboardInterceptor();
         this.initSummaryDropdown();
+        this.initCollapseCurrentFunctionButton();
         
         // New sidebar and filter functionality
         this.initSidebar();
@@ -573,7 +580,7 @@ const TraceViewer = {
 
     // Initialize folding functionality
     initFolding() {
-        const { content, expandAllBtn, collapseAllBtn } = this.elements;
+        const { content, expandAllBtn, collapseAllBtn, trueExpandAllBtn } = this.elements;
 
         // Toggle folding on click
         content.addEventListener('click', e => {
@@ -586,6 +593,11 @@ const TraceViewer = {
         // Smart expand all button
         if (expandAllBtn) {
             expandAllBtn.addEventListener('click', () => this.smartExpandAll());
+        }
+
+        // True expand all button
+        if (trueExpandAllBtn) {
+            trueExpandAllBtn.addEventListener('click', () => this.trueExpandAll());
         }
 
         // Collapse all button
@@ -696,6 +708,32 @@ const TraceViewer = {
         }
 
         console.groupEnd();
+    },
+
+    // Forcibly expands all nodes in the trace.
+    trueExpandAll() {
+        console.log('Action: Forcing expansion of all subtrees.');
+        const { content } = this.elements;
+        const foldables = content.querySelectorAll('.foldable:not(.expanded)');
+        
+        // Batching reads and then writes is a good practice.
+        const pairs = [];
+        foldables.forEach(foldable => {
+            const callGroup = foldable.nextElementSibling;
+            if (callGroup && callGroup.classList.contains('call-group')) {
+                pairs.push({foldable, callGroup});
+            }
+        });
+
+        // Now batch the writes. This is still faster than individual operations that cause reflows.
+        pairs.forEach(pair => {
+            pair.foldable.classList.add('expanded');
+            pair.callGroup.classList.remove('collapsed');
+            // This is important to render debug vars on demand
+            this.renderDebugVarsForContainer(pair.callGroup); 
+        });
+
+        console.log(`Forcibly expanded ${pairs.length} subtrees.`);
     },
 
     // Expands top-level items level by level until a line threshold is met
@@ -1322,6 +1360,69 @@ const TraceViewer = {
         });
     },
 
+    initCollapseCurrentFunctionButton() {
+        const { collapseCurrentFuncBtn, content } = this.elements;
+        if (!collapseCurrentFuncBtn || !content) return;
+
+        collapseCurrentFuncBtn.addEventListener('click', () => {
+            if (this.currentState.activeFoldable) {
+                const elementToCollapse = this.currentState.activeFoldable;
+                this.collapseSubtree(elementToCollapse);
+                // After collapsing, scroll the original element into view.
+                setTimeout(() => {
+                    elementToCollapse.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 100); // Small delay to allow DOM to update
+            }
+        });
+        
+        const scrollHandler = this.utils.debounce(() => {
+            const contentRect = content.getBoundingClientRect();
+            // Check for an element slightly below the top of the content view, to be more robust
+            const checkY = contentRect.top + 10;
+
+            // Get the topmost visible element inside the content area.
+            // Using elementFromPoint relative to viewport.
+            let topElement = document.elementFromPoint(contentRect.left + content.clientWidth / 2, checkY);
+            if (!topElement || !content.contains(topElement)) {
+                this.currentState.activeFoldable = null;
+                collapseCurrentFuncBtn.classList.remove('visible');
+                return;
+            }
+
+            let currentLine = topElement.closest('div[data-indent]');
+            let activeFoldable = null;
+
+            if (currentLine) {
+                let parent = currentLine.parentElement;
+                while(parent && parent !== content) {
+                    if (parent.classList.contains('call-group') && !parent.classList.contains('collapsed')) {
+                        const foldable = parent.previousElementSibling;
+                        if (foldable && foldable.classList.contains('foldable') && foldable.classList.contains('expanded')) {
+                            // Check if the foldable itself is scrolled out of view
+                            const foldableRect = foldable.getBoundingClientRect();
+                            if (foldableRect.bottom < contentRect.top) {
+                                activeFoldable = foldable;
+                                // We found the innermost scope, so we can break.
+                                break;
+                            }
+                        }
+                    }
+                    parent = parent.parentElement;
+                }
+            }
+            
+            this.currentState.activeFoldable = activeFoldable;
+
+            if (this.currentState.activeFoldable) {
+                collapseCurrentFuncBtn.classList.add('visible');
+            } else {
+                collapseCurrentFuncBtn.classList.remove('visible');
+            }
+        }, 150);
+
+        content.addEventListener('scroll', scrollHandler);
+    },
+
     // Internationalization (i18n) Module
     i18n: {
         currentLang: 'en',
@@ -1393,7 +1494,7 @@ const TraceViewer = {
                 }
                 const originalText = element.dataset.originalContent;
 
-                const sizeMatch = originalText.match(/⚠ HTML报告大小已超过(\d+\.?\d*)MB限制，后续内容将被忽略/);
+                const sizeMatch = originalText.match(/⚠ HTML report size has exceeded (\d+\.?\d*)MB limit/);
                 if (sizeMatch) {
                     const sizeLimitMb = sizeMatch[1];
                     element.textContent = this.t('htmlSizeExceeded', {size_limit_mb: sizeLimitMb});

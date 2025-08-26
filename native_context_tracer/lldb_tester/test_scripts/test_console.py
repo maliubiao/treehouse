@@ -2,7 +2,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import FormattedText
 
 try:
-    from tracer.lldb_console import LLDBCompleter
+    from native_context_tracer.lldb_console import LLDBCompleter
 except ImportError:
     pass
 

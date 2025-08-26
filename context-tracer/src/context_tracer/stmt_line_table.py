@@ -289,7 +289,7 @@ class StmtLineTable:
         self,
         source_code: str,
         filename: str = "<string>",
-        strategy: str = "tree-sitter",
+        strategy: str = "ast",
     ):
         """
         Initializes the table and builds the line-to-statement mapping.
