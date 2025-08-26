@@ -186,6 +186,26 @@ def create_parser() -> ArgumentParser:
     return parser
 
 
+def _generate_and_save_container_key(container_path: Path) -> str:
+    """生成随机容器密钥并保存到文件"""
+    # 生成32字节随机密钥
+    key_bytes = os.urandom(32)
+    key_hex = key_bytes.hex()
+
+    # 确保 tracer-logs 目录存在
+    log_dir = Path.cwd() / "tracer-logs"
+    log_dir.mkdir(exist_ok=True)
+
+    # 保存密钥和容器路径到文件
+    key_file = log_dir / "container_key.txt"
+    with open(key_file, "w") as f:
+        f.write(f"container_path={container_path}\n")
+        f.write(f"container_key={key_hex}\n")
+
+    print(color_wrap(f"🔑 自动生成容器密钥并保存到: {key_file}", "var"))
+    return key_hex
+
+
 def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
     """
     解析命令行参数，支持配置文件，并稳健地分离目标及其参数。
@@ -268,6 +288,13 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
             except ValueError as e:
                 raise ValueError(f"跳过变量捕获范围格式错误 '{range_str}': {e}") from e
 
+    # 处理容器密钥：如果启用容器但未提供密钥，则自动生成
+    container_key = args.container_key
+    if args.enable_container and not container_key:
+        # 确定容器路径
+        container_path = args.container_path or Path("tracer-logs/trace_data.bin")
+        container_key = _generate_and_save_container_key(container_path)
+
     return {
         "target_script": target_script,
         "target_module": target_module,
@@ -289,7 +316,7 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "include_stdlibs": args.include_stdlibs or [],
         "trace_c_calls": args.trace_c_calls,
         "enable_container": args.enable_container,
-        "container_key": args.container_key,
+        "container_key": container_key,
         "container_path": args.container_path,
     }
 

@@ -114,18 +114,22 @@ class GitCommitHelper:
         Returns:
             bool: 命令成功执行返回True，否则返回False。
         """
+        original_cwd = Path.cwd()  # 保存原始工作目录
         try:
             # 获取git根目录
             git_root_result = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"], check=True, capture_output=True, text=True
             )
-            git_root = Path(git_root_result.stdout.strip())
+            git_root_path = Path(git_root_result.stdout.strip())
+
+            # 切换工作目录到git根目录，确保所有git命令在正确上下文中执行
+            os.chdir(git_root_path)
+            print(Fore.BLUE + f"工作目录已切换到: {git_root_path}" + Style.RESET_ALL)
 
             # 添加文件到暂存区
             if self.files_to_add:
-                # 将相对路径转换为相对于git根目录的绝对路径
-                absolute_files = [str(git_root / f) for f in self.files_to_add]
-                add_command = ["git", "add"] + absolute_files
+                # 工作目录已是git根目录，直接使用相对路径
+                add_command = ["git", "add"] + self.files_to_add
                 subprocess.run(add_command, check=True, capture_output=True, text=True)
                 print(Fore.GREEN + f"已添加 {len(self.files_to_add)} 个文件到暂存区。" + Style.RESET_ALL)
             else:
@@ -159,6 +163,12 @@ class GitCommitHelper:
                 file=sys.stderr,
             )
             return False
+        finally:
+            # 无论成功与否，都尝试将工作目录恢复原状
+            try:
+                os.chdir(original_cwd)
+            except Exception as restore_error:
+                print(Fore.YELLOW + f"警告: 无法恢复原始工作目录: {restore_error}" + Style.RESET_ALL)
 
     def run(self) -> bool:
         """
