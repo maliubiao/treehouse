@@ -12,7 +12,27 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, cast
 
-from .container import DataContainerReader, EventType, FileManager, TraceEvent
+from .container import (
+    C_CALL_ARG0_INDEX,
+    C_CALL_FUNC_INDEX,
+    C_RAISE_FUNC_INDEX,
+    C_RETURN_FUNC_INDEX,
+    CALL_ARGS_INDEX,
+    CALL_FUNC_INDEX,
+    EXCEPTION_FUNC_INDEX,
+    EXCEPTION_TYPE_INDEX,
+    EXCEPTION_VALUE_INDEX,
+    LINE_CONTENT_INDEX,
+    LINE_RAW_INDEX,
+    LINE_VARS_INDEX,
+    RETURN_FUNC_INDEX,
+    RETURN_VALUE_INDEX,
+    RETURN_VARS_INDEX,
+    DataContainerReader,
+    EventType,
+    FileManager,
+    TraceEvent,
+)
 from .tracer import _INDENT, TraceConfig
 from .tracer_common import TraceTypes
 from .tracer_html import CallTreeHtmlRender
@@ -86,15 +106,15 @@ class Translator:
 
         with open(output_path, "w", encoding="utf-8") as f:
             for event in self._reader:
-                thread_id = event["thread_id"]
+                thread_id = event.thread_id
                 depth = stack_depth.get(thread_id, 0)
                 log_line = self._format_event_as_text(event, depth)
                 f.write(f"{log_line}\n")
 
                 # Update stack depth
-                if event["event_type"] == EventType.CALL.value:
+                if event.event_type == EventType.CALL.value:
                     stack_depth[thread_id] = depth + 1
-                elif event["event_type"] in (EventType.RETURN.value, EventType.EXCEPTION.value):
+                elif event.event_type in (EventType.RETURN.value, EventType.EXCEPTION.value):
                     stack_depth[thread_id] = max(0, depth - 1)
 
                 event_count += 1
@@ -107,15 +127,15 @@ class Translator:
 
     def _event_to_log_data(self, event: TraceEvent) -> Tuple[Dict[str, Any], str]:
         """
-        Converts a TraceEvent from the container back into the log_data dictionary
+        Converts a V3 TraceEvent (list-based) from the container back into the log_data dictionary
         format expected by the HTML renderer.
         """
         if not self._file_manager:
             raise RuntimeError("File manager must be initialized before converting events.")
 
-        event_type = EventType(event["event_type"])
-        data = event["data"]
-        file_path = self._file_manager.get_path(event["file_id"]) or f"<unknown_file_{event['file_id']}>"
+        event_type = EventType(event.event_type)
+        data_list = event.data  # Now a list instead of dict
+        file_path = self._file_manager.get_path(event.file_id) or f"<unknown_file_{event.file_id}>"
         depth = 0  # HTML renderer calculates indent from stack, not a fixed value here.
         log_data: Dict[str, Any]
         color_type: str
@@ -124,56 +144,66 @@ class Translator:
             "indent": _INDENT * depth,
             "filename": file_path,
             "original_filename": file_path,
-            "lineno": event["lineno"],
-            "frame_id": event["frame_id"],
-            "thread_id": event["thread_id"],
+            "lineno": event.lineno,
+            "frame_id": event.frame_id,
+            "thread_id": event.thread_id,
         }
 
         if event_type == EventType.CALL:
+            # CALL: [func_name, args_str]
             color_type = TraceTypes.COLOR_CALL
+            func_name = data_list[CALL_FUNC_INDEX] if len(data_list) > CALL_FUNC_INDEX else "<unknown_func>"
+            args_str = data_list[CALL_ARGS_INDEX] if len(data_list) > CALL_ARGS_INDEX else ""
             log_data = {
                 "template": "{indent}↘ {prefix} {filename}:{lineno} {func}({args}) [frame:{frame_id}][thread:{thread_id}]",
                 "data": {
                     **common_data,
                     "prefix": TraceTypes.PREFIX_CALL,
-                    "func": data.get("func", "<unknown_func>"),
-                    "args": data.get("args", ""),
+                    "func": func_name,
+                    "args": args_str,
                 },
             }
         elif event_type == EventType.RETURN:
+            # RETURN: [func_name, return_value_str, tracked_vars_list]
             color_type = TraceTypes.COLOR_RETURN
+            func_name = data_list[RETURN_FUNC_INDEX] if len(data_list) > RETURN_FUNC_INDEX else "<unknown_func>"
+            return_value = data_list[RETURN_VALUE_INDEX] if len(data_list) > RETURN_VALUE_INDEX else ""
             log_data = {
                 "template": "{indent}↗ {prefix} {filename} {func}() → {return_value} [frame:{frame_id}]",
                 "data": {
                     **common_data,
                     "prefix": TraceTypes.PREFIX_RETURN,
-                    "func": data.get("func", "<unknown_func>"),
-                    "return_value": data.get("return_value", ""),
+                    "func": func_name,
+                    "return_value": return_value,
                 },
             }
         elif event_type == EventType.EXCEPTION:
+            # EXCEPTION: [func_name, exc_type_str, exc_value_str]
             color_type = TraceTypes.COLOR_EXCEPTION
+            func_name = data_list[EXCEPTION_FUNC_INDEX] if len(data_list) > EXCEPTION_FUNC_INDEX else "<unknown_func>"
+            exc_type_str = data_list[EXCEPTION_TYPE_INDEX] if len(data_list) > EXCEPTION_TYPE_INDEX else "Exception"
+            exc_value_str = data_list[EXCEPTION_VALUE_INDEX] if len(data_list) > EXCEPTION_VALUE_INDEX else ""
             log_data = {
                 "template": "{indent}⚠ {prefix} IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]",
                 "data": {
                     **common_data,
                     "prefix": TraceTypes.PREFIX_EXCEPTION,
-                    "func": data.get("func", "<unknown_func>"),
-                    "exc_type": data.get("exc_type", "Exception"),
-                    "exc_value": data.get("exc_value", ""),
+                    "func": func_name,
+                    "exc_type": exc_type_str,
+                    "exc_value": exc_value_str,
                 },
             }
         elif event_type == EventType.LINE:
+            # LINE: [line_content, raw_line, tracked_vars_list]
             color_type = TraceTypes.COLOR_LINE
-            # For simplicity in translation, we don't reconstruct multi-line statements here.
-            # This would require re-parsing the source file. We'll show the single line.
-            source_lines = self._file_manager.get_source_lines(event["file_id"])
             line_content = (
-                source_lines[event["lineno"] - 1].strip()
-                if source_lines and 0 <= event["lineno"] - 1 < len(source_lines)
-                else "<source not available>"
+                data_list[LINE_CONTENT_INDEX] if len(data_list) > LINE_CONTENT_INDEX else "<source not available>"
             )
-            tracked_vars = cast(Dict[str, str], data.get("tracked_vars", {}))
+            raw_line = data_list[LINE_RAW_INDEX] if len(data_list) > LINE_RAW_INDEX else line_content
+            tracked_vars_list = data_list[LINE_VARS_INDEX] if len(data_list) > LINE_VARS_INDEX else []
+
+            # Convert tracked_vars_list back to dict format
+            tracked_vars = {item[0]: item[1] for item in tracked_vars_list if len(item) >= 2}
             vars_str = ", ".join(f"{k}={v}" for k, v in tracked_vars.items())
 
             template = "{indent}▷ {filename}:{lineno} {line}"
@@ -185,44 +215,88 @@ class Translator:
                 "data": {
                     **common_data,
                     "line": line_content,
-                    "raw_line": line_content,
+                    "raw_line": raw_line,
                     "tracked_vars": tracked_vars,
                     "vars": vars_str,
                 },
             }
         else:
-            # Handle C calls and other types as generic traces
+            # Handle C calls and other types
             color_type = TraceTypes.COLOR_TRACE
-            log_data = {
-                "template": "{indent}ℹ {event_name} at {filename}:{lineno}",
-                "data": {**common_data, "event_name": event_type.name},
-            }
+            if event_type == EventType.C_CALL:
+                func_name = data_list[C_CALL_FUNC_INDEX] if len(data_list) > C_CALL_FUNC_INDEX else "<unknown_func>"
+                arg0_str = data_list[C_CALL_ARG0_INDEX] if len(data_list) > C_CALL_ARG0_INDEX else ""
+                template = (
+                    "{indent}↘ C-CALL {func_name}({arg0}) at {filename}:{lineno} [frame:{frame_id}][thread:{thread_id}]"
+                )
+                log_data = {
+                    "template": template,
+                    "data": {**common_data, "func_name": func_name, "arg0": arg0_str},
+                }
+            elif event_type == EventType.C_RETURN:
+                func_name = data_list[C_RETURN_FUNC_INDEX] if len(data_list) > C_RETURN_FUNC_INDEX else "<unknown_func>"
+                template = "{indent}↗ C-RETURN from {func_name} [frame:{frame_id}][thread:{thread_id}]"
+                log_data = {
+                    "template": template,
+                    "data": {**common_data, "func_name": func_name},
+                }
+            elif event_type == EventType.C_RAISE:
+                func_name = data_list[C_RAISE_FUNC_INDEX] if len(data_list) > C_RAISE_FUNC_INDEX else "<unknown_func>"
+                template = "{indent}⚠ C-RAISE from {func_name} [frame:{frame_id}][thread:{thread_id}]"
+                log_data = {
+                    "template": template,
+                    "data": {**common_data, "func_name": func_name},
+                }
+            else:
+                log_data = {
+                    "template": "{indent}ℹ {event_name} at {filename}:{lineno}",
+                    "data": {**common_data, "event_name": event_type.name},
+                }
 
         return log_data, color_type
 
     def _format_event_as_text(self, event: TraceEvent, depth: int) -> str:
-        """Formats a single trace event into a single line of text."""
+        """Formats a single V3 trace event (list-based) into a single line of text."""
         if not self._file_manager:
             return "[Error: File manager not initialized]"
 
         indent = "  " * depth
-        event_type = EventType(event["event_type"])
-        data = event["data"]
-        file_path = self._file_manager.get_path(event["file_id"]) or f"<file_id_{event['file_id']}>"
-        location = f"{file_path}:{event['lineno']}"
+        event_type = EventType(event.event_type)
+        data_list = event.data  # Now a list instead of dict
+        file_path = self._file_manager.get_path(event.file_id) or f"<file_id_{event.file_id}>"
+        location = f"{file_path}:{event.lineno}"
 
         if event_type == EventType.CALL:
-            return f"{indent}CALL -> {data.get('func', '')}({data.get('args', '')}) at {location}"
+            # CALL: [func_name, args_str]
+            func_name = data_list[CALL_FUNC_INDEX] if len(data_list) > CALL_FUNC_INDEX else ""
+            args_str = data_list[CALL_ARGS_INDEX] if len(data_list) > CALL_ARGS_INDEX else ""
+            return f"{indent}CALL -> {func_name}({args_str}) at {location}"
         if event_type == EventType.RETURN:
-            return f"{indent}RETURN <- {data.get('func', '')} -> {data.get('return_value', '')} at {location}"
+            # RETURN: [func_name, return_value_str, tracked_vars_list]
+            func_name = data_list[RETURN_FUNC_INDEX] if len(data_list) > RETURN_FUNC_INDEX else ""
+            return_value = data_list[RETURN_VALUE_INDEX] if len(data_list) > RETURN_VALUE_INDEX else ""
+            return f"{indent}RETURN <- {func_name} -> {return_value} at {location}"
         if event_type == EventType.EXCEPTION:
-            exc_info = f"{data.get('exc_type', 'Exc')}: {data.get('exc_value', '')}"
-            return f"{indent}EXCEPT! {exc_info} in {data.get('func', '')} at {location}"
+            # EXCEPTION: [func_name, exc_type_str, exc_value_str]
+            func_name = data_list[EXCEPTION_FUNC_INDEX] if len(data_list) > EXCEPTION_FUNC_INDEX else ""
+            exc_type_str = data_list[EXCEPTION_TYPE_INDEX] if len(data_list) > EXCEPTION_TYPE_INDEX else "Exc"
+            exc_value_str = data_list[EXCEPTION_VALUE_INDEX] if len(data_list) > EXCEPTION_VALUE_INDEX else ""
+            exc_info = f"{exc_type_str}: {exc_value_str}"
+            return f"{indent}EXCEPT! {exc_info} in {func_name} at {location}"
         if event_type == EventType.LINE:
+            # LINE: [line_content, raw_line, tracked_vars_list]
             vars_str = ""
-            if data.get("tracked_vars"):
-                vars_str = f" [vars: {data['tracked_vars']}]"
+            if len(data_list) > LINE_VARS_INDEX and data_list[LINE_VARS_INDEX]:  # tracked_vars_list
+                tracked_vars = {item[0]: item[1] for item in data_list[LINE_VARS_INDEX] if len(item) >= 2}
+                if tracked_vars:
+                    vars_str = f" [vars: {tracked_vars}]"
             return f"{indent}LINE -> {location}{vars_str}"
+
+        # Handle C calls
+        if event_type in (EventType.C_CALL, EventType.C_RETURN, EventType.C_RAISE):
+            func_name = data_list[0] if len(data_list) > 0 else ""
+            return f"{indent}{event_type.name} -> {func_name} at {location}"
+
         return f"{indent}{event_type.name} -> {location}"
 
 

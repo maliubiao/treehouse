@@ -491,7 +491,7 @@ class TestTracerInstall(BaseTestTracer):
 
             # Verify required commands were executed
             expected_calls = [
-                call("command script import --allow-reload tracer"),
+                call("command script import native_context_tracer"),
                 call("settings set target.use-fast-stepping true", raise_on_error=False),
                 call("settings set target.process.follow-fork-mode child", raise_on_error=False),
                 call("settings set use-color false", raise_on_error=False),

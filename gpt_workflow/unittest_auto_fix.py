@@ -515,7 +515,7 @@ def _full_context_fix_and_retry(
     max_tokens = model_switch.current_config.max_context_size
     text = context_processor.process_text(ask_text, use_json_output=use_json_output, tokens_left=max_tokens)
     text = f"\n\n{error_desc}\n\n{text}"
-    text = inject_edit_prompt_if_needed(text, nodes, use_json_output)
+    text = inject_edit_prompt_if_needed(text, nodes, use_json_output, model_switch.current_config.is_thinking)
 
     # Print the final prompt text length
     print(Fore.CYAN + f"Final prompt text length: {len(text)} characters" + Style.RESET_ALL)

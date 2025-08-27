@@ -2209,7 +2209,14 @@ class TestIntegration(BaseTracerTest):
 
         self.assertGreater(len(events), 0, "Container file is empty.")
         # Check for a call to 'main'
-        main_call_found = any(event["event_type"] == 1 and event["data"].get("func") == "main" for event in events)
+        from context_tracer.container import CALL_FUNC_INDEX, EventType
+
+        main_call_found = any(
+            event.event_type == EventType.CALL.value
+            and len(event.data) > CALL_FUNC_INDEX
+            and event.data[CALL_FUNC_INDEX] == "main"
+            for event in events
+        )
         self.assertTrue(main_call_found, "Call to 'main' not found in container events.")
 
 

@@ -170,19 +170,22 @@ class TestGitCommitHelper(unittest.TestCase):
         self.assertIn("?? new_untracked_file.txt", status_output)
 
     @patch("subprocess.run")
-    def test_execute_git_commands_called_process_error(self, mock_run):
+    def test_execute_git_commands_called_process_error(self, mock_run: MagicMock) -> None:
         """Test handling of CalledProcessError during git command."""
-        mock_run.side_effect = [
-            subprocess.CompletedProcess(
-                args=["git", "rev-parse"], returncode=0, stdout="/tmp/repo\n", stderr=""
-            ),  # For git_root
-            subprocess.CalledProcessError(1, "git commit", "stdout", "stderr: pre-commit hook failed"),
-        ]
-        helper = GitCommitHelper(commit_message="a message", files_to_add=["file.txt"])
-        with patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
-            self.assertFalse(helper._execute_git_commands())
-            self.assertIn("Git命令执行失败！", mock_stderr.getvalue())
-            self.assertIn("pre-commit hook failed", mock_stderr.getvalue())
+        # Create a temporary directory to simulate git repo
+        with tempfile.TemporaryDirectory() as tmp_repo:
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=["git", "rev-parse"], returncode=0, stdout=f"{tmp_repo}\n", stderr=""
+                ),  # For git_root
+                subprocess.CompletedProcess(args=["git", "add"], returncode=0, stdout="", stderr=""),  # For git add
+                subprocess.CalledProcessError(1, ["git", "commit"], "stdout", "stderr: pre-commit hook failed"),
+            ]
+            helper = GitCommitHelper(commit_message="a message", files_to_add=["file.txt"])
+            with patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+                self.assertFalse(helper._execute_git_commands())
+                self.assertIn("Git命令执行失败！", mock_stderr.getvalue())
+                self.assertIn("pre-commit hook failed", mock_stderr.getvalue())
 
     @patch("subprocess.run", side_effect=FileNotFoundError("git not found"))
     def test_execute_git_commands_git_not_found(self, mock_run):

@@ -10,6 +10,9 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 print(sys.path[0])
 
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tests"))
+print(sys.path[0])
+
 from context_tracer.container import (
     DataContainerReader,
     DataContainerWriter,
@@ -99,35 +102,35 @@ class TestDataContainer(BaseTracerTest):
         fm = FileManager()
         writer = DataContainerWriter(container_path, TEST_KEY, fm)
 
-        # Create some events
+        # Create some events using V3 list-based format
         events: list[TraceEvent] = [
-            {
-                "event_type": EventType.CALL.value,
-                "timestamp": time.time(),
-                "thread_id": 1,
-                "frame_id": 101,
-                "file_id": fm.get_id("/app/main.py"),
-                "lineno": 10,
-                "data": {"func": "main", "args": "a=1"},
-            },
-            {
-                "event_type": EventType.LINE.value,
-                "timestamp": time.time() + 0.1,
-                "thread_id": 1,
-                "frame_id": 101,
-                "file_id": fm.get_id("/app/main.py"),
-                "lineno": 11,
-                "data": {"tracked_vars": {"x": "1"}},
-            },
-            {
-                "event_type": EventType.RETURN.value,
-                "timestamp": time.time() + 0.2,
-                "thread_id": 1,
-                "frame_id": 101,
-                "file_id": fm.get_id("/app/main.py"),
-                "lineno": 12,
-                "data": {"func": "main", "return_value": "None"},
-            },
+            TraceEvent(
+                event_type=EventType.CALL.value,
+                timestamp=time.time(),
+                thread_id=1,
+                frame_id=101,
+                file_id=fm.get_id("/app/main.py"),
+                lineno=10,
+                data=["main", "a=1"],  # [func_name, args_str]
+            ),
+            TraceEvent(
+                event_type=EventType.LINE.value,
+                timestamp=time.time() + 0.1,
+                thread_id=1,
+                frame_id=101,
+                file_id=fm.get_id("/app/main.py"),
+                lineno=11,
+                data=["x = 1", "x = 1", [["x", "1"]]],  # [line_content, raw_line, tracked_vars_list]
+            ),
+            TraceEvent(
+                event_type=EventType.RETURN.value,
+                timestamp=time.time() + 0.2,
+                thread_id=1,
+                frame_id=101,
+                file_id=fm.get_id("/app/main.py"),
+                lineno=12,
+                data=["main", "None", []],  # [func_name, return_value_str, tracked_vars_list]
+            ),
         ]
 
         # Write events
@@ -176,33 +179,33 @@ class TestTranslator(BaseTracerTest):
         self.container_path = self.test_dir / "sample.bin"
         self.fm = FileManager()
         self.events: list[TraceEvent] = [
-            {
-                "event_type": EventType.CALL.value,
-                "timestamp": time.time(),
-                "thread_id": 1,
-                "frame_id": 101,
-                "file_id": self.fm.get_id("/app/main.py"),
-                "lineno": 10,
-                "data": {"func": "main", "args": "a=1"},
-            },
-            {
-                "event_type": EventType.LINE.value,
-                "timestamp": time.time(),
-                "thread_id": 1,
-                "frame_id": 101,
-                "file_id": self.fm.get_id("/app/main.py"),
-                "lineno": 11,
-                "data": {"tracked_vars": {"x": "1"}},
-            },
-            {
-                "event_type": EventType.RETURN.value,
-                "timestamp": time.time(),
-                "thread_id": 1,
-                "frame_id": 101,
-                "file_id": self.fm.get_id("/app/main.py"),
-                "lineno": 12,
-                "data": {"func": "main", "return_value": "None"},
-            },
+            TraceEvent(
+                event_type=EventType.CALL.value,
+                timestamp=time.time(),
+                thread_id=1,
+                frame_id=101,
+                file_id=self.fm.get_id("/app/main.py"),
+                lineno=10,
+                data=["main", "a=1"],  # [func_name, args_str]
+            ),
+            TraceEvent(
+                event_type=EventType.LINE.value,
+                timestamp=time.time(),
+                thread_id=1,
+                frame_id=101,
+                file_id=self.fm.get_id("/app/main.py"),
+                lineno=11,
+                data=["x = a", "x = a", [["x", "1"]]],  # [line_content, raw_line, tracked_vars_list]
+            ),
+            TraceEvent(
+                event_type=EventType.RETURN.value,
+                timestamp=time.time(),
+                thread_id=1,
+                frame_id=101,
+                file_id=self.fm.get_id("/app/main.py"),
+                lineno=12,
+                data=["main", "None", []],  # [func_name, return_value_str, tracked_vars_list]
+            ),
         ]
 
         # Create a dummy source file for the translator to read
@@ -213,8 +216,19 @@ class TestTranslator(BaseTracerTest):
 
         # Overwrite file_id in events to match the real file
         file_id = self.fm.get_id(str(source_file.resolve()))
-        for event in self.events:
-            event["file_id"] = file_id
+        # Since NamedTuples are immutable, we need to create new events
+        self.events = [
+            TraceEvent(
+                event_type=event.event_type,
+                timestamp=event.timestamp,
+                thread_id=event.thread_id,
+                frame_id=event.frame_id,
+                file_id=file_id,
+                lineno=event.lineno,
+                data=event.data,
+            )
+            for event in self.events
+        ]
 
         # Write the container file
         writer = DataContainerWriter(self.container_path, TEST_KEY, self.fm)

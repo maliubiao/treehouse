@@ -45,6 +45,12 @@ class TestStepHandlerInitialization(unittest.TestCase):
         mock_tracer.config_manager.get_expression_hooks.return_value = []
         mock_tracer.config_manager.get_log_mode.return_value = "instruction"
         mock_tracer.config_manager.get_step_action.return_value = {}
+        mock_tracer.config_manager.config = {
+            "cache_dir": "cache",
+            "dwarf_cache_memory_size": 100,
+            "dwarf_cache_disk_size": 100 * 1024 * 1024,
+        }
+        # Remove the problematic line - config.get is already a method on dict
         # Ensure modules and source_ranges properties are mocked for tracer init
         type(mock_tracer).modules = PropertyMock(return_value=MagicMock())
         type(mock_tracer).source_ranges = PropertyMock(return_value=MagicMock())
@@ -81,9 +87,9 @@ class TestStepHandlerInitialization(unittest.TestCase):
 
             # Verify LLDB commands were executed
             self.assertEqual(mock_run_cmd.call_count, 2)
-            mock_run_cmd.assert_any_call("script import tracer")
+            mock_run_cmd.assert_any_call("script import native_context_tracer")
             mock_run_cmd.assert_any_call(
-                "script globals()['plt_step_over_callback'] = tracer.step_handler.plt_step_over_callback"
+                "script globals()['plt_step_over_callback'] = native_context_tracer.step_handler.plt_step_over_callback"
             )
 
             # Verify cache initialization
@@ -921,6 +927,12 @@ class TestStepHandlerBuildSourceInfoString(unittest.TestCase):
         """Create a mock Tracer instance with a mock ConfigManager."""
         self.mock_tracer = MagicMock()
         self.mock_config_manager = MagicMock()
+        self.mock_config_manager.config = {
+            "cache_dir": "cache",
+            "dwarf_cache_memory_size": 100,
+            "dwarf_cache_disk_size": 100 * 1024 * 1024,
+        }
+        # Remove the problematic line - config.get is already a method on dict
         self.mock_tracer.config_manager = self.mock_config_manager
 
         self.step_handler = StepHandler(tracer=self.mock_tracer)
@@ -1098,6 +1110,12 @@ class TestStepHandlerEvaluateSourceExpressions(unittest.TestCase):
         self.mock_tracer.logger.setLevel(logging.CRITICAL)  # Suppress logs during tests
         self.mock_tracer.config_manager = MagicMock(spec=ConfigManager)
         self.mock_tracer.config_manager.get_expression_hooks.return_value = []
+        self.mock_tracer.config_manager.config = {
+            "cache_dir": "cache",
+            "dwarf_cache_memory_size": 100,
+            "dwarf_cache_disk_size": 100 * 1024 * 1024,
+        }
+        # Remove the problematic line - config.get is already a method on dict
 
         self.step_handler = StepHandler(self.mock_tracer)
         self.mock_frame = MagicMock()
@@ -1472,6 +1490,12 @@ class TestStepHandlerBranchHandling(unittest.TestCase):
         self.mock_tracer.logger = MagicMock()
         self.mock_tracer.config_manager = MagicMock(spec=ConfigManager)
         self.mock_tracer.config_manager.get_log_mode.return_value = "instruction"
+        self.mock_tracer.config_manager.config = {
+            "cache_dir": "cache",
+            "dwarf_cache_memory_size": 100,
+            "dwarf_cache_disk_size": 100 * 1024 * 1024,
+        }
+        # Remove the problematic line - config.get is already a method on dict
         # Ensure modules and source_ranges properties are mocked for tracer init
         self.mock_module_manager = MagicMock()
         self.mock_source_range_manager = MagicMock()

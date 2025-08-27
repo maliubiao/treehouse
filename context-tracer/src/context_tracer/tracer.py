@@ -17,7 +17,27 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
-from .container import DataContainerWriter, EventType, FileManager, TraceEvent
+from .container import (
+    C_CALL_ARG0_INDEX,
+    C_CALL_FUNC_INDEX,
+    C_RAISE_FUNC_INDEX,
+    C_RETURN_FUNC_INDEX,
+    CALL_ARGS_INDEX,
+    CALL_FUNC_INDEX,
+    EXCEPTION_FUNC_INDEX,
+    EXCEPTION_TYPE_INDEX,
+    EXCEPTION_VALUE_INDEX,
+    LINE_CONTENT_INDEX,
+    LINE_RAW_INDEX,
+    LINE_VARS_INDEX,
+    RETURN_FUNC_INDEX,
+    RETURN_VALUE_INDEX,
+    RETURN_VARS_INDEX,
+    DataContainerWriter,
+    EventType,
+    FileManager,
+    TraceEvent,
+)
 from .source_cache import get_statement_info
 from .tracer_common import TraceTypes, truncate_repr_value
 from .tracer_html import CallTreeHtmlRender
@@ -1239,7 +1259,7 @@ class TraceLogic:
         self._html_render.add_raw_message(log_data, color_type)
 
     def _container_output(self, log_data: Dict[str, Any], color_type: str) -> None:
-        """Container output handler."""
+        """Container output handler for V3 format with list-based compression."""
         if not self._container_writer or not self._file_manager:
             return
 
@@ -1272,31 +1292,55 @@ class TraceLogic:
         elif event_subtype == "c_raise":
             event_type_enum = EventType.C_RAISE
 
-        event_data: Dict[str, Any] = {}
+        # V3 format: Create list-based event data for maximum compression
+        event_data_list: List[Any] = []
         if event_type_enum == EventType.CALL:
-            event_data["func"] = data.get("func")
-            event_data["args"] = data.get("args")
+            # CALL: [func_name, args_str]
+            event_data_list = [
+                data.get("func", ""),  # CALL_FUNC_INDEX
+                data.get("args", ""),  # CALL_ARGS_INDEX
+            ]
         elif event_type_enum == EventType.RETURN:
-            event_data["func"] = data.get("func")
-            event_data["return_value"] = data.get("return_value")
+            # RETURN: [func_name, return_value_str, tracked_vars_list]
+            tracked_vars = data.get("tracked_vars", {})
+            tracked_vars_list = [[k, v] for k, v in tracked_vars.items()] if tracked_vars else []
+            event_data_list = [
+                data.get("func", ""),  # RETURN_FUNC_INDEX
+                data.get("return_value", ""),  # RETURN_VALUE_INDEX
+                tracked_vars_list,  # RETURN_VARS_INDEX
+            ]
         elif event_type_enum == EventType.EXCEPTION:
-            event_data["func"] = data.get("func")
-            event_data["exc_type"] = data.get("exc_type")
-            event_data["exc_value"] = data.get("exc_value")
+            # EXCEPTION: [func_name, exc_type_str, exc_value_str]
+            event_data_list = [
+                data.get("func", ""),  # EXCEPTION_FUNC_INDEX
+                data.get("exc_type", ""),  # EXCEPTION_TYPE_INDEX
+                data.get("exc_value", ""),  # EXCEPTION_VALUE_INDEX
+            ]
         elif event_type_enum == EventType.LINE:
-            event_data["tracked_vars"] = data.get("tracked_vars")
+            # LINE: [line_content, raw_line, tracked_vars_list]
+            tracked_vars = data.get("tracked_vars", {})
+            tracked_vars_list = [[k, v] for k, v in tracked_vars.items()] if tracked_vars else []
+            event_data_list = [
+                data.get("line", ""),  # LINE_CONTENT_INDEX
+                data.get("raw_line", ""),  # LINE_RAW_INDEX
+                tracked_vars_list,  # LINE_VARS_INDEX
+            ]
         elif event_type_enum in (EventType.C_CALL, EventType.C_RETURN, EventType.C_RAISE):
-            event_data["func_name"] = data.get("func_name")
+            # C_CALL/C_RETURN/C_RAISE: [func_name]
+            event_data_list = [data.get("func_name", "")]  # C_*_FUNC_INDEX
+            if event_type_enum == EventType.C_CALL:
+                # C_CALL: [func_name, arg0_str]
+                event_data_list.append(data.get("arg0", ""))  # C_CALL_ARG0_INDEX
 
-        event: TraceEvent = {
-            "event_type": event_type_enum.value,
-            "timestamp": time.time(),
-            "thread_id": data.get("thread_id", 0),
-            "frame_id": data.get("frame_id", 0),
-            "file_id": file_id,
-            "lineno": data.get("lineno", 0),
-            "data": event_data,
-        }
+        event = TraceEvent(
+            event_type=event_type_enum.value,
+            timestamp=time.time(),
+            thread_id=data.get("thread_id", 0),
+            frame_id=data.get("frame_id", 0),
+            file_id=file_id,
+            lineno=data.get("lineno", 0),
+            data=event_data_list,  # Now a list instead of dict
+        )
         self._container_writer.add_event(event)
 
     def _format_log_message(self, log_data):

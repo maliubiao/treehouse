@@ -16,7 +16,7 @@ import threading
 import time
 from enum import Enum
 from pathlib import Path
-from typing import IO, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import IO, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 try:
     import msgpack
@@ -32,8 +32,30 @@ except ImportError:
 
 # Constants for the container file format
 MAGIC_NUMBER = b"CTXTRACE"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 3  # V3 uses full list-based serialization for maximum compression
 HEADER_RESERVED_BYTES = 256  # Reserved space for future header extensions
+
+# V3 Format indices for event data lists
+CALL_FUNC_INDEX = 0
+CALL_ARGS_INDEX = 1
+
+RETURN_FUNC_INDEX = 0
+RETURN_VALUE_INDEX = 1
+RETURN_VARS_INDEX = 2
+
+LINE_CONTENT_INDEX = 0
+LINE_RAW_INDEX = 1
+LINE_VARS_INDEX = 2
+
+EXCEPTION_FUNC_INDEX = 0
+EXCEPTION_TYPE_INDEX = 1
+EXCEPTION_VALUE_INDEX = 2
+
+C_CALL_FUNC_INDEX = 0
+C_CALL_ARG0_INDEX = 1
+
+C_RETURN_FUNC_INDEX = 0
+C_RAISE_FUNC_INDEX = 0
 
 
 class EventType(Enum):
@@ -48,7 +70,7 @@ class EventType(Enum):
     C_RAISE = 7
 
 
-class TraceEvent(TypedDict):
+class TraceEvent(NamedTuple):
     """A structured representation of a single trace event."""
 
     event_type: int  # Corresponds to EventType enum
@@ -57,7 +79,7 @@ class TraceEvent(TypedDict):
     frame_id: int
     file_id: int
     lineno: int
-    data: Dict[str, Any]
+    data: List[Any]  # V3 format uses list-based data
 
 
 class FileManager:
@@ -214,7 +236,17 @@ class DataContainerWriter:
         if not self._file:
             return
         try:
-            packed_event = msgpack.packb(event, use_bin_type=True)
+            # V3 format: full list-based serialization using NamedTuple attributes
+            event_list = [
+                event.event_type,
+                event.timestamp,
+                event.thread_id,
+                event.frame_id,
+                event.file_id,
+                event.lineno,
+                event.data,  # Now expects a list, not a dict
+            ]
+            packed_event = msgpack.packb(event_list, use_bin_type=True)
             encrypted_event = self._encrypt(packed_event)
 
             # Write record length prefix and the encrypted record
@@ -255,6 +287,7 @@ class DataContainerReader:
         self._key = key
         self._file: Optional[IO[bytes]] = None
         self.file_manager: Optional[FileManager] = None
+        self._format_version: int = 1
 
     def _decrypt(self, ciphertext: bytes) -> bytes:
         """Decrypts a bytestring using AES-GCM."""
@@ -273,8 +306,11 @@ class DataContainerReader:
         if magic != MAGIC_NUMBER:
             raise ValueError("Not a valid context tracer file.")
         version = int.from_bytes(self._file.read(2), "big")
-        if version != FORMAT_VERSION:
-            raise ValueError(f"Unsupported format version: {version}")
+        if version > FORMAT_VERSION:
+            raise ValueError(
+                f"Unsupported format version: {version}. This tool supports up to version {FORMAT_VERSION}."
+            )
+        self._format_version = version
 
         # Read and decrypt file manager
         fm_len = int.from_bytes(self._file.read(4), "big")
@@ -305,8 +341,23 @@ class DataContainerReader:
             raise IOError("Incomplete record found at end of file.")
 
         decrypted_record = self._decrypt(encrypted_record)
-        event: TraceEvent = msgpack.unpackb(decrypted_record, raw=False)
-        return event
+        raw_event = msgpack.unpackb(decrypted_record, raw=False)
+
+        # V3 format: convert list back to NamedTuple for API compatibility
+        if self._format_version == 3:
+            event = TraceEvent(
+                event_type=raw_event[0],
+                timestamp=raw_event[1],
+                thread_id=raw_event[2],
+                frame_id=raw_event[3],
+                file_id=raw_event[4],
+                lineno=raw_event[5],
+                data=raw_event[6],  # This is now a list from V3 format
+            )
+            return event
+
+        # Unsupported version
+        raise TypeError(f"Unsupported format version: {self._format_version}")
 
     def close(self) -> None:
         """Closes the container file."""

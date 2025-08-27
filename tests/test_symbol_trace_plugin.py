@@ -114,7 +114,7 @@ class TestSymbolTraceInitialization(unittest.TestCase):
         self.assertEqual(dict(symbol_trace.thread_stacks), {})
         self.assertEqual(st_plugin._SYMBOL_TRACE_INSTANCE, symbol_trace)
 
-        expected_cmd = "script globals()['_symbol_trace_instance'] = tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE"
+        expected_cmd = "script globals()['_symbol_trace_instance'] = native_context_tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE"
         mock_tracer.run_cmd.assert_called_once_with(expected_cmd)
         mock_register_global_callbacks.assert_called_once_with(mock_tracer.run_cmd, mock_tracer.logger)
 
@@ -160,9 +160,7 @@ class TestSymbolTraceInitialization(unittest.TestCase):
             self.assertIsNotNone(instance.console)
             self.assertIs(st_plugin._SYMBOL_TRACE_INSTANCE, instance)
 
-            expected_cmd = (
-                "script globals()['_symbol_trace_instance'] = tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE"
-            )
+            expected_cmd = "script globals()['_symbol_trace_instance'] = native_context_tracer.symbol_trace_plugin._SYMBOL_TRACE_INSTANCE"
             mock_tracer.run_cmd.assert_called_once_with(expected_cmd)
             mock_register.assert_called_once_with(mock_tracer.run_cmd, mock_tracer.logger)
 
@@ -206,12 +204,12 @@ class TestRegisterGlobalCallbacks(unittest.TestCase):
 
         self.assertTrue(result)
         expected_calls = [
-            call("script import tracer"),
+            call("script import native_context_tracer"),
             call(
-                "script globals()['_on_enter_breakpoint_wrapper'] = tracer.symbol_trace_plugin._on_enter_breakpoint_wrapper"
+                "script globals()['_on_enter_breakpoint_wrapper'] = native_context_tracer.symbol_trace_plugin._on_enter_breakpoint_wrapper"
             ),
             call(
-                "script globals()['_on_return_breakpoint_wrapper'] = tracer.symbol_trace_plugin._on_return_breakpoint_wrapper"
+                "script globals()['_on_return_breakpoint_wrapper'] = native_context_tracer.symbol_trace_plugin._on_return_breakpoint_wrapper"
             ),
         ]
         mock_run_cmd.assert_has_calls(expected_calls)

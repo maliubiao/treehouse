@@ -235,7 +235,7 @@ class TestCore(LLDBTracerBaseTestCase):
         mock_tracer.install(mock_tracer.target)
 
         expected_calls = [
-            call("command script import --allow-reload tracer"),
+            call("command script import native_context_tracer"),
             call("settings set target.use-fast-stepping true", raise_on_error=False),
             call("settings set target.process.follow-fork-mode child", raise_on_error=False),
             call("settings set use-color false", raise_on_error=False),
@@ -350,8 +350,10 @@ class TestStepHandler(LLDBTracerBaseTestCase):
         self.assertEqual(self.handler.step_over, self.StepAction.STEP_OVER)
 
         expected_calls = [
-            call("script import tracer"),
-            call("script globals()['plt_step_over_callback'] = tracer.step_handler.plt_step_over_callback"),
+            call("script import native_context_tracer"),
+            call(
+                "script globals()['plt_step_over_callback'] = native_context_tracer.step_handler.plt_step_over_callback"
+            ),
         ]
         self.mock_tracer.run_cmd.assert_has_calls(expected_calls)
 
