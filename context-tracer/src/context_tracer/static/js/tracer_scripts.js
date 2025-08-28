@@ -1,3 +1,17 @@
+// Constants for event data array indices
+// const LINE_VARS_INDEX = 2;
+
+// // Event type constants (should match container-reader.js)
+// const EventType = {
+//     CALL: 1,
+//     RETURN: 2,
+//     LINE: 3,
+//     EXCEPTION: 4,
+//     C_CALL: 5,
+//     C_RETURN: 6,
+//     C_RAISE: 7
+// };
+
 // Search Database - Advanced search functionality for trace events
 class SearchDatabase {
     constructor() {
@@ -516,7 +530,16 @@ const TraceViewer = {
             filterLine: document.getElementById('filterLine'),
             filterException: document.getElementById('filterException'),
             searchBtn: document.getElementById('searchBtn'),
-            collapseCurrentFuncBtn: document.getElementById('collapseCurrentFuncBtn')
+            collapseCurrentFuncBtn: document.getElementById('collapseCurrentFuncBtn'),
+            
+            // Container loading elements
+            containerLoadBtn: document.getElementById('containerLoadBtn'),
+            containerLoadDialog: document.getElementById('containerLoadDialog'),
+            contentOverlay: document.getElementById('contentOverlay'),
+            modalDragDropArea: document.getElementById('modalDragDropArea'),
+            modalDragDropStatus: document.getElementById('modalDragDropStatus'),
+            modalManualLoadBtn: document.getElementById('modalManualLoadBtn'),
+            containerFileInput: document.getElementById('containerFileInput')
         };
 
         // Initialize components
@@ -554,6 +577,9 @@ const TraceViewer = {
         
         // Initialize search functionality
         this.initSearchModal();
+        
+        // Initialize container loading functionality
+        this.initContainerLoader();
     },
     
     // Initialize search modal functionality
@@ -576,6 +602,933 @@ const TraceViewer = {
                 this.searchModal.show();
             }
         });
+    },
+
+    // Initialize container loading functionality
+    initContainerLoader() {
+        const { containerLoadBtn, containerLoadDialog, contentOverlay, modalDragDropArea, modalDragDropStatus, modalManualLoadBtn, containerFileInput } = this.elements;
+        
+        if (!containerLoadBtn || !containerLoadDialog) return;
+        
+        // Modal dialog functionality
+        containerLoadBtn.addEventListener('click', () => {
+            containerLoadDialog.style.display = 'flex';
+        });
+        
+        // Close modal dialog
+        const closeBtn = containerLoadDialog.querySelector('.modal-close-btn');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                containerLoadDialog.style.display = 'none';
+            });
+        }
+        
+        containerLoadDialog.addEventListener('click', (e) => {
+            if (e.target === containerLoadDialog) {
+                containerLoadDialog.style.display = 'none';
+            }
+        });
+        
+        // Modal drag and drop functionality
+        if (modalDragDropArea) {
+            this.setupDragDropHandlers(modalDragDropArea, modalDragDropStatus, 'modal');
+        }
+        
+        // Manual file selection in modal
+        if (modalManualLoadBtn) {
+            modalManualLoadBtn.addEventListener('click', () => {
+                containerFileInput.click();
+            });
+        }
+        
+        // Main content drag overlay functionality
+        if (contentOverlay) {
+            this.setupContentOverlayHandlers(contentOverlay);
+        }
+        
+        // File input change handler
+        containerFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                const files = Array.from(e.target.files);
+                this.handleContainerFiles(files);
+            }
+        });
+    },
+    
+    // Setup drag and drop handlers with detailed animations
+    setupDragDropHandlers(dragDropArea, statusElement, context) {
+        const dragEvents = ['dragenter', 'dragover', 'dragleave', 'drop'];
+        let dragCounter = 0;
+        
+        dragEvents.forEach(event => {
+            dragDropArea.addEventListener(event, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+        
+        dragDropArea.addEventListener('dragenter', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dragCounter++;
+                dragDropArea.classList.add('drag-over');
+                dragDropArea.classList.remove('drag-cancel', 'drag-success');
+                statusElement.textContent = this.i18n.t('dragDropReady');
+                statusElement.className = 'drag-drop-status drag-start';
+                statusElement.style.display = 'block';
+                
+                // Animation: pulse effect
+                dragDropArea.style.animation = 'pulse 0.5s ease-in-out';
+                setTimeout(() => {
+                    dragDropArea.style.animation = '';
+                }, 500);
+            }
+        });
+        
+        dragDropArea.addEventListener('dragover', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dragDropArea.classList.add('drag-over');
+                
+                // Visual feedback: scale up slightly
+                dragDropArea.style.transform = 'scale(1.02)';
+                
+                // Update status with position feedback
+                const rect = dragDropArea.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                if (x > rect.width * 0.8) {
+                    statusElement.textContent = this.i18n.t('dragDropEdgeRight');
+                } else if (x < rect.width * 0.2) {
+                    statusElement.textContent = this.i18n.t('dragDropEdgeLeft');
+                } else {
+                    statusElement.textContent = this.i18n.t('dragDropReady');
+                }
+            }
+        });
+        
+        dragDropArea.addEventListener('dragleave', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dragCounter--;
+                if (dragCounter === 0) {
+                    dragDropArea.classList.remove('drag-over');
+                    dragDropArea.style.transform = '';
+                    
+                    // Animation: cancel effect
+                    dragDropArea.classList.add('drag-cancel');
+                    statusElement.textContent = this.i18n.t('dragDropCancel');
+                    statusElement.className = 'drag-drop-status drag-cancel';
+                    
+                    setTimeout(() => {
+                        statusElement.style.display = 'none';
+                        dragDropArea.classList.remove('drag-cancel');
+                    }, 1000);
+                }
+            }
+        });
+        
+        dragDropArea.addEventListener('drop', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dragCounter = 0;
+                dragDropArea.classList.remove('drag-over');
+                dragDropArea.style.transform = '';
+                
+                // Show processing status instead of immediate success
+                statusElement.textContent = this.i18n.t('dragDropProcessing') || 'Processing files...';
+                statusElement.className = 'drag-drop-status loading';
+                
+                const files = Array.from(e.dataTransfer.files);
+                
+                // Process files immediately, don't show false success
+                this.handleContainerFiles(files);
+            }
+        });
+    },
+    
+    // Setup content overlay drag handlers with detailed animations
+    setupContentOverlayHandlers(overlayElement) {
+        const dragEvents = ['dragenter', 'dragover', 'dragleave', 'drop'];
+        let dragCounter = 0;
+        
+        dragEvents.forEach(event => {
+            document.addEventListener(event, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+        
+        document.addEventListener('dragenter', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dragCounter++;
+                if (dragCounter === 1) {
+                    overlayElement.style.display = 'flex';
+                    overlayElement.classList.add('drag-active', 'drag-start');
+                    overlayElement.classList.remove('drag-cancel', 'drag-success');
+                    
+                    // Animation: fade in with scale
+                    overlayElement.style.animation = 'fadeInScale 0.3s ease-out';
+                }
+            }
+        });
+        
+        document.addEventListener('dragover', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                overlayElement.classList.add('drag-over');
+                
+                // Visual feedback: change opacity based on position
+                const rect = overlayElement.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                const distanceX = Math.abs(e.clientX - centerX) / (rect.width / 2);
+                const distanceY = Math.abs(e.clientY - centerY) / (rect.height / 2);
+                const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+                
+                const intensity = Math.max(0, 1 - distance);
+                overlayElement.style.opacity = 0.8 + intensity * 0.2;
+            }
+        });
+        
+        document.addEventListener('dragleave', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dragCounter--;
+                if (dragCounter === 0) {
+                    overlayElement.classList.remove('drag-over', 'drag-active');
+                    overlayElement.classList.add('drag-cancel');
+                    
+                    // Animation: fade out with shake
+                    overlayElement.style.animation = 'fadeOutShake 0.5s ease-in-out';
+                    
+                    setTimeout(() => {
+                        overlayElement.style.display = 'none';
+                        overlayElement.classList.remove('drag-cancel');
+                        overlayElement.style.animation = '';
+                        overlayElement.style.opacity = '';
+                    }, 500);
+                }
+            }
+        });
+        
+        document.addEventListener('drop', (e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+                dragCounter = 0;
+                overlayElement.classList.remove('drag-over', 'drag-active');
+                
+                // Show processing state instead of immediate success
+                const overlayContent = overlayElement.querySelector('.overlay-content');
+                if (overlayContent) {
+                    overlayContent.innerHTML = `
+                        <div class="overlay-icon">⏳</div>
+                        <h3>Processing Files...</h3>
+                        <p>Please wait while we load the container</p>
+                    `;
+                }
+                
+                const files = Array.from(e.dataTransfer.files);
+                
+                // Open modal dialog and process files
+                const { containerLoadDialog } = this.elements;
+                if (containerLoadDialog) {
+                    containerLoadDialog.style.display = 'flex';
+                }
+                
+                // Hide overlay and process files
+                setTimeout(() => {
+                    overlayElement.style.display = 'none';
+                    overlayElement.style.animation = '';
+                    overlayElement.style.opacity = '';
+                    // Restore original overlay content
+                    this.resetContentOverlay(overlayElement);
+                    this.handleContainerFiles(files);
+                }, 500);
+            }
+        });
+    },
+    
+    // Reset content overlay to original state
+    resetContentOverlay(overlayElement) {
+        const overlayContent = overlayElement.querySelector('.overlay-content');
+        if (overlayContent) {
+            overlayContent.innerHTML = `
+                <div class="overlay-icon">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <h3 data-i18n="dragDropTitle">加载加密追踪容器</h3>
+                <p data-i18n="dragDropOverlayInstructions">拖放容器文件 (.bin) 和密钥文件 (.txt) 到这里</p>
+            `;
+        }
+    },
+    
+    // Handle container file loading
+    handleContainerFiles(files) {
+        console.log('handleContainerFiles called with files:', files);
+        
+        // Use the correct element references from the modal dialog
+        const { modalDragDropArea, modalDragDropStatus, containerLoadDialog } = this.elements;
+        
+        // Reset status - check if elements exist first
+        if (modalDragDropStatus) {
+            modalDragDropStatus.className = 'drag-drop-status';
+            modalDragDropStatus.style.display = 'none';
+        }
+        if (modalDragDropArea) {
+            modalDragDropArea.className = 'drag-drop-container';
+        }
+        
+        // Validate files
+        if (files.length !== 2) {
+            this.showContainerStatus('error', this.i18n.t('containerValidationTwoFiles') || 'Please select exactly 2 files (container.bin and key.txt)');
+            return;
+        }
+        
+        let containerFile = null;
+        let keyFile = null;
+        
+        files.forEach(file => {
+            console.log('Processing file:', file.name, 'size:', file.size);
+            if (file.name.endsWith('.bin')) {
+                containerFile = file;
+            } else if (file.name.endsWith('.txt')) {
+                keyFile = file;
+            }
+        });
+        
+        if (!containerFile || !keyFile) {
+            const errorMsg = this.i18n.t('containerValidationFileTypes') || 'Please select one .bin file and one .txt file';
+            console.error('File validation failed:', errorMsg);
+            this.showContainerStatus('error', errorMsg);
+            return;
+        }
+        
+        console.log('Files validated, starting load process...');
+        this.loadContainer(containerFile, keyFile);
+    },
+    
+    // Load and process container files
+    async loadContainer(containerFile, keyFile) {
+        console.log('loadContainer called with:', containerFile.name, keyFile.name);
+        const { modalDragDropArea, modalDragDropStatus, containerLoadDialog } = this.elements;
+        
+        try {
+            if (modalDragDropArea) {
+                modalDragDropArea.classList.add('loading');
+            }
+            this.showContainerStatus('loading', this.i18n.t('containerLoadingFiles'));
+            
+            // Read key file
+            const keyText = await this.readFileAsText(keyFile);
+            const containerKey = this.parseContainerKey(keyText);
+            
+            // Read container file
+            const containerBuffer = await this.readFileAsArrayBuffer(containerFile);
+            
+            this.showContainerStatus('loading', this.i18n.t('containerDecrypting'));
+            
+            // Parse container using DataContainerReader
+            if (typeof DataContainerReader === 'undefined') {
+                throw new Error(this.i18n.t('containerReaderUnavailable') || 'DataContainerReader is not available');
+            }
+            
+            console.log('DataContainerReader is available, creating instance...');
+            console.log('Container buffer size:', containerBuffer.byteLength);
+            console.log('Container key length:', containerKey.length);
+            
+            const reader = new DataContainerReader(containerBuffer, containerKey);
+            console.log('DataContainerReader instance created:', reader);
+            console.log('Available methods:', Object.getOwnPropertyNames(reader));
+            console.log('Available methods (prototype):', Object.getOwnPropertyNames(Object.getPrototypeOf(reader)));
+            
+            await reader.open();
+            console.log('Container reader opened successfully');
+            
+            // Collect all events using the events() iterator
+            const events = [];
+            console.log('Starting to iterate events...');
+            console.log('Reader events method:', typeof reader.events);
+            
+            let eventCount = 0;
+            let firstEvent = null;
+            let lastEvent = null;
+            
+            try {
+                for await (const event of reader.events()) {
+                    if (eventCount === 0) {
+                        firstEvent = event;
+                        console.log('First event:', JSON.stringify(event, null, 2));
+                    }
+                    
+                    events.push(event);
+                    lastEvent = event;
+                    eventCount++;
+                    
+                    if (eventCount % 100 === 0) {
+                        console.log(`Processed ${eventCount} events...`);
+                    }
+                    
+                    // Stop at a reasonable limit for debugging
+                    if (eventCount >= 10000) {
+                        console.log('Reached 10000 events limit for debugging');
+                        break;
+                    }
+                }
+            } catch (iterationError) {
+                console.error('Error during event iteration:', iterationError);
+                throw iterationError;
+            }
+            
+            console.log(`Total events collected: ${events.length}`);
+            if (events.length > 0) {
+                console.log('Last event:', JSON.stringify(lastEvent, null, 2));
+                console.log('Event types found:', [...new Set(events.map(e => e.event_type))]);
+            } else {
+                console.warn('No events found in container!');
+                console.log('Checking if events() generator is empty...');
+                
+                // Try to debug why no events
+                try {
+                    const eventIterator = reader.events();
+                    console.log('Event iterator created:', eventIterator);
+                    const firstResult = await eventIterator.next();
+                    console.log('First iterator result:', firstResult);
+                } catch (debugError) {
+                    console.error('Error during event iterator debugging:', debugError);
+                }
+            }
+            
+            const fileManager = reader.fileManager;
+            console.log('File manager obtained:', fileManager);
+            console.log('File manager type:', typeof fileManager);
+            if (fileManager) {
+                console.log('File manager methods:', Object.getOwnPropertyNames(fileManager));
+                if (typeof fileManager.getPath === 'function') {
+                    console.log('File manager has getPath method');
+                } else {
+                    console.log('File manager missing getPath method');
+                }
+            }
+            
+            this.showContainerStatus('loading', this.i18n.t('containerTranslating'));
+            
+            // Translate events to HTML format
+            console.log('Starting translateEventsToHtml with', events.length, 'events');
+            const htmlContent = this.translateEventsToHtml(events, fileManager);
+            console.log('HTML content generated, length:', htmlContent.length);
+            console.log('HTML content preview:', htmlContent.substring(0, 500) + '...');
+            
+            // Replace content
+            console.log('Starting replaceContentWithContainer...');
+            this.replaceContentWithContainer(htmlContent, events, fileManager, reader.sourceManager);
+            console.log('Content replacement completed');
+            
+            if (modalDragDropArea) {
+                modalDragDropArea.classList.remove('loading');
+                modalDragDropArea.classList.add('success');
+            }
+            this.showContainerStatus('success', this.i18n.t('containerLoadSuccess', {count: events.length}));
+            
+            // Close the modal dialog after successful loading
+            setTimeout(() => {
+                if (containerLoadDialog) {
+                    containerLoadDialog.style.display = 'none';
+                }
+            }, 2000);
+            
+        } catch (error) {
+            console.error('Container loading error:', error);
+            if (modalDragDropArea) {
+                modalDragDropArea.classList.remove('loading');
+                modalDragDropArea.classList.add('error');
+                // Reset to normal state after showing error for a while
+                setTimeout(() => {
+                    modalDragDropArea.classList.remove('error');
+                    modalDragDropArea.className = 'drag-drop-container';
+                }, 3000);
+            }
+            const errorMsg = this.i18n.t('containerLoadError', {error: error.message}) || `Error loading container: ${error.message}`;
+            this.showContainerStatus('error', errorMsg);
+            
+            // Keep modal open for user to try again
+            console.log('Container loading failed, modal remains open for retry');
+        }
+    },
+    
+    // Helper method to read file as text
+    readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsText(file);
+        });
+    },
+    
+    // Helper method to read file as array buffer
+    readFileAsArrayBuffer(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsArrayBuffer(file);
+        });
+    },
+    
+    // Parse container key from text file
+    parseContainerKey(keyText) {
+        console.log('Parsing container key from text:', keyText.substring(0, 100) + '...');
+        const lines = keyText.split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('container_key=')) {
+                const keyHex = trimmed.split('=', 2)[1].trim();
+                if (!keyHex) {
+                    throw new Error(this.i18n.t('containerKeyEmpty') || 'Container key is empty');
+                }
+                console.log('Found key hex:', keyHex.substring(0, 32) + '...');
+                
+                // Convert hex string to ArrayBuffer
+                const keyBuffer = this.hexStringToArrayBuffer(keyHex);
+                console.log('Converted key to ArrayBuffer, length:', keyBuffer.byteLength);
+                return keyBuffer;
+            }
+        }
+        throw new Error(this.i18n.t('containerKeyNotFound') || 'Container key not found in file');
+    },
+    
+    // Helper method to convert hex string to ArrayBuffer
+    hexStringToArrayBuffer(hexString) {
+        // Remove any whitespace and ensure even length
+        const cleanHex = hexString.replace(/\s/g, '');
+        if (cleanHex.length % 2 !== 0) {
+            throw new Error('Invalid hex string: odd length');
+        }
+        
+        const buffer = new ArrayBuffer(cleanHex.length / 2);
+        const view = new Uint8Array(buffer);
+        
+        for (let i = 0; i < cleanHex.length; i += 2) {
+            const byteValue = parseInt(cleanHex.substr(i, 2), 16);
+            if (isNaN(byteValue)) {
+                throw new Error(`Invalid hex string: "${cleanHex.substr(i, 2)}" is not a valid hex byte`);
+            }
+            view[i / 2] = byteValue;
+        }
+        
+        return buffer;
+    },
+    
+    // Show container loading status
+    showContainerStatus(type, message) {
+        console.log('showContainerStatus called:', type, message);
+        const { modalDragDropStatus } = this.elements;
+        if (!modalDragDropStatus) {
+            console.warn('modalDragDropStatus element not found');
+            return;
+        }
+        
+        modalDragDropStatus.className = `drag-drop-status ${type}`;
+        modalDragDropStatus.textContent = message;
+        modalDragDropStatus.style.display = 'block';
+    },
+    
+    // Translate events to HTML content
+    translateEventsToHtml(events, fileManager) {
+        console.log('translateEventsToHtml started with:', events.length, 'events');
+        console.log('fileManager:', fileManager);
+        
+        if (!events || events.length === 0) {
+            console.warn('No events to translate!');
+            return '<div class="error">No events found in container</div>';
+        }
+        
+        let htmlContent = '';
+        const frameIndents = new Map(); // frame_id -> indent_level
+        let processedCount = 0;
+        const eventTypeStats = new Map();
+        
+        for (const event of events) {
+            processedCount++;
+            
+            // Track event type statistics
+            const eventType = event.event_type;
+            eventTypeStats.set(eventType, (eventTypeStats.get(eventType) || 0) + 1);
+            
+            if (processedCount <= 5) {
+                console.log(`Processing event ${processedCount}:`, JSON.stringify(event, null, 2));
+            }
+            
+            try {
+                // Calculate indentation based on frame-level tracking (like Python version)
+                const frameId = event.frame_id;
+                let indentLevel = 0;
+                
+                // For CALL events, this is when we first encounter a frame
+                if (event.event_type === 1 && !frameIndents.has(frameId)) {
+                    // Use the current call depth as the base indentation for this frame
+                    // Count how many active frames we have to determine depth
+                    let depth = 0;
+                    for (const [fid, level] of frameIndents) {
+                        depth++;
+                    }
+                    frameIndents.set(frameId, depth);
+                    indentLevel = depth;
+                } else if (frameIndents.has(frameId)) {
+                    // Use the stored indentation level for this frame
+                    indentLevel = frameIndents.get(frameId);
+                } else {
+                    // For events without frame tracking, use simple depth estimation
+                    let depth = 0;
+                    for (const [fid, level] of frameIndents) {
+                        depth++;
+                    }
+                    indentLevel = depth;
+                }
+                
+                const logData = this.eventToLogData(event, fileManager, indentLevel);
+                if (processedCount <= 5) {
+                    console.log(`Log data for event ${processedCount}:`, logData);
+                }
+                
+                const htmlLines = this.renderEventAsHtmlStructure(logData, event);
+                if (processedCount <= 5) {
+                    console.log(`HTML lines for event ${processedCount}:`, htmlLines);
+                }
+                
+                htmlContent += htmlLines.join('\n') + '\n';
+                
+                // Clean up frame tracking on RETURN/EXCEPTION events
+                if (event.event_type === 2 || event.event_type === 4) { // RETURN or EXCEPTION
+                    frameIndents.delete(frameId);
+                }
+            } catch (eventError) {
+                console.error(`Error processing event ${processedCount}:`, eventError, event);
+                htmlContent += `<div class="error">Error processing event ${processedCount}: ${eventError.message}</div>\n`;
+            }
+            
+            if (processedCount % 1000 === 0) {
+                console.log(`Processed ${processedCount}/${events.length} events...`);
+            }
+        }
+        
+        console.log('Event type statistics:', Object.fromEntries(eventTypeStats));
+        console.log('Final HTML content length:', htmlContent.length);
+        console.log('Frame indents final state:', Object.fromEntries(frameIndents));
+        
+        return htmlContent;
+    },
+    
+    // Convert event to log data format
+    eventToLogData(event, fileManager, depth) {
+        const filePath = fileManager.getPath(event.file_id) || `<unknown_file_${event.file_id}>`;
+        const indent = '    '.repeat(depth);
+        
+        const commonData = {
+            indent: indent,
+            filename: filePath,
+            original_filename: filePath,
+            lineno: event.lineno,
+            frame_id: event.frame_id,
+            thread_id: event.thread_id,
+        };
+        
+        switch (event.event_type) {
+            case 1: // CALL
+                const funcName = event.data[0] || '<unknown_func>';
+                const argsStr = event.data[1] || '';
+                return {
+                    template: '{indent}↘ CALL {filename}:{lineno} {func}({args}) [frame:{frame_id}][thread:{thread_id}]',
+                    data: {
+                        ...commonData,
+                        func: funcName,
+                        args: argsStr,
+                    },
+                    type: 'call'
+                };
+                
+            case 2: // RETURN
+                const returnFuncName = event.data[0] || '<unknown_func>';
+                const returnValue = event.data[1] || '';
+                return {
+                    template: '{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]',
+                    data: {
+                        ...commonData,
+                        func: returnFuncName,
+                        return_value: returnValue,
+                    },
+                    type: 'return'
+                };
+                
+            case 3: // LINE
+                const lineContent = event.data[0] || '<source not available>';
+                const trackedVarsList = event.data[2] || [];
+                const trackedVars = {};
+                trackedVarsList.forEach(item => {
+                    if (Array.isArray(item) && item.length >= 2) {
+                        trackedVars[item[0]] = item[1];
+                    }
+                });
+                
+                let template = '{indent}▷ {filename}:{lineno} {line}';
+                let varsStr = '';
+                if (Object.keys(trackedVars).length > 0) {
+                    varsStr = Object.entries(trackedVars).map(([k, v]) => `${k}=${v}`).join(', ');
+                    template += ' # Debug: {vars}';
+                }
+                
+                return {
+                    template: template,
+                    data: {
+                        ...commonData,
+                        line: lineContent,
+                        tracked_vars: trackedVars,
+                        vars: varsStr,
+                    },
+                    type: 'line'
+                };
+                
+            case 4: // EXCEPTION
+                const excFuncName = event.data[0] || '<unknown_func>';
+                const excType = event.data[1] || 'Exception';
+                const excValue = event.data[2] || '';
+                return {
+                    template: '{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]',
+                    data: {
+                        ...commonData,
+                        func: excFuncName,
+                        exc_type: excType,
+                        exc_value: excValue,
+                    },
+                    type: 'error'
+                };
+                
+            default:
+                return {
+                    template: '{indent}ℹ {event_name} at {filename}:{lineno}',
+                    data: {
+                        ...commonData,
+                        event_name: `EVENT_${event.event_type}`,
+                    },
+                    type: 'trace'
+                };
+        }
+    },
+    
+    // Generate view source HTML button
+    buildViewSourceHtml(filename, lineNumber, frameId) {
+        if (!filename || !lineNumber || frameId === undefined) {
+            return '';
+        }
+        const escapedFilename = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `<span class="view-source-btn" onclick="showSource('${escapedFilename}', ${lineNumber}, ${frameId})" data-i18n="viewSource">view source</span>`;
+    },
+
+    // Generate action buttons HTML for call events
+    buildActionsHtml() {
+        const copySubtreeHtml = ' <span class="copy-subtree-btn" data-i18n-title="copySubtreeTitle" title="Copy subtree as text">📋</span>';
+        const focusSubtreeHtml = ' <span class="focus-subtree-btn" data-i18n-title="focusSubtreeTitle" title="Focus on this subtree (crop)">🔍</span>';
+        const explainAiHtml = ' <span class="explain-ai-btn" data-i18n-title="explainAITitle" title="Explain with AI">🤖</span>';
+        const toggleDetailsHtml = ' <span class="toggle-details-btn" data-i18n-title="toggleDetailsTitle" title="Show details for this subtree">👁️</span>';
+        return copySubtreeHtml + focusSubtreeHtml + explainAiHtml + toggleDetailsHtml;
+    },
+
+    // Render event as HTML structure (matching Python version)
+    renderEventAsHtmlStructure(logData, event) {
+        // Simple template replacement
+        let rendered = logData.template;
+        for (const [key, value] of Object.entries(logData.data)) {
+            rendered = rendered.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+        }
+        
+        const escapedContent = this.utils.escapeHTML(rendered);
+        const indentLevel = (logData.data.indent.length / 4);
+        const indentSpace = `${indentLevel}ch`;
+        const eventId = this._getNextEventId();
+        const dataIndentAttr = `data-indent="${indentLevel}"`;
+        const dataEventIdAttr = `data-event-id="${eventId}"`;
+        
+        // Build components
+        const viewSourceHtml = this.buildViewSourceHtml(
+            logData.data.original_filename || logData.data.filename,
+            logData.data.lineno,
+            logData.data.frame_id
+        );
+        
+        const htmlParts = [];
+        
+        if (logData.type === 'call') {
+            // CALL event: foldable div + call-group
+            const actionsHtml = this.buildActionsHtml();
+            const appendedHtml = viewSourceHtml + actionsHtml;
+            
+            htmlParts.push(
+                `<div ${dataEventIdAttr} class="foldable call" ${dataIndentAttr} style="--indent-space: ${indentSpace};">`,
+                `    ${escapedContent}${appendedHtml}`,
+                '</div>',
+                '<div class="call-group collapsed">'
+            );
+        } else if (logData.type === 'return') {
+            // RETURN event: close call-group + return div
+            htmlParts.push(
+                '</div>',
+                `<div ${dataEventIdAttr} class="return" ${dataIndentAttr} style="--indent-space: ${indentSpace};">`,
+                `    ${escapedContent}${viewSourceHtml}`,
+                '</div>'
+            );
+        } else if (logData.type === 'error') {
+            // EXCEPTION event: close call-group + error div
+            htmlParts.push(
+                '</div>',
+                `<div ${dataEventIdAttr} class="error" ${dataIndentAttr} style="--indent-space: ${indentSpace};">`,
+                `    ${escapedContent}${viewSourceHtml}`,
+                '</div>'
+            );
+        } else {
+            // Other events (line, trace, etc.): simple div
+            htmlParts.push(
+                `<div ${dataEventIdAttr} class="${logData.type}" ${dataIndentAttr} style="--indent-space: ${indentSpace};">`,
+                `    ${escapedContent}${viewSourceHtml}`,
+                '</div>'
+            );
+        }
+        
+        return htmlParts;
+    },
+
+    // Get next event ID (simple counter)
+    _getNextEventId() {
+        if (!this._nextEventId) {
+            this._nextEventId = 1;
+        }
+        return this._nextEventId++;
+    },
+    
+    // Replace content with container data
+    replaceContentWithContainer(htmlContent, events, fileManager, sourceManager) {
+        const { content } = this.elements;
+        if (!content) return;
+        
+        // Replace the content
+        content.innerHTML = htmlContent;
+        
+        // Initialize global variables from container data
+        this._initializeGlobalVariablesFromContainer(events, fileManager, sourceManager);
+        
+        // Reinitialize components that depend on content
+        this.initFolding();
+        
+        // Reinitialize search database with container metadata
+        this.searchDatabase = new SearchDatabase();
+        if (window.eventMetadata) {
+            this.searchDatabase.initializeFromMetadata();
+        }
+        
+        // Apply current filters
+        if (this.applyFilters) {
+            this.applyFilters();
+        }
+        
+        // Reapply i18n
+        this.i18n.apply();
+        
+        console.log('Content replaced and global variables initialized from container');
+    },
+
+    // Initialize global variables from container data
+    _initializeGlobalVariablesFromContainer(events, fileManager, sourceManager) {
+        // Initialize executed lines tracking
+        window.executedLines = window.executedLines || {};
+        
+        // Initialize source files from SourceManager
+        window.sourceFiles = window.sourceFiles || {};
+        if (sourceManager) {
+            const sourceFiles = sourceManager.getAllSourceFiles();
+            for (const [filename, base64Content] of sourceFiles) {
+                try {
+                    const decoded = atob(base64Content);
+                    window.sourceFiles[filename] = decoded;
+                } catch (error) {
+                    console.warn(`Failed to decode source file ${filename}:`, error);
+                }
+            }
+        }
+        
+        // Initialize comments data and line comment from events
+        window.commentsData = window.commentsData || {};
+        window.lineComment = window.lineComment || {};
+        
+        // Initialize event metadata
+        window.eventMetadata = window.eventMetadata || {};
+        
+        // Process events to populate metadata, executed lines, and comments data
+        events.forEach((event, index) => {
+            const eventId = index + 1; // Generate sequential event IDs
+            const filename = fileManager.getPath(event.file_id);
+            
+            if (filename) {
+                // Track executed lines - Python uses arrays, not Sets
+                if (!window.executedLines[filename]) {
+                    window.executedLines[filename] = {};
+                }
+                if (!window.executedLines[filename][event.frame_id]) {
+                    window.executedLines[filename][event.frame_id] = [];
+                }
+                if (!window.executedLines[filename][event.frame_id].includes(event.lineno)) {
+                    window.executedLines[filename][event.frame_id].push(event.lineno);
+                }
+                
+                // Create event metadata
+                window.eventMetadata[eventId] = {
+                    type: this._getEventTypeName(event.event_type),
+                    filename: filename,
+                    lineno: event.lineno,
+                    frame_id: event.frame_id,
+                    thread_id: event.thread_id,
+                    timestamp: event.timestamp
+                };
+                
+                // Process LINE events for comments data and line comment
+                if (event.event_type === EventType.LINE && Array.isArray(event.data)) {
+                    const trackedVars = event.data[LINE_VARS_INDEX];
+                    if (trackedVars && Array.isArray(trackedVars) && trackedVars.length > 0) {
+                        // Initialize comments data structure
+                        if (!window.commentsData[filename]) {
+                            window.commentsData[filename] = {};
+                        }
+                        if (!window.commentsData[filename][event.frame_id]) {
+                            window.commentsData[filename][event.frame_id] = [];
+                        }
+                        
+                        // Add comment for this line
+                        const commentText = `# Debug: ${trackedVars.join(', ')}`;
+                        window.commentsData[filename][event.frame_id].push(commentText);
+                        
+                        // Add to line comment mapping
+                        const lineKey = `${event.frame_id}-${filename}-${event.lineno}`;
+                        window.lineComment[lineKey] = trackedVars;
+                    }
+                }
+            }
+        });
+        
+        // Convert Sets to Arrays for JSON serialization
+        for (const filename in window.executedLines) {
+            for (const frameId in window.executedLines[filename]) {
+                window.executedLines[filename][frameId] = Array.from(window.executedLines[filename][frameId]);
+            }
+        }
+        
+        console.log('Global variables initialized from container data');
+    },
+
+    // Helper method to get event type name
+    _getEventTypeName(eventType) {
+        const typeMap = {
+            1: 'call',
+            2: 'return', 
+            3: 'line',
+            4: 'exception',
+            5: 'c_call',
+            6: 'c_return',
+            7: 'c_raise'
+        };
+        return typeMap[eventType] || 'unknown';
     },
 
     // Initialize folding functionality

@@ -179,9 +179,20 @@ def create_parser() -> ArgumentParser:
         help="容器文件的加密密钥（32字节十六进制字符串）",
     )
     parser.add_argument(
+        "--container-key-file",
+        type=Path,
+        help="从文件读取容器加密密钥（与 --container-key 二选一）",
+    )
+    parser.add_argument(
         "--container-path",
         type=Path,
         help="容器文件的输出路径",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        help="超时时间（秒），超过此时间强制终止追踪",
+        metavar="SECONDS",
     )
     return parser
 
@@ -204,6 +215,26 @@ def _generate_and_save_container_key(container_path: Path) -> str:
 
     print(color_wrap(f"🔑 自动生成容器密钥并保存到: {key_file}", "var"))
     return key_hex
+
+
+def _read_container_key_from_file(key_file_path: Path) -> str:
+    """从文件读取容器密钥"""
+    if not key_file_path.exists():
+        raise FileNotFoundError(f"密钥文件不存在: {key_file_path}")
+
+    with open(key_file_path, "r", encoding="utf-8") as f:
+        content = f.read().strip()
+
+    # 解析密钥文件格式: container_key=xxxxx
+    for line in content.split("\n"):
+        line = line.strip()
+        if line.startswith("container_key="):
+            key_hex = line.split("=", 1)[1]
+            if not key_hex:
+                raise ValueError(f"密钥文件中未找到有效的密钥: {key_file_path}")
+            return key_hex
+
+    raise ValueError(f"密钥文件格式错误，未找到 'container_key=' 行: {key_file_path}")
 
 
 def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
@@ -288,12 +319,22 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
             except ValueError as e:
                 raise ValueError(f"跳过变量捕获范围格式错误 '{range_str}': {e}") from e
 
-    # 处理容器密钥：如果启用容器但未提供密钥，则自动生成
+    # 处理容器密钥：支持从文件读取或直接提供字符串
     container_key = args.container_key
-    if args.enable_container and not container_key:
-        # 确定容器路径
-        container_path = args.container_path or Path("tracer-logs/trace_data.bin")
-        container_key = _generate_and_save_container_key(container_path)
+
+    # 检查参数冲突
+    if args.container_key and args.container_key_file:
+        raise ValueError("不能同时指定 --container-key 和 --container-key-file，请选择其中一种方式")
+
+    # 如果启用容器模式
+    if args.enable_container:
+        if args.container_key_file:
+            # 从文件读取密钥
+            container_key = _read_container_key_from_file(args.container_key_file)
+        elif not container_key:
+            # 未提供密钥，自动生成
+            container_path = args.container_path or Path("tracer-logs/trace_data.bin")
+            container_key = _generate_and_save_container_key(container_path)
 
     return {
         "target_script": target_script,
@@ -318,6 +359,7 @@ def parse_cli_args(argv: List[str]) -> Dict[str, Any]:
         "enable_container": args.enable_container,
         "container_key": container_key,
         "container_path": args.container_path,
+        "timeout_seconds": args.timeout,
     }
 
 
@@ -415,6 +457,8 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             print(color_wrap(f"📝 包含标准库: {', '.join(args['include_stdlibs'])}", "var"))
         if args["enable_container"]:
             print(color_wrap(f"📝 容器模式已启用: {args['container_path']}", "var"))
+        if args["timeout_seconds"]:
+            print(color_wrap(f"📝 超时设置: {args['timeout_seconds']} 秒", "var"))
 
         # 创建 TraceConfig 实例
         config = TraceConfig(
@@ -435,6 +479,7 @@ def debug_main(argv: Optional[List[str]] = None) -> int:
             enable_container=args["enable_container"],
             container_path=str(args["container_path"]) if args["container_path"] else None,
             container_key=args["container_key"],
+            timeout_seconds=args["timeout_seconds"],
         )
 
         log_dir = Path.cwd() / "tracer-logs"

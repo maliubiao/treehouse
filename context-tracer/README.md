@@ -12,6 +12,7 @@
 - **Highly Configurable**: Control what to trace (specific files, line ranges), what to ignore (system libraries, specific functions), and what to capture (variable values) through CLI flags or a YAML config file.
 - **Low Intrusion**: Can be attached to any running script, making it ideal for debugging complex applications.
 - **Python 3.12+ Ready**: Leverages the new `sys.monitoring` API for lower overhead tracing on modern Python versions.
+- **Timeout Protection**: Supports setting timeout limits to prevent long-running scripts from consuming excessive resources.
 
 ## 📊 The Interactive HTML Report
 
@@ -76,6 +77,17 @@ This command will:
 2.  Enable detailed variable assignment tracing.
 3.  Automatically open the generated `trace_report.html` in your web browser upon completion.
 
+#### Example: Set timeout limit
+
+```bash
+# Set 3-second timeout to prevent long-running scripts
+context-tracer --timeout 3 long_running_script.py
+```
+
+This command will:
+1.  Trace the execution of `long_running_script.py`.
+2.  Automatically terminate the trace and return exit code 124 if it runs longer than 3 seconds.
+
 ## ⚙️ Configuration
 
 `context-tracer` can be configured via command-line arguments or a YAML file for more complex scenarios.
@@ -102,6 +114,7 @@ This command will:
 | `--trace-c-calls` | | | Trace calls to C functions (Python 3.12+). | `trace_c_calls` |
 | `--start-function` | | `FUNC` | Specify a function to start tracing from, format: `'file:lineno'`. | `start_function` |
 | `--source-base-dir` | | `PATH` | Set the source root directory for relative paths in the report. | `source_base_dir`|
+| `--timeout` | | `SECONDS` | Timeout in seconds, force termination after this time | `timeout_seconds`|
 
 ### Using a YAML configuration file
 
@@ -118,6 +131,7 @@ include_stdlibs:
   - "json"
   - "re"
 source_base_dir: "./src"
+timeout_seconds: 30  # Set 30-second timeout
 ```
 
 Then run the tracer with your config:
@@ -150,7 +164,8 @@ from context_tracer.tracer import TraceConfig, TraceContext
 config = TraceConfig(
     target_files=["my_module.py"],
     enable_var_trace=True,
-    report_name="manual_trace.html"
+    report_name="manual_trace.html",
+    timeout_seconds=60  # Set 60-second timeout
 )
 
 with TraceContext(config):

@@ -34,7 +34,8 @@ class DOMInspector:
         self.script_cache: Dict[str, Dict] = {}  # 脚本源缓存 - 按 script_id 存储源码和元数据
         self.connection_errors = 0  # 连接错误计数器
         self.max_connection_errors = 5  # 最大连接错误次数
-        self.calibrated_ui_offset_y: Optional[int] = None
+        self.console_listening = False  # 控制台监听状态
+        self.console_message_handler = None  # 控制台消息处理回调
 
     async def connect(self):
         """连接到Chrome DevTools Protocol WebSocket"""
@@ -47,17 +48,14 @@ class DOMInspector:
         await self.send_command("Runtime.enable")
         await self.send_command("Page.enable")
 
+        # 启用控制台监听
+        await self.start_console_listening()
+
         # 启用Debugger域以支持脚本源信息获取
         try:
             await self.send_command("Debugger.enable")
         except Exception:
             print("警告: Debugger.enable 不可用，脚本源信息功能可能受限")
-
-        # 尝试启用DOMDebugger（某些浏览器版本可能不支持）
-        try:
-            await self.send_command("DOMDebugger.enable")
-        except Exception:
-            print("警告: DOMDebugger.enable 不可用，事件监听器功能可能受限")
 
         # 监听样式表添加事件以收集头部信息
         try:
@@ -66,6 +64,9 @@ class DOMInspector:
             print("警告: 无法收集样式表头部信息")
 
         print(f"Connected to Browser DevTools: {self.websocket_url}")
+
+        # 添加连接后的等待时间，让浏览器稳定
+        await asyncio.sleep(1)
 
     async def send_command(self, method: str, params: Dict = None) -> Dict:
         """发送CDP命令并等待响应"""
@@ -97,6 +98,32 @@ class DOMInspector:
                 async for msg in self.ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         response = json.loads(msg.data)
+
+                        # 处理控制台消息事件（无需response id）
+                        if response.get("method") == "Runtime.consoleAPICalled":
+                            if self.console_listening and self.console_message_handler:
+                                await self.console_message_handler(
+                                    {
+                                        "type": response.get("params", {}).get("type", ""),
+                                        "message": response.get("params", {}),
+                                        "raw": response,
+                                    }
+                                )
+                            elif self.console_listening:
+                                await self._handle_console_api_called(response.get("params", {}))
+                        elif response.get("method") == "Console.messageAdded":
+                            if self.console_listening and self.console_message_handler:
+                                await self.console_message_handler(
+                                    {
+                                        "type": response.get("params", {}).get("message", {}).get("level", ""),
+                                        "message": response.get("params", {}),
+                                        "raw": response,
+                                    }
+                                )
+                            elif self.console_listening:
+                                await self._handle_console_message_added(response.get("params", {}))
+
+                        # 处理命令响应（有response id）
                         if response.get("id") == message_id:
                             return response
                     elif msg.type == aiohttp.WSMsgType.ERROR:
@@ -106,6 +133,11 @@ class DOMInspector:
                 raise Exception("WebSocket connection closed")
 
             result = await asyncio.wait_for(wait_for_response(), timeout=30.0)
+            # 检查响应中是否有错误
+            if "error" in result:
+                error_info = result["error"]
+                raise Exception(f"Command {method} failed: {error_info.get('message', 'Unknown error')}")
+
             # 成功时重置错误计数器
             self.connection_errors = 0
             return result
@@ -121,23 +153,84 @@ class DOMInspector:
             else:
                 raise Exception(f"Command {method} failed: {str(e)}")
 
+    def _is_valid_web_page(self, url: str) -> bool:
+        """检查URL是否是有效的网页，过滤掉内部页面和DevTools页面"""
+        # 过滤掉的URL类型
+        invalid_prefixes = [
+            "devtools://",
+            "chrome://",
+            "edge://",
+            "chrome-extension://",
+            "about:",
+            "moz-extension://",
+            "safari-extension://",
+        ]
+
+        url_lower = url.lower()
+        for prefix in invalid_prefixes:
+            if url_lower.startswith(prefix):
+                return False
+
+        # 优先选择HTTP(S)页面
+        return url_lower.startswith(("http://", "https://", "file://", "ftp://"))
+
     async def find_tab_by_url(self, url_pattern: Optional[str] = None) -> Optional[str]:
         """查找匹配URL模式的标签页，如果未指定URL则返回最上层/当前显示的标签页"""
+        # 添加获取目标前的等待时间
+        await asyncio.sleep(0.5)
         response = await self.send_command("Target.getTargets")
         targets = response.get("result", {}).get("targetInfos", [])
 
-        # 如果未指定URL模式，返回第一个页面标签页（通常是最上层/当前显示的）
+        # 过滤出有效的网页标签页
+        valid_targets = []
+        for target in targets:
+            if target["type"] == "page" and self._is_valid_web_page(target["url"]):
+                valid_targets.append(target)
+
+        # 如果未指定URL模式，让用户选择标签页
         if not url_pattern:
-            for target in targets:
-                if target["type"] == "page":
-                    print(f"选择默认标签页: {target['url']}")
-                    return target["targetId"]
-            return None
+            print(f"🔍 发现 {len(valid_targets)} 个有效的网页标签页")
+
+            if not valid_targets:
+                print("❌ 未找到有效的网页标签页")
+                print("💡 请确保浏览器中打开了网页，而不仅仅是开发者工具")
+                return None
+
+            if len(valid_targets) == 1:
+                # 只有一个标签页，直接选择
+                selected_target = valid_targets[0]
+                print(f"✅ 自动选择唯一标签页: {selected_target['url']}")
+                return selected_target["targetId"]
+
+            # 多个标签页，让用户选择
+            for i, target in enumerate(valid_targets, 1):
+                print(f"  {i}. {target['url']}")
+
+            while True:
+                try:
+                    choice = input(f"\n请选择标签页 (1-{len(valid_targets)}): ").strip()
+                    choice_num = int(choice)
+                    if 1 <= choice_num <= len(valid_targets):
+                        selected_target = valid_targets[choice_num - 1]
+                        print(f"✅ 选择标签页: {selected_target['url']}")
+                        return selected_target["targetId"]
+                    else:
+                        print(f"请输入 1 到 {len(valid_targets)} 之间的数字")
+                except (ValueError, KeyboardInterrupt):
+                    print("\n已取消选择")
+                    return None
 
         # 查找匹配URL模式的标签页
-        for target in targets:
-            if target["type"] == "page" and url_pattern in target["url"]:
+        for target in valid_targets:
+            if url_pattern in target["url"]:
+                print(f"✅ 找到匹配的标签页: {target['url']}")
                 return target["targetId"]
+
+        print(f"❌ 未找到匹配 '{url_pattern}' 的标签页")
+        if valid_targets:
+            print("💡 可用的标签页:")
+            for i, target in enumerate(valid_targets, 1):
+                print(f"  {i}. {target['url']}")
 
         return None
 
@@ -194,6 +287,71 @@ class DOMInspector:
 
         return response["result"]["outerHTML"]
 
+    async def get_element_screen_coords(self, node_id: int) -> Optional[Tuple[int, int]]:
+        """获取DOM元素在屏幕上的坐标（使用JavaScript的getBoundingClientRect和screen相关属性）"""
+        try:
+            # 解析节点为远程对象
+            response = await self.send_command("DOM.resolveNode", {"nodeId": node_id})
+            remote_object = response["result"]["object"]
+            object_id = remote_object["objectId"]
+
+            # 执行JavaScript获取元素的屏幕坐标
+            js_code = """
+            (function(element) {
+                if (!element) return null;
+                
+                const rect = element.getBoundingClientRect();
+                if (!rect) return null;
+                
+                // 计算元素中心点在屏幕上的坐标
+                // rect.left + rect.width/2 是元素中心的viewport坐标
+                // window.screenX/screenY 是浏览器窗口在屏幕上的坐标
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                
+                return {
+                    screenX: Math.round(window.screenX + centerX),
+                    screenY: Math.round(window.screenY + centerY),
+                    viewportX: Math.round(centerX),
+                    viewportY: Math.round(centerY),
+                    rect: {
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height
+                    }
+                };
+            })(this)
+            """
+
+            response = await self.send_command(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": object_id,
+                    "functionDeclaration": js_code,
+                    "returnByValue": True,
+                },
+            )
+
+            # 检查是否有JS执行异常
+            exception_details = response.get("result", {}).get("exceptionDetails")
+            if exception_details:
+                error_message = exception_details.get("exception", {}).get("description", "Unknown JavaScript error")
+                print(f"JavaScript execution failed in get_element_screen_coords: {error_message}")
+                return None
+
+            result = response.get("result", {}).get("result", {})
+            if result.get("type") == "object" and "value" in result:
+                coords = result["value"]
+                if coords and "screenX" in coords and "screenY" in coords:
+                    return (coords["screenX"], coords["screenY"])
+
+            return None
+
+        except Exception as e:
+            print(f"获取元素屏幕坐标失败: {e}")
+            return None
+
     async def get_node_for_location(self, x: int, y: int) -> Optional[int]:
         """根据坐标获取DOM节点ID"""
         try:
@@ -212,45 +370,60 @@ class DOMInspector:
                 # 检查nodeId是否有效（不为0）
                 if node_id == 0:
                     print(f"⚠️  警告: 无效的nodeId 0，可能是DevTools协议错误")
+                    node_id = None  # 将无效的nodeId设为None，后续统一处理
+                else:
+                    return node_id
 
-                    # 尝试使用backendNodeId获取有效节点
-                    if backend_node_id and backend_node_id != 0:
-                        print(f"尝试使用backendNodeId {backend_node_id} 获取有效节点")
-                        try:
-                            push_response = await self.send_command(
-                                "DOM.pushNodesByBackendIdsToFrontend", {"backendNodeIds": [backend_node_id]}
-                            )
+            # 如果没有有效的nodeId，但有backendNodeId，尝试转换
+            if not node_id and backend_node_id and backend_node_id != 0:
+                print(f"No nodeId found, attempting to convert backendNodeId: {backend_node_id}")
 
-                            push_result = push_response.get("result", {})
-                            push_node_ids = push_result.get("nodeIds", [])
+                # 尝试使用backendNodeId获取有效节点
+                try:
+                    # 首先确保文档已被请求，这是pushNodesByBackendIdsToFrontend的前置条件
+                    try:
+                        doc_response = await self.send_command("DOM.getDocument", {"depth": 0})
+                        if "error" not in doc_response:
+                            print(f"✅ 文档请求成功，准备转换backendNodeId")
+                        else:
+                            print(f"⚠️  文档请求失败: {doc_response.get('error', {}).get('message', 'Unknown error')}")
+                    except Exception as doc_error:
+                        print(f"⚠️  文档请求异常: {doc_error}")
 
-                            if push_node_ids and push_node_ids[0] != 0:
-                                valid_node_id = push_node_ids[0]
-                                print(f"✅ 成功获取有效nodeId: {valid_node_id}")
-                                return valid_node_id
-                            else:
-                                print(f"❌ 无法从backendNodeId {backend_node_id} 获取有效节点")
-                        except Exception as push_error:
-                            print(f"backendNodeId转换错误: {push_error}")
+                    # 现在尝试转换backendNodeId
+                    push_response = await self.send_command(
+                        "DOM.pushNodesByBackendIdsToFrontend", {"backendNodeIds": [backend_node_id]}
+                    )
 
-                    return None
+                    # 检查是否有错误
+                    if "error" in push_response:
+                        error_msg = push_response["error"].get("message", "Unknown error")
+                        print(f"❌ pushNodesByBackendIdsToFrontend失败: {error_msg}")
+                        return None
 
-                return node_id
+                    push_result = push_response.get("result", {})
+                    push_node_ids = push_result.get("nodeIds", [])
+
+                    if push_node_ids and push_node_ids[0] != 0:
+                        valid_node_id = push_node_ids[0]
+                        print(f"✅ 成功从backendNodeId {backend_node_id} 转换为nodeId: {valid_node_id}")
+                        return valid_node_id
+                    else:
+                        print(f"❌ 无法从backendNodeId {backend_node_id} 获取有效节点")
+                except Exception as push_error:
+                    print(f"backendNodeId转换错误: {push_error}")
+
+            # 如果仍然没有找到元素，提供调试信息
+            print(f"No element found at coordinates ({x}, {y})")
+
+            # 添加调试信息：检查是否有其他信息
+            if "error" in response:
+                print(f"Error: {response['error']}")
+
+            if backend_node_id:
+                print(f"Found backendNodeId: {backend_node_id}")
             else:
-                print(f"No element found at coordinates ({x}, {y})")
-
-                # 添加调试信息：检查是否有其他信息
-                if "error" in response:
-                    print(f"Error: {response['error']}")
-
-                # 检查是否有backendNodeId或其他信息
-                if backend_node_id:
-                    print(f"Found backendNodeId: {backend_node_id}")
-
-                    # 如果backendNodeId是29（已知问题值），提供额外信息
-                    if backend_node_id == 29:
-                        print(f"⚠️  已知问题: backendNodeId 29 通常表示无效的DevTools协议响应")
-                        print(f"💡 这可能是因为页面内容问题或坐标指向了空白区域")
+                print("No backendNodeId available")
 
                 # 如果坐标在浏览器窗口内但找不到元素，尝试获取文档根节点作为备选
                 try:
@@ -407,12 +580,10 @@ class DOMInspector:
                         mouse_x, mouse_y = pyautogui.position()
                         print(f"鼠标位置: ({mouse_x}, {mouse_y})")
 
-                        # 转换坐标并获取节点
-                        browser_x, browser_y = await self.convert_screen_to_browser_coords(mouse_x, mouse_y)
-                        if browser_x is not None and browser_y is not None:
-                            node_id = await self.get_node_for_location(browser_x, browser_y)
-                            if node_id:
-                                return node_id
+                        # 直接使用屏幕坐标获取元素（简化方法）
+                        node_id = await self.get_element_at_screen_coords(mouse_x, mouse_y)
+                        if node_id:
+                            return node_id
 
                         print("未找到有效元素，请重新选择")
 
@@ -430,45 +601,163 @@ class DOMInspector:
             print(f"鼠标选择模式错误: {e}")
             return None
 
-    async def _calibrate_ui_offset(self) -> None:
-        """
-        通过比较窗口大小和视口大小来计算浏览器的UI偏移量（标签页、地址栏等）。
-        """
-        print("📏 正在校准浏览器UI偏移量...")
+    async def get_element_at_screen_coords(self, screen_x: int, screen_y: int) -> Optional[int]:
+        """直接根据屏幕坐标获取DOM元素，无需复杂的窗口检测"""
         try:
-            # 1. 确保Page域已启用 (在connect中已做)
+            # 执行JavaScript来查找屏幕坐标处的元素（考虑High DPI）
+            js_code = f"""
+            (function() {{
+                // 计算viewport坐标：屏幕坐标 - 窗口在屏幕上的偏移
+                // 考虑devicePixelRatio来处理High DPI显示
+                const devicePixelRatio = window.devicePixelRatio || 1;
+                const viewportX = Math.round(({screen_x} - window.screenX));
+                const viewportY = Math.round(({screen_y} - window.screenY - 80));
+                console.log({screen_x}, {screen_y}, window.screenX, window.screenY, viewportX, viewportY);
+                
+                // 使用document.elementFromPoint获取元素
+                const element = document.elementFromPoint(viewportX, viewportY);
+                if (!element) {{
+                    console.log("not found");
+                    return {{ found: false }};
+                }}
+                
+                // 尝试获取nodeId（如果支持的话）
+                let nodeId = null;
+                if (window.devtools && window.devtools.inspectedWindow) {{
+                    // 在DevTools context中
+                    try {{
+                        nodeId = window.devtools.inspectedWindow.eval('$0', function(result, isException) {{
+                            return isException ? null : result;
+                        }});
+                    }} catch (e) {{
+                        // DevTools API不可用
+                    }}
+                }}
+                
+                // 返回元素信息
+                const rect = element.getBoundingClientRect();
+                return {{
+                    found: true,
+                    tagName: element.tagName,
+                    id: element.id || '',
+                    className: element.className || '',
+                    viewportX: viewportX,
+                    viewportY: viewportY,
+                    devicePixelRatio: devicePixelRatio,
+                    nodeId: nodeId,
+                    elementRect: {{
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height
+                    }},
+                    // 添加元素的唯一标识符
+                    elementPath: (function() {{
+                        const getPath = (el) => {{
+                            if (el.id) return '#' + el.id;
+                            if (el === document.body) return 'body';
+                            
+                            let path = [];
+                            while (el.parentNode) {{
+                                if (el.id) {{
+                                    path.unshift('#' + el.id);
+                                    break;
+                                }}
+                                let siblings = Array.from(el.parentNode.children);
+                                let index = siblings.indexOf(el);
+                                path.unshift(el.tagName.toLowerCase() + ':nth-child(' + (index + 1) + ')');
+                                el = el.parentNode;
+                            }}
+                            return path.join(' > ');
+                        }};
+                        return getPath(element);
+                    }})()
+                }};
+            }})()
+            """
+            print(js_code)
+            response = await self.send_command(
+                "Runtime.evaluate",
+                {"expression": js_code, "returnByValue": True, "awaitPromise": True},  # awaitPromise for safety
+            )
 
-            # 2. 从操作系统获取窗口几何信息 (返回逻辑像素)
-            chrome_window = self.find_chrome_window()
-            if not chrome_window:
-                print("⚠️  校准失败：未能找到浏览器窗口。")
-                return
+            # 检查是否有JS执行异常
+            exception_details = response.get("result", {}).get("exceptionDetails")
+            if exception_details:
+                error_message = exception_details.get("exception", {}).get("description", "Unknown JavaScript error")
+                print(f"JavaScript execution failed: {error_message}")
+                # 打印更详细的堆栈信息（如果可用）
+                if "stackTrace" in exception_details:
+                    print("Stack trace:")
+                    for frame in exception_details["stackTrace"].get("callFrames", []):
+                        function_name = frame.get("functionName", "anonymous")
+                        url = frame.get("url", "inline")
+                        line = frame.get("lineNumber", 0) + 1
+                        col = frame.get("columnNumber", 0) + 1
+                        print(f"  at {function_name} ({url}:{line}:{col})")
+                return None
 
-            _, _, window_width, window_height = chrome_window
+            result = response.get("result", {}).get("result", {})
+            if result.get("type") == "object" and "value" in result:
+                element_info = result["value"]
+                if element_info and element_info.get("found"):
+                    print(
+                        f"找到元素: {element_info['tagName']} (id: {element_info['id']}, class: {element_info['className']})"
+                    )
+                    print(f"Viewport坐标: ({element_info['viewportX']}, {element_info['viewportY']})")
+                    print(f"元素路径: {element_info.get('elementPath', 'Unknown')}")
 
-            # 3. 从CDP获取视口度量
-            metrics_response = await self.send_command("Page.getLayoutMetrics")
-            if "error" in metrics_response:
-                print(f"⚠️  校准失败: {metrics_response['error'].get('message')}")
-                return
+                    # 如果JavaScript中获取到了nodeId，直接使用
+                    if element_info.get("nodeId"):
+                        print(f"从JavaScript获取到nodeId: {element_info['nodeId']}")
+                        return element_info["nodeId"]
 
-            # 使用 visualViewport 获取可见区域的大小 (逻辑像素)
-            viewport_height = metrics_response["result"]["visualViewport"]["clientHeight"]
+                    # 否则尝试通过元素路径查找
+                    element_path = element_info.get("elementPath")
+                    if element_path:
+                        print(f"尝试通过元素路径查找: {element_path}")
+                        node_id = await self.get_node_by_selector(element_path)
+                        if node_id:
+                            return node_id
 
-            print(f"校准调试：窗口逻辑高度={window_height}, 视口逻辑高度={viewport_height}")
+                    # 最后尝试使用坐标方法
+                    print("尝试使用坐标方法查找节点...")
+                    viewport_x = round(element_info["viewportX"])
+                    viewport_y = round(element_info["viewportY"])
+                    return await self.get_node_for_location(viewport_x, viewport_y)
 
-            # 5. 计算偏移量
-            # 窗口高度 (从 find_chrome_window) 和视口高度 (从 CDP) 都应该是逻辑像素 (CSS像素)。
-            offset = window_height - viewport_height
+            print(f"在屏幕坐标 ({screen_x}, {screen_y}) 处未找到元素")
+            return None
 
-            # 偏移量应该是一个正整数
-            if offset > 0:
-                self.calibrated_ui_offset_y = int(offset)
-                print(f"✅ 校准成功。检测到的UI偏移量: {self.calibrated_ui_offset_y}px")
-            else:
-                print(f"⚠️  校准警告：计算出的偏移量为非正数 ({offset})。将使用备用值。")
         except Exception as e:
-            print(f"⚠️  校准因错误失败: {e}。将使用备用值。")
+            print(f"根据屏幕坐标获取元素失败: {e}")
+            return None
+
+    async def get_node_by_selector(self, selector: str) -> Optional[int]:
+        """通过CSS选择器获取DOM节点ID"""
+        try:
+            # 首先获取根文档
+            doc_response = await self.send_command("DOM.getDocument", {"depth": 1})
+            root_node_id = doc_response.get("result", {}).get("root", {}).get("nodeId")
+
+            if not root_node_id:
+                print("无法获取根文档节点")
+                return None
+
+            # 使用CSS选择器查找元素
+            response = await self.send_command("DOM.querySelector", {"nodeId": root_node_id, "selector": selector})
+
+            node_id = response.get("result", {}).get("nodeId")
+            if node_id and node_id != 0:
+                print(f"通过选择器 '{selector}' 找到节点ID: {node_id}")
+                return node_id
+            else:
+                print(f"选择器 '{selector}' 未找到匹配的元素")
+                return None
+
+        except Exception as e:
+            print(f"通过选择器查找元素失败: {e}")
+            return None
 
     async def convert_screen_to_browser_coords(
         self, screen_x: int, screen_y: int
@@ -495,15 +784,20 @@ class DOMInspector:
             # 屏幕坐标是物理像素，窗口坐标是逻辑坐标
 
             # 多屏幕支持：检查鼠标是否在浏览器窗口内（考虑多屏幕坐标空间）
+            # 注意：pyautogui返回的屏幕坐标是物理像素，需要先转换为逻辑像素再比较
+            logical_screen_x = screen_x / scale_factor
+            logical_screen_y = screen_y / scale_factor
+
             window_right = window_x + window_width
             window_bottom = window_y + window_height
 
             # 打印调试信息以帮助诊断多屏幕问题
-            print(f"窗口位置: ({window_x}, {window_y}) - ({window_right}, {window_bottom})")
-            print(f"鼠标位置: ({screen_x}, {screen_y})")
+            print(f"窗口逻辑位置: ({window_x}, {window_y}) - ({window_right}, {window_bottom})")
+            print(f"鼠标物理位置: ({screen_x}, {screen_y})")
+            print(f"鼠标逻辑位置: ({logical_screen_x:.2f}, {logical_screen_y:.2f})")
 
-            # 检查鼠标是否在浏览器窗口内
-            if not (window_x <= screen_x <= window_right and window_y <= screen_y <= window_bottom):
+            # 检查鼠标是否在浏览器窗口内 (使用逻辑像素进行比较)
+            if not (window_x <= logical_screen_x <= window_right and window_y <= logical_screen_y <= window_bottom):
                 print(f"警告：鼠标位置 ({screen_x}, {screen_y}) 不在浏览器窗口内")
                 print(f"      窗口范围: ({window_x}, {window_y}) - ({window_right}, {window_bottom})")
 
@@ -538,8 +832,8 @@ class DOMInspector:
                             s_right = s_left + s_width
                             s_bottom = s_top + s_height
 
-                            # 检查鼠标是否在这个屏幕上
-                            if s_left <= screen_x <= s_right and s_top <= screen_y <= s_bottom:
+                            # 检查鼠标是否在这个屏幕上 (使用逻辑坐标)
+                            if s_left <= logical_screen_x <= s_right and s_top <= logical_screen_y <= s_bottom:
                                 mouse_screen_index = i
                                 print(f"鼠标在屏幕 {i} 上")
                                 break
@@ -556,18 +850,8 @@ class DOMInspector:
 
             # 转换为相对于浏览器窗口的坐标
             # 考虑浏览器UI的偏移（地址栏、工具栏等）
-            if self.calibrated_ui_offset_y is not None:
-                browser_ui_offset_y = self.calibrated_ui_offset_y
-                print(f"信息：使用校准后的浏览器UI偏移: {browser_ui_offset_y}px")
-            else:
-                browser_ui_offset_y = self._get_fallback_ui_offset()
-                print(f"警告：校准失败，使用备用UI偏移: {browser_ui_offset_y}px")
-
-            # 屏幕坐标 (screen_x, screen_y) 是物理像素.
-            # 窗口坐标 (window_x, window_y) 是逻辑像素.
-            # 必须先将屏幕坐标转换为逻辑像素再进行计算.
-            logical_screen_x = screen_x / scale_factor
-            logical_screen_y = screen_y / scale_factor
+            browser_ui_offset_y = self._get_fallback_ui_offset()
+            print(f"信息：使用备用UI偏移: {browser_ui_offset_y}px")
 
             # 现在所有单位都是逻辑像素 (CSS像素)
             relative_x = int(logical_screen_x - window_x)
@@ -1225,47 +1509,53 @@ end tell
             script_source = response["result"]["scriptSource"]
 
             # 尝试获取脚本元数据（文件名/URL信息）
-            # 使用 Debugger.getScripts 获取所有脚本信息，然后匹配 scriptId
+            # 使用单独的 Runtime.getProperties 或从源码中推断信息
             try:
-                scripts = response.get("result", {}).get("scripts", [])
+                # 先尝试从源码注释中提取URL信息（如Raven.js的情况）
+                script_url = ""
+                filename = f"script_{script_id[-8:]}.js"
 
-                script_info = None
-                for script in scripts:
-                    if script.get("scriptId") == script_id:
-                        script_info = script
-                        break
+                # 检查源码开头是否包含URL信息
+                source_lines = script_source.split("\n")[:5]  # 检查前5行
+                for line in source_lines:
+                    line = line.strip()
+                    if "://" in line and ("http" in line or "github.com" in line):
+                        # 尝试提取URL
+                        import re
 
-                if script_info:
-                    # 提取文件名/URL信息
-                    script_url = script_info.get("url", "")
-                    if script_url:
-                        # 从URL中提取文件名
-                        from urllib.parse import urlparse
+                        url_match = re.search(r'(https?://[^\s\'"]+)', line)
+                        if url_match:
+                            script_url = url_match.group(1)
+                            break
 
-                        parsed_url = urlparse(script_url)
-                        filename = parsed_url.path.split("/")[-1] if parsed_url.path else "script.js"
+                # 如果找到了URL，从中提取文件名
+                if script_url:
+                    from urllib.parse import urlparse
 
-                        # 如果是内联脚本或data URL，使用其他标识
-                        if script_url.startswith("data:") or not script_url.strip():
-                            filename = f"inline_script_{script_id[-8:]}"
+                    parsed_url = urlparse(script_url)
+                    if parsed_url.path:
+                        filename = parsed_url.path.split("/")[-1]
+                        if not filename.endswith(".js"):
+                            filename = filename + ".js"
 
-                        # 缓存脚本源码和元数据
-                        self.script_cache[script_id] = {
-                            "source": script_source,
-                            "filename": filename,
-                            "url": script_url,
-                            "scriptInfo": script_info,
-                        }
+                    # 缓存脚本源码和元数据
+                    self.script_cache[script_id] = {
+                        "source": script_source,
+                        "filename": filename,
+                        "url": script_url,
+                        "scriptInfo": {},
+                    }
 
-                        return {
-                            "scriptId": script_id,
-                            "lineNumber": line_number,
-                            "columnNumber": column_number,
-                            "source": script_source,
-                            "filename": filename,
-                            "url": script_url,
-                            "scriptInfo": script_info,
-                        }
+                    return {
+                        "scriptId": script_id,
+                        "lineNumber": line_number,
+                        "columnNumber": column_number,
+                        "source": script_source,
+                        "filename": filename,
+                        "url": script_url,
+                        "scriptInfo": {},
+                    }
+
             except Exception as meta_error:
                 # 如果获取脚本元数据失败，继续使用基本信息
                 print(f"警告: 无法获取脚本元数据: {meta_error}")
@@ -1410,104 +1700,124 @@ end tell
         return "\n".join(output)
 
     async def format_event_listeners(self, listeners_data: List[Dict]) -> str:
-        """格式化事件监听器输出，模仿DevTools显示格式"""
+        """格式化事件监听器输出，按脚本位置分组去重"""
         if not listeners_data:
             return "无事件监听器"
 
         output = []
 
-        # 按事件类型分组
-        events_by_type = {}
+        # 按脚本位置分组 (scriptId, lineNumber, columnNumber)
+        script_groups = {}
         for listener in listeners_data:
-            event_type = listener["type"]
-            if event_type not in events_by_type:
-                events_by_type[event_type] = []
-            events_by_type[event_type].append(listener)
+            script_id = listener.get("scriptId")
+            line_number = listener.get("lineNumber", 0)
+            column_number = listener.get("columnNumber", 0)
 
-        for event_type, listeners in events_by_type.items():
-            output.append(f"事件类型: {event_type}")
-            output.append("-" * 40)
+            # 生成分组键
+            if script_id:
+                group_key = (script_id, line_number, column_number)
+            else:
+                # 对于没有脚本信息的监听器，单独处理
+                group_key = ("no_script", listener.get("backendNodeId", 0))
 
-            for listener in listeners:
-                # 基本信息
-                use_capture = "是" if listener.get("useCapture", False) else "否"
-                passive = "是" if listener.get("passive", False) else "否"
-                once = "是" if listener.get("once", False) else "否"
+            if group_key not in script_groups:
+                script_groups[group_key] = {
+                    "listeners": [],
+                    "event_types": set(),
+                    "backend_node_ids": set(),
+                    "script_info": None,
+                }
 
-                output.append(f"  捕获阶段: {use_capture}")
-                output.append(f"  被动监听: {passive}")
-                output.append(f"  仅触发一次: {once}")
+            script_groups[group_key]["listeners"].append(listener)
+            script_groups[group_key]["event_types"].add(listener["type"])
+            if listener.get("backendNodeId"):
+                script_groups[group_key]["backend_node_ids"].add(listener["backendNodeId"])
 
-                # 源位置信息
-                if listener.get("scriptId"):
-                    script_id = listener["scriptId"]
-                    line_number = listener.get("lineNumber", 0)
-                    column_number = listener.get("columnNumber", 0)
+        # 输出分组结果
+        group_count = 0
+        for group_key, group_data in script_groups.items():
+            group_count += 1
+            script_id, line_number, column_number = group_key if len(group_key) == 3 else (None, None, None)
 
-                    # 获取脚本源信息以获取文件名/URL
-                    script_info = await self.get_script_source_info(script_id, line_number, column_number)
+            # 汇总信息
+            event_types = sorted(group_data["event_types"])
+            node_ids = sorted(group_data["backend_node_ids"])
+            listeners = group_data["listeners"]
 
-                    output.append(f"  脚本ID: {script_id}")
-                    output.append(f"  位置: 行 {line_number + 1}, 列 {column_number + 1}")
+            if script_id and script_id != "no_script":
+                # 有脚本信息的监听器组
+                output.append(f"📍 脚本位置组 #{group_count}")
+                output.append("=" * 50)
 
-                    # 显示脚本来源信息（如果有）
-                    if script_info.get("source"):
-                        # 显示脚本来源（文件名/URL）
-                        if script_info.get("filename"):
-                            output.append(f"  脚本来源: {script_info['filename']}")
-                            if script_info.get("url") and not script_info["url"].startswith("data:"):
-                                # 显示完整URL（如果不是data URL）
-                                output.append(f"  脚本URL: {script_info['url']}")
+                # 获取脚本信息（只获取一次）
+                script_info = await self.get_script_source_info(script_id, line_number, column_number)
 
-                        # 显示相关代码行（限制压缩脚本的显示长度）
-                        source_lines = script_info["source"].split("\n")
-                        if 0 <= line_number < len(source_lines):
-                            output.append(f"  相关代码:")
-                            start_line = max(0, line_number - 2)
-                            end_line = min(len(source_lines), line_number + 3)
-                            for i in range(start_line, end_line):
-                                line_prefix = "→ " if i == line_number else "  "
-                                line_content = source_lines[i]
-                                # 限制单行显示长度，避免压缩脚本过长
-                                if len(line_content) > 200:
-                                    line_content = line_content[:200] + "... [截断]"
-                                output.append(f"    {line_prefix}{i + 1}: {line_content}")
-                        else:
-                            # 即使行号超出范围，也显示脚本文件信息
-                            output.append(
-                                f"  脚本源码已获取 (总行数: {len(source_lines)}, 请求行号: {line_number + 1})"
-                            )
-                            # 显示前几行作为预览
-                            if source_lines:
-                                output.append(f"  源码预览:")
-                                preview_lines = min(5, len(source_lines))
-                                for i in range(preview_lines):
-                                    if source_lines[i].strip():  # 跳过空行
-                                        output.append(f"    {i + 1}: {source_lines[i]}")
-                                if len(source_lines) > preview_lines:
-                                    output.append(f"    ... (还有 {len(source_lines) - preview_lines} 行)")
-                    elif script_info.get("error"):
-                        output.append(f"  脚本源获取错误: {script_info['error']}")
+                # 显示脚本基本信息
+                output.append(f"🎯 事件类型: {', '.join(event_types)} ({len(event_types)}个)")
+                output.append(f"🔗 绑定节点: {', '.join(map(str, node_ids))} ({len(node_ids)}个节点)")
+                output.append(f"📄 脚本ID: {script_id}")
+                output.append(f"📍 位置: 行 {line_number + 1}, 列 {column_number + 1}")
 
-                # 处理函数信息
-                if listener.get("handler"):
-                    handler = listener["handler"]
+                # 显示脚本来源信息 - 优先显示URL
+                if script_info.get("url") and not script_info["url"].startswith("data:"):
+                    output.append(f"🌐 脚本URL: {script_info['url']}")
+                elif script_info.get("filename") and not script_info["filename"].startswith("script_"):
+                    # 只有当filename不是临时生成的时候才显示
+                    output.append(f"📁 脚本文件: {script_info['filename']}")
+                else:
+                    # 对于没有URL的情况，明确标示
+                    output.append(f"📄 内联/动态脚本 (ID: {script_id})")
+
+                # 显示详细属性（仅对第一个监听器）
+                first_listener = listeners[0]
+                use_capture = "是" if first_listener.get("useCapture", False) else "否"
+                passive = "是" if first_listener.get("passive", False) else "否"
+                once = "是" if first_listener.get("once", False) else "否"
+
+                output.append(f"⚙️  监听属性: 捕获={use_capture}, 被动={passive}, 一次={once}")
+
+                # 显示相关代码（只显示一次）
+                if script_info.get("source"):
+                    source_lines = script_info["source"].split("\n")
+                    if 0 <= line_number < len(source_lines):
+                        output.append(f"📝 相关代码:")
+                        start_line = max(0, line_number - 2)
+                        end_line = min(len(source_lines), line_number + 3)
+                        for i in range(start_line, end_line):
+                            line_prefix = "→ " if i == line_number else "  "
+                            line_content = source_lines[i]
+                            if len(line_content) > 200:
+                                line_content = line_content[:200] + "... [截断]"
+                            output.append(f"    {line_prefix}{i + 1}: {line_content}")
+
+            else:
+                # 没有脚本信息的监听器组
+                output.append(f"📍 无脚本信息监听器组 #{group_count}")
+                output.append("=" * 50)
+                output.append(f"🎯 事件类型: {', '.join(event_types)} ({len(event_types)}个)")
+                output.append(f"🔗 绑定节点: {', '.join(map(str, node_ids))} ({len(node_ids)}个节点)")
+
+                # 显示详细属性
+                first_listener = listeners[0]
+                use_capture = "是" if first_listener.get("useCapture", False) else "否"
+                passive = "是" if first_listener.get("passive", False) else "否"
+                once = "是" if first_listener.get("once", False) else "否"
+                output.append(f"⚙️  监听属性: 捕获={use_capture}, 被动={passive}, 一次={once}")
+
+                # 显示处理函数信息
+                if first_listener.get("handler"):
+                    handler = first_listener["handler"]
                     if handler.get("description"):
-                        output.append(f"  函数: {handler['description']}")
+                        output.append(f"📋 函数: {handler['description']}")
                     elif handler.get("className"):
-                        output.append(f"  类型: {handler['className']}")
+                        output.append(f"📋 类型: {handler['className']}")
 
-                # 原始处理器信息
-                if listener.get("originalHandler"):
-                    original_handler = listener["originalHandler"]
-                    if original_handler.get("description"):
-                        output.append(f"  原始函数: {original_handler['description']}")
+            output.append("")
 
-                # 绑定的节点信息
-                if listener.get("backendNodeId"):
-                    output.append(f"  绑定节点ID: {listener['backendNodeId']}")
-
-                output.append("")
+        # 添加汇总统计
+        total_listeners = len(listeners_data)
+        total_groups = len(script_groups)
+        output.append(f"📊 统计: 共 {total_listeners} 个监听器，合并为 {total_groups} 组")
 
         return "\n".join(output)
 
@@ -1559,10 +1869,175 @@ end tell
 
     async def close(self):
         """关闭连接"""
+        # 停止控制台监听
+        await self.stop_console_listening()
+
         if self.ws:
             await self.ws.close()
         if self.session:
             await self.session.close()
+
+    async def start_console_listening(self, message_handler=None):
+        """开始监听控制台消息"""
+        if self.console_listening:
+            print("控制台监听已启动")
+            return
+
+        self.console_message_handler = message_handler
+        self.console_listening = True
+
+        # 启用控制台域
+        try:
+            await self.send_command("Console.enable")
+            print("✅ 控制台监听已启用")
+        except Exception as e:
+            print(f"❌ 启用控制台监听失败: {e}")
+            self.console_listening = False
+            return
+
+        # 控制台监听已通过统一的消息处理机制实现
+
+    async def stop_console_listening(self):
+        """停止监听控制台消息"""
+        if not self.console_listening:
+            return
+
+        self.console_listening = False
+
+        # 禁用控制台域
+        try:
+            await self.send_command("Console.disable")
+            print("✅ 控制台监听已禁用")
+        except Exception as e:
+            print(f"❌ 禁用控制台监听失败: {e}")
+
+    async def _console_message_loop(self):
+        """控制台消息监听循环"""
+        while self.console_listening and self.ws and not self.ws.closed:
+            try:
+                async for msg in self.ws:
+                    if not self.console_listening:
+                        break
+
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        message = json.loads(msg.data)
+
+                        # 处理控制台消息事件
+                        if message.get("method") == "Runtime.consoleAPICalled":
+                            await self._handle_console_api_called(message.get("params", {}))
+
+                        # 处理控制台消息事件（Console.messageAdded）
+                        elif message.get("method") == "Console.messageAdded":
+                            await self._handle_console_message_added(message.get("params", {}))
+
+            except Exception as e:
+                if self.console_listening:
+                    print(f"控制台消息监听错误: {e}")
+                    await asyncio.sleep(1)  # 错误后等待1秒再重试
+
+    async def _handle_console_api_called(self, params: Dict):
+        """处理Runtime.consoleAPICalled事件"""
+        try:
+            call_type = params.get("type", "")
+            args = params.get("args", [])
+            timestamp = params.get("timestamp")
+            stack_trace = params.get("stackTrace")
+            execution_context_id = params.get("executionContextId")
+            context = params.get("context", "")
+
+            # 格式化消息内容
+            message_parts = []
+            for arg in args:
+                if arg.get("type") == "string":
+                    message_parts.append(arg.get("value", ""))
+                elif arg.get("type") == "number":
+                    message_parts.append(str(arg.get("value", "")))
+                elif arg.get("type") == "boolean":
+                    message_parts.append(str(arg.get("value", "")))
+                elif arg.get("type") == "undefined":
+                    message_parts.append("undefined")
+                elif arg.get("type") == "null":
+                    message_parts.append("null")
+                elif arg.get("type") == "object":
+                    message_parts.append(f"[object {arg.get('className', 'Object')}]")
+                else:
+                    message_parts.append(str(arg))
+
+            message_text = " ".join(message_parts)
+
+            # 格式化时间戳（Chrome使用毫秒，需要转换为秒）
+            if timestamp:
+                from datetime import datetime
+
+                dt = datetime.fromtimestamp(timestamp / 1000.0)
+                time_str = dt.strftime("%H:%M:%S.%f")[:-3]
+            else:
+                time_str = ""
+
+            # 格式化堆栈信息
+            stack_info = ""
+            if stack_trace and stack_trace.get("callFrames"):
+                frames = stack_trace["callFrames"]
+                if frames:
+                    frame = frames[0]  # 取第一个调用帧
+                    function_name = frame.get("functionName", "anonymous")
+                    url = frame.get("url", "")
+                    line_number = frame.get("lineNumber", 0) + 1
+                    column_number = frame.get("columnNumber", 0) + 1
+
+                    if url:
+                        filename = url.split("/")[-1] if "/" in url else url
+                        stack_info = f" at {function_name} ({filename}:{line_number}:{column_number})"
+                    else:
+                        stack_info = f" at {function_name} (line {line_number}:{column_number})"
+
+            # 构建完整的输出消息
+            output_message = f"[{time_str}] {call_type.upper()}: {message_text}{stack_info}"
+
+            # 调用自定义处理函数或默认输出
+            if self.console_message_handler:
+                await self.console_message_handler(
+                    {
+                        "type": call_type,
+                        "message": message_text,
+                        "timestamp": timestamp,
+                        "stack_trace": stack_trace,
+                        "execution_context_id": execution_context_id,
+                        "context": context,
+                        "raw": params,
+                    }
+                )
+            else:
+                print(output_message)
+
+        except Exception as e:
+            print(f"处理控制台消息错误: {e}")
+
+    async def _handle_console_message_added(self, params: Dict):
+        """处理Console.messageAdded事件"""
+        try:
+            message = params.get("message", {})
+            message_text = message.get("text", "")
+            level = message.get("level", "")
+            source = message.get("source", "")
+            url = message.get("url", "")
+            line = message.get("line", 0)
+
+            # 格式化输出
+            output_message = f"[{level.upper()}] {source}: {message_text}"
+            if url:
+                output_message += f" ({url}:{line})"
+
+            # 调用自定义处理函数或默认输出
+            if self.console_message_handler:
+                await self.console_message_handler(
+                    {"type": level, "message": message_text, "source": source, "url": url, "line": line, "raw": params}
+                )
+            else:
+                print(output_message)
+
+        except Exception as e:
+            print(f"处理控制台消息错误: {e}")
 
 
 async def launch_browser_with_debugging(
@@ -1814,27 +2289,23 @@ async def inspect_element_styles(
             inspector = DOMInspector(ws_url)
             await inspector.connect()
 
-            # 获取所有目标并查找匹配的标签页
-            response = await inspector.send_command("Target.getTargets")
-            targets = response.get("result", {}).get("targetInfos", [])
+            # 连接后等待一下再查找标签页
+            await asyncio.sleep(1)
 
-            # 如果URL模式为空，选择第一个页面标签页（最上层/当前显示的）
-            if not url_pattern:
+            # 使用已修复的方法查找标签页
+            target_id = await inspector.find_tab_by_url(url_pattern)
+            if target_id:
+                # 获取所有目标信息以找到匹配的标签页详情
+                response = await inspector.send_command("Target.getTargets")
+                targets = response.get("result", {}).get("targetInfos", [])
+
                 for target in targets:
-                    if target["type"] == "page":
+                    if target["targetId"] == target_id:
                         matched_tab = target
-                        print(f"选择默认标签页: {target['url']}")
-                        break
-            else:
-                # 查找匹配URL模式的标签页
-                for target in targets:
-                    if target["type"] == "page" and url_pattern in target["url"]:
-                        matched_tab = target
-                        print(f"找到匹配的标签页: {target['url']}")
                         break
 
-            if matched_tab:
-                break
+                if matched_tab:
+                    break
 
             await inspector.close()
             inspector = None
@@ -1868,10 +2339,6 @@ async def inspect_element_styles(
     try:
         # 附加到目标标签页
         await inspector.attach_to_tab(matched_tab["targetId"])
-
-        # 为指针模式校准UI偏移量
-        if from_pointer:
-            await inspector._calibrate_ui_offset()
 
         # 根据模式选择元素
         node_id = None

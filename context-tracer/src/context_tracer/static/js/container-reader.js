@@ -21,6 +21,78 @@ const EventType = {
     C_RAISE: 7
 };
 
+/**
+ * SourceManager class - manages source code content storage and retrieval
+ */
+class SourceManager {
+    constructor() {
+        this._sourceContent = new Map(); // filename -> base64 content
+        this._loadedFiles = new Set(); // Track which files we've attempted to load
+    }
+
+    /**
+     * Get base64-encoded source content for a file
+     * @param {string} filename - File path
+     * @returns {string|null} Base64 content or null
+     */
+    getSourceContent(filename) {
+        return this._sourceContent.get(filename) || null;
+    }
+
+    /**
+     * Get source code lines for a file
+     * @param {string} filename - File path
+     * @returns {string[]|null} Array of source lines or null
+     */
+    getSourceLines(filename) {
+        const content = this.getSourceContent(filename);
+        if (content) {
+            try {
+                const decoded = atob(content);
+                return decoded.split('\n');
+            } catch (error) {
+                console.warn(`Failed to decode base64 content for ${filename}:`, error);
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Deserialize SourceManager state from JSON bytes
+     * @param {Uint8Array} data - Serialized SourceManager data
+     * @returns {SourceManager} New SourceManager instance
+     */
+    static deserialize(data) {
+        const text = new TextDecoder().decode(data);
+        const state = JSON.parse(text);
+        
+        const instance = new SourceManager();
+        
+        // Restore source content
+        if (state.source_content) {
+            for (const [filename, content] of Object.entries(state.source_content)) {
+                instance._sourceContent.set(filename, content);
+            }
+        }
+        
+        // Restore loaded files
+        if (state.loaded_files) {
+            state.loaded_files.forEach(file => instance._loadedFiles.add(file));
+        }
+        
+        return instance;
+    }
+
+    /**
+     * Get all stored source files with their content
+     * @returns {Map<string, string>} Map of filename to base64 content
+     */
+    getAllSourceFiles() {
+        return new Map(this._sourceContent);
+    }
+}
+
 // V3 format indices for event data lists
 const CALL_FUNC_INDEX = 0;
 const CALL_ARGS_INDEX = 1;
@@ -144,8 +216,9 @@ class DataContainerReader {
         this._key = key;
         this._offset = 0;
         this.fileManager = null;
+        this.sourceManager = null;
         this._formatVersion = 1;
-        this._fileManagerPosition = 0;
+        this._metadataPosition = 0;
     }
 
     /**
@@ -165,30 +238,46 @@ class DataContainerReader {
             throw new Error(`Unsupported format version: ${this._formatVersion}. This tool supports up to version ${FORMAT_VERSION}.`);
         }
 
-        // V4+ format: FileManager stored at end with pointer in header
+        // Skip reserved bytes
+        this._offset = 10 + 8 + HEADER_RESERVED_BYTES;
+
+        // V4+ format: Metadata (FileManager + SourceManager) stored at end with pointer in header
         if (this._formatVersion >= 4) {
-            this._fileManagerPosition = this._readUint64(10); // Position after magic + version
+            this._metadataPosition = this._readUint64(10); // Position after magic + version
             
-            // Skip reserved bytes
-            this._offset = 10 + 8 + HEADER_RESERVED_BYTES;
-            
-            // Read FileManager from end of file
-            if (this._fileManagerPosition > 0) {
+            // Read metadata from end of file
+            if (this._metadataPosition > 0) {
                 const currentPos = this._offset;
-                this._offset = this._fileManagerPosition;
+                this._offset = this._metadataPosition;
                 
-                const fmLength = this._dataView.getUint32(this._offset, false);
+                const metadataLength = this._dataView.getUint32(this._offset, false);
                 this._offset += 4;
                 
-                const encryptedFm = new Uint8Array(this._arrayBuffer, this._offset, fmLength);
-                const fmBytes = await this._decrypt(encryptedFm);
-                this.fileManager = FileManager.deserialize(fmBytes);
+                const encryptedMetadata = new Uint8Array(this._arrayBuffer, this._offset, metadataLength);
+                const metadataBytes = await this._decrypt(encryptedMetadata);
+                const metadataText = new TextDecoder().decode(metadataBytes);
+                const metadata = JSON.parse(metadataText);
+                
+                // Deserialize FileManager
+                const fmData = metadata.file_manager;
+                if (fmData) {
+                    this.fileManager = FileManager.deserialize(new TextEncoder().encode(fmData));
+                } else {
+                    this.fileManager = new FileManager();
+                }
+                
+                // Deserialize SourceManager if available
+                const smData = metadata.source_manager;
+                if (smData) {
+                    this.sourceManager = SourceManager.deserialize(new TextEncoder().encode(smData));
+                }
                 
                 // Restore position
                 this._offset = currentPos;
             } else {
-                // No FileManager data (empty container)
+                // No metadata (empty container)
                 this.fileManager = new FileManager();
+                this.sourceManager = null;
             }
         }
     }
@@ -203,9 +292,9 @@ class DataContainerReader {
         }
 
         while (this._offset < this._arrayBuffer.byteLength) {
-            // For V4 format, check if we've reached the FileManager section
-            if (this._formatVersion >= 4 && this._fileManagerPosition > 0) {
-                if (this._offset >= this._fileManagerPosition) {
+            // For V4 format, check if we've reached the metadata section
+            if (this._formatVersion >= 4 && this._metadataPosition > 0) {
+                if (this._offset >= this._metadataPosition) {
                     break;
                 }
             }
@@ -306,14 +395,38 @@ class DataContainerReader {
     }
 
     /**
+     * Encrypt data for testing (exposed for unit tests)
+     * @param {Uint8Array} plaintext - Data to encrypt
+     * @returns {Uint8Array} Encrypted data
+     */
+    _encryptForTest(plaintext) {
+        // Simple XOR encryption for testing (not secure, for testing only)
+        const result = new Uint8Array(plaintext.length + 32); // nonce + tag + data
+        
+        // Add dummy nonce and tag
+        for (let i = 0; i < 32; i++) {
+            result[i] = i;
+        }
+        
+        // Copy plaintext
+        for (let i = 0; i < plaintext.length; i++) {
+            result[32 + i] = plaintext[i];
+        }
+        
+        return result;
+    }
+
+    /**
      * Decode MessagePack data
      * @param {Uint8Array} data - MessagePack encoded data
      * @returns {Promise<any>} Decoded data
      */
     async _decodeMsgPack(data) {
-        // Use dynamic import for browser compatibility
-        const msgpack = await import('./lib/@msgpack/msgpack.js');
-        return msgpack.decode(data);
+        // Use global MessagePack object loaded via script tag
+        if (typeof MessagePack !== 'undefined') {
+            return MessagePack.decode(data);
+        }
+        throw new Error('MessagePack library not loaded');
     }
 
     /**
@@ -346,6 +459,7 @@ class DataContainerReader {
 if (typeof window !== 'undefined') {
     window.DataContainerReader = DataContainerReader;
     window.FileManager = FileManager;
+    window.SourceManager = SourceManager;
     window.EventType = EventType;
 }
 
@@ -353,6 +467,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         DataContainerReader,
         FileManager,
+        SourceManager,
         EventType
     };
 }

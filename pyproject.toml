@@ -59,6 +59,9 @@ dependencies = [
     "respx>=0.21.0",
     "pycryptodome>=3.23.0",
     "msgpack>=1.1.1",
+    "aiohttp>=3.12.15",
+    "pyautogui>=0.9.54",
+    "keyboard>=0.13.5",
 ]
 
 [tool.black]

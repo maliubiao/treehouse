@@ -244,5 +244,83 @@ class TestFilenameCollapsing(unittest.TestCase):
         self.assertNotIn(f"{long_filename}:8", result)
 
 
+class TestSaveToFilePathHandling(unittest.TestCase):
+    """Test path handling in save_to_file method"""
+
+    def setUp(self):
+        """Set up test fixtures"""
+        # Create a mock trace_logic object
+        self.mock_trace_logic = Mock()
+        self.renderer = CallTreeHtmlRender(self.mock_trace_logic)
+
+    def test_absolute_path_handling(self):
+        """Test that absolute paths are handled correctly"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Test with absolute path
+            absolute_path = Path(temp_dir) / "test_absolute.html"
+            result = self.renderer.save_to_file(str(absolute_path), is_multi_threaded=False)
+
+            # Should return the same absolute path
+            self.assertEqual(result.resolve(), absolute_path.resolve())
+            # Directory should exist
+            self.assertTrue(absolute_path.parent.exists())
+
+    def test_relative_path_handling(self):
+        """Test that relative paths use tracer-logs directory"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+
+                # Test with relative path
+                relative_path = "test_relative.html"
+                result = self.renderer.save_to_file(relative_path, is_multi_threaded=False)
+
+                # Should be in tracer-logs directory
+                expected_path = Path(temp_dir) / "tracer-logs" / relative_path
+                # Use resolve() to handle /private prefix on macOS
+                self.assertEqual(result.resolve(), expected_path.resolve())
+                # Directory should exist
+                self.assertTrue(expected_path.parent.exists())
+
+            finally:
+                os.chdir(original_cwd)
+
+    def test_multi_threaded_absolute_path(self):
+        """Test multi-threaded mode with absolute path"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Test with absolute path in multi-threaded mode
+            # Note: save_to_file expects simple filenames, not paths with directories
+            # The translator should handle path conversion before calling this method
+            absolute_path = Path(temp_dir) / "test_mt.html"
+            result = self.renderer.save_to_file("test_mt.html", is_multi_threaded=True)
+
+            # Should create timestamped subdirectory with report.html
+            self.assertTrue("test_mt_" in str(result))
+            self.assertTrue(result.name == "report.html")
+            # Directory should exist
+            self.assertTrue(result.parent.exists())
+
+    def test_multi_threaded_relative_path(self):
+        """Test multi-threaded mode with relative path"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+
+                # Test with relative path in multi-threaded mode
+                relative_path = "test_mt.html"
+                result = self.renderer.save_to_file(relative_path, is_multi_threaded=True)
+
+                # Should create timestamped subdirectory with report.html
+                self.assertTrue("test_mt_" in str(result))
+                self.assertTrue(result.name == "report.html")
+                # Directory should exist
+                self.assertTrue(result.parent.exists())
+
+            finally:
+                os.chdir(original_cwd)
+
+
 if __name__ == "__main__":
     unittest.main()

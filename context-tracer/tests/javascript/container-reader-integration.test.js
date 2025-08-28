@@ -23,8 +23,8 @@ DataContainerReader.prototype._decodeMsgPack = async function(data) {
 };
 
 describe('Container Reader Integration', () => {
-    const containerPath = path.join(__dirname, '../../src/tracer-logs/trace_data.bin');
-    const keyHex = 'cc27d9c1761735f0234a2297c9637b86f7db349fd4bdfb77052ec66eb1c418f0';
+    const containerPath = path.join(__dirname, '__fixtures__/trace_data.bin');
+    const keyHex = '2e3108d94dce4ec250beaa2ae5420c820bba0d0c259e41931a3693d9993fe2f8';
     
     let containerData = null;
     let keyBytes = null;

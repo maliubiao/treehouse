@@ -1,4 +1,5 @@
 import ast
+import base64
 import dis
 import fnmatch
 import functools
@@ -39,6 +40,7 @@ from .container import (
     TraceEvent,
 )
 from .source_cache import get_statement_info
+from .source_manager import SourceManager
 from .tracer_common import TraceTypes, truncate_repr_value
 from .tracer_html import CallTreeHtmlRender
 from .utils.path_utils import to_relative_module_path
@@ -136,6 +138,8 @@ class TraceConfig:
         enable_container: bool = False,
         container_path: Optional[str] = None,
         container_key: Optional[str] = None,
+        # Timeout settings
+        timeout_seconds: Optional[int] = None,
     ):
         """
         初始化跟踪配置
@@ -159,6 +163,7 @@ class TraceConfig:
             enable_container: 是否启用持久化数据容器
             container_path: 数据容器文件路径
             container_key: 用于加密数据容器的密钥 (16, 24, or 32 bytes as a hex string)
+            timeout_seconds: 超时时间（秒），超过此时间强制终止追踪
         """
         self.target_files = target_files or []
         self.line_ranges = self._parse_line_ranges(line_ranges or {})
@@ -188,6 +193,9 @@ class TraceConfig:
         self.container_key_bytes: Optional[bytes] = bytes.fromhex(container_key) if container_key else None
         if self.container_key_bytes and len(self.container_key_bytes) not in [16, 24, 32]:
             raise ValueError("Container key must be 16, 24, or 32 bytes (32, 48, or 64 hex characters).")
+
+        # Timeout settings
+        self.timeout_seconds = timeout_seconds
 
     @staticmethod
     def _get_system_paths() -> Set[str]:
@@ -1113,6 +1121,7 @@ class TraceLogic:
         self._log_queue = queue.Queue()
         self._flush_event = threading.Event()
         self._timer_thread = None
+        self._timeout_thread = None
         self._running_flag = False
         self._html_render = CallTreeHtmlRender(config=self.config)
         self._stack_variables = {}
@@ -1127,6 +1136,7 @@ class TraceLogic:
 
         # Container state
         self._file_manager: Optional[FileManager] = None
+        self._source_manager: Optional[SourceManager] = None
         self._container_writer: Optional[DataContainerWriter] = None
 
         if not self.config.disable_html:
@@ -1135,13 +1145,22 @@ class TraceLogic:
         if self.config.enable_container:
             self._output._active_outputs.add("container")
             self._file_manager = FileManager()
+            self._source_manager = SourceManager()
             if self.config.container_key_bytes:
                 self._container_writer = DataContainerWriter(
-                    self.config.container_path, self.config.container_key_bytes, self._file_manager
+                    self.config.container_path,
+                    self.config.container_key_bytes,
+                    self._file_manager,
+                    self._source_manager,
                 )
         self.enable_output("file", filename=str(Path(_LOG_DIR) / Path(self.config.report_name).stem) + ".log")
         self._local = threading.local()
         self.init_stack_variables()
+
+        # 超时相关属性
+        self._start_time = None
+        self._timeout_event = threading.Event()
+        self._timed_out = False  # 超时标志
 
     def init_stack_variables(self):
         """初始化线程本地堆栈变量"""
@@ -1259,8 +1278,8 @@ class TraceLogic:
         self._html_render.add_raw_message(log_data, color_type)
 
     def _container_output(self, log_data: Dict[str, Any], color_type: str) -> None:
-        """Container output handler for V3 format with list-based compression."""
-        if not self._container_writer or not self._file_manager:
+        """Container output handler for V4 format with source code storage."""
+        if not self._container_writer or not self._file_manager or not self._source_manager:
             return
 
         data = log_data.get("data", {})
@@ -1268,9 +1287,16 @@ class TraceLogic:
         if not original_filename:
             return
 
+        # Use formatted filename for consistent path handling (same as display logic)
+        formatted_filename = self._get_formatted_filename(original_filename)
+
         # Handle dynamic code by getting its source content if available
         content = data.get("dynamic_source")
-        file_id = self._file_manager.get_id(original_filename, content)
+        file_id = self._file_manager.get_id(formatted_filename, content)
+
+        # Load and store source file content in SourceManager if not already stored and not dynamic code
+        if not content and original_filename:
+            self._source_manager.load_source_file(original_filename)
 
         event_map = {
             TraceTypes.COLOR_CALL: EventType.CALL,
@@ -1375,6 +1401,29 @@ class TraceLogic:
         while self._running_flag:
             time.sleep(1)
             self._flush_buffer()
+
+    def _timeout_monitor(self):
+        """超时监控线程"""
+        if not self.config.timeout_seconds:
+            return
+
+        # 等待超时时间
+        self._timeout_event.wait(self.config.timeout_seconds)
+
+        # 如果超时事件没有被设置（即没有正常结束），则强制终止整个进程
+        if not self._timeout_event.is_set() and self._running_flag:
+            print(
+                color_wrap(
+                    f"\n⏰ 超时警告：追踪已运行超过 {self.config.timeout_seconds} 秒，强制终止", TraceTypes.COLOR_ERROR
+                )
+            )
+            logging.warning("Timeout after %d seconds, forcing termination", self.config.timeout_seconds)
+
+            # 强制停止追踪器
+            self._running_flag = False
+
+            # 退出整个进程（使用124作为超时退出码）
+            os._exit(124)
 
     def _get_formatted_filename(self, filename: str) -> str:
         """
@@ -2008,19 +2057,39 @@ class TraceLogic:
         self._timer_thread.daemon = True
         self._timer_thread.start()
 
+        # 启动超时监控线程（如果需要）
+        if self.config.timeout_seconds:
+            self._timeout_thread = threading.Thread(target=self._timeout_monitor)
+            self._timeout_thread.daemon = True
+            self._timeout_thread.start()
+
     def start(self):
         """启动逻辑处理"""
         if self._container_writer:
             self._container_writer.open()
         self._running_flag = True
+        self._start_time = time.time()
+        # 重置超时事件
+        self._timeout_event.clear()
 
     def stop(self) -> Optional[Path]:
         """
         停止逻辑处理, 返回最终报告路径
         """
+        # 如果已经在停止过程中，直接返回
+        if not self._running_flag:
+            return None
+
         self._running_flag = False
-        if self._timer_thread:
+        # 设置超时事件，通知监控线程正常结束
+        self._timeout_event.set()
+
+        # 只在主线程中join其他线程
+        current_thread = threading.current_thread()
+        if self._timer_thread and self._timer_thread != current_thread:
             self._timer_thread.join(timeout=1)
+        if self._timeout_thread and self._timeout_thread != current_thread:
+            self._timeout_thread.join(timeout=1)
 
         self._flush_buffer()
         while not self._log_queue.empty():

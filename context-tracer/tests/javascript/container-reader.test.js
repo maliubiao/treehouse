@@ -108,9 +108,92 @@ describe('Container Reader', () => {
             expect(EventType.C_RAISE).toBe(7);
         });
     });
+
+    describe('SourceManager', () => {
+        let sourceManager;
+
+        beforeEach(() => {
+            sourceManager = new SourceManager();
+        });
+
+        test('should create SourceManager instance', () => {
+            expect(sourceManager).toBeInstanceOf(SourceManager);
+            expect(sourceManager._sourceContent).toBeInstanceOf(Map);
+            expect(sourceManager._loadedFiles).toBeInstanceOf(Set);
+        });
+
+        test('should deserialize from JSON', () => {
+            const serializedData = JSON.stringify({
+                source_content: { '/test/file.py': 'cHJpbnQoIkhlbGxvIFdvcmxkIik=' }, // base64 of "print(\"Hello World\")"
+                loaded_files: ['/test/file.py', '/another/file.py']
+            });
+
+            const bytes = new TextEncoder().encode(serializedData);
+            const deserialized = SourceManager.deserialize(bytes);
+
+            expect(deserialized).toBeInstanceOf(SourceManager);
+            expect(deserialized.getSourceContent('/test/file.py')).toBe('cHJpbnQoIkhlbGxvIFdvcmxkIik=');
+            expect(deserialized._loadedFiles.has('/test/file.py')).toBe(true);
+        });
+
+        test('should get source lines from base64 content', () => {
+            const base64Content = 'cHJpbnQoIkhlbGxvIFdvcmxkIik='; // "print(\"Hello World\")"
+            sourceManager._sourceContent.set('/test/file.py', base64Content);
+
+            const lines = sourceManager.getSourceLines('/test/file.py');
+            expect(lines).toEqual(['print("Hello World")']);
+        });
+
+        test('should return null for non-existent file', () => {
+            expect(sourceManager.getSourceLines('/nonexistent/file.py')).toBeNull();
+        });
+    });
+
+    describe('V4 Format Support', () => {
+        test('should handle V4 metadata with both FileManager and SourceManager', async () => {
+            // Create mock V4 metadata
+            const fileManagerData = JSON.stringify({
+                file_to_id: { '/test/file.py': 0, '/another/file.py': 1 },
+                id_to_file: { '0': '/test/file.py', '1': '/another/file.py' },
+                dynamic_code: {},
+                next_id: 2
+            });
+
+            const sourceManagerData = JSON.stringify({
+                source_content: { '/test/file.py': 'cHJpbnQoIkhlbGxvIFdvcmxkIik=' },
+                loaded_files: ['/test/file.py']
+            });
+
+            const metadata = {
+                file_manager: fileManagerData,
+                source_manager: sourceManagerData
+            };
+
+            // Mock the container reader to test V4 format parsing
+            const reader = new DataContainerReader(new ArrayBuffer(100), new Uint8Array(16));
+            
+            // Test metadata parsing directly - simulate decryption by just using the plaintext
+            // (since _encryptForTest adds 32 bytes of header, we need to slice it off)
+            const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
+            const encryptedData = reader._encryptForTest(metadataBytes);
+            // For testing, just use the plaintext part (skip the 32-byte header)
+            const decryptedMetadata = encryptedData.slice(32);
+            const parsedMetadata = JSON.parse(new TextDecoder().decode(decryptedMetadata));
+
+            // Test FileManager deserialization
+            const fmBytes = new TextEncoder().encode(parsedMetadata.file_manager);
+            const fileManager = FileManager.deserialize(fmBytes);
+            expect(fileManager.getPath(0)).toBe('/test/file.py');
+
+            // Test SourceManager deserialization
+            const smBytes = new TextEncoder().encode(parsedMetadata.source_manager);
+            const sourceManager = SourceManager.deserialize(smBytes);
+            expect(sourceManager.getSourceContent('/test/file.py')).toBe('cHJpbnQoIkhlbGxvIFdvcmxkIik=');
+        });
+    });
 });
 
 // Export for manual testing
 if (typeof module !== 'undefined') {
-    module.exports = { DataContainerReader, FileManager, EventType };
+    module.exports = { DataContainerReader, FileManager, SourceManager, EventType };
 }

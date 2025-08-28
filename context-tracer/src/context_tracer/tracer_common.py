@@ -136,7 +136,7 @@ def _truncate_object(value: object, keep_elements: int, safe: bool, max_depth: i
 
 
 def truncate_repr_value(
-    value: Any, keep_elements: int = 10, safe: bool = False, max_depth: int = 2, _depth: int = 1
+    value: Any, keep_elements: int = 10, safe: bool = False, max_depth: int = 5, _depth: int = 0
 ) -> str:
     """
     Intelligently truncates a value and creates a suitable string representation for it,

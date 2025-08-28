@@ -80,10 +80,15 @@ class Translator:
             if event_count % 1000 == 0:
                 print(f"Processed {event_count} events...", end="\r")
 
-        renderer.save_to_file(str(output_path), is_multi_threaded=False)
+        # Convert relative paths to absolute paths before passing to save_to_file
+        # This ensures the HTML renderer works correctly with paths containing directories
+        if not output_path.is_absolute():
+            output_path = output_path.resolve()
+
+        final_output_path = renderer.save_to_file(str(output_path), is_multi_threaded=False)
 
         end_time = time.time()
-        print(f"\nHTML report generated at: {output_path.resolve()}")
+        print(f"\nHTML report generated at: {final_output_path.resolve()}")
         print(f"Processed {event_count} events in {end_time - start_time:.2f} seconds.")
 
     def translate_to_text(self, output_path: Path) -> None:
@@ -300,11 +305,32 @@ class Translator:
         return f"{indent}{event_type.name} -> {location}"
 
 
+def _read_container_key_from_file(key_file_path: Path) -> str:
+    """从文件读取容器密钥"""
+    if not key_file_path.exists():
+        raise FileNotFoundError(f"密钥文件不存在: {key_file_path}")
+
+    with open(key_file_path, "r", encoding="utf-8") as f:
+        content = f.read().strip()
+
+    # 解析密钥文件格式: container_key=xxxxx
+    for line in content.split("\n"):
+        line = line.strip()
+        if line.startswith("container_key="):
+            key_hex = line.split("=", 1)[1]
+            if not key_hex:
+                raise ValueError(f"密钥文件中未找到有效的密钥: {key_file_path}")
+            return key_hex
+
+    raise ValueError(f"密钥文件格式错误，未找到 'container_key=' 行: {key_file_path}")
+
+
 def main() -> None:
     """Command-line entry point for the translator."""
     parser = argparse.ArgumentParser(description="Translate context-tracer data container.")
     parser.add_argument("input_file", type=Path, help="Path to the .bin container file.")
-    parser.add_argument("-k", "--key", required=True, help="Decryption key (hex string).")
+    parser.add_argument("-k", "--key", help="Decryption key (hex string).")
+    parser.add_argument("--key-file", type=Path, help="Read decryption key from file (alternative to --key).")
     parser.add_argument(
         "-f",
         "--format",
@@ -325,12 +351,35 @@ def main() -> None:
         print(f"Error: Input file not found at {args.input_file}", file=sys.stderr)
         sys.exit(1)
 
+    # Check for key parameter conflicts
+    if args.key and args.key_file:
+        print("Error: Cannot specify both --key and --key-file. Please choose one method.", file=sys.stderr)
+        sys.exit(1)
+
+    # If no key method specified, try to find default key file
+    if not args.key and not args.key_file:
+        default_key_file = Path("tracer-logs/container_key.txt")
+        if default_key_file.exists():
+            print(f"No key specified, using default key file: {default_key_file}")
+            args.key_file = default_key_file
+        else:
+            print("Error: Must specify either --key or --key-file for decryption.", file=sys.stderr)
+            print(f"  (Or place key file at default location: {default_key_file})", file=sys.stderr)
+            sys.exit(1)
+
     try:
-        if not args.key:
-            raise ValueError()
-        key_bytes = bytes.fromhex(args.key)
+        # Get the key either from direct input or from file
+        if args.key_file:
+            key_hex = _read_container_key_from_file(args.key_file)
+        else:
+            key_hex = args.key
+
+        if not key_hex:
+            raise ValueError("Empty key provided")
+
+        key_bytes = bytes.fromhex(key_hex)
         if len(key_bytes) not in [16, 24, 32]:
-            raise ValueError()
+            raise ValueError("Key must be 16, 24, or 32 bytes (32, 48, or 64 hex characters)")
 
         output_path = args.output
         if not output_path:

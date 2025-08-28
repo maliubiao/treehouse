@@ -115,5 +115,19 @@
     "search": { "en": "Advanced Search", "zh": "高级搜索" },
     "collapseCurrentFuncBtnText": { "en": "Collapse Current", "zh": "折叠当前" },
     "collapseCurrentFuncBtnTitle": { "en": "Collapse the current active function call stack", "zh": "折叠当前活动的函数调用堆栈" },
-    "aiThinkingProcess": { "en": "Thinking Process", "zh": "思考过程" }
+    "aiThinkingProcess": { "en": "Thinking Process", "zh": "思考过程" },
+    "dragDropTitle": { "en": "Load Encrypted Trace Container", "zh": "加载加密追踪容器" },
+    "dragDropInstructions": { "en": "Drag and drop container file (.bin) and key file (.txt) here, or click to select files", "zh": "拖放容器文件 (.bin) 和密钥文件 (.txt) 到这里，或点击选择文件" },
+    "fileRequirements": { "en": "Two files required: one container file and one key file", "zh": "需要两个文件：一个容器文件和一个密钥文件" },
+    "manualLoadBtn": { "en": "Select Files", "zh": "选择文件" },
+    "containerValidationTwoFiles": { "en": "Please select exactly 2 files: one .bin container file and one .txt key file", "zh": "请选择恰好2个文件：一个 .bin 容器文件和一个 .txt 密钥文件" },
+    "containerValidationFileTypes": { "en": "Please select one .bin container file and one .txt key file", "zh": "请选择一个 .bin 容器文件和一个 .txt 密钥文件" },
+    "containerLoadingFiles": { "en": "Loading container files...", "zh": "正在加载容器文件..." },
+    "containerDecrypting": { "en": "Decrypting and parsing events...", "zh": "正在解密和解析事件..." },
+    "containerTranslating": { "en": "Translating events to HTML...", "zh": "正在将事件转换为HTML..." },
+    "containerReaderUnavailable": { "en": "DataContainerReader not available. Make sure container-reader.js is loaded.", "zh": "DataContainerReader 不可用。请确保已加载 container-reader.js。" },
+    "containerLoadSuccess": { "en": "Successfully loaded {count} events from container", "zh": "成功从容器中加载了 {count} 个事件" },
+    "containerLoadError": { "en": "Failed to load container: {error}", "zh": "容器加载失败：{error}" },
+    "containerKeyEmpty": { "en": "Invalid key format: empty key value", "zh": "无效的密钥格式：密钥值为空" },
+    "containerKeyNotFound": { "en": "Key file format error: no \"container_key=\" line found", "zh": "密钥文件格式错误：未找到 \"container_key=\" 行" }
 }

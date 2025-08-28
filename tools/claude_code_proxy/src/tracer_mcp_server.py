@@ -280,6 +280,10 @@ class TracerMCPServer:
             for lib in params["include_stdlibs"]:
                 argv.extend(["--include-stdlibs", lib])
 
+        # Pass timeout to the tracer itself for graceful handling
+        timeout = params.get("timeout", 30)
+        argv.extend(["--timeout", str(timeout)])
+
         if target_type == "module":
             argv.extend(["-m", target])
         else:
@@ -291,6 +295,8 @@ class TracerMCPServer:
     def _execute_tracer_process(self, command_args: List[str], cwd: str, timeout: int) -> Tuple[int, str, str, bool]:
         """Executes the tracer process and handles timeouts.
         Returns (exit_code, stdout, stderr, killed_by_timeout).
+
+        Uses a slightly longer timeout than the tracer's timeout as a safety measure.
         """
         old_cwd = os.getcwd()
         os.chdir(cwd)
@@ -299,7 +305,14 @@ class TracerMCPServer:
         killed = False
 
         try:
-            logger.info("Starting trace with timeout %ss and command: %s", timeout, " ".join(command_args))
+            # Use a slightly longer timeout than the tracer's timeout as a safety measure
+            safety_timeout = timeout + 5
+            logger.info(
+                "Starting trace with safety timeout %ss (tracer timeout: %ss) and command: %s",
+                safety_timeout,
+                timeout,
+                " ".join(command_args),
+            )
 
             result = subprocess.run(
                 command_args,
@@ -307,7 +320,7 @@ class TracerMCPServer:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=cwd,
-                timeout=timeout,
+                timeout=safety_timeout,
                 check=False,
             )
             stdout = result.stdout
@@ -315,7 +328,7 @@ class TracerMCPServer:
             exit_code = result.returncode
             killed = False
         except subprocess.TimeoutExpired as e:
-            logger.warning("Trace timed out after %ss", timeout)
+            logger.warning("Trace timed out after safety timeout %ss (tracer timeout: %ss)", safety_timeout, timeout)
             stdout = e.stdout if e.stdout else ""
             stderr = e.stderr if e.stderr else ""
             exit_code = -1
@@ -579,7 +592,7 @@ class TracerMCPServer:
                     )
 
                     # Truncate bytes and decode safely
-                    truncated_bytes = log_bytes[: self.MAX_TRACE_LOG_BYTES]
+                    truncated_bytes = log_bytes[len(log_bytes) - self.MAX_TRACE_LOG_BYTES : len(log_bytes)]
                     trace_log_content = truncated_bytes.decode("utf-8", errors="ignore")
 
                 result_text = self._compose_trace_result_text(

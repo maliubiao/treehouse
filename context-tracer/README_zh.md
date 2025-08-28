@@ -12,6 +12,7 @@
 - **高度可配置**: 通过CLI标志或YAML配置文件，精确控制要追踪的内容（特定文件、行范围）、要忽略的内容（系统库、特定函数）以及要捕獲的內容（变量值）。
 - **低侵入性**: 可以附加到任何正在运行的脚本上，是调试复杂应用的理想选择。
 - **为 Python 3.12+ 准备就绪**: 利用新的 `sys.monitoring` API，在现代Python版本上实现更低开销的追踪。
+- **超时保护**: 支持设置超时时间，防止长时间运行的脚本占用过多资源。
 
 ## 📊 交互式HTML报告
 
@@ -76,6 +77,17 @@ context-tracer --open-report --enable-var-trace my_app.py
 2.  启用详细的变量赋值追踪。
 3.  完成后自动在您的Web浏览器中打开生成的 `trace_report.html`。
 
+#### 示例：设置超时限制
+
+```bash
+# 设置3秒超时，防止长时间运行的脚本
+context-tracer --timeout 3 long_running_script.py
+```
+
+此命令将：
+1.  追踪 `long_running_script.py` 的执行过程。
+2.  如果运行时间超过3秒，自动终止追踪并返回退出码124。
+
 ## ⚙️ 配置
 
 `context-tracer` 可以通过命令行参数或YAML文件进行配置，以适应更复杂的场景。
@@ -102,6 +114,7 @@ context-tracer --open-report --enable-var-trace my_app.py
 | `--trace-c-calls` | | | 追踪C函数的调用 (Python 3.12+)。 | `trace_c_calls` |
 | `--start-function` | | `FUNC` | 指定开始追踪的函数，格式：`'file:lineno'`。 | `start_function` |
 | `--source-base-dir` | | `PATH` | 设置源码根目录，用于在报告中显示相对路径。 | `source_base_dir`|
+| `--timeout` | | `SECONDS` | 超时时间（秒），超过此时间强制终止追踪 | `timeout_seconds`|
 
 ### 使用 YAML 配置文件
 
@@ -118,6 +131,7 @@ include_stdlibs:
   - "json"
   - "re"
 source_base_dir: "./src"
+timeout_seconds: 30  # 设置30秒超时
 ```
 
 然后使用您的配置运行追踪器：
@@ -150,7 +164,8 @@ from context_tracer.tracer import TraceConfig, TraceContext
 config = TraceConfig(
     target_files=["my_module.py"],
     enable_var_trace=True,
-    report_name="manual_trace.html"
+    report_name="manual_trace.html",
+    timeout_seconds=60  # 设置60秒超时
 )
 
 with TraceContext(config):

@@ -1919,6 +1919,120 @@ body.skeleton-mode #content .call-group.show-details .var {
     }
 }
 
+/* ===== Drag and Drop Container Styles ===== */
+.drag-drop-container {
+    margin-bottom: var(--space-lg);
+    border: 2px dashed var(--border-primary);
+    border-radius: var(--radius-lg);
+    padding: var(--space-xl);
+    text-align: center;
+    background-color: var(--bg-tertiary);
+    transition: all 0.3s ease;
+}
+
+.drag-drop-area {
+    cursor: pointer;
+}
+
+.drag-drop-icon {
+    font-size: 3rem;
+    color: var(--text-muted);
+    margin-bottom: var(--space-md);
+}
+
+.drag-drop-container.drag-over {
+    border-color: var(--accent-primary);
+    background-color: rgba(59, 130, 246, 0.1);
+    transform: scale(1.02);
+}
+
+.drag-drop-container.loading {
+    border-color: var(--warning-color);
+    background-color: rgba(245, 158, 11, 0.1);
+}
+
+.drag-drop-container.success {
+    border-color: var(--success-color);
+    background-color: rgba(16, 185, 129, 0.1);
+}
+
+.drag-drop-container.error {
+    border-color: var(--error-color);
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
+.drag-drop-container h3 {
+    margin: 0 0 var(--space-sm) 0;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.drag-drop-container p {
+    margin: 0 0 var(--space-sm) 0;
+    color: var(--text-secondary);
+}
+
+.file-requirements {
+    margin: var(--space-md) 0;
+    padding: var(--space-sm);
+    background-color: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-primary);
+}
+
+.file-requirements p {
+    font-size: 0.875rem;
+    margin: 0;
+    color: var(--text-muted);
+}
+
+.manual-load-btn {
+    margin-top: var(--space-md);
+    padding: var(--space-sm) var(--space-lg);
+    background-color: var(--accent-primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.manual-load-btn:hover {
+    background-color: var(--btn-hover);
+}
+
+.drag-drop-status {
+    margin-top: var(--space-md);
+    padding: var(--space-sm);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    display: none;
+}
+
+.drag-drop-status.loading {
+    display: block;
+    background-color: var(--warning-color);
+    color: white;
+}
+
+.drag-drop-status.success {
+    display: block;
+    background-color: var(--success-color);
+    color: white;
+}
+
+.drag-drop-status.error {
+    display: block;
+    background-color: var(--error-color);
+    color: white;
+}
+
+/* File input hidden but accessible */
+#containerFileInput {
+    display: none;
+}
+
 /* ===== Floating Action Button ===== */
 .floating-action-btn {
     position: fixed;
@@ -1941,4 +2055,222 @@ body.skeleton-mode #content .call-group.show-details .var {
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
+}
+
+/* ===== Drag and Drop Animation Keyframes ===== */
+@keyframes pulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.8; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes fadeInScale {
+    0% { 
+        opacity: 0; 
+        transform: scale(0.9);
+    }
+    100% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+}
+
+@keyframes fadeOutShake {
+    0% { 
+        opacity: 1; 
+        transform: translateX(0);
+    }
+    25% { 
+        transform: translateX(-5px);
+    }
+    75% { 
+        transform: translateX(5px);
+    }
+    100% { 
+        opacity: 0; 
+        transform: translateX(0);
+    }
+}
+
+@keyframes successPulse {
+    0% { 
+        opacity: 1; 
+        transform: scale(1);
+        background-color: rgba(16, 185, 129, 0.1);
+    }
+    50% { 
+        transform: scale(1.02);
+        background-color: rgba(16, 185, 129, 0.3);
+    }
+    100% { 
+        opacity: 1; 
+        transform: scale(1);
+        background-color: rgba(16, 185, 129, 0.1);
+    }
+}
+
+/* ===== Content Overlay for Main Area Drag ===== */
+.content-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(16, 185, 129, 0.1));
+    backdrop-filter: blur(4px);
+    z-index: 1500;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.content-overlay.drag-active {
+    display: flex;
+}
+
+.content-overlay.drag-start {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.15));
+}
+
+.content-overlay.drag-over {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(16, 185, 129, 0.25));
+}
+
+.content-overlay.drag-cancel {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(245, 158, 11, 0.15));
+}
+
+.content-overlay.drag-success {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(34, 197, 94, 0.25));
+}
+
+.content-overlay-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+    opacity: 0.8;
+}
+
+.content-overlay-text {
+    margin-bottom: 0.5rem;
+}
+
+.content-overlay-subtext {
+    font-size: 1rem;
+    font-weight: 400;
+    opacity: 0.7;
+}
+
+/* ===== Modal Container Load Dialog ===== */
+.container-load-dialog {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    z-index: 2000;
+    align-items: center;
+    justify-content: center;
+}
+
+.container-load-dialog-content {
+    background-color: var(--dialog-bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--dialog-shadow);
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+}
+
+.container-load-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-lg);
+    border-bottom: 1px solid var(--border-primary);
+    background-color: var(--bg-secondary);
+}
+
+.container-load-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.container-load-body {
+    padding: var(--space-lg);
+    flex: 1;
+    overflow-y: auto;
+}
+
+/* ===== Enhanced Drag Drop States ===== */
+.drag-drop-container.drag-start {
+    border-color: var(--accent-primary);
+    background-color: rgba(59, 130, 246, 0.05);
+    animation: pulse 0.5s ease-in-out;
+}
+
+.drag-drop-container.drag-over {
+    border-color: var(--accent-primary);
+    background-color: rgba(59, 130, 246, 0.1);
+    transform: scale(1.02);
+}
+
+.drag-drop-container.drag-cancel {
+    border-color: var(--warning-color);
+    background-color: rgba(245, 158, 11, 0.1);
+    animation: fadeOutShake 0.5s ease-in-out;
+}
+
+.drag-drop-container.drag-success {
+    border-color: var(--success-color);
+    background-color: rgba(16, 185, 129, 0.1);
+    animation: successPulse 0.8s ease-out;
+}
+
+/* ===== Drag Drop Status Enhanced ===== */
+.drag-drop-status.drag-start {
+    background-color: var(--accent-primary);
+    color: white;
+    animation: fadeInScale 0.3s ease-out;
+}
+
+.drag-drop-status.drag-cancel {
+    background-color: var(--warning-color);
+    color: white;
+    animation: fadeOutShake 0.5s ease-in-out;
+}
+
+.drag-drop-status.drag-success {
+    background-color: var(--success-color);
+    color: white;
+    animation: successPulse 0.8s ease-out;
+}
+
+/* ===== Responsive Design for Container Loading ===== */
+@media (max-width: 768px) {
+    .container-load-dialog-content {
+        width: 95%;
+        max-width: none;
+    }
+    
+    .content-overlay {
+        font-size: 1.25rem;
+    }
+    
+    .content-overlay-icon {
+        font-size: 3rem;
+    }
 }

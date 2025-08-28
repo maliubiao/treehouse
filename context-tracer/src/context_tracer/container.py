@@ -32,7 +32,7 @@ except ImportError:
 
 # Constants for the container file format
 MAGIC_NUMBER = b"CTXTRACE"
-FORMAT_VERSION = 3  # V3 uses full list-based serialization for maximum compression
+FORMAT_VERSION = 4  # V4: FileManager stored at end of file with pointer in header
 HEADER_RESERVED_BYTES = 256  # Reserved space for future header extensions
 
 # V3 Format indices for event data lists
@@ -86,6 +86,8 @@ class FileManager:
     """
     Manages the mapping between file paths and unique integer IDs.
     Also handles the storage of dynamically executed code snippets.
+
+    Note: Source file content is now handled by SourceManager for better separation of concerns.
     """
 
     def __init__(self) -> None:
@@ -118,15 +120,15 @@ class FileManager:
     def get_source_lines(self, file_id: int) -> Optional[List[str]]:
         """
         Get the source code for a file ID, split into lines.
-        Handles both regular files and dynamic code snippets.
+        Only handles dynamic code snippets. For regular file source content, use SourceManager.
         """
         if file_id in self._dynamic_code:
             return self._dynamic_code[file_id].splitlines()
 
+        # For regular files, use SourceManager or read directly from disk
         path_str = self.get_path(file_id)
         if path_str:
             try:
-                # TODO: Add caching for file reads
                 return Path(path_str).read_text(encoding="utf-8").splitlines()
             except (IOError, OSError):
                 return None
@@ -163,10 +165,11 @@ class DataContainerWriter:
     impact on the main application's performance.
     """
 
-    def __init__(self, file_path: Union[str, Path], key: bytes, file_manager: FileManager):
+    def __init__(self, file_path: Union[str, Path], key: bytes, file_manager: FileManager, source_manager=None):
         self._file_path = Path(file_path)
         self._key = key
         self._file_manager = file_manager
+        self._source_manager = source_manager  # SourceManager for source content
         self._queue: queue.Queue[Optional[TraceEvent]] = queue.Queue(maxsize=10000)
         self._writer_thread: Optional[threading.Thread] = None
         self._running = False
@@ -190,20 +193,15 @@ class DataContainerWriter:
         self._writer_thread.start()
 
     def _write_header(self) -> None:
-        """Writes the container file header."""
+        """Writes the container file header with FileManager pointer placeholder."""
         if not self._file:
             return
         # Write magic number and version
         self._file.write(MAGIC_NUMBER)
         self._file.write(FORMAT_VERSION.to_bytes(2, "big"))
 
-        # Serialize and encrypt the file manager state
-        fm_bytes = self._file_manager.serialize()
-        encrypted_fm = self._encrypt(fm_bytes)
-
-        # Write header length and the encrypted file manager
-        self._file.write(len(encrypted_fm).to_bytes(4, "big"))
-        self._file.write(encrypted_fm)
+        # Write placeholder for FileManager position (8 bytes for 64-bit offset)
+        self._file.write(b"\0\0\0\0\0\0\0\0")  # FileManager position placeholder
 
         # Write reserved bytes for future use
         self._file.write(b"\0" * HEADER_RESERVED_BYTES)
@@ -275,8 +273,41 @@ class DataContainerWriter:
         if self._writer_thread:
             self._writer_thread.join(timeout=2)
         if self._file:
+            # Write the FileManager to the end of the file before closing
+            self._write_file_manager()
             self._file.close()
             self._file = None
+
+    def _write_file_manager(self) -> None:
+        """Writes the FileManager and SourceManager to the end of the file and updates header pointer."""
+        if not self._file:
+            return
+
+        # Save current position
+        current_pos = self._file.tell()
+
+        # Move to end of file to write metadata
+        self._file.seek(0, 2)  # Seek to end
+        metadata_pos = self._file.tell()
+
+        # Create combined metadata
+        metadata = {
+            "file_manager": self._file_manager.serialize().decode("utf-8"),
+            "source_manager": self._source_manager.serialize().decode("utf-8") if self._source_manager else "",
+        }
+        metadata_bytes = json.dumps(metadata).encode("utf-8")
+        encrypted_metadata = self._encrypt(metadata_bytes)
+
+        # Write metadata
+        self._file.write(len(encrypted_metadata).to_bytes(4, "big"))
+        self._file.write(encrypted_metadata)
+
+        # Update header with metadata position
+        self._file.seek(len(MAGIC_NUMBER) + 2)  # Skip magic and version
+        self._file.write(metadata_pos.to_bytes(8, "big"))
+
+        # Restore position
+        self._file.seek(current_pos)
 
 
 class DataContainerReader:
@@ -287,7 +318,9 @@ class DataContainerReader:
         self._key = key
         self._file: Optional[IO[bytes]] = None
         self.file_manager: Optional[FileManager] = None
+        self.source_manager = None  # SourceManager for source content
         self._format_version: int = 1
+        self._metadata_position: int = 0  # For V4+ format (previously _file_manager_position)
 
     def _decrypt(self, ciphertext: bytes) -> bytes:
         """Decrypts a bytestring using AES-GCM."""
@@ -312,14 +345,43 @@ class DataContainerReader:
             )
         self._format_version = version
 
-        # Read and decrypt file manager
-        fm_len = int.from_bytes(self._file.read(4), "big")
-        encrypted_fm = self._file.read(fm_len)
-        fm_bytes = self._decrypt(encrypted_fm)
-        self.file_manager = FileManager.deserialize(fm_bytes)
+        if version >= 4:
+            # V4+ format: Metadata (FileManager + SourceManager) stored at end with pointer in header
+            self._metadata_position = int.from_bytes(self._file.read(8), "big")
 
-        # Skip reserved bytes
-        self._file.read(HEADER_RESERVED_BYTES)
+            # Skip reserved bytes
+            self._file.read(HEADER_RESERVED_BYTES)
+
+            # Read metadata from end of file
+            if self._metadata_position > 0:
+                current_pos = self._file.tell()
+                self._file.seek(self._metadata_position)
+
+                metadata_len = int.from_bytes(self._file.read(4), "big")
+                encrypted_metadata = self._file.read(metadata_len)
+                metadata_bytes = self._decrypt(encrypted_metadata)
+                metadata = json.loads(metadata_bytes.decode("utf-8"))
+
+                # Deserialize FileManager
+                fm_data = metadata.get("file_manager", "")
+                if fm_data:
+                    self.file_manager = FileManager.deserialize(fm_data.encode("utf-8"))
+                else:
+                    self.file_manager = FileManager()
+
+                # Deserialize SourceManager if available
+                sm_data = metadata.get("source_manager", "")
+                if sm_data:
+                    from .source_manager import SourceManager
+
+                    self.source_manager = SourceManager.deserialize(sm_data.encode("utf-8"))
+
+                # Restore position
+                self._file.seek(current_pos)
+            else:
+                # No metadata (empty container)
+                self.file_manager = FileManager()
+                self.source_manager = None
 
     def __iter__(self) -> "DataContainerReader":
         if self._file is None:
@@ -330,6 +392,13 @@ class DataContainerReader:
         """Reads, decrypts, and returns the next event in the file."""
         if not self._file:
             raise StopIteration
+
+        # For V4 format, check if we've reached the metadata section
+        if self._format_version >= 4 and self._metadata_position > 0:
+            current_pos = self._file.tell()
+            # If we're at the metadata position (end of events), stop iteration
+            if current_pos >= self._metadata_position:
+                raise StopIteration
 
         len_bytes = self._file.read(4)
         if not len_bytes:
@@ -343,8 +412,8 @@ class DataContainerReader:
         decrypted_record = self._decrypt(encrypted_record)
         raw_event = msgpack.unpackb(decrypted_record, raw=False)
 
-        # V3 format: convert list back to NamedTuple for API compatibility
-        if self._format_version == 3:
+        # V3 and V4 format: convert list back to NamedTuple for API compatibility
+        if self._format_version in (3, 4):
             event = TraceEvent(
                 event_type=raw_event[0],
                 timestamp=raw_event[1],
@@ -352,7 +421,7 @@ class DataContainerReader:
                 frame_id=raw_event[3],
                 file_id=raw_event[4],
                 lineno=raw_event[5],
-                data=raw_event[6],  # This is now a list from V3 format
+                data=raw_event[6],  # This is now a list from V3/V4 format
             )
             return event
 
