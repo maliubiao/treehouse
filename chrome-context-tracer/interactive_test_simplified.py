@@ -26,10 +26,10 @@ async def interactive_test():
         await inspector.connect()
         print("✅ 已连接到Chrome DevTools")
         print("\n=== 交互式测试简化坐标方法 ===")
-        print("这个测试将使用新的简化方法:")
-        print("- 直接使用window.screenX/screenY")
-        print("- 无需窗口检测和DPI计算")
-        print("- 使用document.elementFromPoint")
+        print("这个测试将使用纯JavaScript方法:")
+        print("- 直接使用window.screenX/screenY进行坐标转换")
+        print("- 使用document.elementFromPoint进行元素检测")
+        print("- 完全基于浏览器API，无需平台特定代码")
 
         while True:
             print("\n选择测试模式:")
@@ -119,7 +119,7 @@ async def interactive_test():
     except Exception as e:
         print(f"测试失败: {e}")
     finally:
-        await inspector.disconnect()
+        await inspector.close()
 
 
 if __name__ == "__main__":

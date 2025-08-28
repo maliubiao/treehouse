@@ -80,14 +80,21 @@ def _create_error_response(
     )
 
 
-def _handle_downstream_error(e: httpx.HTTPStatusError, request_id: str, provider_name: str) -> JSONResponse:
+async def _handle_downstream_error(e: httpx.HTTPStatusError, request_id: str, provider_name: str) -> JSONResponse:
     """Creates a standardized error from a downstream HTTP error."""
     try:
-        error_details = e.response.json()
-        error_message = error_details.get("error", {}).get("message", e.response.text)
-    except json.JSONDecodeError:
-        error_details = {"raw_text": e.response.text}
-        error_message = e.response.text
+        # Read the response content first to handle both streaming and non-streaming responses
+        response_content = await e.response.aread()
+        try:
+            error_details = json.loads(response_content)
+            error_message = error_details.get("error", {}).get("message", response_content.decode("utf-8"))
+        except json.JSONDecodeError:
+            error_details = {"raw_text": response_content.decode("utf-8")}
+            error_message = response_content.decode("utf-8")
+    except Exception as read_error:
+        # Fallback if reading the response fails
+        error_details = {"raw_text": f"Failed to read response: {read_error}"}
+        error_message = f"Failed to read response from provider: {read_error}"
 
     request_logger.log_error(
         request_id,
@@ -269,7 +276,7 @@ async def messages_proxy(request: Request) -> Response:
 
             return JSONResponse(content=json.loads(anthropic_response.model_dump_json(exclude_none=True)))
     except httpx.HTTPStatusError as e:
-        return _handle_downstream_error(e, request_id, provider.name)
+        return await _handle_downstream_error(e, request_id, provider.name)
     except Exception as e:
         request_logger.log_error(request_id, e, {"context": "downstream_request"})
         return _create_error_response(f"An unexpected error occurred: {e}", "api_error", 500)
@@ -364,7 +371,7 @@ async def create_batch(request: Request) -> Response:
             )
 
     except httpx.HTTPStatusError as e:
-        return _handle_downstream_error(e, request_id, provider_key)
+        return await _handle_downstream_error(e, request_id, provider_key)
     except Exception as e:
         request_logger.log_error(request_id, e, {"context": "batch_creation"})
         return _create_error_response(f"Error creating batch: {e}", "api_error", 500)

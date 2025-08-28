@@ -156,6 +156,238 @@ python -m claude_code_proxy.src.tracer_mcp_server
 python -m tests.claude_code_proxy_tests.test_response_translator_v2 -v
 ```
 
+## 🚀 MCP 服务器使用指南
+
+### 内置 MCP 服务器功能
+
+代理包含一个功能完整的 MCP（模型上下文协议）服务器，提供强大的 Python 代码追踪和分析功能：
+
+#### 📋 可用工具
+
+1. **`trace_python`** - Python 代码执行追踪器
+   - 脚本和模块级别的详细执行追踪
+   - 变量状态实时监控
+   - 执行流程可视化
+   - 异常和错误分析
+
+2. **`import_path_finder`** - 导入路径分析器
+   - 自动发现模块结构
+   - 解决导入错误问题
+   - 提供正确的导入语句建议
+
+### 🔧 运行模式
+
+#### 1. 标准同步模式 (stdio)
+```bash
+# 从项目根目录运行
+python -m claude_code_proxy.src.tracer_mcp_server
+
+# 或直接运行文件
+python tools/claude_code_proxy/src/tracer_mcp_server.py
+```
+
+#### 2. 异步模式 (stdio)
+```bash
+# 启用异步模式
+python -m claude_code_proxy.src.tracer_mcp_server --async
+```
+
+#### 3. HTTP 服务器模式 (推荐)
+```bash
+# 启动 HTTP MCP 服务器
+python -m claude_code_proxy.src.http_mcp_server
+
+# 自定义端口和主机
+python -m claude_code_proxy.src.http_mcp_server --host 0.0.0.0 --port 8000
+```
+
+### 🔌 与 Claude Code 集成
+
+#### 方法 1: stdio 集成 (同步/异步)
+
+在 Claude Code 配置中添加 MCP 服务器：
+
+```json
+// ~/.config/claude/claude_code_settings.json
+{
+  "mcpServers": {
+    "tracer-mcp": {
+      "command": "python",
+      "args": [
+        "/path/to/your/project/tools/claude_code_proxy/src/tracer_mcp_server.py",
+        "--async"  // 对于异步模式
+      ],
+      "env": {
+        "PYTHONPATH": "/path/to/your/project"
+      }
+    }
+  }
+}
+```
+
+#### 方法 2: HTTP 集成 (推荐)
+
+首先启动 HTTP 服务器：
+```bash
+cd /path/to/your/project/tools/claude_code_proxy
+python src/http_mcp_server.py
+```
+
+然后在 Claude Code 配置中添加：
+
+```json
+// ~/.config/claude/claude_code_settings.json
+{
+  "mcpServers": {
+    "tracer-mcp-http": {
+      "url": "http://localhost:8000"
+    }
+  }
+}
+```
+
+### 🧪 测试 MCP 服务器
+
+使用内置测试客户端验证服务器功能：
+
+```bash
+# 测试 HTTP MCP 服务器
+python tools/claude_code_proxy/src/test_http_mcp_client.py
+
+# 测试特定服务器 URL
+python tools/claude_code_proxy/src/test_http_mcp_client.py http://localhost:8000
+
+# 详细测试输出
+python tools/claude_code_proxy/src/test_http_mcp_client.py --verbose
+```
+
+### 📋 MCP 服务器 API 端点
+
+HTTP MCP 服务器提供以下端点：
+
+- `POST /jsonrpc` - 主要的 JSON-RPC 2.0 端点
+- `GET /health` - 服务器健康检查
+- `GET /tools` - 列出可用工具
+
+### 🛠️ 工具使用示例
+
+#### 1. 追踪 Python 脚本
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "trace_python",
+    "arguments": {
+      "target": "/path/to/your/script.py",
+      "target_type": "script",
+      "args": ["--verbose", "input.txt"],
+      "enable_var_trace": true,
+      "timeout": 30
+    }
+  }
+}
+```
+
+#### 2. 追踪 Python 模块
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "trace_python",
+    "arguments": {
+      "target": "json",
+      "target_type": "module",
+      "enable_var_trace": true
+    }
+  }
+}
+```
+
+#### 3. 导入路径分析
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "import_path_finder",
+    "arguments": {
+      "max_depth": 3,
+      "include_patterns": ["*.py", "*.pyi"]
+    }
+  }
+}
+```
+
+### ⚡ 性能优化提示
+
+1. **使用 HTTP 模式**：HTTP 模式比 stdio 更稳定，支持并发连接
+2. **适当设置超时**：根据脚本复杂度调整 `timeout` 参数
+3. **限制追踪范围**：使用 `line_ranges` 参数聚焦关键代码区域
+4. **排除噪音函数**：使用 `exclude_functions` 过滤不必要的调试输出
+
+### 🔍 调试技巧
+
+```bash
+# 启用详细日志
+python -m claude_code_proxy.src.tracer_mcp_server --log-level DEBUG
+
+# 查看实时日志
+tail -f tracer_mcp_server.log
+
+# 测试特定功能
+python -c "
+import asyncio
+from claude_code_proxy.src.tracer_mcp_server import TracerMCPServer
+
+async def test():
+    server = TracerMCPServer()
+    # 测试初始化
+    result = server.handle_initialize({})
+    print('Initialize result:', result)
+    
+    # 测试工具列表
+    tools = server.handle_tools_list()
+    print('Available tools:', [t['name'] for t in tools['tools']])
+
+asyncio.run(test())
+"
+```
+
+### 🚨 常见问题解决
+
+#### 问题: 导入错误
+**解决方案**: 确保正确设置 PYTHONPATH
+```bash
+export PYTHONPATH="/path/to/your/project:$PYTHONPATH"
+```
+
+#### 问题: 连接超时
+**解决方案**: 增加超时时间
+```json
+{
+  "arguments": {
+    "timeout": 60,
+    "enable_var_trace": false
+  }
+}
+```
+
+#### 问题: 日志文件过大
+**解决方案**: 使用范围限制
+```json
+{
+  "arguments": {
+    "line_ranges": "/path/to/file.py:50-100",
+    "exclude_functions": ["print", "logging.debug"]
+  }
+}
+```
+
 ### 配置验证
 - **自动验证**：启动时的 YAML 配置验证
 - **提供商健康检查**：配置时的提供商连接测试

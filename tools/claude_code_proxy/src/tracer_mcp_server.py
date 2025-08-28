@@ -5,6 +5,7 @@ This server implements the Model Context Protocol over stdio and exposes
 a tracer tool that can execute Python scripts/modules with full tracing.
 """
 
+import asyncio
 import importlib.util
 import json
 import logging
@@ -207,6 +208,18 @@ class TracerMCPServer:
 
         raise ValueError(f"Unknown tool: {tool_name}")
 
+    async def handle_tools_call_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle tools/call request asynchronously."""
+        tool_name = params.get("name")
+        tool_params = params.get("arguments", {})
+
+        if tool_name == "trace_python":
+            return await self._handle_trace_python_async(tool_params)
+        elif tool_name == "import_path_finder":
+            return self._handle_import_path_finder(tool_params)
+
+        raise ValueError(f"Unknown tool: {tool_name}")
+
     def _validate_script_target(self, target: str) -> None:
         """Validate that target path points to an existing .py file."""
         path = Path(target)
@@ -292,8 +305,64 @@ class TracerMCPServer:
         argv.extend(params.get("args", []))
         return [sys.executable, "-m", "context_tracer.tracer_main"] + argv
 
+    async def _execute_tracer_process_async(
+        self, command_args: List[str], cwd: str, timeout: int
+    ) -> Tuple[int, str, str, bool]:
+        """Executes the tracer process asynchronously and handles timeouts.
+        Returns (exit_code, stdout, stderr, killed_by_timeout).
+
+        Uses a slightly longer timeout than the tracer's timeout as a safety measure.
+        """
+        old_cwd = os.getcwd()
+        os.chdir(cwd)
+        stdout, stderr = "", ""
+        exit_code = -1
+        killed = False
+
+        try:
+            # Use a slightly longer timeout than the tracer's timeout as a safety measure
+            safety_timeout = timeout + 5
+            logger.info(
+                "Starting async trace with safety timeout %ss (tracer timeout: %ss) and command: %s",
+                safety_timeout,
+                timeout,
+                " ".join(command_args),
+            )
+
+            # Use asyncio.create_subprocess_exec for async execution
+            process = await asyncio.create_subprocess_exec(
+                *command_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd
+            )
+
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=safety_timeout)
+                stdout = stdout_bytes.decode("utf-8", errors="ignore") if stdout_bytes else ""
+                stderr = stderr_bytes.decode("utf-8", errors="ignore") if stderr_bytes else ""
+                exit_code = process.returncode
+                killed = False
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Async trace timed out after safety timeout %ss (tracer timeout: %ss)", safety_timeout, timeout
+                )
+                process.kill()
+                try:
+                    await process.wait()
+                except:
+                    pass
+                exit_code = -1
+                killed = True
+
+        except OSError as e:
+            logger.error("Failed to execute async tracer process: %s", e)
+            stderr = f"Failed to execute async tracer process: {e}"
+            exit_code = -1
+            killed = False
+        finally:
+            os.chdir(old_cwd)
+        return exit_code, stdout, stderr, killed
+
     def _execute_tracer_process(self, command_args: List[str], cwd: str, timeout: int) -> Tuple[int, str, str, bool]:
-        """Executes the tracer process and handles timeouts.
+        """Executes the tracer process synchronously and handles timeouts.
         Returns (exit_code, stdout, stderr, killed_by_timeout).
 
         Uses a slightly longer timeout than the tracer's timeout as a safety measure.
@@ -612,6 +681,135 @@ class TracerMCPServer:
             logger.error("Unexpected error during trace handling: %s", e, exc_info=True)
             return {"content": [{"type": "text", "text": f"An unexpected error occurred: {str(e)}"}]}
 
+    async def _handle_trace_python_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle trace_python tool asynchronously by resolving paths and executing the tracer."""
+        try:
+            project_root = Path.cwd()
+            cmd_params = params.copy()
+
+            target = cmd_params.get("target")
+            target_type = cmd_params.get("target_type")
+            if not target or not target_type:
+                raise ValueError("'target' and 'target_type' are required parameters")
+
+            if target_type == "script":
+                target_path = Path(target)
+                if not target_path.is_absolute():
+                    target_path = (project_root / target_path).resolve()
+                self._validate_script_target(str(target_path))
+                cmd_params["target"] = str(target_path)
+            elif target_type == "module":
+                self._validate_module_target(target)
+            else:
+                raise ValueError("target_type must be either 'script' or 'module'")
+
+            if cmd_params.get("watch_files"):
+                resolved_patterns = []
+                for pattern in cmd_params["watch_files"]:
+                    p = Path(pattern)
+                    if not p.is_absolute():
+                        resolved_patterns.append(str(project_root / p))
+                    else:
+                        resolved_patterns.append(pattern)
+                cmd_params["watch_files"] = resolved_patterns
+
+            if cmd_params.get("line_ranges"):
+                resolved_ranges = []
+                for range_str in cmd_params["line_ranges"].split(","):
+                    range_str = range_str.strip()
+                    try:
+                        file_part, line_part = range_str.rsplit(":", 1)
+                        file_path = Path(file_part)
+                        if not file_path.is_absolute():
+                            file_path = (project_root / file_path).resolve()
+                        resolved_ranges.append(f"{file_path}:{line_part}")
+                    except (ValueError, FileNotFoundError):
+                        resolved_ranges.append(range_str)
+                cmd_params["line_ranges"] = ",".join(resolved_ranges)
+
+            timeout = cmd_params.get("timeout", 30)
+            temp_dir = tempfile.mkdtemp(prefix="trace_")
+
+            try:
+                command_args = self._build_tracer_command_args(cmd_params)
+                exit_code, stdout, stderr, killed = await self._execute_tracer_process_async(
+                    command_args, temp_dir, timeout
+                )
+                log_path = self._extract_log_path_from_stdout(stdout)
+
+                # Read log content BEFORE cleanup
+                trace_log_content = self._read_log_content(log_path) if log_path else ""
+
+                if log_path:
+                    logger.info("Extracted trace log from: %s", log_path)
+                else:
+                    logger.warning("Could not extract trace log path from stdout")
+
+                truncation_warning = None
+                log_bytes = trace_log_content.encode("utf-8")
+                actual_size_kb = len(log_bytes) / 1024
+
+                if len(log_bytes) > self.MAX_TRACE_LOG_BYTES:
+                    truncation_warning = (
+                        "--- TRACE LOG TRUNCATED ---\n"
+                        f"WARNING: The full trace log is too large ({actual_size_kb:.1f} KB) and has been truncated to fit within the model's context limit.\n"
+                        "To get a complete and useful trace, you MUST narrow the execution scope.\n\n"
+                        "ACTIONABLE SUGGESTIONS:\n"
+                        "1. Use the 'line_ranges' parameter to focus on a specific function or code block.\n"
+                        "   Example: line_ranges='/path/to/file.py:50-100'\n"
+                        "2. If running tests, trace ONE test case at a time instead of the whole suite.\n"
+                        "3. Use the 'exclude_functions' parameter to filter out noisy or irrelevant functions.\n"
+                        "--- END OF WARNING ---\n\n"
+                    )
+
+                    # Truncate bytes and decode safely
+                    truncated_bytes = log_bytes[len(log_bytes) - self.MAX_TRACE_LOG_BYTES : len(log_bytes)]
+                    trace_log_content = truncated_bytes.decode("utf-8", errors="ignore")
+
+                result_text = self._compose_trace_result_text(
+                    exit_code, killed, stdout, stderr, trace_log_content, truncation_warning
+                )
+                return {"content": [{"type": "text", "text": result_text}]}
+            finally:
+                self._cleanup_temp_dir(temp_dir)
+
+        except ValueError as e:
+            logger.error("Trace validation error: %s", e)
+            return {"content": [{"type": "text", "text": f"Error during trace validation: {str(e)}"}]}
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.error("Error during trace execution: %s", e)
+            return {"content": [{"type": "text", "text": f"Error during trace execution: {str(e)}"}]}
+        except Exception as e:
+            logger.error("Unexpected error during trace handling: %s", e, exc_info=True)
+            return {"content": [{"type": "text", "text": f"An unexpected error occurred: {str(e)}"}]}
+
+    async def _handle_single_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle a single request asynchronously."""
+        try:
+            request_id = request.get("id")
+            method = request.get("method")
+            params = request.get("params", {})
+            logger.debug("Received async request: %s", method)
+
+            if method == "initialize":
+                result = self.handle_initialize(params)
+            elif method == "tools/list":
+                result = self.handle_tools_list()
+            elif method == "tools/call":
+                result = await self.handle_tools_call_async(params)
+            else:
+                result = {"error": f"Unknown method: {method}"}
+
+            return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError, Exception) as e:
+            logger.error("Error handling async request: %s", e, exc_info=True)
+            return {
+                "jsonrpc": "2.0",
+                "id": request.get("id"),
+                "error": {"code": -32603, "message": str(e)},
+            }
+
     def run(self) -> None:
         """Run the MCP server over stdio synchronously."""
         logger.info("Starting tracer MCP server...")
@@ -652,11 +850,48 @@ class TracerMCPServer:
         except Exception as e:
             logger.critical("Top-level server error: %s", e, exc_info=True)
 
+    async def run_async(self) -> None:
+        """Run the MCP server over stdio asynchronously."""
+        logger.info("Starting async tracer MCP server...")
+        try:
+            while True:
+                line = await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
+                if not line:
+                    break
+                try:
+                    message = json.loads(line.strip())
+                    response = await self._handle_single_request(message)
+                    print(json.dumps(response), flush=True)
+
+                except (json.JSONDecodeError, ValueError, TypeError, KeyError, Exception) as e:
+                    logger.error("Error handling request: %s", e, exc_info=True)
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "id": locals().get("request_id"),
+                        "error": {"code": -32603, "message": str(e)},
+                    }
+                    print(json.dumps(error_response), flush=True)
+
+        except KeyboardInterrupt:
+            logger.info("Async server shutting down...")
+        except Exception as e:
+            logger.critical("Top-level async server error: %s", e, exc_info=True)
+
 
 def main() -> None:
     """Main entry point."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Tracer MCP Server")
+    parser.add_argument("--async", action="store_true", help="Run in async mode")
+    args = parser.parse_args()
+
     server = TracerMCPServer()
-    server.run()
+
+    if getattr(args, "async", False):
+        asyncio.run(server.run_async())
+    else:
+        server.run()
 
 
 if __name__ == "__main__":

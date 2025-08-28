@@ -5,12 +5,8 @@ Chrome DevTools Protocol DOM Inspector
 
 Dependencies:
 - aiohttp: pip install aiohttp
-- pyautogui: pip install pyautogui (for mouse position capture)
-- pynput: pip install pynput (for hotkey listening)
-- pygetwindow: pip install pygetwindow (for Windows window detection)
 
-Optional dependencies for enhanced DPI support:
-- pyobjc-framework-Cocoa: pip install pyobjc-framework-Cocoa (for macOS Retina detection)
+Element selection is handled via JavaScript injection for cross-platform compatibility.
 """
 
 import argparse
@@ -21,6 +17,333 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import aiohttp
+
+# JavaScript代码：鼠标元素检测器
+MOUSE_ELEMENT_DETECTOR_JS = """
+/**
+ * Chrome Context Tracer - Mouse Element Detector
+ * 纯JavaScript实现的鼠标元素检测器
+ * 通过控制台输出与Python端通信
+ */
+
+(function() {
+    'use strict';
+    
+    // 防止重复注入
+    if (window.chromeContextTracer) {
+        console.log('[CHROME_TRACER] Already initialized');
+        return;
+    }
+    
+    window.chromeContextTracer = {
+        version: '1.0.0',
+        isActive: false,
+        lastElement: null,
+        overlay: null
+    };
+    
+    const tracer = window.chromeContextTracer;
+    
+    /**
+     * 生成元素的唯一CSS选择器路径
+     */
+    function getElementPath(element) {
+        if (!element || element.nodeType !== Node.ELEMENT_NODE) {
+            return null;
+        }
+        
+        if (element.id) {
+            return '#' + element.id;
+        }
+        
+        if (element === document.body) {
+            return 'body';
+        }
+        
+        const path = [];
+        while (element && element.parentNode) {
+            if (element.id) {
+                path.unshift('#' + element.id);
+                break;
+            }
+            
+            let selector = element.tagName.toLowerCase();
+            const siblings = Array.from(element.parentNode.children);
+            const index = siblings.indexOf(element);
+            
+            if (index > 0) {
+                selector += ':nth-child(' + (index + 1) + ')';
+            }
+            
+            path.unshift(selector);
+            element = element.parentNode;
+        }
+        
+        return path.join(' > ');
+    }
+    
+    /**
+     * 获取元素的详细信息
+     */
+    function getElementInfo(element, mouseX, mouseY) {
+        if (!element) return null;
+        
+        const rect = element.getBoundingClientRect();
+        const computedStyle = window.getComputedStyle(element);
+        
+        return {
+            // 基本信息
+            tagName: element.tagName,
+            id: element.id || '',
+            className: element.className || '',
+            textContent: element.textContent ? element.textContent.substring(0, 100) : '',
+            
+            // 位置信息
+            mouse: {
+                x: mouseX,
+                y: mouseY
+            },
+            rect: {
+                left: Math.round(rect.left),
+                top: Math.round(rect.top),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height)
+            },
+            
+            // 选择器信息
+            path: getElementPath(element),
+            
+            // 样式信息
+            style: {
+                display: computedStyle.display,
+                position: computedStyle.position,
+                zIndex: computedStyle.zIndex,
+                backgroundColor: computedStyle.backgroundColor,
+                cursor: computedStyle.cursor
+            },
+            
+            // 属性信息
+            attributes: Array.from(element.attributes).reduce((acc, attr) => {
+                acc[attr.name] = attr.value;
+                return acc;
+            }, {}),
+            
+            // 时间戳
+            timestamp: Date.now()
+        };
+    }
+
+    /**
+     * 获取指定坐标处的元素信息
+     */
+    function getElementAtCoordinates(x, y) {
+        const element = document.elementFromPoint(x, y);
+        if (!element) {
+            return {
+                found: false,
+                message: `No element found at coordinates (${x}, ${y})`
+            };
+        }
+        
+        const elementInfo = getElementInfo(element, x, y);
+        return {
+            found: true,
+            element: elementInfo,
+            coordinates: { x, y }
+        };
+    }
+    
+    /**
+     * 创建高亮覆盖层
+     */
+    function createOverlay() {
+        if (tracer.overlay) return tracer.overlay;
+        
+        const overlay = document.createElement('div');
+        overlay.id = 'chrome-tracer-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            pointer-events: none;
+            z-index: 10000;
+            border: 2px solid #ff4444;
+            background-color: rgba(255, 68, 68, 0.1);
+            transition: all 0.1s ease;
+            display: none;
+        `;
+        
+        document.body.appendChild(overlay);
+        tracer.overlay = overlay;
+        return overlay;
+    }
+    
+    /**
+     * 更新覆盖层位置
+     */
+    function updateOverlay(element) {
+        if (!tracer.overlay || !element) return;
+        
+        const rect = element.getBoundingClientRect();
+        const overlay = tracer.overlay;
+        
+        overlay.style.left = rect.left + 'px';
+        overlay.style.top = rect.top + 'px';
+        overlay.style.width = rect.width + 'px';
+        overlay.style.height = rect.height + 'px';
+        overlay.style.display = 'block';
+    }
+    
+    /**
+     * 隐藏覆盖层
+     */
+    function hideOverlay() {
+        if (tracer.overlay) {
+            tracer.overlay.style.display = 'none';
+        }
+    }
+    
+    /**
+     * 鼠标移动事件处理器
+     */
+    function handleMouseMove(event) {
+        if (!tracer.isActive) return;
+        
+        const element = event.target;
+        if (element === tracer.lastElement) return;
+        
+        tracer.lastElement = element;
+        updateOverlay(element);
+        
+        // 输出元素信息到控制台
+        const elementInfo = getElementInfo(element, event.clientX, event.clientY);
+        console.log('[CHROME_TRACER_HOVER]', JSON.stringify(elementInfo));
+    }
+    
+    /**
+     * 鼠标点击事件处理器
+     */
+    function handleMouseClick(event) {
+        if (!tracer.isActive) return;
+        
+        // 阻止默认行为
+        event.preventDefault();
+        event.stopPropagation();
+        
+        const element = event.target;
+        const elementInfo = getElementInfo(element, event.clientX, event.clientY);
+        
+        // 输出选中的元素信息
+        console.log('[CHROME_TRACER_SELECTED]', JSON.stringify(elementInfo));
+        
+        // 停止检测模式
+        tracer.stop();
+        
+        return false;
+    }
+    
+    /**
+     * 键盘事件处理器
+     */
+    function handleKeyDown(event) {
+        if (!tracer.isActive) return;
+        
+        // ESC键退出检测模式
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            console.log('[CHROME_TRACER_CANCELLED]', JSON.stringify({
+                action: 'cancelled',
+                timestamp: Date.now()
+            }));
+            
+            tracer.stop();
+        }
+    }
+    
+    /**
+     * 启动元素检测模式
+     */
+    tracer.start = function() {
+        if (tracer.isActive) {
+            console.log('[CHROME_TRACER] Already active');
+            return;
+        }
+        
+        tracer.isActive = true;
+        tracer.lastElement = null;
+        
+        // 创建覆盖层
+        createOverlay();
+        
+        // 添加事件监听器
+        document.addEventListener('mousemove', handleMouseMove, true);
+        document.addEventListener('click', handleMouseClick, true);
+        document.addEventListener('keydown', handleKeyDown, true);
+        
+        // 改变鼠标样式
+        document.body.style.cursor = 'crosshair';
+        
+        console.log('[CHROME_TRACER_STARTED]', JSON.stringify({
+            action: 'started',
+            timestamp: Date.now(),
+            message: 'Element selection mode activated. Click to select, ESC to cancel.'
+        }));
+    };
+    
+    /**
+     * 停止元素检测模式
+     */
+    tracer.stop = function() {
+        if (!tracer.isActive) {
+            return;
+        }
+        
+        tracer.isActive = false;
+        tracer.lastElement = null;
+        
+        // 移除事件监听器
+        document.removeEventListener('mousemove', handleMouseMove, true);
+        document.removeEventListener('click', handleMouseClick, true);
+        document.removeEventListener('keydown', handleKeyDown, true);
+        
+        // 恢复鼠标样式
+        document.body.style.cursor = '';
+        
+        // 隐藏覆盖层
+        hideOverlay();
+        
+        console.log('[CHROME_TRACER_STOPPED]', JSON.stringify({
+            action: 'stopped',
+            timestamp: Date.now()
+        }));
+    };
+    
+    /**
+     * 获取当前状态
+     */
+    tracer.getStatus = function() {
+        return {
+            isActive: tracer.isActive,
+            version: tracer.version,
+            lastElement: tracer.lastElement ? getElementPath(tracer.lastElement) : null
+        };
+    };
+    
+    // 暴露全局控制方法
+    window.startElementSelection = tracer.start;
+    window.stopElementSelection = tracer.stop;
+    window.getTracerStatus = tracer.getStatus;
+    window.getElementAtCoordinates = getElementAtCoordinates;
+    
+    console.log('[CHROME_TRACER] Initialized successfully');
+    console.log('[CHROME_TRACER] Available commands:');
+    console.log('[CHROME_TRACER]   - startElementSelection(): Start element detection');
+    console.log('[CHROME_TRACER]   - stopElementSelection(): Stop element detection');
+    console.log('[CHROME_TRACER]   - getTracerStatus(): Get current status');
+    console.log('[CHROME_TRACER]   - getElementAtCoordinates(x, y): Get element at specific coordinates');
+    
+})();
+"""
 
 
 class DOMInspector:
@@ -36,6 +359,8 @@ class DOMInspector:
         self.max_connection_errors = 5  # 最大连接错误次数
         self.console_listening = False  # 控制台监听状态
         self.console_message_handler = None  # 控制台消息处理回调
+        self.element_selection_result = None  # 元素选择结果
+        self.original_console_handler = None  # 保存原始的控制台处理器
 
     async def connect(self):
         """连接到Chrome DevTools Protocol WebSocket"""
@@ -352,6 +677,89 @@ class DOMInspector:
             print(f"获取元素屏幕坐标失败: {e}")
             return None
 
+    async def get_element_at_screen_coords(self, screen_x: int, screen_y: int) -> Optional[int]:
+        """使用JavaScript方法获取屏幕坐标处的元素
+
+        通过注入JavaScript代码，直接使用document.elementFromPoint和坐标转换
+        避免了复杂的屏幕坐标到viewport坐标的转换
+        """
+        try:
+            # 首先注入JavaScript代码
+            js_file_path = "/Users/richard/code/terminal-llm/chrome-context-tracer/mouse_element_detector.js"
+            try:
+                with open(js_file_path, "r", encoding="utf-8") as f:
+                    js_code = f.read()
+                print(f"✅ 从文件加载JavaScript代码: {js_file_path}")
+            except Exception as e:
+                print(f"❌ 无法读取JavaScript文件: {e}")
+                return None
+
+            if not await self.inject_javascript_file(js_code):
+                print("❌ JavaScript注入失败")
+                return None
+
+            # 使用JavaScript函数获取元素信息（处理屏幕坐标）
+            js_get_element = f"""
+            (function() {{
+                const result = window.getElementAtScreenCoordinates({screen_x}, {screen_y});
+                if (result && result.found) {{
+                    return {{
+                        found: true,
+                        element: result.element,
+                        screenCoordinates: result.screenCoordinates,
+                        viewportCoordinates: result.viewportCoordinates
+                    }};
+                }} else {{
+                    return {{
+                        found: false,
+                        message: result ? result.message : 'Unknown error',
+                        viewportCoordinates: result ? result.viewportCoordinates : null
+                    }};
+                }}
+            }})()
+            """
+
+            response = await self.send_command(
+                "Runtime.evaluate", {"expression": js_get_element, "returnByValue": True, "awaitPromise": True}
+            )
+
+            # 检查响应
+            if "result" in response:
+                result = response["result"]
+                if "exceptionDetails" in result:
+                    exception = result["exceptionDetails"]["exception"]
+                    error_msg = exception.get("description", "Unknown JavaScript error")
+                    print(f"❌ JavaScript执行失败: {error_msg}")
+                    return None
+
+                if "value" in result:
+                    element_data = result["value"]
+                    if element_data and element_data.get("found"):
+                        element_info = element_data["element"]
+                        print(
+                            f"✅ 找到元素: {element_info.get('tagName', 'Unknown')} - {element_info.get('path', 'No path')}"
+                        )
+
+                        # 使用选择器获取节点ID
+                        element_path = element_info.get("path")
+                        if element_path:
+                            node_id = await self.get_node_by_selector(element_path)
+                            if node_id:
+                                return node_id
+
+                        # 如果选择器方法失败，使用坐标方法
+                        return await self.get_node_for_location(screen_x, screen_y)
+                    else:
+                        print(f"❌ 未找到元素: {element_data.get('message', 'Unknown reason')}")
+                        return None
+
+            print("❌ 获取元素信息失败: 无效响应")
+            return None
+
+        except Exception as e:
+            print(f"❌ 获取屏幕坐标元素失败: {e}")
+            return None
+
     async def get_node_for_location(self, x: int, y: int) -> Optional[int]:
         """根据坐标获取DOM节点ID"""
         try:
@@ -536,202 +944,29 @@ class DOMInspector:
             return True
 
     async def wait_for_pointer_selection(self) -> Optional[int]:
-        """等待用户通过鼠标指针选择元素"""
-        try:
-            import asyncio
-            from queue import Empty, Queue
+        """等待用户通过鼠标指针选择元素（使用JavaScript元素选择模式）"""
+        print("\n🎯 鼠标选择模式已启用")
+        print("请将鼠标移动到目标元素上，然后点击选择")
+        print("按ESC键取消选择模式\n")
 
-            import pyautogui
-            from pynput import keyboard
+        # 直接使用JavaScript元素选择模式
+        element_info = await self.start_element_selection_mode()
+        if element_info and element_info != "cancelled":
+            print(f"✅ 选择的元素: {element_info.get('tagName', 'Unknown')}")
+            print(f"   ID: {element_info.get('id', 'None')}")
+            print(f"   类: {element_info.get('className', 'None')}")
+            # 通过元素路径获取实际nodeId
+            element_path = element_info.get("path")
+            if element_path:
+                node_id = await self.get_node_by_selector(element_path)
+                if node_id:
+                    return node_id
+        elif element_info == "cancelled":
+            print("退出选择模式")
+        else:
+            print("未选择有效元素")
 
-            print("\n🎯 鼠标选择模式已启用")
-            print("请将鼠标移动到目标元素上，然后按 'm' 键选择")
-            print("按 'q' 键退出选择模式\n")
-
-            # 使用标准线程安全队列来同步键盘监听线程和主asyncio循环
-            key_queue: Queue[str] = Queue()
-
-            def on_key_press(key: Any) -> None:
-                """pynput的回调函数，运行在单独的线程中"""
-                try:
-                    if hasattr(key, "char") and key.char in ["m", "q"]:
-                        # 这是线程安全的
-                        key_queue.put_nowait(key.char)
-                except AttributeError:
-                    # 忽略非字符键
-                    pass
-
-            # 启动键盘监听器
-            listener = keyboard.Listener(on_press=on_key_press)
-            listener.start()
-
-            try:
-                while True:
-                    try:
-                        # 以非阻塞方式从队列中获取按键
-                        selected_key = key_queue.get_nowait()
-                    except Empty:
-                        # 队列为空时，短暂休眠以让出CPU，避免100%占用
-                        await asyncio.sleep(0.05)
-                        continue
-
-                    if selected_key == "m":
-                        # 获取当前鼠标位置
-                        mouse_x, mouse_y = pyautogui.position()
-                        print(f"鼠标位置: ({mouse_x}, {mouse_y})")
-
-                        # 直接使用屏幕坐标获取元素（简化方法）
-                        node_id = await self.get_element_at_screen_coords(mouse_x, mouse_y)
-                        if node_id:
-                            return node_id
-
-                        print("未找到有效元素，请重新选择")
-
-                    elif selected_key == "q":
-                        print("退出选择模式")
-                        return None
-            finally:
-                listener.stop()
-
-        except ImportError as e:
-            print(f"缺少必要的依赖库: {e}")
-            print("请安装: pip install pyautogui pynput")
-            return None
-        except Exception as e:
-            print(f"鼠标选择模式错误: {e}")
-            return None
-
-    async def get_element_at_screen_coords(self, screen_x: int, screen_y: int) -> Optional[int]:
-        """直接根据屏幕坐标获取DOM元素，无需复杂的窗口检测"""
-        try:
-            # 执行JavaScript来查找屏幕坐标处的元素（考虑High DPI）
-            js_code = f"""
-            (function() {{
-                // 计算viewport坐标：屏幕坐标 - 窗口在屏幕上的偏移
-                // 考虑devicePixelRatio来处理High DPI显示
-                const devicePixelRatio = window.devicePixelRatio || 1;
-                const viewportX = Math.round(({screen_x} - window.screenX));
-                const viewportY = Math.round(({screen_y} - window.screenY - 80));
-                console.log({screen_x}, {screen_y}, window.screenX, window.screenY, viewportX, viewportY);
-                
-                // 使用document.elementFromPoint获取元素
-                const element = document.elementFromPoint(viewportX, viewportY);
-                if (!element) {{
-                    console.log("not found");
-                    return {{ found: false }};
-                }}
-                
-                // 尝试获取nodeId（如果支持的话）
-                let nodeId = null;
-                if (window.devtools && window.devtools.inspectedWindow) {{
-                    // 在DevTools context中
-                    try {{
-                        nodeId = window.devtools.inspectedWindow.eval('$0', function(result, isException) {{
-                            return isException ? null : result;
-                        }});
-                    }} catch (e) {{
-                        // DevTools API不可用
-                    }}
-                }}
-                
-                // 返回元素信息
-                const rect = element.getBoundingClientRect();
-                return {{
-                    found: true,
-                    tagName: element.tagName,
-                    id: element.id || '',
-                    className: element.className || '',
-                    viewportX: viewportX,
-                    viewportY: viewportY,
-                    devicePixelRatio: devicePixelRatio,
-                    nodeId: nodeId,
-                    elementRect: {{
-                        left: rect.left,
-                        top: rect.top,
-                        width: rect.width,
-                        height: rect.height
-                    }},
-                    // 添加元素的唯一标识符
-                    elementPath: (function() {{
-                        const getPath = (el) => {{
-                            if (el.id) return '#' + el.id;
-                            if (el === document.body) return 'body';
-                            
-                            let path = [];
-                            while (el.parentNode) {{
-                                if (el.id) {{
-                                    path.unshift('#' + el.id);
-                                    break;
-                                }}
-                                let siblings = Array.from(el.parentNode.children);
-                                let index = siblings.indexOf(el);
-                                path.unshift(el.tagName.toLowerCase() + ':nth-child(' + (index + 1) + ')');
-                                el = el.parentNode;
-                            }}
-                            return path.join(' > ');
-                        }};
-                        return getPath(element);
-                    }})()
-                }};
-            }})()
-            """
-            print(js_code)
-            response = await self.send_command(
-                "Runtime.evaluate",
-                {"expression": js_code, "returnByValue": True, "awaitPromise": True},  # awaitPromise for safety
-            )
-
-            # 检查是否有JS执行异常
-            exception_details = response.get("result", {}).get("exceptionDetails")
-            if exception_details:
-                error_message = exception_details.get("exception", {}).get("description", "Unknown JavaScript error")
-                print(f"JavaScript execution failed: {error_message}")
-                # 打印更详细的堆栈信息（如果可用）
-                if "stackTrace" in exception_details:
-                    print("Stack trace:")
-                    for frame in exception_details["stackTrace"].get("callFrames", []):
-                        function_name = frame.get("functionName", "anonymous")
-                        url = frame.get("url", "inline")
-                        line = frame.get("lineNumber", 0) + 1
-                        col = frame.get("columnNumber", 0) + 1
-                        print(f"  at {function_name} ({url}:{line}:{col})")
-                return None
-
-            result = response.get("result", {}).get("result", {})
-            if result.get("type") == "object" and "value" in result:
-                element_info = result["value"]
-                if element_info and element_info.get("found"):
-                    print(
-                        f"找到元素: {element_info['tagName']} (id: {element_info['id']}, class: {element_info['className']})"
-                    )
-                    print(f"Viewport坐标: ({element_info['viewportX']}, {element_info['viewportY']})")
-                    print(f"元素路径: {element_info.get('elementPath', 'Unknown')}")
-
-                    # 如果JavaScript中获取到了nodeId，直接使用
-                    if element_info.get("nodeId"):
-                        print(f"从JavaScript获取到nodeId: {element_info['nodeId']}")
-                        return element_info["nodeId"]
-
-                    # 否则尝试通过元素路径查找
-                    element_path = element_info.get("elementPath")
-                    if element_path:
-                        print(f"尝试通过元素路径查找: {element_path}")
-                        node_id = await self.get_node_by_selector(element_path)
-                        if node_id:
-                            return node_id
-
-                    # 最后尝试使用坐标方法
-                    print("尝试使用坐标方法查找节点...")
-                    viewport_x = round(element_info["viewportX"])
-                    viewport_y = round(element_info["viewportY"])
-                    return await self.get_node_for_location(viewport_x, viewport_y)
-
-            print(f"在屏幕坐标 ({screen_x}, {screen_y}) 处未找到元素")
-            return None
-
-        except Exception as e:
-            print(f"根据屏幕坐标获取元素失败: {e}")
-            return None
+        return None
 
     async def get_node_by_selector(self, selector: str) -> Optional[int]:
         """通过CSS选择器获取DOM节点ID"""
@@ -758,711 +993,6 @@ class DOMInspector:
         except Exception as e:
             print(f"通过选择器查找元素失败: {e}")
             return None
-
-    async def convert_screen_to_browser_coords(
-        self, screen_x: int, screen_y: int
-    ) -> Tuple[Optional[int], Optional[int]]:
-        """将屏幕坐标转换为浏览器坐标（考虑DPI缩放和多屏幕支持）"""
-        try:
-            import pyautogui
-
-            # 检测浏览器窗口
-            chrome_window = self.find_chrome_window()
-            if not chrome_window:
-                print("警告：未找到浏览器窗口（Chrome/Edge），使用屏幕坐标")
-                # 即使没有窗口信息，也要考虑DPI缩放
-                scale_factor = self.get_display_scale_factor()
-                return int(screen_x / scale_factor), int(screen_y / scale_factor)
-
-            window_x, window_y, window_width, window_height = chrome_window
-
-            # 获取显示器缩放因子
-            scale_factor = self.get_display_scale_factor()
-            print(f"DPI缩放因子: {scale_factor}")
-
-            # 关键修复：窗口坐标已经是逻辑坐标，不需要再次除以缩放因子
-            # 屏幕坐标是物理像素，窗口坐标是逻辑坐标
-
-            # 多屏幕支持：检查鼠标是否在浏览器窗口内（考虑多屏幕坐标空间）
-            # 注意：pyautogui返回的屏幕坐标是物理像素，需要先转换为逻辑像素再比较
-            logical_screen_x = screen_x / scale_factor
-            logical_screen_y = screen_y / scale_factor
-
-            window_right = window_x + window_width
-            window_bottom = window_y + window_height
-
-            # 打印调试信息以帮助诊断多屏幕问题
-            print(f"窗口逻辑位置: ({window_x}, {window_y}) - ({window_right}, {window_bottom})")
-            print(f"鼠标物理位置: ({screen_x}, {screen_y})")
-            print(f"鼠标逻辑位置: ({logical_screen_x:.2f}, {logical_screen_y:.2f})")
-
-            # 检查鼠标是否在浏览器窗口内 (使用逻辑像素进行比较)
-            if not (window_x <= logical_screen_x <= window_right and window_y <= logical_screen_y <= window_bottom):
-                print(f"警告：鼠标位置 ({screen_x}, {screen_y}) 不在浏览器窗口内")
-                print(f"      窗口范围: ({window_x}, {window_y}) - ({window_right}, {window_bottom})")
-
-                # 多屏幕处理：尝试检测是否在不同屏幕上
-                # 如果鼠标和窗口不在同一屏幕，可能需要特殊的坐标转换
-                if self._is_macos():
-                    # 在macOS上，尝试获取所有屏幕信息来正确处理多屏幕
-                    screen_info = self._get_macos_global_screen_info()
-                    if screen_info:
-                        print(f"检测到 {len(screen_info)} 个屏幕")
-                        for i, screen in enumerate(screen_info):
-                            left, top, width, height = screen["frame"]
-                            print(f"屏幕 {i}: 位置 ({left}, {top}, {width}, {height})")
-
-                        # 尝试确定浏览器窗口在哪个屏幕上
-                        window_screen_index = None
-                        for i, screen in enumerate(screen_info):
-                            s_left, s_top, s_width, s_height = screen["frame"]
-                            s_right = s_left + s_width
-                            s_bottom = s_top + s_height
-
-                            # 检查窗口是否在这个屏幕上
-                            if s_left <= window_x <= s_right and s_top <= window_y <= s_bottom:
-                                window_screen_index = i
-                                print(f"浏览器窗口在屏幕 {i} 上")
-                                break
-
-                        # 尝试确定鼠标在哪个屏幕上
-                        mouse_screen_index = None
-                        for i, screen in enumerate(screen_info):
-                            s_left, s_top, s_width, s_height = screen["frame"]
-                            s_right = s_left + s_width
-                            s_bottom = s_top + s_height
-
-                            # 检查鼠标是否在这个屏幕上 (使用逻辑坐标)
-                            if s_left <= logical_screen_x <= s_right and s_top <= logical_screen_y <= s_bottom:
-                                mouse_screen_index = i
-                                print(f"鼠标在屏幕 {i} 上")
-                                break
-
-                        # 如果窗口和鼠标在不同屏幕上，提供提示
-                        if window_screen_index is not None and mouse_screen_index is not None:
-                            if window_screen_index != mouse_screen_index:
-                                print(
-                                    f"⚠️  警告：浏览器窗口在屏幕 {window_screen_index}，但鼠标在屏幕 {mouse_screen_index}"
-                                )
-                                print(f"💡 请将鼠标移动到包含浏览器窗口的屏幕上")
-
-                return None, None
-
-            # 转换为相对于浏览器窗口的坐标
-            # 考虑浏览器UI的偏移（地址栏、工具栏等）
-            browser_ui_offset_y = self._get_fallback_ui_offset()
-            print(f"信息：使用备用UI偏移: {browser_ui_offset_y}px")
-
-            # 现在所有单位都是逻辑像素 (CSS像素)
-            relative_x = int(logical_screen_x - window_x)
-            relative_y = int(logical_screen_y - window_y - browser_ui_offset_y)
-
-            # 确保坐标在视口范围内。如果计算出的坐标为负，
-            # 说明点击位置在浏览器UI栏中（视口上方或左方）。
-            # 在这种情况下，我们将坐标修正为0，以查询视口边缘的元素。
-            if relative_x < 0:
-                print(f"信息：相对X坐标 ({relative_x}) 为负，修正为 0。")
-                relative_x = 0
-            if relative_y < 0:
-                print(f"信息：相对Y坐标 ({relative_y}) 为负，修正为 0 (可能点击了浏览器UI栏)。")
-                relative_y = 0
-
-            print(f"坐标转换 (物理->逻辑): 屏幕({screen_x}, {screen_y}) -> 浏览器视口({relative_x}, {relative_y})")
-            return relative_x, relative_y
-
-        except Exception as e:
-            print(f"坐标转换错误: {e}")
-            # fallback: 考虑DPI缩放的屏幕坐标
-            try:
-                scale_factor = self.get_display_scale_factor()
-                return int(screen_x / scale_factor), int(screen_y / scale_factor)
-            except:
-                return screen_x, screen_y
-
-    def find_chrome_window(self) -> Optional[Tuple[int, int, int, int]]:
-        """查找浏览器窗口的位置和大小（支持Chrome和Edge）"""
-        try:
-            import platform
-
-            import pyautogui
-
-            system = platform.system()
-
-            if system == "Darwin":  # macOS
-                return self._find_browser_window_macos()
-            elif system == "Windows":
-                return self._find_browser_window_windows()
-            elif system == "Linux":
-                return self._find_browser_window_linux()
-            else:
-                print(f"不支持的操作系统: {system}")
-                return None
-
-        except Exception as e:
-            print(f"查找浏览器窗口错误: {e}")
-            return None
-
-    def _find_browser_window_macos(self) -> Optional[Tuple[int, int, int, int]]:
-        """在macOS上查找浏览器窗口（Chrome或Edge）使用Objective-C/Cocoa API"""
-        try:
-            import os
-            import subprocess
-            import tempfile
-
-            # 尝试查找浏览器
-            browsers = [("Google Chrome", "Chrome"), ("Microsoft Edge", "Edge")]
-
-            for process_name, display_name in browsers:
-                # 首先尝试AppleScript方法（不受sandbox限制）
-                applescript_result = self._get_window_info_via_applescript(process_name)
-                if applescript_result:
-                    print(f"✅ {display_name}窗口位置 (AppleScript): {applescript_result}")
-                    return applescript_result
-
-                # Objective-C代码使用Cocoa API - 改进版本，查找主浏览器窗口
-                objc_code = f'''
-#import <Cocoa/Cocoa.h>
-#import <ApplicationServices/ApplicationServices.h>
-
-int main() {{
-    @autoreleasepool {{
-        // 获取所有运行的应用
-        NSArray *runningApps = [[NSWorkspace sharedWorkspace] runningApplications];
-        
-        // 查找目标浏览器（精确匹配）
-        printf("Looking for browser: %s\\n", "{process_name}");
-        for (NSRunningApplication *app in runningApps) {{
-            NSString *appName = [app localizedName];
-            if ([appName isEqualToString:@"{process_name}"]) {{
-                // 找到浏览器应用
-                pid_t pid = [app processIdentifier];
-                
-                // 使用Accessibility API获取应用窗口
-                AXUIElementRef appElement = AXUIElementCreateApplication(pid);
-                
-                if (appElement) {{
-                    CFArrayRef windows;
-                    AXError result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute, (CFTypeRef *)&windows);
-                    
-                    printf("Accessibility API result: %d\\n", result);
-                    
-                    if (result == kAXErrorSuccess && windows) {{
-                        CFIndex windowCount = CFArrayGetCount(windows);
-                        printf("Number of windows: %ld\\n", windowCount);
-                        
-                        // 查找主浏览器窗口（最大、可见、非工具窗口）
-                        AXUIElementRef bestWindow = NULL;
-                        CGSize bestWindowSize = {{0, 0}};
-                        
-                        for (CFIndex i = 0; i < windowCount; i++) {{
-                            AXUIElementRef window = (AXUIElementRef)CFArrayGetValueAtIndex(windows, i);
-                            
-                            // 检查窗口是否可见
-                            CFTypeRef visibleRef;
-                            Boolean isVisible = false;
-                            if (AXUIElementCopyAttributeValue(window, CFSTR("AXVisible"), (CFTypeRef *)&visibleRef) == kAXErrorSuccess) {{
-                                isVisible = CFBooleanGetValue(visibleRef);
-                                CFRelease(visibleRef);
-                                printf("Window %ld visibility: %s\\n", i, isVisible ? "YES" : "NO");
-                            }}
-                            
-                            if (!isVisible) {{
-                                continue;  // 跳过不可见窗口
-                            }}
-                            
-                            // 检查窗口是否为主窗口
-                            CFTypeRef mainWindowRef;
-                            Boolean isMainWindow = false;
-                            if (AXUIElementCopyAttributeValue(window, CFSTR("AXMain"), (CFTypeRef *)&mainWindowRef) == kAXErrorSuccess) {{
-                                isMainWindow = CFBooleanGetValue(mainWindowRef);
-                                CFRelease(mainWindowRef);
-                                printf("Window %ld is main: %s\\n", i, isMainWindow ? "YES" : "NO");
-                            }}
-                            
-                            // 获取窗口大小
-                            CFTypeRef sizeRef;
-                            CGSize size = {{0, 0}};
-                            if (AXUIElementCopyAttributeValue(window, kAXSizeAttribute, &sizeRef) == kAXErrorSuccess) {{
-                                AXValueGetValue(sizeRef, kAXValueCGSizeType, &size);
-                                CFRelease(sizeRef);
-                                printf("Window %ld size: %.0fx%.0f\\n", i, size.width, size.height);
-                            }}
-                            
-                            // 窗口选择策略：优先选择主窗口，然后选择最大的可见窗口
-                            // 排除小窗口（如开发工具、扩展等）
-                            if (size.width > 400 && size.height > 300) {{  // 最小合理浏览器窗口大小
-                                printf("Window %ld meets size criteria\\n", i);
-                                if (isMainWindow) {{
-                                    // 找到主窗口，立即返回
-                                    bestWindow = window;
-                                    bestWindowSize = size;
-                                    printf("Selected window %ld as main window\\n", i);
-                                    break;
-                                }}
-                                
-                                // 选择最大的窗口
-                                if (size.width * size.height > bestWindowSize.width * bestWindowSize.height) {{
-                                    bestWindow = window;
-                                    bestWindowSize = size;
-                                    printf("Selected window %ld as largest window\\n", i);
-                                }}
-                            }} else {{
-                                printf("Window %ld rejected due to size (%.0fx%.0f)\\n", i, size.width, size.height);
-                            }}
-                        }}
-                        
-                        if (bestWindow) {{
-                            // 获取最佳窗口的位置
-                            CFTypeRef positionRef;
-                            CGPoint position = {{0, 0}};
-                            if (AXUIElementCopyAttributeValue(bestWindow, kAXPositionAttribute, &positionRef) == kAXErrorSuccess) {{
-                                AXValueGetValue(positionRef, kAXValueCGPointType, &position);
-                                CFRelease(positionRef);
-                            }}
-                            
-                            printf("SUCCESS:%d,%d,%d,%d\\n", 
-                                   (int)position.x, (int)position.y, 
-                                   (int)bestWindowSize.width, (int)bestWindowSize.height);
-                            
-                            CFRelease(windows);
-                            CFRelease(appElement);
-                            return 0;
-                        }}
-                        
-                        CFRelease(windows);
-                    }} else {{
-                        printf("Accessibility API failed or no windows (error: %d)\\n", result);
-                        if (result == kAXErrorAPIDisabled) {{
-                            printf("⚠️  Accessibility API disabled. Please enable in System Settings > Privacy & Security > Accessibility\\n");
-                        }}
-                    }}
-                    
-                    CFRelease(appElement);
-                }}
-                
-                printf("NO_WINDOWS\\n");
-                return 1;
-            }}
-        }}
-        
-        printf("NO_PROCESS\\n");
-        return 2;
-    }}
-    return 3;
-}}
-'''
-
-                # 编译并运行Objective-C代码
-                try:
-                    # 写入临时文件
-                    with tempfile.NamedTemporaryFile(suffix=".m", delete=False) as temp_file:
-                        temp_file.write(objc_code.encode("utf-8"))
-                        temp_path = temp_file.name
-
-                    # 编译
-                    compile_result = subprocess.run(
-                        [
-                            "clang",
-                            "-framework",
-                            "Cocoa",
-                            "-framework",
-                            "ApplicationServices",
-                            "-o",
-                            "/tmp/browser_detector",
-                            temp_path,
-                        ],
-                        capture_output=True,
-                        text=True,
-                    )
-
-                    print(f"Debug: Compilation return code: {compile_result.returncode}")
-                    if compile_result.stderr:
-                        print(f"Debug: Compilation stderr: {compile_result.stderr}")
-
-                    if compile_result.returncode != 0:
-                        continue
-
-                    # 运行
-                    result = subprocess.run(["/tmp/browser_detector"], capture_output=True, text=True, timeout=10)
-
-                    print(f"Debug: Objective-C return code: {result.returncode}")
-                    print(f"Debug: Objective-C stdout: {result.stdout}")
-                    print(f"Debug: Objective-C stderr: {result.stderr}")
-
-                    if result.returncode == 0 and result.stdout.strip():
-                        output = result.stdout.strip()
-                        if output.startswith("SUCCESS:"):
-                            coords = output.replace("SUCCESS:", "").split(",")
-                            if len(coords) == 4:
-                                x, y, width, height = map(int, coords)
-                                print(
-                                    f"✅ {display_name}窗口位置 (Accessibility API): ({x}, {y}), 大小: {width}x{height}"
-                                )
-                                return (x, y, width, height)
-
-                except Exception as e:
-                    print(f"Objective-C execution error: {e}")
-                    continue
-                finally:
-                    # 清理临时文件
-                    try:
-                        os.unlink(temp_path)
-                        os.unlink("/tmp/browser_detector")
-                    except:
-                        pass
-
-            print("⚠️  所有窗口检测方法都失败了，请检查Accessibility权限设置")
-            print("💡 请在系统设置 > 隐私与安全性 > 辅助功能中授予终端或Python访问权限")
-            return None
-
-        except Exception as e:
-            print(f"macOS 浏览器窗口检测错误: {e}")
-            return None
-
-    def _get_window_info_via_applescript(self, app_name: str) -> Optional[Tuple[int, int, int, int]]:
-        """使用AppleScript获取窗口信息（不受sandbox限制）"""
-        try:
-            import subprocess
-
-            # 方法1: 直接使用应用程序
-            applescript_code1 = f'''
-tell application "{app_name}"
-    set windowBounds to bounds of front window
-    return windowBounds
-end tell
-'''
-
-            # 方法2: 使用System Events作为回退
-            applescript_code2 = f'''
-tell application "System Events"
-    tell process "{app_name}"
-        set frontmost to true
-        set windowBounds to bounds of front window
-        return windowBounds
-    end tell
-end tell
-'''
-
-            # 首先尝试直接方法
-            result = subprocess.run(["osascript", "-e", applescript_code1], capture_output=True, text=True, timeout=10)
-
-            # 如果直接方法失败，尝试System Events方法
-            if result.returncode != 0 or not result.stdout.strip():
-                result = subprocess.run(
-                    ["osascript", "-e", applescript_code2], capture_output=True, text=True, timeout=10
-                )
-
-            if result.returncode == 0 and result.stdout.strip():
-                # 解析AppleScript输出格式: "左, 上, 右, 下"
-                bounds = result.stdout.strip().split(", ")
-                if len(bounds) == 4:
-                    left, top, right, bottom = map(int, bounds)
-                    width = right - left
-                    height = bottom - top
-                    return (left, top, width, height)
-
-            return None
-
-        except Exception as e:
-            print(f"AppleScript窗口检测错误: {e}")
-            return None
-
-    def _find_browser_window_windows(self) -> Optional[Tuple[int, int, int, int]]:
-        """在Windows上查找浏览器窗口（Chrome或Edge）"""
-        try:
-            import pygetwindow as gw
-
-            # 按优先级查找浏览器窗口
-            browser_searches = [
-                # Chrome
-                ["Chrome", "Google Chrome"],
-                # Edge
-                ["Microsoft Edge", "Edge", "Microsoft​ Edge"],
-            ]
-
-            for search_terms in browser_searches:
-                for term in search_terms:
-                    try:
-                        windows = gw.getWindowsWithTitle(term)
-                        if windows:
-                            # 选择第一个可见的窗口
-                            window = windows[0]
-                            if window.isMinimized:
-                                window.restore()
-
-                            browser_name = "Chrome" if "Chrome" in term else "Edge"
-                            print(
-                                f"{browser_name}窗口位置: ({window.left}, {window.top}), 大小: {window.width}x{window.height}"
-                            )
-                            return (window.left, window.top, window.width, window.height)
-                    except Exception:
-                        continue
-
-            return None
-
-        except ImportError:
-            print("警告：请安装 pygetwindow: pip install pygetwindow")
-            return None
-        except Exception as e:
-            print(f"Windows 浏览器窗口检测错误: {e}")
-            return None
-
-    def _find_browser_window_linux(self) -> Optional[Tuple[int, int, int, int]]:
-        """在Linux上查找浏览器窗口（Chrome或Edge）"""
-        try:
-            import subprocess
-
-            # 使用wmctrl查找浏览器窗口
-            result = subprocess.run(["wmctrl", "-lG"], capture_output=True, text=True)
-
-            if result.returncode == 0:
-                browser_keywords = [("Google Chrome", "chrome"), ("Microsoft Edge", "edge"), ("Chromium", "chromium")]
-
-                for line in result.stdout.split("\n"):
-                    line_lower = line.lower()
-                    for display_name, keyword in browser_keywords:
-                        if keyword in line_lower or display_name.lower() in line_lower:
-                            parts = line.split()
-                            if len(parts) >= 6:
-                                x, y, width, height = map(int, parts[2:6])
-                                browser_name = display_name.split()[0] if " " in display_name else display_name
-                                print(f"{browser_name}窗口位置: ({x}, {y}), 大小: {width}x{height}")
-                                return (x, y, width, height)
-
-            return None
-
-        except Exception as e:
-            print(f"Linux 浏览器窗口检测错误: {e}")
-            print("请安装 wmctrl: sudo apt-get install wmctrl")
-            return None
-
-    def get_display_scale_factor(self) -> float:
-        """获取显示器DPI缩放因子"""
-        try:
-            import platform
-
-            system = platform.system()
-
-            if system == "Darwin":  # macOS
-                return self._get_scale_factor_macos()
-            elif system == "Windows":
-                return self._get_scale_factor_windows()
-            elif system == "Linux":
-                return self._get_scale_factor_linux()
-            else:
-                print(f"未知操作系统，使用默认缩放因子 1.0")
-                return 1.0
-
-        except Exception as e:
-            print(f"获取DPI缩放因子错误: {e}，使用默认值 1.0")
-            return 1.0
-
-    def _get_scale_factor_macos(self) -> float:
-        """获取macOS的显示器缩放因子"""
-        try:
-            import subprocess
-
-            # 使用system_profiler获取显示器信息
-            result = subprocess.run(["system_profiler", "SPDisplaysDataType"], capture_output=True, text=True)
-
-            if result.returncode == 0:
-                # 查找缩放因子信息
-                for line in result.stdout.split("\n"):
-                    if "UI Looks like" in line or "Retina" in line:
-                        # Retina显示器通常是2x缩放
-                        return 2.0
-
-            # 如果没有检测到Retina，尝试使用Cocoa API
-            try:
-                import Cocoa
-
-                screen = Cocoa.NSScreen.mainScreen()
-                if screen:
-                    scale = screen.backingScaleFactor()
-                    return float(scale)
-            except ImportError:
-                pass
-
-            return 1.0
-
-        except Exception as e:
-            print(f"macOS DPI检测错误: {e}")
-            return 2.0 if "retina" in str(e).lower() else 1.0
-
-    def _get_scale_factor_windows(self) -> float:
-        """获取Windows的显示器缩放因子"""
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            # 使用Windows API获取DPI
-            user32 = ctypes.windll.user32
-            user32.SetProcessDPIAware()
-
-            # 获取主显示器的DPI
-            hdc = user32.GetDC(0)
-            dpi_x = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
-            user32.ReleaseDC(0, hdc)
-
-            # 标准DPI是96，计算缩放因子
-            scale_factor = dpi_x / 96.0
-
-            # 常见的缩放因子值：1.0, 1.25, 1.5, 2.0
-            if scale_factor <= 1.125:
-                return 1.0
-            elif scale_factor <= 1.375:
-                return 1.25
-            elif scale_factor <= 1.75:
-                return 1.5
-            elif scale_factor <= 2.25:
-                return 2.0
-            else:
-                return scale_factor
-
-        except Exception as e:
-            print(f"Windows DPI检测错误: {e}")
-            return 1.0
-
-    def _get_scale_factor_linux(self) -> float:
-        """获取Linux的显示器缩放因子"""
-        try:
-            import os
-            import subprocess
-
-            # 尝试从环境变量获取
-            gdk_scale = os.environ.get("GDK_SCALE")
-            if gdk_scale:
-                return float(gdk_scale)
-
-            qt_scale = os.environ.get("QT_SCALE_FACTOR")
-            if qt_scale:
-                return float(qt_scale)
-
-            # 尝试使用xrandr获取显示器信息
-            result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True)
-
-            if result.returncode == 0:
-                for line in result.stdout.split("\n"):
-                    if " connected " in line and "primary" in line:
-                        # 解析分辨率信息
-                        import re
-
-                        match = re.search(r"(\d+)x(\d+)", line)
-                        if match:
-                            width = int(match.group(1))
-                            # 如果宽度超过3000，很可能是高DPI显示器
-                            if width >= 3000:
-                                return 2.0
-
-            # 尝试使用gsettings获取GNOME设置
-            try:
-                result = subprocess.run(
-                    ["gsettings", "get", "org.gnome.desktop.interface", "scaling-factor"],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode == 0:
-                    scale = result.stdout.strip()
-                    if scale != "uint32 0":
-                        return float(scale.split()[-1])
-            except:
-                pass
-
-            return 1.0
-
-        except Exception as e:
-            print(f"Linux DPI检测错误: {e}")
-            return 1.0
-
-    def _get_fallback_ui_offset(self) -> int:
-        """估算浏览器UI（地址栏、标签栏等）的垂直偏移量（单位：逻辑像素）。"""
-        # 这是一个启发式方法，作为校准失败时的备用方案。
-        # 现代浏览器的UI高度（逻辑像素）通常在75-100之间（取决于是否有书签栏）。
-        # 我们使用一个更现实、更保守的固定值。
-        return 90
-
-    def _is_macos(self) -> bool:
-        """检查当前系统是否为macOS"""
-        import platform
-
-        return platform.system() == "Darwin"
-
-    def _get_macos_screen_info(self) -> List[Dict]:
-        """获取macOS屏幕信息（多屏幕支持）"""
-        try:
-            import json
-            import subprocess
-
-            # 使用system_profiler获取屏幕信息
-            result = subprocess.run(
-                ["system_profiler", "SPDisplaysDataType", "-json"], capture_output=True, text=True, timeout=10
-            )
-
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                screens = []
-
-                # 解析屏幕信息
-                for item in data.get("SPDisplaysDataType", []):
-                    for display in item.get("spdisplays_ndrvs", []):
-                        screen_info = {
-                            "name": display.get("_name", ""),
-                            "resolution": display.get("spdisplays_pixels", ""),
-                            "scale": 2.0 if "Retina" in str(display) else 1.0,
-                        }
-                        screens.append(screen_info)
-
-                return screens
-
-        except Exception as e:
-            print(f"获取屏幕信息错误: {e}")
-
-        return []
-
-    def _get_macos_global_screen_info(self) -> List[Dict]:
-        """获取macOS全局屏幕信息（包括多屏幕坐标）"""
-        try:
-            import re
-            import subprocess
-
-            # 使用AppleScript获取所有屏幕的全局坐标信息
-            applescript = """
-tell application "System Events"
-    set screenFrames to {}
-    repeat with i from 1 to (count of desktops)
-        set desktopBounds to bounds of desktop i
-        copy desktopBounds to end of screenFrames
-    end repeat
-    return screenFrames
-end tell
-"""
-
-            result = subprocess.run(["osascript", "-e", applescript], capture_output=True, text=True, timeout=10)
-
-            if result.returncode == 0:
-                # 解析AppleScript输出格式: {{x1, y1, x2, y2}, {x1, y1, x2, y2}, ...}
-                output = result.stdout.strip()
-                screens = []
-
-                # 使用正则表达式解析屏幕坐标
-                pattern = r"\{(\d+), (\d+), (\d+), (\d+)\}"
-                matches = re.findall(pattern, output)
-
-                for i, match in enumerate(matches):
-                    left, top, right, bottom = map(int, match)
-                    width = right - left
-                    height = bottom - top
-
-                    screens.append(
-                        {"index": i, "frame": (left, top, width, height), "global_frame": (left, top, right, bottom)}
-                    )
-
-                return screens
-
-        except Exception as e:
-            print(f"获取全局屏幕信息错误: {e}")
-
-        return []
 
     async def get_script_source_info(self, script_id: str, line_number: int, column_number: int) -> Dict:
         """获取脚本源信息"""
@@ -1866,6 +1396,160 @@ end tell
                 return "注入的样式表"
 
         return ""
+
+    async def inject_javascript_file(self, file_path_or_code: str) -> bool:
+        """注入JavaScript代码到当前页面
+
+        Args:
+            file_path_or_code: JavaScript文件路径或直接的JavaScript代码字符串
+
+        Returns:
+            bool: 注入是否成功
+        """
+        try:
+            # 判断是文件路径还是代码字符串
+            if "\n" not in file_path_or_code and len(file_path_or_code) < 1000:
+                # 可能是文件路径，尝试读取
+                try:
+                    import os
+
+                    if os.path.isfile(file_path_or_code):
+                        with open(file_path_or_code, "r", encoding="utf-8") as f:
+                            js_code = f.read()
+                        print(f"✅ 从文件加载JavaScript代码: {file_path_or_code}")
+                    else:
+                        # 不是有效文件路径，当作代码字符串处理
+                        js_code = file_path_or_code
+                except Exception:
+                    # 读取文件失败，当作代码字符串处理
+                    js_code = file_path_or_code
+            else:
+                # 直接是代码字符串
+                js_code = file_path_or_code
+
+            # 使用Runtime.evaluate执行JavaScript代码
+            response = await self.send_command(
+                "Runtime.evaluate",
+                {"expression": js_code, "returnByValue": False, "awaitPromise": True, "userGesture": False},
+            )
+
+            # 检查是否有异常
+            if "result" in response:
+                result = response["result"]
+                if "exceptionDetails" in result:
+                    exception = result["exceptionDetails"]["exception"]
+                    error_msg = exception.get("description", "Unknown JavaScript error")
+                    print(f"❌ JavaScript注入失败: {error_msg}")
+                    return False
+                else:
+                    print("✅ JavaScript代码注入成功")
+                    return True
+            else:
+                print("❌ JavaScript注入失败: 无效响应")
+                return False
+
+        except Exception as e:
+            print(f"❌ JavaScript注入过程中发生错误: {e}")
+            return False
+
+    async def start_element_selection_mode(self) -> Optional[Dict]:
+        """启动元素选择模式，返回用户选择的元素信息
+
+        Returns:
+            Optional[Dict]: 选择的元素信息，如果取消或超时则返回None
+        """
+        # 首先注入JavaScript代码 - 读取外部文件内容
+        js_file_path = "/Users/richard/code/terminal-llm/chrome-context-tracer/mouse_element_detector.js"
+        try:
+            with open(js_file_path, "r", encoding="utf-8") as f:
+                js_code = f.read()
+            print(f"✅ 从文件加载JavaScript代码: {js_file_path}")
+        except Exception as e:
+            print(f"❌ 无法读取JavaScript文件: {e}")
+            return None
+
+        if not await self.inject_javascript_file(js_code):
+            print("❌ JavaScript注入失败，无法启动元素选择模式")
+            return None
+
+        # 存储元素选择结果
+        self.element_selection_result = None
+        self.original_console_handler = self.console_message_handler
+
+        # 设置临时控制台消息处理器
+        self.console_message_handler = self._handle_element_selection_console
+
+        try:
+            # 启动元素选择模式
+            await self.send_command(
+                "Runtime.evaluate", {"expression": "window.startElementSelection();", "returnByValue": False}
+            )
+
+            print("🎯 元素选择模式已启动")
+            print("   - 移动鼠标查看元素高亮")
+            print("   - 点击选择元素")
+            print("   - 按ESC键取消")
+
+            # 等待用户选择（最多30秒）
+            timeout = 30.0
+            start_time = time.time()
+
+            while time.time() - start_time < timeout:
+                if self.element_selection_result is not None:
+                    break
+                await asyncio.sleep(0.1)
+
+            if self.element_selection_result is None:
+                print("⏰ 元素选择超时")
+                # 停止选择模式
+                await self.send_command(
+                    "Runtime.evaluate", {"expression": "window.stopElementSelection();", "returnByValue": False}
+                )
+
+            return self.element_selection_result
+
+        except asyncio.CancelledError:
+            print("🚫 元素选择被取消")
+            return None
+        except Exception as e:
+            print(f"❌ 元素选择过程中发生错误: {e}")
+            return None
+        finally:
+            # 恢复原来的控制台消息处理器
+            self.console_message_handler = self.original_console_handler
+            self.element_selection_result = None
+
+    async def _handle_element_selection_console(self, console_data: Dict):
+        """处理元素选择过程中的控制台消息"""
+        try:
+            message_text = console_data.get("message", "")
+
+            if "[CHROME_TRACER_SELECTED]" in message_text:
+                # 提取JSON数据部分
+                json_start = message_text.find("{")
+                if json_start != -1:
+                    json_str = message_text[json_start:]
+                    try:
+                        element_data = json.loads(json_str)
+                        self.element_selection_result = element_data
+                        print(
+                            f"✅ 已选择元素: {element_data.get('tagName', 'Unknown')} - {element_data.get('path', 'No path')}"
+                        )
+                    except json.JSONDecodeError:
+                        print("❌ 解析选择的元素数据失败")
+
+            elif "[CHROME_TRACER_CANCELLED]" in message_text:
+                print("🚫 用户取消了元素选择")
+                self.element_selection_result = "cancelled"
+
+            elif "[CHROME_TRACER_STARTED]" in message_text:
+                print("🚀 元素选择模式已激活")
+
+            elif "[CHROME_TRACER_STOPPED]" in message_text:
+                print("🛑 元素选择模式已停止")
+
+        except Exception as e:
+            print(f"❌ 处理元素选择控制台消息时发生错误: {e}")
 
     async def close(self):
         """关闭连接"""
