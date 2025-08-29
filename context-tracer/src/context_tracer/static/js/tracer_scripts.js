@@ -1,16 +1,16 @@
 // Constants for event data array indices
-// const LINE_VARS_INDEX = 2;
+const LINE_VARS_INDEX = 2;
 
-// // Event type constants (should match container-reader.js)
-// const EventType = {
-//     CALL: 1,
-//     RETURN: 2,
-//     LINE: 3,
-//     EXCEPTION: 4,
-//     C_CALL: 5,
-//     C_RETURN: 6,
-//     C_RAISE: 7
-// };
+// Event type constants (should match container-reader.js)
+const EventType = {
+    CALL: 1,
+    RETURN: 2,
+    LINE: 3,
+    EXCEPTION: 4,
+    C_CALL: 5,
+    C_RETURN: 6,
+    C_RAISE: 7
+};
 
 // Search Database - Advanced search functionality for trace events
 class SearchDatabase {
@@ -1138,6 +1138,7 @@ const TraceViewer = {
             return '<div class="error">No events found in container</div>';
         }
         
+        this._nextEventId = 1; // Reset event ID counter for each new container load
         let htmlContent = '';
         const frameIndents = new Map(); // frame_id -> indent_level
         let processedCount = 0;
@@ -1442,11 +1443,14 @@ const TraceViewer = {
 
     // Initialize global variables from container data
     _initializeGlobalVariablesFromContainer(events, fileManager, sourceManager) {
-        // Initialize executed lines tracking
-        window.executedLines = window.executedLines || {};
-        
+        // Reset all global data stores to prevent data leakage from previous loads
+        window.executedLines = {};
+        window.sourceFiles = {};
+        window.commentsData = {};
+        window.lineComment = {};
+        window.eventMetadata = {};
+
         // Initialize source files from SourceManager
-        window.sourceFiles = window.sourceFiles || {};
         if (sourceManager) {
             const sourceFiles = sourceManager.getAllSourceFiles();
             for (const [filename, base64Content] of sourceFiles) {
@@ -1458,73 +1462,71 @@ const TraceViewer = {
                 }
             }
         }
-        
-        // Initialize comments data and line comment from events
-        window.commentsData = window.commentsData || {};
-        window.lineComment = window.lineComment || {};
-        
-        // Initialize event metadata
-        window.eventMetadata = window.eventMetadata || {};
-        
+
         // Process events to populate metadata, executed lines, and comments data
         events.forEach((event, index) => {
             const eventId = index + 1; // Generate sequential event IDs
             const filename = fileManager.getPath(event.file_id);
-            
+
             if (filename) {
-                // Track executed lines - Python uses arrays, not Sets
-                if (!window.executedLines[filename]) {
-                    window.executedLines[filename] = {};
-                }
-                if (!window.executedLines[filename][event.frame_id]) {
-                    window.executedLines[filename][event.frame_id] = [];
-                }
+                // Populate executedLines
+                if (!window.executedLines[filename]) window.executedLines[filename] = {};
+                if (!window.executedLines[filename][event.frame_id]) window.executedLines[filename][event.frame_id] = [];
                 if (!window.executedLines[filename][event.frame_id].includes(event.lineno)) {
                     window.executedLines[filename][event.frame_id].push(event.lineno);
                 }
-                
-                // Create event metadata
-                window.eventMetadata[eventId] = {
+
+                // Base metadata object
+                const metadata = {
                     type: this._getEventTypeName(event.event_type),
                     filename: filename,
                     lineno: event.lineno,
                     frame_id: event.frame_id,
                     thread_id: event.thread_id,
-                    timestamp: event.timestamp
+                    timestamp: event.timestamp,
+                    args: '',
+                    return_value: '',
+                    func: '',
+                    tracked_vars: {}
                 };
-                
-                // Process LINE events for comments data and line comment
-                if (event.event_type === EventType.LINE && Array.isArray(event.data)) {
-                    const trackedVars = event.data[LINE_VARS_INDEX];
-                    if (trackedVars && Array.isArray(trackedVars) && trackedVars.length > 0) {
-                        // Initialize comments data structure
-                        if (!window.commentsData[filename]) {
-                            window.commentsData[filename] = {};
-                        }
-                        if (!window.commentsData[filename][event.frame_id]) {
-                            window.commentsData[filename][event.frame_id] = [];
-                        }
+
+                // Event-specific metadata for search and other features
+                switch (event.event_type) {
+                    case EventType.CALL:
+                        metadata.func = event.data[0] || '';
+                        metadata.args = event.data[1] || '';
+                        break;
+                    case EventType.RETURN:
+                        metadata.func = event.data[0] || '';
+                        metadata.return_value = event.data[1] || '';
+                        break;
+                    case EventType.LINE:
+                        const trackedVarsList = event.data[LINE_VARS_INDEX] || [];
+                        const trackedVars = {};
+                        trackedVarsList.forEach(item => {
+                            if (Array.isArray(item) && item.length >= 2) {
+                                trackedVars[item[0]] = item[1];
+                            }
+                        });
+                        metadata.tracked_vars = trackedVars;
                         
-                        // Add comment for this line
-                        const commentText = `# Debug: ${trackedVars.join(', ')}`;
-                        window.commentsData[filename][event.frame_id].push(commentText);
-                        
-                        // Add to line comment mapping
-                        const lineKey = `${event.frame_id}-${filename}-${event.lineno}`;
-                        window.lineComment[lineKey] = trackedVars;
-                    }
+                        // Also populate lineComment for source view, which needs a similar object
+                        if (Object.keys(trackedVars).length > 0) {
+                            const lineKey = `${event.frame_id}-${filename}-${event.lineno}`;
+                            window.lineComment[lineKey] = trackedVars;
+                        }
+                        break;
+                    case EventType.EXCEPTION:
+                        metadata.func = event.data[0] || '';
+                        metadata.return_value = `${event.data[1] || 'Exception'}: ${event.data[2] || ''}`;
+                        break;
                 }
+                
+                window.eventMetadata[eventId] = metadata;
             }
         });
         
-        // Convert Sets to Arrays for JSON serialization
-        for (const filename in window.executedLines) {
-            for (const frameId in window.executedLines[filename]) {
-                window.executedLines[filename][frameId] = Array.from(window.executedLines[filename][frameId]);
-            }
-        }
-        
-        console.log('Global variables initialized from container data');
+        console.log('Global variables correctly re-initialized from container data');
     },
 
     // Helper method to get event type name
