@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Chrome DevTools Protocol DOM Inspector
-获取元素样式和事件监听器信息，格式与Chrome DevTools完全一致
+Chrome DevTools Protocol DOM Inspector & Debugger
+- Inspect: 获取元素样式和事件监听器信息，格式与Chrome DevTools完全一致
+- Trace: 监听JavaScript断点(debugger;)，并打印包含变量值的调用栈信息
 
 Dependencies:
 - aiohttp: pip install aiohttp
@@ -124,6 +125,112 @@ class DOMInspector:
             await self._handle_style_sheet_added(params)
         elif method == "Debugger.scriptParsed":
             await self._handle_script_parsed(params)
+        elif method == "Debugger.paused":
+            await self._handle_debugger_paused(params)
+
+    async def _handle_debugger_paused(self, params: Dict[str, Any]) -> None:
+        """处理 Debugger.paused 事件，打印调用栈和变量信息"""
+        print("\n" + "=" * 20 + " Paused on debugger statement " + "=" * 20)
+        reason = params.get("reason")
+        call_frames = params.get("callFrames", [])
+        print(f"Reason: {reason}\n")
+
+        # 打印简化的堆栈轨迹
+        print("--- Stack Trace ---")
+        for i, frame in enumerate(call_frames):
+            func_name = frame.get("functionName") or "(anonymous)"
+            location = frame.get("location", {})
+            script_id = location.get("scriptId")
+            line = location.get("lineNumber", 0) + 1
+            col = location.get("columnNumber", 0) + 1
+
+            script_info = self.script_cache.get(script_id, {})
+            filename = script_info.get("filename", f"scriptId:{script_id}")
+
+            print(f"  [{i}] {func_name} at {filename}:{line}:{col}")
+        print("")
+
+        # 详细处理每个调用帧
+        for i, frame in enumerate(call_frames):
+            await self._process_and_print_call_frame(frame, i)
+
+        print("=" * 66)
+        print("Resuming execution...")
+
+        # 处理完后恢复执行
+        try:
+            await self.send_command("Debugger.resume")
+        except Exception as e:
+            print(f"Error resuming debugger: {e}")
+
+    async def _get_variables_from_scope_chain(self, scope_chain: List[Dict[str, Any]]) -> Dict[str, str]:
+        """从作用域链中提取局部和闭包变量"""
+        variables: Dict[str, str] = {}
+        for scope in scope_chain:
+            # 我们只关心 local 和 closure 作用域，以避免全局变量污染
+            scope_type = scope.get("type")
+            if scope_type in ["local", "closure"]:
+                scope_object = scope.get("object", {})
+                object_id = scope_object.get("objectId")
+                if object_id:
+                    try:
+                        props_response = await self.send_command(
+                            "Runtime.getProperties", {"objectId": object_id, "ownProperties": True}
+                        )
+                        for prop in props_response.get("result", {}).get("result", []):
+                            name = prop.get("name")
+                            value_obj = prop.get("value", {})
+                            # 使用 description 字段来获得一个可读的表示
+                            description = value_obj.get("description", str(value_obj.get("value", "N/A")))
+                            if name:
+                                variables[name] = description
+                    except Exception as e:
+                        print(f"Warning: Could not get variables for scope {scope_type}: {e}")
+        return variables
+
+    async def _process_and_print_call_frame(self, frame: Dict[str, Any], frame_index: int) -> None:
+        """处理单个调用帧：获取源码、变量并格式化输出"""
+        func_name = frame.get("functionName") or "(anonymous)"
+        location = frame.get("location", {})
+        script_id = location.get("scriptId")
+        line_number = location.get("lineNumber", 0)
+        column_number = location.get("columnNumber", 0)
+
+        script_info = self.script_cache.get(script_id, {})
+        filename = script_info.get("filename", f"scriptId:{script_id}")
+
+        print(f"--- Frame {frame_index}: {func_name} ({filename}:{line_number + 1}:{column_number + 1}) ---")
+        print("Source Context:")
+
+        # 获取变量
+        variables = await self._get_variables_from_scope_chain(frame.get("scopeChain", []))
+        variables_str = ", ".join(f"{name}: {value}" for name, value in variables.items())
+
+        # 获取并打印源码
+        source_info = await self.get_script_source_info(script_id, line_number, column_number)
+        source_code = source_info.get("source")
+
+        if source_code:
+            lines = source_code.split("\n")
+            start = max(0, line_number - 2)
+            end = min(len(lines), line_number + 3)
+
+            for i in range(start, end):
+                prefix = "->" if i == line_number else "  "
+                line_content = lines[i]
+
+                # 在断点行附加变量信息
+                if i == line_number:
+                    # 找到一个好的位置插入注释，或者直接附加
+                    if len(line_content.strip()) > 0:
+                        line_content += f"    // {variables_str}"
+                    else:
+                        line_content += f"// {variables_str}"
+
+                print(f" {prefix} {i + 1: >4} | {line_content}")
+        else:
+            print("  [Source code not available]")
+        print("")
 
     async def _handle_style_sheet_added(self, params: Dict[str, Any]) -> None:
         """处理 CSS.styleSheetAdded 事件，缓存样式表头部信息"""
@@ -1512,16 +1619,14 @@ async def find_chrome_tabs(port: int = 9222, auto_launch: bool = True) -> List[s
 
 async def inspect_element_styles(
     url_pattern: str,
-    selector: str = None,
-    port: int = 9222,
-    show_events: bool = False,
-    show_html: bool = False,
-    from_pointer: bool = False,
+    selector: str,
+    port: int,
+    show_events: bool,
+    show_html: bool,
+    from_pointer: bool,
 ):
     """主函数：检查元素的样式和事件监听器"""
-    # 查找所有Chrome标签页
     websocket_urls = await find_chrome_tabs(port)
-
     if not websocket_urls:
         print("未找到浏览器标签页，请确保浏览器以远程调试模式运行:")
         print("Chrome: chrome --remote-debugging-port=9222")
@@ -1529,149 +1634,128 @@ async def inspect_element_styles(
         print("或者指定正确的端口: --port <port_number>")
         return
 
-    # 查找匹配URL的标签页
-    matched_tab = None
-    inspector = None
-
-    for ws_url in websocket_urls:
-        try:
-            inspector = DOMInspector(ws_url)
-            await inspector.connect()
-
-            # 连接后等待一下再查找标签页
-            await asyncio.sleep(1)
-
-            # 使用已修复的方法查找标签页
-            target_id = await inspector.find_tab_by_url(url_pattern)
-            if target_id:
-                # 获取所有目标信息以找到匹配的标签页详情
-                response = await inspector.send_command("Target.getTargets", use_session=False)
-                targets = response.get("result", {}).get("targetInfos", [])
-
-                for target in targets:
-                    if target["targetId"] == target_id:
-                        matched_tab = target
-                        break
-
-                if matched_tab:
-                    break
-
-            await inspector.close()
-            inspector = None
-
-        except Exception as e:
-            print(f"连接错误: {e}")
-            if inspector:
-                await inspector.close()
-                inspector = None
-
-    if not matched_tab:
-        if not url_pattern:
-            print("未找到任何页面标签页")
-        else:
-            print(f"未找到匹配URL模式 '{url_pattern}' 的标签页")
-        print("可用标签页:")
-        for ws_url in websocket_urls:
-            try:
-                temp_inspector = DOMInspector(ws_url)
-                await temp_inspector.connect()
-                response = await temp_inspector.send_command("Target.getTargets", use_session=False)
-                targets = response.get("result", {}).get("targetInfos", [])
-                for target in targets:
-                    if target["type"] == "page":
-                        print(f"  - {target['url']}")
-                await temp_inspector.close()
-            except:
-                pass
-        return
+    inspector = DOMInspector(websocket_urls[0])
+    await inspector.connect()
 
     try:
-        # 附加到目标标签页
-        session_id = await inspector.attach_to_tab(matched_tab["targetId"])
-        if not session_id:
-            print(f"附加到标签页失败: {matched_tab['url']}")
+        target_id = await inspector.find_tab_by_url(url_pattern)
+        if not target_id:
+            print(f"未找到匹配URL '{url_pattern}' 的标签页或用户取消选择")
             return
 
-        # 根据模式选择元素
-        node_id = None
+        session_id = await inspector.attach_to_tab(target_id)
+        if not session_id:
+            print("附加到标签页失败")
+            return
 
+        node_id = None
         if from_pointer:
-            # 鼠标指针选择模式
             node_id = await inspector.wait_for_pointer_selection()
             if not node_id:
                 print("未选择元素，退出")
                 return
-        else:
-            # CSS选择器模式
-            if not selector:
-                print("错误：必须提供 --selector 或使用 --from-pointer")
-                return
-
+        elif selector:
             node_id = await inspector.find_element(selector)
             if not node_id:
                 print(f"未找到选择器 '{selector}' 匹配的元素")
                 return
+        else:
+            print("错误：必须提供 --selector 或使用 --from-pointer")
+            return
 
         print(f"找到元素，nodeId: {node_id}")
 
-        # 获取样式信息
         styles_data = await inspector.get_element_styles(node_id)
-
-        # 格式化并输出样式
         formatted_styles = await inspector.format_styles(styles_data)
         print("\n元素样式信息:")
         print("=" * 60)
         print(formatted_styles)
 
-        # 如果需要，获取并显示事件监听器
         if show_events:
-            try:
-                listeners_data = await inspector.get_element_event_listeners(node_id)
-                formatted_listeners = await inspector.format_event_listeners(listeners_data)
-                print("\n事件监听器信息:")
-                print("=" * 60)
-                print(formatted_listeners)
-            except Exception as e:
-                print(f"\n获取事件监听器失败: {e}")
+            listeners_data = await inspector.get_element_event_listeners(node_id)
+            formatted_listeners = await inspector.format_event_listeners(listeners_data)
+            print("\n事件监听器信息:")
+            print("=" * 60)
+            print(formatted_listeners)
 
-        # 如果需要，获取并显示元素HTML表示
         if show_html:
-            try:
-                html_content = await inspector.get_element_html(node_id)
-                formatted_html = await inspector.format_html(html_content)
-                print("\n元素HTML表示:")
-                print("=" * 60)
-                print(formatted_html)
-            except Exception as e:
-                print(f"\n获取元素HTML失败: {e}")
+            html_content = await inspector.get_element_html(node_id)
+            formatted_html = await inspector.format_html(html_content)
+            print("\n元素HTML表示:")
+            print("=" * 60)
+            print(formatted_html)
 
-    except Exception as e:
-        print(f"错误: {e}")
-        import traceback
-
-        traceback.print_exc()
     finally:
-        if inspector:
-            await inspector.close()
+        await inspector.close()
+
+
+async def run_debugger_trace(url_pattern: str, port: int):
+    """主函数：运行调试追踪器模式"""
+    websocket_urls = await find_chrome_tabs(port)
+    if not websocket_urls:
+        print("未找到浏览器标签页，请确保浏览器以远程调试模式运行。")
+        return
+
+    inspector = DOMInspector(websocket_urls[0])
+    await inspector.connect()
+
+    stop_event = asyncio.Event()
+
+    try:
+        target_id = await inspector.find_tab_by_url(url_pattern)
+        if not target_id:
+            print(f"未找到匹配URL '{url_pattern}' 的标签页或用户取消选择")
+            return
+
+        session_id = await inspector.attach_to_tab(target_id)
+        if not session_id:
+            print("附加到标签页失败")
+            return
+
+        print("\n✅ Debugger trace mode activated.")
+        print("Waiting for 'debugger;' statements in the attached page.")
+        print("Press Ctrl+C to exit.")
+
+        await stop_event.wait()
+
+    except asyncio.CancelledError:
+        print("\nExiting debugger trace mode.")
+    finally:
+        await inspector.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="浏览器元素DOM检查工具 - 样式和事件监听器（支持Chrome/Edge）")
-    parser.add_argument("--url", help="要匹配的URL模式（可选，如未指定则选择最上层标签页）")
-    parser.add_argument("--selector", help="CSS选择器（如使用 --from-pointer 则可选）")
-    parser.add_argument("--port", type=int, default=9222, help="浏览器调试端口（Chrome默认9222，Edge默认9222）")
-    parser.add_argument("--events", action="store_true", help="同时显示事件监听器信息")
-    parser.add_argument("--html", action="store_true", help="同时显示元素HTML表示（标签和属性）")
-    parser.add_argument("--from-pointer", action="store_true", help="使用鼠标指针选择元素（按 m 键选择）")
+    parser = argparse.ArgumentParser(description="浏览器DOM检查与调试追踪工具 (支持Chrome/Edge)")
+    parser.add_argument("--port", type=int, default=9222, help="浏览器调试端口")
+
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
+
+    # --- Inspect command ---
+    parser_inspect = subparsers.add_parser("inspect", help="检查元素的样式和事件监听器")
+    parser_inspect.add_argument("--url", help="要匹配的URL模式 (可选，如未指定则提供选择)")
+    parser_inspect.add_argument("--selector", help="CSS选择器 (如果使用 --from-pointer 则可选)")
+    parser_inspect.add_argument("--events", action="store_true", help="显示事件监听器信息")
+    parser_inspect.add_argument("--html", action="store_true", help="显示元素HTML表示")
+    parser_inspect.add_argument("--from-pointer", action="store_true", help="使用鼠标指针选择元素")
+
+    # --- Trace command ---
+    parser_trace = subparsers.add_parser("trace", help="追踪JS 'debugger;' 语句并显示调用栈")
+    parser_trace.add_argument("--url", help="要匹配的URL模式 (可选，如未指定则提供选择)")
 
     args = parser.parse_args()
-
-    # 如果未指定URL，使用空字符串表示默认选择最上层标签页
     url_pattern = args.url if args.url else ""
 
-    asyncio.run(
-        inspect_element_styles(url_pattern, args.selector, args.port, args.events, args.html, args.from_pointer)
-    )
+    try:
+        if args.command == "inspect":
+            if not args.selector and not args.from_pointer:
+                parser_inspect.error("必须提供 --selector 或使用 --from-pointer")
+            asyncio.run(
+                inspect_element_styles(url_pattern, args.selector, args.port, args.events, args.html, args.from_pointer)
+            )
+        elif args.command == "trace":
+            asyncio.run(run_debugger_trace(url_pattern, args.port))
+    except KeyboardInterrupt:
+        print("\nInterrupted by user. Exiting.")
 
 
 class BrowserContextManager:
