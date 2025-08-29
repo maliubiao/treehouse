@@ -1336,7 +1336,12 @@ const TraceViewer = {
             rendered = rendered.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
         }
         
-        const escapedContent = this.utils.escapeHTML(rendered);
+        // To preserve whitespace which is crucial for both layout and ensuring
+        // consistent DOM structure, replace normal spaces with non-breaking spaces ('\u00A0').
+        // The escapeHTML utility will then correctly convert this character to '&nbsp;'.
+        const contentToEscape = rendered.replace(/ /g, '\u00A0');
+        const escapedContent = this.utils.escapeHTML(contentToEscape);
+
         const indentLevel = (logData.data.indent.length / 4);
         const indentSpace = `${indentLevel}ch`;
         const eventId = this._getNextEventId();
