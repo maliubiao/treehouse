@@ -251,7 +251,7 @@ This sophisticated coordinate conversion system ensures accurate element selecti
   - Ensure browser is running with remote debugging: `chrome --remote-debugging-port=9222`
   - Check if the URL pattern matches any open tabs
   - Verify the port number is correct
-  - Use `test_manual_browser.py` to debug connection issues
+  - Use `test_manual_browser.py` or `test_connection.py` to debug connection issues
 
 - **"Cannot connect to browser"**:
   - Check if browser is running with the correct debugging port
@@ -263,19 +263,19 @@ This sophisticated coordinate conversion system ensures accurate element selecti
   - The tool automatically handles DPI scaling
   - Ensure the browser window is visible and not minimized
   - Try different elements or refresh the page
-  - Run `test_enhanced_coordinate_conversion.py` to validate coordinate accuracy
+  - Run `test_mouse_selection.py` or `test_viewport_analysis.py` to validate coordinate accuracy
 
 - **"Cannot find browser window"**:
   - Make sure Chrome/Edge is running and visible
   - On Linux, install `wmctrl`: `sudo apt-get install wmctrl`
   - On Windows, install `pygetwindow`: `pip install pygetwindow`
-  - Run `test_window_detection.py` to debug window detection
+  - Run coordinate tests to debug window detection
 
 #### Permission Issues
 - **macOS Accessibility Permissions**:
   - Grant accessibility permissions to Terminal/iTerm
   - System Preferences → Security & Privacy → Privacy → Accessibility
-  - Run `test_objc_window_detection.py` to test accessibility API permissions
+  - Required for accurate window detection and coordinate conversion
 
 - **File URL Limitations**:
   - File URLs (`file://`) may have security restrictions
@@ -284,14 +284,14 @@ This sophisticated coordinate conversion system ensures accurate element selecti
 
 #### High-DPI Display Issues
 - **Incorrect scaling detection**:
-  - Run `test_coordinate_finding.py` to validate DPI scaling detection
+  - Run `test_viewport_analysis.py` to validate DPI scaling detection
   - Check if multi-monitor setup is causing issues
   - Verify display scaling settings in system preferences
 
 - **Retina display problems**:
   - macOS Retina displays use 2x scaling by default
-  - Run `test_enhanced_coordinate_conversion.py` with precise test elements
-  - Check if AppleScript fallback is working correctly
+  - Run coordinate tests with precise test elements
+  - Check browser window positioning and UI offset calculation
 
 #### Testing-Specific Issues
 - **Test failures**:
@@ -299,10 +299,11 @@ This sophisticated coordinate conversion system ensures accurate element selecti
   - Run tests with browser already running on port 9222
   - Check browser console for any error messages
 
-- **AppleScript timeouts**:
-  - macOS may prompt for accessibility permissions
-  - Grant permissions to terminal application
-  - Run `test_frontmost_window.py` to test AppleScript functionality
+- **JavaScript injection failures**:
+  - Browser may block JavaScript injection due to security policies
+  - Ensure the browser tab has proper webpage loaded
+  - Run `test_simple_injection.py` to test injection logic without browser
+  - Use `test_real_chrome_injection.py` for comprehensive browser testing
 
 ### Debug Mode
 
@@ -310,16 +311,16 @@ For detailed debugging:
 
 1. **Enable verbose logging**: Modify test files to add `print()` statements
 2. **Browser DevTools**: Use browser's developer tools to monitor WebSocket traffic
-3. **Coordinate debugging**: Run `test_enhanced_coordinate_conversion.py` with precise test elements
-4. **Window detection debugging**: Use `test_objc_window_detection.py` for detailed macOS window information
-5. **Accessibility debugging**: Run accessibility permission tests with `test_objc_window_detection.py`
+3. **Coordinate debugging**: Run `test_viewport_analysis.py` or `test_mouse_selection.py` with precise test elements
+4. **Connection debugging**: Use `test_connection.py` for basic WebSocket connection testing
+5. **JavaScript debugging**: Use `test_simple_injection.py` for injection logic validation
 
 ### Test-Specific Troubleshooting
 
 - If `test_dom_inspector.py` fails: Check browser connection and page loading
-- If coordinate tests fail: Verify DPI scaling detection and window positioning
-- If window detection tests fail: Check platform-specific dependencies and permissions
-- If AppleScript tests fail: Grant accessibility permissions to terminal app
+- If coordinate tests fail: Verify DPI scaling detection and window positioning  
+- If JavaScript injection tests fail: Check browser security policies and console output
+- If console listener tests fail: Verify browser DevTools Protocol message handling
 
 ## 🔍 Use Cases
 
@@ -348,8 +349,9 @@ The project includes a comprehensive test suite to verify all functionality. Eac
 ```bash
 # Run individual test files
 python test_dom_inspector.py
-python test_coordinate_finding.py
-python test_enhanced_coordinate_conversion.py
+python test_connection.py
+python test_mouse_selection.py
+python test_real_chrome_injection.py
 ```
 
 #### Test Categories
@@ -376,54 +378,94 @@ python test_enhanced_coordinate_conversion.py
   - Tests complex CSS selector functionality
   - Includes error handling tests
 
+- **`test_connection.py`** - Basic browser connection test
+  - Quick test to verify Chrome DevTools Protocol connection
+  - Shows available browser tabs and WebSocket URLs
+  - Minimal test for connection troubleshooting
+
 ##### Coordinate System Tests
-- **`test_coordinate_finding.py`** - Coordinate-based element finding
-  - Tests finding elements by screen coordinates
-  - Validates coordinate conversion accuracy
-  - Tests browser UI offset calculation
-  - Tests display scale factor detection
-
-- **`test_enhanced_coordinate_conversion.py`** - High-DPI coordinate conversion
-  - Comprehensive coordinate conversion testing
-  - Tests with precisely positioned HTML elements
-  - Validates DPI scaling detection accuracy
-  - Tests screen-to-browser coordinate conversion
-  - Includes reverse conversion validation
-
 - **`test_mouse_selection.py`** - Mouse pointer selection functionality
-  - Tests mouse-based element selection
+  - Tests mouse-based element selection with positioned elements
   - Validates coordinate conversion for mouse input
-  - Tests element selection at specific coordinates
+  - Tests element selection at specific coordinates using HTTP server
 
-##### Window Detection Tests
-- **`test_browser_window_detection.py`** - Cross-platform window detection
-  - Tests platform-specific window detection
-  - Validates display scale factor detection
-  - Tests coordinate system integration
-  - Works on macOS, Windows, and Linux
+- **`test_viewport_analysis.py`** - Viewport and layout analysis
+  - Analyzes browser viewport and page layout information
+  - Tests coordinate detection within visible areas
+  - Validates DOM structure and boundary calculations
 
-- **`test_frontmost_window.py`** - Frontmost window requirements
-  - Tests if browser window needs to be frontmost for detection
-  - Uses AppleScript for detailed window information
-  - Tests both background and foreground scenarios
+- **`test_simple_page.py`** - Simple page coordinate testing
+  - Tests coordinate detection on simple HTML pages
+  - Uses data URLs for isolated testing
+  - Validates basic element positioning and coordinate mapping
 
-- **`test_objc_window_detection.py`** - Objective-C/Cocoa API testing
-  - Tests Objective-C/Cocoa API for window detection
-  - Supports multiple browsers (Chrome, Edge, Safari, Firefox, Brave, Opera)
-  - Tests accessibility API permissions
-  - Tests alternative Objective-C approaches
+- **`test_first_div.py`** - First div element coordinate testing
+  - Finds and tests coordinates of the first div element on a page
+  - Tests coordinate accuracy at specific element positions
+  - Includes backendNodeId to nodeId conversion testing
 
-- **`test_window_detection.py`** - Window detection accuracy
-  - Tests window detection accuracy over multiple iterations
-  - Validates window size and position detection
-  - Tests DPI scaling factor detection
-  - Tests browser UI offset calculation
+##### JavaScript Integration Tests
+- **`test_embedded_js.py`** - Embedded JavaScript code testing
+  - Tests the embedded JavaScript code functionality
+  - Validates mouse element detector code structure
+  - Checks for required functions and methods
+
+- **`test_chrome_simple.py`** - Simple Chrome connection and JavaScript injection
+  - Quick test for Chrome connection and JavaScript injection
+  - Tests basic JavaScript functionality injection
+  - Validates element selection mode startup
+
+- **`test_javascript_injection.py`** - JavaScript injection functionality
+  - Tests JavaScript injection into browser pages
+  - Validates element selection mode functionality
+  - Tests communication between Python and injected JavaScript
+
+- **`test_injection_logic.py`** - JavaScript injection logic testing
+  - Tests JavaScript injection logic without requiring real Chrome connection
+  - Validates embedded code structure and required functions
+  - Tests console output patterns and function availability
+
+- **`test_simple_injection.py`** - Simple injection functionality testing
+  - Tests JavaScript injection methods and validation
+  - Checks instance variables and code constants
+  - Validates file reading capabilities for JavaScript injection
+
+- **`test_real_chrome_injection.py`** - Real Chrome JavaScript injection testing
+  - Comprehensive test with real Chrome browser
+  - Tests complete JavaScript injection and element selection workflow
+  - Validates browser console interaction and user interface
+
+##### Utility and Debug Tests
+- **`test_server_utils.py`** - HTTP server utilities for testing
+  - Provides shared HTTP server implementation for tests
+  - Replaces file:// URL usage with proper HTTP server
+  - Contains TestServerContext for clean test setup/teardown
+
+- **`test_console_listener.py`** - Console message listening functionality
+  - Tests browser console message monitoring
+  - Validates console message handling and processing
+  - Useful for debugging JavaScript execution
 
 ##### Issue Investigation Tests
 - **`test_file_url_issue.py`** - File URL element finding issues
-  - Investigates file:// URL element finding problems
-  - Compares file:// URL behavior with HTTP URLs
+  - Investigates file:// URL element finding problems using HTTP server
+  - Compares HTTP URL behavior with file URL limitations
   - Tests DOM content availability with different URL schemes
+
+- **`test_backendid_fix.py`** - BackendNodeId conversion fix testing
+  - Tests the fix for backendNodeId to nodeId conversion
+  - Simulates scenarios where only backendNodeId is available
+  - Validates conversion logic for DOM element identification
+
+- **`test_script_origin.py`** - Script origin information testing
+  - Tests script source information extraction in event listeners
+  - Validates script URL and filename retrieval
+  - Uses HTTP server for proper script source testing
+
+- **`test_script_info.py`** - Script source information functionality
+  - Tests script source information retrieval and display
+  - Validates JavaScript source code extraction
+  - Tests integration with event listener formatting
 
 ### Test Development
 

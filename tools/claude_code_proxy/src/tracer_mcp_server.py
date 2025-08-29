@@ -39,18 +39,22 @@ class TracerMCPServer:
         self.server_info = {"name": "tracer-mcp-server", "version": "2.2.0"}
         self.tools = [
             {
-                "name": "trace_python",
-                "description": """这是你验证代码正确性的核心工具。**在你编写或修改完任何Python代码后，都应该使用此工具来运行它**，以观察其真实的执行流程和状态变化。
+                "name": "debug_python_script",
+                "description": """这是你的首选调试器, debug的核心工具。**在你编写或修改完任何Python代码后，都应该使用此工具来运行它**，通过观察其真实的执行流程和状态变化, 以排除debug。
 
-把它想象成一个强大的交互式调试器，它能完整地记录下程序的“故事”，让你能够确认代码的行为与你的设想完全一致。**在每次修改后都进行追踪验证，就像运行单元测试一样，是构建健壮、无误程序的关键开发习惯。**
+把它想象成一个强大的调试器，它能完整地记录下程序的“故事”，让你能够确认代码的行为与你的设想完全一致。**在每次修改后都进行追踪验证，就像运行单元测试一样，是构建健壮、无误程序的关键开发习惯。**
 
 **具体调试场景:**
 当遇到以下情况时，此工具尤其有效：
-- **代码行为不符合预期:** 程序崩溃、挂起、返回错误结果，但原因不明显。
-- **ImportError/ModuleNotFoundError:** 无法确定模块导入失败的原因。
+- **执行单元测试时:** 深刻理解程序的执行逻辑，一步到位，给出用户满意的修复, 取代python -m pytest -v或者直接unittest文件执行。
+- **获取运行时上下文时:** 取代python -c, 获取你需要确定的上下文数据。
+- **替代pdb,print,logging:** 当你想用pdb,print,logging调试时, 使用这个工具替换，这个更有效
+- **让用户放心:** 跑一跑debug_python_script, 结合实机数据代码向用户说明程序能用或者不能用
+- **代码行为不符合预期:** 程序崩溃、挂起、返回错误结果。
 - **逻辑错误:** 需要理解复杂的条件判断、循环或算法的实际执行路径。
 - **状态变化问题:** 需要观察变量、对象属性或数据结构在运行时的具体变化。
 - **异常分析:** 需要追溯异常的源头，了解它在哪个函数调用链中被抛出和捕获。
+- **ImportError/ModuleNotFoundError:** 无法确定模块导入失败的原因。
 
 **输出解读:**
 工具的输出是一个详细的文本日志，包含以下部分：
@@ -72,22 +76,22 @@ class TracerMCPServer:
 **使用示例:**
 
 1.  **基本脚本追踪 (带参数):**
-    `trace_python(target='/path/to/src/main.py', target_type='script', args=['--user', 'test'])`
+    `debug_python_script(target='/path/to/src/main.py', target_type='script', args=['--user', 'test'])`
 
 2.  **模块追踪:**
-    `trace_python(target='my_project.service.worker', target_type='module', args=['--config', 'config/dev.yaml'])`
+    `debug_python_script(target='pytest', target_type='module', args=['tests/test_text_to_llm_context.py::TestTextToLLMContext::test_real_world_trace_patterns', "-v"])`
 
 3.  **聚焦特定代码范围 (调试核心逻辑):**
-    `trace_python(target='/path/to/app/main.py', target_type='script', line_ranges='/path/to/app/core/logic.py:50-100')`
+    `debug_python_script(target='/path/to/app/main.py', target_type='script', line_ranges='/path/to/app/core/logic.py:50-100')`
 
 4.  **追踪与标准库的交互:**
-    `trace_python(target='/path/to/utils/network_helper.py', target_type='script', include_stdlibs=['socket', 'json'])`
+    `debug_python_script(target='/path/to/utils/network_helper.py', target_type='script', include_stdlibs=['socket', 'json'])`
 
 5.  **追踪第三方库的行为 (需要绝对路径):**
-    `trace_python(target='/path/to/scripts/process_data.py', target_type='script', include_system=True, line_ranges='.../site-packages/pandas/core/frame.py:350-370')`
+    `debug_python_script(target='/path/to/scripts/process_data.py', target_type='script', include_system=True, line_ranges='.../site-packages/pandas/core/frame.py:350-370')`
 
 6.  **复杂场景 (追踪一个包，排除日志函数，并监控多个文件目录):**
-    `trace_python(target='my_app.main', target_type='module', watch_files=['/path/to/my_app/core/**/*.py', '/path/to/my_app/utils/*.py'], exclude_functions=['log_info', 'debug_print'])`
+    `debug_python_script(target='my_app.main', target_type='module', watch_files=['/path/to/my_app/core/**/*.py', '/path/to/my_app/utils/*.py'], exclude_functions=['log_info', 'debug_print'])`
 """,
                 "inputSchema": {
                     "type": "object",
@@ -201,7 +205,7 @@ class TracerMCPServer:
         tool_name = params.get("name")
         tool_params = params.get("arguments", {})
 
-        if tool_name == "trace_python":
+        if tool_name == "debug_python_script":
             return self._handle_trace_python(tool_params)
         elif tool_name == "import_path_finder":
             return self._handle_import_path_finder(tool_params)
@@ -213,7 +217,7 @@ class TracerMCPServer:
         tool_name = params.get("name")
         tool_params = params.get("arguments", {})
 
-        if tool_name == "trace_python":
+        if tool_name == "debug_python_script":
             return await self._handle_trace_python_async(tool_params)
         elif tool_name == "import_path_finder":
             return self._handle_import_path_finder(tool_params)

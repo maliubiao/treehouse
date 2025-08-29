@@ -2106,5 +2106,346 @@ def main():
     )
 
 
+class BrowserContextManager:
+    """浏览器上下文管理器，支持自动清理和保持存活两种模式"""
+
+    def __init__(self, browser_type: str = "edge", port: int = 9222, auto_cleanup: bool = True):
+        self.browser_type = browser_type
+        self.port = port
+        self.auto_cleanup = auto_cleanup
+        self.browser_process = None
+        self.websocket_urls = []
+        self._browser_launched = False
+        self._user_data_dir = None
+
+    async def __aenter__(self):
+        """进入上下文，启动或连接浏览器"""
+        print(f"🚀 初始化浏览器上下文 (模式: {'自动清理' if self.auto_cleanup else '保持存活'})")
+
+        # 查找现有浏览器标签页
+        self.websocket_urls = await find_chrome_tabs(self.port, auto_launch=False)
+
+        if not self.websocket_urls:
+            print(f"⚠️  未找到浏览器标签页，启动 {self.browser_type}...")
+            # 启动浏览器
+            result = await launch_browser_with_debugging(self.browser_type, self.port, return_process_info=True)
+            if isinstance(result, tuple):
+                success, process_info = result
+            else:
+                success, process_info = result, None
+            if not success:
+                raise Exception(f"无法启动 {self.browser_type} 浏览器")
+
+            self.browser_process = process_info
+            self._browser_launched = True
+            self._user_data_dir = process_info.get("user_data_dir")
+
+            # 等待浏览器启动
+            await asyncio.sleep(3)
+            self.websocket_urls = await find_chrome_tabs(self.port, auto_launch=False)
+            if not self.websocket_urls:
+                raise Exception("启动后仍未找到浏览器标签页")
+
+        print(f"✅ 找到 {len(self.websocket_urls)} 个浏览器标签页")
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """退出上下文，根据模式决定是否清理浏览器"""
+        if self.auto_cleanup and self._browser_launched:
+            print("🧹 自动清理浏览器进程...")
+            await cleanup_browser(self.browser_process)
+        else:
+            print("💾 保持浏览器存活")
+
+        # 清理临时目录（如果存在且需要清理）
+        if self.auto_cleanup and self._user_data_dir:
+            await cleanup_temp_directory(self._user_data_dir)
+
+    def get_websocket_urls(self):
+        """获取WebSocket URL列表"""
+        return self.websocket_urls
+
+    def get_main_websocket_url(self):
+        """获取主WebSocket URL"""
+        return self.websocket_urls[0] if self.websocket_urls else None
+
+
+async def launch_browser_with_debugging(
+    browser_type: str = "chrome", port: int = 9222, user_data_dir: str = None, return_process_info: bool = False
+) -> bool:
+    """自动启动浏览器并启用远程调试模式，使用临时配置文件"""
+    import atexit
+    import os
+    import platform
+    import shutil
+    import subprocess
+    import tempfile
+    import time
+
+    system = platform.system()
+
+    # 创建临时配置文件目录（如果未提供）
+    if user_data_dir is None:
+        user_data_dir = tempfile.mkdtemp(prefix="chrome_profile_")
+
+    process_info = {
+        "browser_type": browser_type,
+        "port": port,
+        "user_data_dir": user_data_dir,
+        "pid": None,
+        "command": None,
+    }
+
+    try:
+        if system == "Darwin":  # macOS
+            browser_names = {
+                "chrome": ["Google Chrome", "Google Chrome", "Chrome"],
+                "edge": ["Microsoft Edge", "Microsoft Edge", "Edge"],
+            }
+
+            browser_process = None
+            browser_launched = False
+
+            for chrome_name in browser_names.get(browser_type.lower(), []):
+                try:
+                    # 构建启动命令
+                    cmd = [
+                        "open",
+                        "-n",
+                        "-a",
+                        chrome_name,
+                        "--args",
+                        f"--remote-debugging-port={port}",
+                        f"--user-data-dir={user_data_dir}",
+                        "--no-first-run",
+                        "--no-default-browser-check",
+                    ]
+
+                    process_info["command"] = " ".join(cmd)
+
+                    # 启动浏览器
+                    process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    process.wait()  # 等待open命令完成
+
+                    if process.returncode == 0:
+                        # 等待浏览器启动
+                        time.sleep(2)
+
+                        # 查找浏览器进程
+                        try:
+                            pgrep_result = subprocess.run(
+                                ["pgrep", "-f", f"remote-debugging-port={port}"], capture_output=True, text=True
+                            )
+                            if pgrep_result.returncode == 0:
+                                pids = pgrep_result.stdout.strip().split("\n")
+                                if pids and pids[0]:
+                                    process_info["pid"] = int(pids[0])
+                                    browser_launched = True
+                                    browser_process = process
+                                    break
+                        except:
+                            continue
+                except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+                    continue
+
+            if not browser_launched:
+                print(f"无法找到或启动{browser_type}浏览器，请确保已安装")
+                if return_process_info:
+                    return False, process_info
+                return False
+
+        elif system == "Windows":
+            # Windows实现（简化版）
+            browser_exes = {"chrome": "chrome.exe", "edge": "msedge.exe"}
+
+            exe_name = browser_exes.get(browser_type.lower())
+            if not exe_name:
+                if return_process_info:
+                    return False, process_info
+                return False
+
+            cmd = [
+                exe_name,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={user_data_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+
+            process_info["command"] = " ".join(cmd)
+
+            process = subprocess.Popen(cmd)
+            process_info["pid"] = process.pid
+            browser_process = process
+            browser_launched = True
+
+        elif system == "Linux":
+            # Linux实现（简化版）
+            browser_commands = {"chrome": "google-chrome", "edge": "microsoft-edge"}
+
+            cmd_name = browser_commands.get(browser_type.lower())
+            if not cmd_name:
+                if return_process_info:
+                    return False, process_info
+                return False
+
+            cmd = [
+                cmd_name,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={user_data_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+
+            process_info["command"] = " ".join(cmd)
+
+            process = subprocess.Popen(cmd)
+            process_info["pid"] = process.pid
+            browser_process = process
+            browser_launched = True
+
+        else:
+            if return_process_info:
+                return False, process_info
+            return False
+
+        print(f"使用临时配置文件启动浏览器: {user_data_dir}")
+
+        # 等待浏览器完全启动
+        time.sleep(5)
+
+        if return_process_info:
+            return True, process_info
+        return True
+
+    except Exception as e:
+        print(f"启动浏览器失败: {e}")
+        # 清理临时目录
+        try:
+            if os.path.exists(user_data_dir):
+                shutil.rmtree(user_data_dir)
+        except:
+            pass
+
+        if return_process_info:
+            return False, process_info
+        return False
+
+
+async def cleanup_browser(process_info: dict):
+    """清理浏览器进程"""
+    import os
+    import platform
+    import signal
+    import subprocess
+    import time
+
+    if not process_info:
+        return
+
+    system = platform.system()
+    pid = process_info.get("pid")
+    user_data_dir = process_info.get("user_data_dir")
+
+    print(f"🧹 清理浏览器进程 (PID: {pid})")
+
+    try:
+        if pid:
+            if system == "Darwin" or system == "Linux":
+                # Unix系统使用kill命令
+                os.kill(pid, signal.SIGTERM)  # 先尝试优雅关闭
+                time.sleep(1)
+
+                # 检查进程是否还存在
+                try:
+                    os.kill(pid, 0)  # 检查进程是否存在
+                    # 如果还存在，强制杀死
+                    subprocess.run(["kill", "-9", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError:
+                    # 进程已经退出
+                    pass
+
+            elif system == "Windows":
+                # Windows使用taskkill
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+
+        # 清理使用相同端口的其他浏览器进程
+        if system == "Darwin" or system == "Linux":
+            subprocess.run(
+                ["pkill", "-f", f"remote-debugging-port={process_info.get('port', 9222)}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif system == "Windows":
+            subprocess.run(
+                ["taskkill", "/FI", f"WINDOWTITLE eq *remote-debugging-port*", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+    except Exception as e:
+        print(f"清理浏览器进程时发生错误: {e}")
+
+    # 清理临时目录
+    await cleanup_temp_directory(user_data_dir)
+
+
+async def cleanup_temp_directory(user_data_dir: str):
+    """清理临时目录"""
+    import os
+    import shutil
+
+    if user_data_dir and os.path.exists(user_data_dir):
+        try:
+            shutil.rmtree(user_data_dir)
+            print(f"✅ 清理临时配置文件目录: {user_data_dir}")
+        except Exception as e:
+            print(f"清理临时目录失败: {e}")
+
+
+async def get_browser_processes(port: int = None):
+    """获取浏览器进程信息"""
+    import platform
+    import subprocess
+
+    system = platform.system()
+    processes = []
+
+    try:
+        if system == "Darwin" or system == "Linux":
+            # Unix系统使用pgrep
+            cmd = ["pgrep", "-f", "remote-debugging-port"]
+            if port:
+                cmd = ["pgrep", "-f", f"remote-debugging-port={port}"]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    if pid.strip():
+                        processes.append({"pid": int(pid.strip()), "system": system})
+
+        elif system == "Windows":
+            # Windows使用tasklist
+            cmd = ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/FI", "IMAGENAME eq msedge.exe", "/FO", "CSV"]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                lines = result.stdout.strip().split("\n")[1:]  # 跳过标题行
+                for line in lines:
+                    if line.strip():
+                        parts = line.strip().split(",")
+                        if len(parts) >= 2:
+                            processes.append(
+                                {"name": parts[0].strip('"'), "pid": int(parts[1].strip('"')), "system": system}
+                            )
+
+    except Exception as e:
+        print(f"获取浏览器进程信息失败: {e}")
+
+    return processes
+
+
 if __name__ == "__main__":
     main()
