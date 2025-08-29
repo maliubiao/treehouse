@@ -1416,7 +1416,7 @@ const TraceViewer = {
         this._initializeGlobalVariablesFromContainer(events, fileManager, sourceManager);
         
         // Reinitialize components that depend on content
-        this.initFolding();
+        // this.initFolding(); // The delegated listener on #content is already set up in TraceViewer.init() and will work with new content. No need to re-bind.
         
         // Reinitialize search database with container metadata
         this.searchDatabase = new SearchDatabase();
