@@ -1233,7 +1233,7 @@ const TraceViewer = {
                 const funcName = event.data[0] || '<unknown_func>';
                 const argsStr = event.data[1] || '';
                 return {
-                    template: '{indent}↘ CALL {filename}:{lineno} {func}({args}) [frame:{frame_id}][thread:{thread_id}]',
+                    template: '↘ CALL {filename}:{lineno} {func}({args}) [frame:{frame_id}][thread:{thread_id}]',
                     data: {
                         ...commonData,
                         func: funcName,
@@ -1246,7 +1246,7 @@ const TraceViewer = {
                 const returnFuncName = event.data[0] || '<unknown_func>';
                 const returnValue = event.data[1] || '';
                 return {
-                    template: '{indent}↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]',
+                    template: '↗ RETURN {filename} {func}() → {return_value} [frame:{frame_id}]',
                     data: {
                         ...commonData,
                         func: returnFuncName,
@@ -1265,7 +1265,7 @@ const TraceViewer = {
                     }
                 });
                 
-                let template = '{indent}▷ {filename}:{lineno} {line}';
+                let template = '▷ {filename}:{lineno} {line}';
                 let varsStr = '';
                 if (Object.keys(trackedVars).length > 0) {
                     varsStr = Object.entries(trackedVars).map(([k, v]) => `${k}=${v}`).join(', ');
@@ -1288,7 +1288,7 @@ const TraceViewer = {
                 const excType = event.data[1] || 'Exception';
                 const excValue = event.data[2] || '';
                 return {
-                    template: '{indent}⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]',
+                    template: '⚠ EXCEPTION IN {func} AT {filename}:{lineno} {exc_type}: {exc_value} [frame:{frame_id}]',
                     data: {
                         ...commonData,
                         func: excFuncName,
@@ -1300,7 +1300,7 @@ const TraceViewer = {
                 
             default:
                 return {
-                    template: '{indent}ℹ {event_name} at {filename}:{lineno}',
+                    template: 'ℹ {event_name} at {filename}:{lineno}',
                     data: {
                         ...commonData,
                         event_name: `EVENT_${event.event_type}`,
