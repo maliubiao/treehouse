@@ -1460,6 +1460,7 @@ class DOMInspector:
 
         try:
             await self.send_command("Console.enable")
+            await self.send_command("Runtime.enable")  # Runtime is needed for consoleAPICalled
             print("✅ 控制台监听已启用")
         except Exception as e:
             print(f"❌ 启用控制台监听失败: {e}")
@@ -1474,6 +1475,7 @@ class DOMInspector:
 
         try:
             await self.send_command("Console.disable")
+            await self.send_command("Runtime.disable")
             print("✅ 控制台监听已禁用")
         except Exception as e:
             print(f"❌ 禁用控制台监听失败: {e}")
@@ -1761,10 +1763,17 @@ def main():
 class BrowserContextManager:
     """浏览器上下文管理器，支持自动清理和保持存活两种模式"""
 
-    def __init__(self, browser_type: str = "edge", port: int = 9222, auto_cleanup: bool = True):
+    def __init__(
+        self,
+        browser_type: str = "edge",
+        port: int = 9222,
+        auto_cleanup: bool = True,
+        start_url: Optional[str] = None,
+    ):
         self.browser_type = browser_type
         self.port = port
         self.auto_cleanup = auto_cleanup
+        self.start_url = start_url
         self.browser_process = None
         self.websocket_urls = []
         self._browser_launched = False
@@ -1774,13 +1783,21 @@ class BrowserContextManager:
         """进入上下文，启动或连接浏览器"""
         print(f"🚀 初始化浏览器上下文 (模式: {'自动清理' if self.auto_cleanup else '保持存活'})")
 
-        # 查找现有浏览器标签页
-        self.websocket_urls = await find_chrome_tabs(self.port, auto_launch=False)
+        # If a start_url is given, skip checking for existing tabs and force a new launch
+        if not self.start_url:
+            # 查找现有浏览器标签页
+            self.websocket_urls = await find_chrome_tabs(self.port, auto_launch=False)
 
         if not self.websocket_urls:
-            print(f"⚠️  未找到浏览器标签页，启动 {self.browser_type}...")
+            if self.start_url:
+                print(f"ℹ️  `start_url` provided, launching a new browser instance...")
+            else:
+                print(f"⚠️  未找到浏览器标签页，启动 {self.browser_type}...")
+
             # 启动浏览器
-            result = await launch_browser_with_debugging(self.browser_type, self.port, return_process_info=True)
+            result = await launch_browser_with_debugging(
+                self.browser_type, self.port, return_process_info=True, start_url=self.start_url
+            )
             if isinstance(result, tuple):
                 success, process_info = result
             else:
@@ -1827,6 +1844,7 @@ async def launch_browser_with_debugging(
     port: int = 9222,
     user_data_dir: Optional[str] = None,
     return_process_info: bool = False,
+    start_url: Optional[str] = None,
 ) -> Union[bool, Tuple[bool, Dict[str, Any]]]:
     """自动启动浏览器并启用远程调试模式，使用临时配置文件"""
     import atexit
@@ -1864,42 +1882,46 @@ async def launch_browser_with_debugging(
             for chrome_name in browser_names.get(browser_type.lower(), []):
                 try:
                     # 构建启动命令
-                    cmd = [
-                        "open",
-                        "-n",
-                        "-a",
-                        chrome_name,
-                        "--args",
-                        f"--remote-debugging-port={port}",
-                        f"--user-data-dir={user_data_dir}",
-                        "--no-first-run",
-                        "--no-default-browser-check",
-                    ]
+                    cmd = ["open", "-n", "-a", chrome_name]
+                    if start_url:
+                        cmd.append(start_url)
+                    cmd.extend(
+                        [
+                            "--args",
+                            f"--remote-debugging-port={port}",
+                            f"--user-data-dir={user_data_dir}",
+                            "--no-first-run",
+                            "--no-default-browser-check",
+                        ]
+                    )
 
                     process_info["command"] = " ".join(cmd)
 
                     # 启动浏览器
-                    process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    process.wait()  # 等待open命令完成
+                    # Launch browser; 'open' command exits quickly. We don't need its Popen object.
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                    if process.returncode == 0:
-                        # 等待浏览器启动
-                        time.sleep(2)
+                    # Give the browser a moment to actually start.
+                    time.sleep(2)
 
-                        # 查找浏览器进程
-                        try:
-                            pgrep_result = subprocess.run(
-                                ["pgrep", "-f", f"remote-debugging-port={port}"], capture_output=True, text=True
-                            )
-                            if pgrep_result.returncode == 0:
-                                pids = pgrep_result.stdout.strip().split("\n")
-                                if pids and pids[0]:
-                                    process_info["pid"] = int(pids[0])
-                                    browser_launched = True
-                                    browser_process = process
-                                    break
-                        except:
-                            continue
+                    # Verify if the process is running using pgrep. This is more reliable
+                    # than the 'open' command's return code, which can be misleading.
+                    try:
+                        pgrep_result = subprocess.run(
+                            ["pgrep", "-f", f"remote-debugging-port={port}"],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        )
+                        pids = pgrep_result.stdout.strip().split("\n")
+                        if pids and pids[0]:
+                            process_info["pid"] = int(pids[0])
+                            browser_launched = True
+                            # The local 'browser_process' variable was not used, so we don't need it.
+                            break
+                    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+                        # If pgrep fails (not found or error), try the next browser name.
+                        continue
                 except (subprocess.CalledProcessError, FileNotFoundError, OSError):
                     continue
 
@@ -1926,6 +1948,8 @@ async def launch_browser_with_debugging(
                 "--no-first-run",
                 "--no-default-browser-check",
             ]
+            if start_url:
+                cmd.append(start_url)
 
             process_info["command"] = " ".join(cmd)
 
@@ -1951,6 +1975,8 @@ async def launch_browser_with_debugging(
                 "--no-first-run",
                 "--no-default-browser-check",
             ]
+            if start_url:
+                cmd.append(start_url)
 
             process_info["command"] = " ".join(cmd)
 

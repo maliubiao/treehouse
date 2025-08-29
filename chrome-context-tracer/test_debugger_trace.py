@@ -89,7 +89,7 @@ async def run_test() -> None:
         print(f"✅ Temporary test page created at: {file_url}")
 
         # Step 2: Launch browser using the context manager for auto-cleanup
-        async with BrowserContextManager(browser_type="chrome", auto_cleanup=True) as browser:
+        async with BrowserContextManager(browser_type="chrome", auto_cleanup=True, start_url=file_url) as browser:
             # Step 3: Run dom_inspector.py as a subprocess
             script_path = Path(__file__).parent / "dom_inspector.py"
             command: List[str] = [
