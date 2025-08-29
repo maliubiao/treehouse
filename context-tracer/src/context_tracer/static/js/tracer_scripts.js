@@ -1355,7 +1355,7 @@ const TraceViewer = {
             logData.data.frame_id
         );
         
-        const htmlParts = [];
+        let htmlParts = [];
         
         if (logData.type === 'call') {
             // CALL event: foldable div + call-group
@@ -1368,6 +1368,9 @@ const TraceViewer = {
                 '</div>',
                 '<div class="call-group collapsed">'
             );
+            if (eventId < 5) { // Log first few generated call structures
+                console.log('[Debug] Generated HTML for CALL event:', htmlParts.join('\n'));
+            }
         } else if (logData.type === 'return') {
             // RETURN event: close call-group + return div
             htmlParts.push(
@@ -1409,8 +1412,10 @@ const TraceViewer = {
         const { content } = this.elements;
         if (!content) return;
         
+        console.log('[Debug] Replacing content with HTML generated from container. HTML length:', htmlContent.length);
         // Replace the content
         content.innerHTML = htmlContent;
+        console.log('[Debug] content.innerHTML has been set.');
         
         // Initialize global variables from container data
         this._initializeGlobalVariablesFromContainer(events, fileManager, sourceManager);
@@ -1539,12 +1544,16 @@ const TraceViewer = {
     // Initialize folding functionality
     initFolding() {
         const { content, expandAllBtn, collapseAllBtn, trueExpandAllBtn } = this.elements;
+        console.log('[Debug] Initializing folding functionality on #content element.');
 
         // Toggle folding on click
         content.addEventListener('click', e => {
+            console.log('[Debug] Click detected on #content. Event target:', e.target);
             if (e.target.classList.contains('foldable')) {
                 console.log('[+] Foldable element clicked:', e.target.textContent.trim());
                 this.toggleFoldable(e.target);
+            } else {
+                console.log('[Debug] Click was not on a foldable element.');
             }
         });
 
@@ -1597,6 +1606,8 @@ const TraceViewer = {
 
     // Toggles a single foldable element's state
     toggleFoldable(foldable) {
+        console.log('[Debug] toggleFoldable called for element:', foldable);
+        console.log(`[Debug] Current classes on foldable: ${foldable.className}`);
         if (foldable.classList.contains('expanded')) {
             console.log('Action: Collapsing subtree for', foldable.textContent.trim());
             this.collapseSubtree(foldable);
@@ -1610,16 +1621,24 @@ const TraceViewer = {
     expandSubtree(foldable) {
         const label = `expandSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
         console.group(label);
+        console.log('[Debug] Expanding foldable:', foldable);
 
         const callGroup = foldable.nextElementSibling;
+        console.log('[Debug] Found next element sibling (should be call-group):', callGroup);
+
         if (!callGroup || !callGroup.classList.contains('call-group')) {
-            console.warn('Could not find call-group for foldable:', foldable);
+            console.error('CRITICAL: Could not find call-group for foldable:', foldable);
+            console.log('[Debug] Foldable outerHTML:', foldable.outerHTML);
+            console.log('[Debug] Parent innerHTML (preview):', foldable.parentElement.innerHTML.substring(0, 1000));
             console.groupEnd();
             return;
         }
+        console.log(`[Debug] callGroup initial classes: ${callGroup.className}`);
 
         foldable.classList.add('expanded');
         callGroup.classList.remove('collapsed');
+        console.log(`[Debug] foldable classes AFTER add: ${foldable.className}`);
+        console.log(`[Debug] callGroup classes AFTER remove: ${callGroup.className}`);
         
         this.renderDebugVarsForContainer(callGroup);
         
@@ -1631,16 +1650,22 @@ const TraceViewer = {
     collapseSubtree(foldable) {
         const label = `collapseSubtree: ${foldable.textContent.trim().substring(0, 100)}`;
         console.group(label);
+        console.log('[Debug] Collapsing foldable:', foldable);
 
         foldable.classList.remove('expanded');
         const callGroup = foldable.nextElementSibling;
+        console.log('[Debug] Found next element sibling (should be call-group):', callGroup);
+
         if (!callGroup || !callGroup.classList.contains('call-group')) {
-            console.warn('Could not find call-group for foldable during collapse:', foldable);
+            console.error('CRITICAL: Could not find call-group for foldable during collapse:', foldable);
             console.groupEnd();
             return;
         }
+        console.log(`[Debug] callGroup initial classes: ${callGroup.className}`);
 
         callGroup.classList.add('collapsed');
+        console.log(`[Debug] foldable classes AFTER remove: ${foldable.className}`);
+        console.log(`[Debug] callGroup classes AFTER add: ${callGroup.className}`);
 
         // Also recursively collapse any children that were open
         const children = callGroup.querySelectorAll('.foldable.call.expanded');
