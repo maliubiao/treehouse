@@ -1,500 +1,217 @@
 # Chrome Context Tracer
 
-A powerful DOM inspector tool that replicates Chrome DevTools functionality through the Chrome DevTools Protocol (CDP). Get detailed CSS styles, event listeners, and HTML representation for any web element.
+A powerful command-line tool that brings Chrome DevTools functionality to your terminal. Built on the Chrome DevTools Protocol (CDP), it allows you to inspect DOM elements, analyze CSS, trace event listeners, and debug JavaScript execution without leaving your terminal.
 
 ## 🌟 Features
 
-### 🎯 Smart Element Selection
-- **Mouse Pointer Selection**: Point and click to select elements with hotkey support (`m` key)
-- **CSS Selector Mode**: Traditional CSS selector-based element targeting
-- **Intelligent Window Detection**: Automatically detects Chrome/Edge browser windows
-- **High DPI Support**: Accurate coordinate conversion for all display types (Retina, 4K, etc.)
+### 🕵️‍♀️ DOM Inspection (`inspect`)
+- **Smart Element Selection**:
+  - **Mouse Pointer Mode**: A browser overlay allows you to simply click on any element to select it for inspection. This is implemented via robust JavaScript injection, making it fully cross-platform.
+  - **CSS Selector Mode**: Target elements precisely using standard CSS selectors.
+- **Complete Style Analysis**:
+  - **DevTools-Compatible Output**: Get CSS styles in the exact same format as the Chrome DevTools "Styles" pane.
+  - **Source Information**: See which CSS file and line number each style originates from.
+  - **Inheritance Chain**: View styles inherited from parent elements.
+- **Event Listener Inspection**:
+  - **Full Event Analysis**: List all event listeners attached to an element and its ancestors (up to `window`).
+  - **Source Location**: Pinpoint the exact JavaScript file, line number, and function for each listener.
 
-### 🎨 Complete Style Analysis
-- **DevTools-Compatible Output**: Exact same format as Chrome DevTools
-- **Source File Information**: Shows which CSS file and line number affects each style
-- **Inheritance Chain**: Displays inherited styles from parent elements
-- **Style Priority**: Respects CSS cascade and specificity rules
-- **Multiple Origins**: Supports user-agent, author, and injected stylesheets
+### 🐛 JavaScript Debugging (`trace`)
+- **Debugger Tracing**: Activate a trace mode that listens for `debugger;` statements in your JavaScript code.
+- **Rich Call Stacks**: When a `debugger;` statement is hit, it prints a complete, easy-to-read call stack.
+- **Variable Inspection**: The output includes the names and values of local variables within each scope of the call stack at the moment of pause.
+- **Automatic Resume**: The script automatically resumes execution after printing the stack trace, allowing for non-intrusive logging.
 
-### 🎧 Event Listener Inspection
-- **Complete Event Analysis**: Shows all event listeners attached to elements
-- **Source Location**: Displays JavaScript file, line number, and function information
-- **Event Details**: Capture phase, passive, once flags, and handler information
-- **DevTools Format**: Identical output to Chrome DevTools event listener panel
-
-### 🌐 Multi-Browser Support
-- **Chrome**: Full support for Google Chrome
-- **Microsoft Edge**: Complete compatibility with Edge browser
-- **Cross-Platform**: Works on macOS, Windows, and Linux
+### 🌐 General
+- **Multi-Browser Support**: Works seamlessly with Google Chrome and Microsoft Edge.
+- **Cross-Platform**: Fully functional on macOS, Windows, and Linux.
+- **Auto-Launch Browser**: Can automatically launch a browser instance with remote debugging enabled if one isn't already running.
 
 ## 🚀 Installation
 
 ### Prerequisites
-Ensure you have Python 3.7+ installed.
+- Python 3.7+
+- An installed version of Google Chrome or Microsoft Edge.
 
-### Required Dependencies
+### Dependencies
+The tool has one core dependency: `aiohttp`.
+
 ```bash
-pip install aiohttp pyautogui keyboard
-```
-
-### Platform-Specific Dependencies
-
-#### Windows
-```bash
-pip install pygetwindow
-```
-
-#### macOS (Optional for enhanced Retina detection)
-```bash
-pip install pyobjc-framework-Cocoa
-```
-
-#### Linux
-```bash
-# Install wmctrl for window detection
-sudo apt-get install wmctrl
-
-# Or on other distributions:
-# sudo yum install wmctrl
-# sudo pacman -S wmctrl
+pip install aiohttp
 ```
 
 ## 🛠️ Setup
 
-### Browser Configuration
+To allow the tool to connect, you need to launch your browser with the remote debugging port enabled.
 
 #### Chrome
 ```bash
-chrome --remote-debugging-port=9222
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+
+# Windows
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+
+# Linux
+google-chrome --remote-debugging-port=9222
 ```
 
 #### Microsoft Edge
-```bash
-msedge --remote-debugging-port=9222
-```
+The command is similar, just replace the executable name (e.g., `msedge`).
 
-### Alternative Setup
-You can also enable remote debugging through browser flags:
-- Launch browser with `--remote-debugging-port=9222` flag
-- Or set up a custom port with `--remote-debugging-port=<port>`
+**Tip**: The tool can also attempt to **auto-launch** a browser for you if it can't find a running instance on the specified port.
 
 ## 📖 Usage
 
-### Mouse Pointer Selection Mode (Recommended)
+The tool is split into two main commands: `inspect` and `trace`.
+
+### `inspect` - Inspecting DOM Elements
+This command is for analyzing the HTML, CSS, and event listeners of a specific element.
+
+#### Using Mouse Pointer Selection (Recommended)
+This is the easiest way to select an element.
 ```bash
-# Basic element inspection with mouse selection
-python dom_inspector.py --url "example.com" --from-pointer
-
-# Complete analysis: styles + events + HTML
-python dom_inspector.py --url "example.com" --from-pointer --events --html
-
-# Custom port
-python dom_inspector.py --url "localhost:3000" --from-pointer --port 9223
+# Inspect styles, events, and HTML of an element by clicking on it
+python dom_inspector.py inspect --url "example.com" --from-pointer --events --html
 ```
-
 **How it works:**
-1. Run the command
-2. Move your mouse to the target element on the webpage
-3. Press `m` key to select the element
-4. Press `q` key to exit selection mode
+1. Run the command. A browser overlay will activate.
+2. Move your mouse to highlight elements.
+3. **Click** on the target element to select it.
+4. Press the `ESC` key to cancel selection.
 
-### CSS Selector Mode
+#### Using a CSS Selector
 ```bash
-# Target specific elements with CSS selectors
-python dom_inspector.py --url "example.com" --selector ".my-class"
+# Inspect only the styles for an element with the ID 'main-content'
+python dom_inspector.py inspect --url "example.com" --selector "#main-content"
 
-# Multiple inspection types
-python dom_inspector.py --url "example.com" --selector "#button" --events --html
+# Get events and HTML for an element with the class '.btn-primary'
+python dom_inspector.py inspect --url "example.com" --selector ".btn-primary" --events --html
 ```
 
-### Command Line Options
+### `trace` - Tracing JavaScript Execution
+This command listens for `debugger;` statements and prints the call stack.
 
+```bash
+# Attach to a tab and wait for debugger statements
+python dom_inspector.py trace --url "example.com"
+```
+Once attached, any time a `debugger;` statement is executed in the page's JavaScript, its context will be printed to your terminal.
+
+## 命令行选项
+
+### Global Options
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--url` | URL pattern to match browser tabs | Required |
-| `--selector` | CSS selector (if not using `--from-pointer`) | Optional |
-| `--from-pointer` | Enable mouse pointer selection mode | False |
-| `--events` | Show event listeners information | False |
-| `--html` | Show element HTML representation | False |
-| `--port` | Browser debugging port | 9222 |
+| `--port` | The port for the browser's remote debugging protocol. | `9222` |
+
+### `inspect` Command
+| Option | Description |
+|--------|-------------|
+| `--url` | A URL pattern to find the target browser tab. If omitted, you can choose from a list. |
+| `--selector` | The CSS selector for the element to inspect. |
+| `--from-pointer` | Use the interactive, in-browser mouse selection mode. |
+| `--events` | Display the event listeners attached to the element. |
+| `--html` | Display the outer HTML of the element. |
+
+*Note: You must provide either `--selector` or `--from-pointer`.*
+
+### `trace` Command
+| Option | Description |
+|--------|-------------|
+| `--url` | A URL pattern to find the target browser tab. If omitted, you can choose from a list. |
 
 ## 📋 Example Output
 
-### CSS Styles
-```css
+### CSS Styles (`inspect`)
+```
 element.style {
 }
 
-.param-type {
-    display: block;
-    font-weight: bold;
+main.css:12
+.button {
+    background-color: #007bff;
+    color: white;
 }
 
-a, .aside-close-button {
-    color: hsl(232, 50%, 45%);
-}
-
-用户代理样式表
-a:-webkit-any-link {
-    color: -webkit-link;
+user agent stylesheet
+button {
     cursor: pointer;
-    text-decoration: underline;
-}
-
-继承的样式:
-html, body {
-    font-family: 'Roboto', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    background-color: #fafafa;
 }
 ```
 
-### Event Listeners
+### Event Listeners (`inspect`)
 ```
-事件类型: click
-----------------------------------------
-  捕获阶段: 否
-  被动监听: 否
-  仅触发一次: 否
-  脚本ID: 123
-  位置: 行 45, 列 12
-  函数: function onClick() { ... }
-
-事件类型: mouseover
-----------------------------------------
-  捕获阶段: 是
-  被动监听: 是
-  仅触发一次: 否
-  脚本ID: 124
-  位置: 行 78, 列 8
+📍 脚本位置组 #1
+==================================================
+🎯 事件类型: click (1个)
+🔗 绑定对象: button#my-button.btn.btn-primary
+📄 脚本ID: 25
+📍 位置: 行 15, 列 8
+🌐 脚本URL: http://example.com/assets/main.js
+⚙️  监听属性: 捕获=否, 被动=否, 一次=否
+📝 相关代码:
+    → 15:     button.addEventListener('click', () => {
+      16:         console.log('Button clicked!');
+      17:     });
 ```
 
-### HTML Representation
-```html
-<button class="btn btn-primary" data-toggle="modal" onclick="handleClick()">
-  Click me
-  <span class="icon"></span>
-</button>
+### Debugger Trace (`trace`)
+```
+==================== Paused on debugger statement ====================
+Reason: debuggerStatement
+
+--- Stack Trace ---
+  [0] funcC at test.html:15:13
+  [1] funcB at test.html:21:13
+  [2] funcA at test.html:25:13
+
+--- Frame 0: funcC (test.html:15:13) ---
+Source Context:
+   13 |     let b = "test string";
+   14 |     let c = { d: 1, e: "nested" };
+-> 15 |     debugger;    // a: 10, b: "test string", c: Object
+   16 | }
+   17 | 
+
+--- Frame 1: funcB (test.html:21:13) ---
+Source Context:
+   19 | function funcB() {
+   20 |     let z = 99;
+-> 21 |     funcC();
+   22 | }
+   23 | 
+
+==================================================================
+Resuming execution...
 ```
 
 ## 🔧 Technical Details
 
-### Architecture
-- **Chrome DevTools Protocol**: Direct communication with browser debugging API
-- **Asynchronous Operations**: Built with `aiohttp` for efficient WebSocket communication
-- **Cross-Platform Window Management**: Platform-specific window detection and coordinate conversion
+This tool communicates directly with the browser using the **Chrome DevTools Protocol (CDP)** over WebSockets.
 
-### Coordinate System
-The tool handles complex coordinate conversions with high precision:
-
-1. **Physical Screen Coordinates**: Raw mouse position in physical pixels
-2. **DPI Scaling Detection**: Automatic high-DPI display scaling detection using platform-specific APIs
-3. **Browser Window Detection**: Cross-platform window detection using:
-   - **macOS**: Objective-C/Cocoa Accessibility APIs and AppleScript fallback
-   - **Windows**: pygetwindow library with Win32 API integration
-   - **Linux**: wmctrl utility for X11 window management
-4. **Browser UI Offset Calculation**: Automatic detection of browser chrome (address bar, tabs, etc.)
-5. **Viewport Coordinates**: Final coordinates for DOM API after all conversions
-
-### DPI Support
-- **Automatic Detection**: Identifies display scaling factors using native platform APIs
-- **Platform-Specific Implementations**:
-  - **macOS**: Uses `NSScreen` API for Retina display detection
-  - **Windows**: Uses `GetDpiForWindow` and monitor DPI awareness
-  - **Linux**: Uses X11 server information and display configuration
-- **Common Scales**: Supports 100%, 125%, 150%, 175%, 200%, 225%, 250%, 300%, 400%
-- **Dynamic Scaling**: Handles multi-monitor setups with different DPI scaling
-
-### Window Detection Architecture
-
-The window detection system uses a multi-layered approach:
-
-1. **Primary Detection**: Platform-specific native APIs
-   - macOS: Accessibility API (AXUIElement) with Objective-C/Cocoa
-   - Windows: pygetwindow with Win32 API integration
-   - Linux: wmctrl with X11 window management
-
-2. **Fallback Mechanisms**:
-   - AppleScript fallback for macOS when Accessibility API fails
-   - Process enumeration for browser identification
-   - Window filtering by title, class, and visibility
-
-3. **Error Handling**:
-   - Graceful degradation when APIs are unavailable
-   - Permission handling for accessibility features
-   - Cross-platform compatibility checks
-
-### Coordinate Conversion Workflow
-
-```
-Physical Screen Coordinates
-          ↓
-DPI Scaling Application (× scale factor)
-          ↓
-Browser Window Detection (position + size)
-          ↓
-Browser UI Offset Calculation (address bar, tabs)
-          ↓
-Viewport Coordinates (final DOM position)
-          ↓
-DOM Element Selection
-```
-
-This sophisticated coordinate conversion system ensures accurate element selection across all display types and browser configurations.
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-#### Browser Connection Issues
-- **"No browser tabs found"**: 
-  - Ensure browser is running with remote debugging: `chrome --remote-debugging-port=9222`
-  - Check if the URL pattern matches any open tabs
-  - Verify the port number is correct
-  - Use `test_manual_browser.py` or `test_connection.py` to debug connection issues
-
-- **"Cannot connect to browser"**:
-  - Check if browser is running with the correct debugging port
-  - Verify firewall isn't blocking WebSocket connections
-  - Try using a different port number
-
-#### Coordinate Conversion Issues
-- **"Mouse position doesn't match element"**:
-  - The tool automatically handles DPI scaling
-  - Ensure the browser window is visible and not minimized
-  - Try different elements or refresh the page
-  - Run `test_mouse_selection.py` or `test_viewport_analysis.py` to validate coordinate accuracy
-
-- **"Cannot find browser window"**:
-  - Make sure Chrome/Edge is running and visible
-  - On Linux, install `wmctrl`: `sudo apt-get install wmctrl`
-  - On Windows, install `pygetwindow`: `pip install pygetwindow`
-  - Run coordinate tests to debug window detection
-
-#### Permission Issues
-- **macOS Accessibility Permissions**:
-  - Grant accessibility permissions to Terminal/iTerm
-  - System Preferences → Security & Privacy → Privacy → Accessibility
-  - Required for accurate window detection and coordinate conversion
-
-- **File URL Limitations**:
-  - File URLs (`file://`) may have security restrictions
-  - Use HTTP URLs for testing when possible
-  - Run `test_file_url_issue.py` to investigate file URL issues
-
-#### High-DPI Display Issues
-- **Incorrect scaling detection**:
-  - Run `test_viewport_analysis.py` to validate DPI scaling detection
-  - Check if multi-monitor setup is causing issues
-  - Verify display scaling settings in system preferences
-
-- **Retina display problems**:
-  - macOS Retina displays use 2x scaling by default
-  - Run coordinate tests with precise test elements
-  - Check browser window positioning and UI offset calculation
-
-#### Testing-Specific Issues
-- **Test failures**:
-  - Ensure all dependencies are installed: `pip install aiohttp pyautogui keyboard`
-  - Run tests with browser already running on port 9222
-  - Check browser console for any error messages
-
-- **JavaScript injection failures**:
-  - Browser may block JavaScript injection due to security policies
-  - Ensure the browser tab has proper webpage loaded
-  - Run `test_simple_injection.py` to test injection logic without browser
-  - Use `test_real_chrome_injection.py` for comprehensive browser testing
-
-### Debug Mode
-
-For detailed debugging:
-
-1. **Enable verbose logging**: Modify test files to add `print()` statements
-2. **Browser DevTools**: Use browser's developer tools to monitor WebSocket traffic
-3. **Coordinate debugging**: Run `test_viewport_analysis.py` or `test_mouse_selection.py` with precise test elements
-4. **Connection debugging**: Use `test_connection.py` for basic WebSocket connection testing
-5. **JavaScript debugging**: Use `test_simple_injection.py` for injection logic validation
-
-### Test-Specific Troubleshooting
-
-- If `test_dom_inspector.py` fails: Check browser connection and page loading
-- If coordinate tests fail: Verify DPI scaling detection and window positioning  
-- If JavaScript injection tests fail: Check browser security policies and console output
-- If console listener tests fail: Verify browser DevTools Protocol message handling
-
-## 🔍 Use Cases
-
-### Web Development
-- **CSS Debugging**: Understand style inheritance and specificity
-- **Performance Analysis**: Identify unused styles and event listeners
-- **Cross-Browser Testing**: Verify consistent styling across browsers
-
-### QA Testing
-- **Element Inspection**: Verify proper styling and behavior
-- **Automated Testing**: Generate selectors and validate DOM structure
-- **Accessibility Testing**: Check event handlers and semantic structure
-
-### Learning & Education
-- **Understanding CSS**: See how styles cascade and inherit
-- **JavaScript Events**: Learn about event delegation and handlers
-- **Browser Internals**: Explore how DevTools gather information
+The interactive element selection mode (`--from-pointer`) is achieved by injecting a JavaScript module into the target page. This script overlays the page, highlights elements under the cursor, and captures clicks. When an element is selected, the script sends a `console.log` message with a unique prefix and the element's unique CSS selector. The Python backend listens for this specific console message, parses the selector, and uses it to perform the inspection via CDP. This approach avoids brittle OS-level screen coordinate calculations and works reliably across all platforms and display resolutions.
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite to verify all functionality. Each test focuses on specific aspects of the DOM inspector.
+The project includes a comprehensive test suite to ensure reliability.
 
 ### Running Tests
-
-#### Run All Tests
+You can run tests individually:
 ```bash
-# Run individual test files
 python test_dom_inspector.py
-python test_connection.py
-python test_mouse_selection.py
-python test_real_chrome_injection.py
+python test_debugger_trace.py
 ```
 
-#### Test Categories
-
-##### Core Functionality Tests
-- **`test_dom_inspector.py`** - Main comprehensive test suite
-  - Tests browser connection, element finding, style extraction, and event listeners
-  - Uses a new browser profile for isolated testing
-  - Validates all major DOM inspector features
-
-- **`test_manual_browser.py`** - Manual browser connection testing
-  - Tests browser connection without auto-launch
-  - Validates basic DOM inspector functionality
-  - Useful for debugging browser connection issues
-
-- **`test_real_website.py`** - Real website navigation testing
-  - Tests navigation to external websites like baidu.com
-  - Validates element finding on complex real-world pages
-  - Ensures compatibility with production websites
-
-- **`test_advanced_features.py`** - Advanced features testing
-  - Tests style extraction on real websites
-  - Validates event listener detection
-  - Tests complex CSS selector functionality
-  - Includes error handling tests
-
-- **`test_connection.py`** - Basic browser connection test
-  - Quick test to verify Chrome DevTools Protocol connection
-  - Shows available browser tabs and WebSocket URLs
-  - Minimal test for connection troubleshooting
-
-##### Coordinate System Tests
-- **`test_mouse_selection.py`** - Mouse pointer selection functionality
-  - Tests mouse-based element selection with positioned elements
-  - Validates coordinate conversion for mouse input
-  - Tests element selection at specific coordinates using HTTP server
-
-- **`test_viewport_analysis.py`** - Viewport and layout analysis
-  - Analyzes browser viewport and page layout information
-  - Tests coordinate detection within visible areas
-  - Validates DOM structure and boundary calculations
-
-- **`test_simple_page.py`** - Simple page coordinate testing
-  - Tests coordinate detection on simple HTML pages
-  - Uses data URLs for isolated testing
-  - Validates basic element positioning and coordinate mapping
-
-- **`test_first_div.py`** - First div element coordinate testing
-  - Finds and tests coordinates of the first div element on a page
-  - Tests coordinate accuracy at specific element positions
-  - Includes backendNodeId to nodeId conversion testing
-
-##### JavaScript Integration Tests
-- **`test_embedded_js.py`** - Embedded JavaScript code testing
-  - Tests the embedded JavaScript code functionality
-  - Validates mouse element detector code structure
-  - Checks for required functions and methods
-
-- **`test_chrome_simple.py`** - Simple Chrome connection and JavaScript injection
-  - Quick test for Chrome connection and JavaScript injection
-  - Tests basic JavaScript functionality injection
-  - Validates element selection mode startup
-
-- **`test_javascript_injection.py`** - JavaScript injection functionality
-  - Tests JavaScript injection into browser pages
-  - Validates element selection mode functionality
-  - Tests communication between Python and injected JavaScript
-
-- **`test_injection_logic.py`** - JavaScript injection logic testing
-  - Tests JavaScript injection logic without requiring real Chrome connection
-  - Validates embedded code structure and required functions
-  - Tests console output patterns and function availability
-
-- **`test_simple_injection.py`** - Simple injection functionality testing
-  - Tests JavaScript injection methods and validation
-  - Checks instance variables and code constants
-  - Validates file reading capabilities for JavaScript injection
-
-- **`test_real_chrome_injection.py`** - Real Chrome JavaScript injection testing
-  - Comprehensive test with real Chrome browser
-  - Tests complete JavaScript injection and element selection workflow
-  - Validates browser console interaction and user interface
-
-##### Utility and Debug Tests
-- **`test_server_utils.py`** - HTTP server utilities for testing
-  - Provides shared HTTP server implementation for tests
-  - Replaces file:// URL usage with proper HTTP server
-  - Contains TestServerContext for clean test setup/teardown
-
-- **`test_console_listener.py`** - Console message listening functionality
-  - Tests browser console message monitoring
-  - Validates console message handling and processing
-  - Useful for debugging JavaScript execution
-
-##### Issue Investigation Tests
-- **`test_file_url_issue.py`** - File URL element finding issues
-  - Investigates file:// URL element finding problems using HTTP server
-  - Compares HTTP URL behavior with file URL limitations
-  - Tests DOM content availability with different URL schemes
-
-- **`test_backendid_fix.py`** - BackendNodeId conversion fix testing
-  - Tests the fix for backendNodeId to nodeId conversion
-  - Simulates scenarios where only backendNodeId is available
-  - Validates conversion logic for DOM element identification
-
-- **`test_script_origin.py`** - Script origin information testing
-  - Tests script source information extraction in event listeners
-  - Validates script URL and filename retrieval
-  - Uses HTTP server for proper script source testing
-
-- **`test_script_info.py`** - Script source information functionality
-  - Tests script source information retrieval and display
-  - Validates JavaScript source code extraction
-  - Tests integration with event listener formatting
-
-### Test Development
-
-When adding new features, follow these testing practices:
-1. Create dedicated test files for new functionality
-2. Include both unit tests and integration tests
-3. Test on multiple platforms (macOS, Windows, Linux)
-4. Test with different browsers (Chrome, Edge)
-5. Include error handling and edge case testing
+### Test Overview
+- **`test_dom_inspector.py`**: End-to-end tests for the `inspect` command, covering element finding, style extraction, and event listeners.
+- **`test_debugger_trace.py`**: An integration test for the `trace` command, verifying that it correctly captures `debugger;` statements and prints the stack with variables.
+- ... and many others for connection, utilities, and specific features.
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and test thoroughly
-4. Commit your changes: `git commit -m 'Add feature-name'`
-5. Push to the branch: `git push origin feature-name`
-6. Submit a pull request
+Contributions are welcome! Please feel free to fork the repository, make your changes, and submit a pull request.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- Chrome DevTools Protocol team for the comprehensive API
-- Contributors to `aiohttp`, `pyautogui`, and other dependencies
-- The web development community for inspiration and feedback
-
----
-
-**Note**: This tool is for development and educational purposes. Always respect website terms of service and privacy policies when using automated inspection tools.
+This project is licensed under the MIT License.

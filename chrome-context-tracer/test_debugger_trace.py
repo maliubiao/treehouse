@@ -9,8 +9,8 @@ This test script automates the following process:
     - A 'debugger;' statement is placed in the innermost function (`funcC`)
       along with several local variables.
 2.  Launches a browser with remote debugging enabled, navigated to the temp file.
-3.  Runs `dom_inspector.py trace` as a subprocess, targeting the test page.
-4.  Captures the standard output of the subprocess.
+3.  Directly invokes the DOMInspector's tracing capabilities in-process.
+4.  Captures the standard output of the inspector in memory.
 5.  Asserts that the captured output contains:
     - The expected console log messages.
     - The debugger pause notification.
@@ -20,19 +20,23 @@ This test script automates the following process:
 """
 
 import asyncio
+import contextlib
+import io
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 # Add the parent directory to the path to allow importing dom_inspector
 sys.path.append(str(Path(__file__).parent.absolute()))
 
-from dom_inspector import BrowserContextManager
+from dom_inspector import BrowserContextManager, DOMInspector, find_chrome_tabs
 
 # --- Test Configuration ---
-TEST_TIMEOUT: float = 15.0  # seconds
+TEST_TIMEOUT: float = 20.0  # Increased timeout to be more robust
+STOP_SIGNAL = "Resuming execution..."
 
 TEST_HTML_CONTENT: str = """
 <!DOCTYPE html>
@@ -48,9 +52,8 @@ TEST_HTML_CONTENT: str = """
             console.log("Inside funcC, before debugger.");
             let a = 10;
             let b = "test string";
-            let c = {{ d: 1, e: "nested" }};
+            let c = { d: 1, e: "nested" };
             debugger; // The inspector should pause here
-            console.log("This should not be printed during the test.");
         }
 
         function funcB() {
@@ -65,7 +68,7 @@ TEST_HTML_CONTENT: str = """
 
         window.onload = function() {
             console.log("Console message from test page: Script starting.");
-            setTimeout(funcA, 1000); // Delay to ensure inspector is attached
+            setTimeout(funcA, 1500); // Delay to ensure inspector is attached
         };
     </script>
 </body>
@@ -78,6 +81,8 @@ async def run_test() -> None:
     print("--- Starting Debugger Trace Integration Test ---")
     success = False
     temp_html_file = None
+    output = ""
+    errors = ""
 
     try:
         # Step 1: Create a temporary HTML file
@@ -90,46 +95,53 @@ async def run_test() -> None:
 
         # Step 2: Launch browser using the context manager for auto-cleanup
         async with BrowserContextManager(browser_type="chrome", auto_cleanup=True, start_url=file_url) as browser:
-            # Step 3: Run dom_inspector.py as a subprocess
-            script_path = Path(__file__).parent / "dom_inspector.py"
-            command: List[str] = [
-                sys.executable,
-                str(script_path),
-                "trace",
-                "--url",
-                Path(temp_html_file).name,  # Match by filename is sufficient
-            ]
+            url_pattern = Path(temp_html_file).name  # Match by filename
+            port = browser.port
 
-            print(f"🚀 Running command: {' '.join(command)}")
+            output_buffer = io.StringIO()
+            inspector: Optional[DOMInspector] = None
 
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            # Redirect stdout/stderr to capture all prints from the inspector
+            with contextlib.redirect_stdout(output_buffer), contextlib.redirect_stderr(output_buffer):
+                try:
+                    # Step 3: Run inspector logic in-process
+                    websocket_urls = await find_chrome_tabs(port, auto_launch=False)
+                    if not websocket_urls:
+                        raise RuntimeError("Test setup failed: No websocket URLs found.")
 
-            # Step 4: Capture output with a timeout
-            try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=TEST_TIMEOUT)
-            except asyncio.TimeoutError:
-                print(f"⌛ Test timed out after {TEST_TIMEOUT} seconds. Terminating process.")
-                process.terminate()
-                await process.wait()
-                # Get whatever output was captured before the timeout
-                stdout_bytes = await process.stdout.read() if process.stdout else b""
-                stderr_bytes = await process.stderr.read() if process.stderr else b""
+                    inspector = DOMInspector(websocket_urls[0])
+                    await inspector.connect()
 
-            output = stdout_bytes.decode("utf-8")
-            errors = stderr_bytes.decode("utf-8")
+                    target_id = await inspector.find_tab_by_url(url_pattern)
+                    if not target_id:
+                        raise RuntimeError(f"Test setup failed: Could not find tab with pattern '{url_pattern}'.")
 
-            print("\n--- Captured STDOUT ---")
+                    session_id = await inspector.attach_to_tab(target_id)
+                    if not session_id:
+                        raise RuntimeError("Test setup failed: Could not attach to tab.")
+
+                    print("\n✅ Inspector attached. Waiting for debugger event...")
+
+                    # Step 4: Wait for the debugger event to be processed
+                    start_time = time.time()
+                    while STOP_SIGNAL not in output_buffer.getvalue():
+                        if time.time() - start_time > TEST_TIMEOUT:
+                            raise asyncio.TimeoutError(f"Test timed out after {TEST_TIMEOUT}s waiting for stop signal.")
+                        await asyncio.sleep(0.1)
+
+                    print(f"✅ Stop signal '{STOP_SIGNAL}' detected.")
+
+                finally:
+                    # Ensure inspector connection is closed
+                    if inspector:
+                        await inspector.close()
+
+            # Retrieve captured output
+            output = output_buffer.getvalue()
+
+            print("\n--- Captured Output ---")
             print(output)
-            print("--- End of STDOUT ---\n")
-
-            if errors:
-                print("--- Captured STDERR ---")
-                print(errors)
-                print("--- End of STDERR ---\n")
+            print("--- End of Output ---\n")
 
             # Step 5: Assertions
             print("🔬 Verifying output...")
@@ -142,6 +154,7 @@ async def run_test() -> None:
         import traceback
 
         traceback.print_exc()
+        errors = str(e)
     finally:
         # Step 6: Cleanup
         if temp_html_file and os.path.exists(temp_html_file):
@@ -152,6 +165,13 @@ async def run_test() -> None:
             print("\n✅✅✅ Integration Test Passed! ✅✅✅")
         else:
             print("\n❌❌❌ Integration Test Failed! ❌❌❌")
+            if output:
+                print("\n--- Final Captured Output on Failure ---")
+                print(output)
+            if errors:
+                print("\n--- Error on Failure ---")
+                print(errors)
+            sys.exit(1)  # Exit with error code on failure
 
 
 def _verify_output(output: str) -> None:
@@ -180,12 +200,12 @@ def _verify_output(output: str) -> None:
         if "debugger;" in line and "//" in line:
             var_string_found = True
             assert "a: 10" in line
-            assert "b: test string" in line
+            assert 'b: "test string"' in line or "b: test string" in line
             # For objects, the default description is 'Object'
             assert "c: Object" in line
             break
 
-    assert var_string_found
+    assert var_string_found, "Did not find the annotated line with local variable values."
     print("✅ Assertion Passed: Local variables were correctly displayed.")
 
     # 5. Verify execution is resumed

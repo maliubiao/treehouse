@@ -1,330 +1,217 @@
 # Chrome Context Tracer
 
-一个强大的 DOM 检查工具，通过 Chrome DevTools Protocol (CDP) 复制 Chrome DevTools 功能。获取任何网页元素的详细 CSS 样式、事件监听器和 HTML 表示。
+一个强大的命令行工具，可将 Chrome DevTools 的核心功能带到您的终端。它基于 Chrome DevTools Protocol (CDP) 构建，允许您在不离开终端的情况下检查 DOM 元素、分析 CSS、追踪事件监听器以及调试 JavaScript 执行。
 
 ## 🌟 功能特性
 
-### 🎯 智能元素选择
-- **鼠标指针选择**: 使用热键支持 (`m` 键) 点选元素
-- **CSS 选择器模式**: 传统的 CSS 选择器元素定位
-- **智能窗口检测**: 自动检测 Chrome/Edge 浏览器窗口
-- **高 DPI 支持**: 支持所有显示类型的精确坐标转换 (Retina, 4K 等)
+### 🕵️‍♀️ DOM 检查 (`inspect`)
+- **智能元素选择**:
+  - **鼠标指针模式**: 通过一个浏览器内覆盖层，您只需点击页面上的任何元素即可选中并进行检查。该功能通过稳定的 JavaScript 注入实现，完全跨平台。
+  - **CSS 选择器模式**: 使用标准的 CSS 选择器精确定位目标元素。
+- **完整的样式分析**:
+  - **DevTools 兼容输出**: 以与 Chrome DevTools "样式" 面板完全相同的格式获取 CSS 样式。
+  - **来源信息**: 查看每个样式来源于哪个 CSS 文件以及具体的行号。
+  - **继承链**: 查看从父元素继承的样式。
+- **事件监听器检查**:
+  - **全面的事件分析**: 列出附加到元素及其祖先（直到 `window` 对象）的所有事件监听器。
+  - **来源定位**: 精确显示每个监听器所在的 JavaScript 文件、行号和函数。
 
-### 🎨 完整样式分析
-- **DevTools 兼容输出**: 与 Chrome DevTools 完全相同的格式
-- **源文件信息**: 显示哪个 CSS 文件和行号影响每个样式
-- **继承链**: 显示从父元素继承的样式
-- **样式优先级**: 尊重 CSS 层叠和特异性规则
-- **多来源支持**: 支持用户代理、作者和注入的样式表
+### 🐛 JavaScript 调试 (`trace`)
+- **Debugger 追踪**: 激活追踪模式，监听您 JavaScript 代码中的 `debugger;` 语句。
+- **丰富的调用栈**: 当命中 `debugger;` 语句时，工具会打印出一个完整且易于阅读的调用栈。
+- **变量检查**: 输出内容包含暂停时刻调用栈中每个作用域内的局部变量名及其值。
+- **自动恢复**: 在打印调用栈信息后，脚本会自动恢复执行，从而实现非侵入式的调试日志记录。
 
-### 🎧 事件监听器检查
-- **完整事件分析**: 显示附加到元素的所有事件监听器
-- **源位置**: 显示 JavaScript 文件、行号和函数信息
-- **事件详情**: 捕获阶段、被动、一次性标志和处理程序信息
-- **DevTools 格式**: 与 Chrome DevTools 事件监听器面板相同的输出
-
-### 🌐 多浏览器支持
-- **Chrome**: 全面支持 Google Chrome
-- **Microsoft Edge**: 完全兼容 Edge 浏览器
-- **跨平台**: 支持 macOS、Windows 和 Linux
+### 🌐 通用特性
+- **多浏览器支持**: 与 Google Chrome 和 Microsoft Edge 无缝协作。
+- **跨平台**: 在 macOS、Windows 和 Linux 上功能完整。
+- **自动启动浏览器**: 如果在指定端口上找不到正在运行的浏览器实例，它可以自动为您启动一个启用了远程调试的浏览器。
 
 ## 🚀 安装
 
 ### 先决条件
-确保已安装 Python 3.7+。
+- Python 3.7+
+- 已安装的 Google Chrome 或 Microsoft Edge 浏览器。
 
-### 必需依赖
+### 依赖
+该工具只有一个核心依赖：`aiohttp`。
+
 ```bash
-pip install aiohttp pyautogui keyboard
-```
-
-### 平台特定依赖
-
-#### Windows
-```bash
-pip install pygetwindow
-```
-
-#### macOS (可选，用于增强 Retina 检测)
-```bash
-pip install pyobjc-framework-Cocoa
-```
-
-#### Linux
-```bash
-# 安装 wmctrl 用于窗口检测
-sudo apt-get install wmctrl
+pip install aiohttp
 ```
 
 ## 🛠️ 设置
 
-### 浏览器配置
+为了让工具能够连接，您需要启动浏览器并启用远程调试端口。
 
 #### Chrome
 ```bash
-chrome --remote-debugging-port=9222
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+
+# Windows
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+
+# Linux
+google-chrome --remote-debugging-port=9222
 ```
 
 #### Microsoft Edge
-```bash
-msedge --remote-debugging-port=9222
-```
+命令类似，只需替换可执行文件名（例如 `msedge`）。
+
+**提示**: 如果工具在指定端口上找不到正在运行的实例，它也会尝试为您**自动启动**一个浏览器。
 
 ## 📖 使用方法
 
-### 鼠标指针选择模式 (推荐)
+该工具分为两个主要命令：`inspect` 和 `trace`。
+
+### `inspect` - 检查 DOM 元素
+此命令用于分析特定元素的 HTML、CSS 和事件监听器。
+
+#### 使用鼠标指针选择 (推荐)
+这是选择元素最简单的方式。
 ```bash
-# 基本元素检查，使用鼠标选择
-python dom_inspector.py --url "example.com" --from-pointer
-
-# 完整分析: 样式 + 事件 + HTML
-python dom_inspector.py --url "example.com" --from-pointer --events --html
-
-# 自定义端口
-python dom_inspector.py --url "localhost:3000" --from-pointer --port 9223
+# 通过点击元素来检查其样式、事件和 HTML
+python dom_inspector.py inspect --url "example.com" --from-pointer --events --html
 ```
-
 **工作原理:**
-1. 运行命令
-2. 将鼠标移动到网页上的目标元素
-3. 按 `m` 键选择元素
-4. 按 `q` 键退出选择模式
+1. 运行命令，浏览器内将激活一个覆盖层。
+2. 移动鼠标以高亮显示元素。
+3. **点击** 目标元素以选中它。
+4. 按 `ESC` 键可取消选择。
 
-### CSS 选择器模式
+#### 使用 CSS 选择器
 ```bash
-# 使用 CSS 选择器定位特定元素
-python dom_inspector.py --url "example.com" --selector ".my-class"
+# 仅检查 ID 为 'main-content' 的元素的样式
+python dom_inspector.py inspect --url "example.com" --selector "#main-content"
 
-# 多种检查类型
-python dom_inspector.py --url "example.com" --selector "#button" --events --html
+# 获取 class 为 '.btn-primary' 的元素的事件和 HTML
+python dom_inspector.py inspect --url "example.com" --selector ".btn-primary" --events --html
 ```
 
-### 命令行选项
+### `trace` - 追踪 JavaScript 执行
+此命令监听 `debugger;` 语句并打印调用栈。
 
+```bash
+# 附加到一个标签页并等待 debugger 语句
+python dom_inspector.py trace --url "example.com"
+```
+一旦附加成功，页面 JavaScript 中任何时候执行 `debugger;` 语句，其上下文信息都将被打印到您的终端。
+
+## 命令行选项
+
+### 全局选项
 | 选项 | 描述 | 默认值 |
-|------|------|--------|
-| `--url` | 匹配浏览器标签页的 URL 模式 | 必需 |
-| `--selector` | CSS 选择器 (如果不使用 `--from-pointer`) | 可选 |
-| `--from-pointer` | 启用鼠标指针选择模式 | False |
-| `--events` | 显示事件监听器信息 | False |
-| `--html` | 显示元素 HTML 表示 | False |
-| `--port` | 浏览器调试端口 | 9222 |
+|--------|-------------|---------|
+| `--port` | 浏览器远程调试协议的端口。 | `9222` |
+
+### `inspect` 命令
+| 选项 | 描述 |
+|--------|-------------|
+| `--url` | 用于查找目标浏览器标签页的 URL 模式。如果省略，将提供列表供您选择。 |
+| `--selector` | 要检查的元素的 CSS 选择器。 |
+| `--from-pointer` | 使用交互式的、基于浏览器内鼠标操作的选择模式。 |
+| `--events` | 显示附加到该元素的事件监听器。 |
+| `--html` | 显示该元素的 outer HTML。 |
+
+*注意: 您必须提供 `--selector` 或 `--from-pointer` 中的一个。*
+
+### `trace` 命令
+| 选项 | 描述 |
+|--------|-------------|
+| `--url` | 用于查找目标浏览器标签页的 URL 模式。如果省略，将提供列表供您选择。 |
 
 ## 📋 示例输出
 
-### CSS 样式
-```css
+### CSS 样式 (`inspect`)
+```
 element.style {
 }
 
-.param-type {
-    display: block;
-    font-weight: bold;
+main.css:12
+.button {
+    background-color: #007bff;
+    color: white;
 }
 
-a, .aside-close-button {
-    color: hsl(232, 50%, 45%);
-}
-
-用户代理样式表
-a:-webkit-any-link {
-    color: -webkit-link;
+user agent stylesheet
+button {
     cursor: pointer;
-    text-decoration: underline;
-}
-
-继承的样式:
-html, body {
-    font-family: 'Roboto', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    background-color: #fafafa;
 }
 ```
 
-### 事件监听器
+### 事件监听器 (`inspect`)
 ```
-事件类型: click
-----------------------------------------
-  捕获阶段: 否
-  被动监听: 否
-  仅触发一次: 否
-  脚本ID: 123
-  位置: 行 45, 列 12
-  函数: function onClick() { ... }
-
-事件类型: mouseover
-----------------------------------------
-  捕获阶段: 是
-  被动监听: 是
-  仅触发一次: 否
-  脚本ID: 124
-  位置: 行 78, 列 8
+📍 脚本位置组 #1
+==================================================
+🎯 事件类型: click (1个)
+🔗 绑定对象: button#my-button.btn.btn-primary
+📄 脚本ID: 25
+📍 位置: 行 15, 列 8
+🌐 脚本URL: http://example.com/assets/main.js
+⚙️  监听属性: 捕获=否, 被动=否, 一次=否
+📝 相关代码:
+    → 15:     button.addEventListener('click', () => {
+      16:         console.log('Button clicked!');
+      17:     });
 ```
 
-### HTML 表示
-```html
-<button class="btn btn-primary" data-toggle="modal" onclick="handleClick()">
-  点击我
-  <span class="icon"></span>
-</button>
+### Debugger 追踪 (`trace`)
+```
+==================== Paused on debugger statement ====================
+Reason: debuggerStatement
+
+--- Stack Trace ---
+  [0] funcC at test.html:15:13
+  [1] funcB at test.html:21:13
+  [2] funcA at test.html:25:13
+
+--- Frame 0: funcC (test.html:15:13) ---
+Source Context:
+   13 |     let b = "test string";
+   14 |     let c = { d: 1, e: "nested" };
+-> 15 |     debugger;    // a: 10, b: "test string", c: Object
+   16 | }
+   17 | 
+
+--- Frame 1: funcB (test.html:21:13) ---
+Source Context:
+   19 | function funcB() {
+   20 |     let z = 99;
+-> 21 |     funcC();
+   22 | }
+   23 | 
+
+==================================================================
+Resuming execution...
 ```
 
 ## 🔧 技术细节
 
-### 架构
-- **Chrome DevTools Protocol**: 与浏览器调试 API 直接通信
-- **异步操作**: 使用 `aiohttp` 实现高效的 WebSocket 通信
-- **跨平台窗口管理**: 平台特定的窗口检测和坐标转换
+该工具通过 WebSocket 直接使用 **Chrome DevTools Protocol (CDP)** 与浏览器进行通信。
 
-### 坐标系统
-工具处理复杂的坐标转换：
-1. **物理屏幕坐标**: 原始鼠标位置
-2. **DPI 缩放**: 自动高 DPI 显示缩放检测
-3. **浏览器窗口坐标**: 相对于浏览器窗口
-4. **视口坐标**: DOM API 的最终坐标
+交互式元素选择模式 (`--from-pointer`) 是通过向目标页面注入一个 JavaScript 模块来实现的。该脚本会在页面上创建一个覆盖层，高亮鼠标下的元素并捕获点击事件。当用户选择一个元素时，脚本会通过 `console.log` 发送一条带有唯一前缀和该元素唯一 CSS 选择器的消息。Python 后端会监听这条特定的控制台消息，解析出选择器，然后通过 CDP 使用该选择器执行检查。这种方法避免了脆弱的、依赖操作系统的屏幕坐标计算，并且能在所有平台和显示分辨率下可靠地工作。
 
-### 窗口检测架构
+## 🧪 测试
 
-窗口检测系统采用多层方法：
+项目包含一个全面的测试套件以确保其可靠性。
 
-1. **主要检测**: 平台特定的原生API
-   - macOS: 辅助功能API (AXUIElement) 与 Objective-C/Cocoa
-   - Windows: pygetwindow 与 Win32 API 集成
-   - Linux: wmctrl 与 X11 窗口管理
-
-2. **备用机制**:
-   - macOS 辅助功能API失败时的 AppleScript 备用方法
-   - 进程枚举进行浏览器识别
-   - 按标题、类和可见性过滤窗口
-
-3. **错误处理**:
-   - API不可用时的优雅降级
-   - 辅助功能权限处理
-   - 跨平台兼容性检查
-
-### 坐标转换工作流程
-
-```
-物理屏幕坐标
-          ↓
-DPI 缩放应用 (× 缩放因子)
-          ↓
-浏览器窗口检测 (位置 + 大小)
-          ↓
-浏览器UI偏移计算 (地址栏、标签页)
-          ↓
-视口坐标 (最终DOM位置)
-          ↓
-DOM元素选择
+### 运行测试
+您可以单独运行测试文件：
+```bash
+python test_dom_inspector.py
+python test_debugger_trace.py
 ```
 
-这种复杂的坐标转换系统确保在所有显示类型和浏览器配置下都能准确选择元素。
+### 测试概览
+- **`test_dom_inspector.py`**: `inspect` 命令的端到端测试，覆盖元素查找、样式提取和事件监听器。
+- **`test_debugger_trace.py`**: `trace` 命令的集成测试，验证它能正确捕获 `debugger;` 语句并打印带变量的调用栈。
+- ... 以及许多其他针对连接、工具函数和特定功能的测试。
 
-## 🐛 故障排除
+## 🤝 贡献
 
-### 常见问题
-
-#### 浏览器连接问题
-- **"未找到浏览器标签页"**: 
-  - 确保浏览器正在运行远程调试: `chrome --remote-debugging-port=9222`
-  - 检查 URL 模式是否匹配任何打开的标签页
-  - 验证端口号是否正确
-  - 使用 `test_manual_browser.py` 调试连接问题
-
-- **"无法连接到浏览器"**:
-  - 检查浏览器是否使用正确的调试端口运行
-  - 验证防火墙是否阻止 WebSocket 连接
-  - 尝试使用不同的端口号
-
-#### 坐标转换问题
-- **"鼠标位置与元素不匹配"**:
-  - 工具自动处理 DPI 缩放
-  - 确保浏览器窗口可见且未最小化
-  - 尝试不同的元素或刷新页面
-  - 运行 `test_enhanced_coordinate_conversion.py` 验证坐标准确性
-
-- **"找不到浏览器窗口"**:
-  - 确保 Chrome/Edge 正在运行且可见
-  - 在 Linux 上，安装 `wmctrl`: `sudo apt-get install wmctrl`
-  - 在 Windows 上，安装 `pygetwindow`: `pip install pygetwindow`
-  - 运行 `test_window_detection.py` 调试窗口检测
-
-#### 权限问题
-- **macOS 辅助功能权限**:
-  - 授予 Terminal/iTerm 辅助功能权限
-  - 系统偏好设置 → 安全性与隐私 → 隐私 → 辅助功能
-  - 运行 `test_objc_window_detection.py` 测试辅助功能API权限
-
-- **文件URL限制**:
-  - 文件URL (`file://`) 可能有安全限制
-  - 尽可能使用 HTTP URL 进行测试
-  - 运行 `test_file_url_issue.py` 调查文件URL问题
-
-#### 高DPI显示问题
-- **缩放检测不正确**:
-  - 运行 `test_coordinate_finding.py` 验证DPI缩放检测
-  - 检查多显示器设置是否导致问题
-  - 验证系统偏好设置中的显示缩放设置
-
-- **Retina显示问题**:
-  - macOS Retina 显示默认使用2倍缩放
-  - 使用精确测试元素运行 `test_enhanced_coordinate_conversion.py`
-  - 检查 AppleScript 备用方法是否正常工作
-
-#### 测试特定问题
-- **测试失败**:
-  - 确保所有依赖项已安装: `pip install aiohttp pyautogui keyboard`
-  - 在端口9222上运行浏览器时运行测试
-  - 检查浏览器控制台是否有错误消息
-
-- **AppleScript 超时**:
-  - macOS 可能提示辅助功能权限
-  - 授予终端应用程序权限
-  - 运行 `test_frontmost_window.py` 测试 AppleScript 功能
-
-### 调试模式
-
-要进行详细调试：
-
-1. **启用详细日志记录**: 修改测试文件添加 `print()` 语句
-2. **浏览器开发者工具**: 使用浏览器的开发者工具监控 WebSocket 流量
-3. **坐标调试**: 使用精确测试元素运行 `test_enhanced_coordinate_conversion.py`
-4. **窗口检测调试**: 使用 `test_objc_window_detection.py` 获取详细的 macOS 窗口信息
-5. **辅助功能调试**: 使用 `test_objc_window_detection.py` 运行辅助功能权限测试
-
-### 测试特定故障排除
-
-- 如果 `test_dom_inspector.py` 失败: 检查浏览器连接和页面加载
-- 如果坐标测试失败: 验证DPI缩放检测和窗口定位
-- 如果窗口检测测试失败: 检查平台特定依赖项和权限
-- 如果 AppleScript 测试失败: 授予终端应用程序辅助功能权限
-
-## 🔍 使用场景
-
-### Web 开发
-- **CSS 调试**: 理解样式继承和特异性
-- **性能分析**: 识别未使用的样式和事件监听器
-- **跨浏览器测试**: 验证跨浏览器的一致性样式
-
-### QA 测试
-- **元素检查**: 验证正确的样式和行为
-- **自动化测试**: 生成选择器和验证 DOM 结构
-- **可访问性测试**: 检查事件处理程序和语义结构
-
-### 学习与教育
-- **理解 CSS**: 查看样式如何层叠和继承
-- **JavaScript 事件**: 了解事件委托和处理程序
-- **浏览器内部**: 探索 DevTools 如何收集信息
+欢迎贡献！请随时 Fork 本仓库，进行修改，然后提交 Pull Request。
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 详见 LICENSE 文件。
-
-## 🙏 致谢
-
-- Chrome DevTools Protocol 团队提供全面的 API
-- `aiohttp`、`pyautogui` 和其他依赖项的贡献者
-- Web 开发社区的灵感和反馈
-
----
-
-**注意**: 此工具用于开发和教育目的。使用自动化检查工具时，请始终尊重网站的服务条款和隐私政策。
+本项目采用 MIT 许可证。

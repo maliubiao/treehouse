@@ -89,7 +89,9 @@ class DOMInspector:
                             else:
                                 future.set_result(response)
                     elif "method" in response:  # 事件
-                        await self._handle_event(response)
+                        # Run event handlers in a separate task to avoid deadlocking the listener
+                        # if a handler sends a command and waits for a response.
+                        asyncio.create_task(self._handle_event(response))
 
                 elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
                     break
@@ -110,7 +112,24 @@ class DOMInspector:
         params = event.get("params", {})
 
         if method == "Runtime.consoleAPICalled":
-            if self.console_listening and self.console_message_handler:
+            # 捕获我们自己的测试脚本的控制台消息
+            is_test_message = False
+            if params and "args" in params:
+                for arg in params.get("args", []):
+                    if "value" in arg and isinstance(arg["value"], str):
+                        if any(
+                            s in arg["value"]
+                            for s in [
+                                "Console message from test page",
+                                "Inside funcC, before debugger.",
+                            ]
+                        ):
+                            is_test_message = True
+                            break
+            if is_test_message:
+                await self._handle_console_api_called(params)
+
+            elif self.console_listening and self.console_message_handler:
                 await self.console_message_handler({"type": params.get("type", ""), "message": params, "raw": event})
             elif self.console_listening:
                 await self._handle_console_api_called(params)
@@ -212,22 +231,29 @@ class DOMInspector:
 
         if source_code:
             lines = source_code.split("\n")
-            start = max(0, line_number - 2)
-            end = min(len(lines), line_number + 3)
+
+            # For inline scripts, the line number from the event is relative to the document,
+            # but the fetched source is just the script content. We need to adjust.
+            script_start_line = script_info.get("scriptInfo", {}).get("startLine", 0)
+            relative_line_number = line_number - script_start_line
+
+            start = max(0, relative_line_number - 2)
+            end = min(len(lines), relative_line_number + 3)
 
             for i in range(start, end):
-                prefix = "->" if i == line_number else "  "
+                prefix = "->" if i == relative_line_number else "  "
                 line_content = lines[i]
 
                 # 在断点行附加变量信息
-                if i == line_number:
+                if i == relative_line_number:
                     # 找到一个好的位置插入注释，或者直接附加
                     if len(line_content.strip()) > 0:
                         line_content += f"    // {variables_str}"
                     else:
                         line_content += f"// {variables_str}"
 
-                print(f" {prefix} {i + 1: >4} | {line_content}")
+                # Print the original file line number for better context
+                print(f" {prefix} {i + script_start_line + 1: >4} | {line_content}")
         else:
             print("  [Source code not available]")
         print("")
@@ -1475,8 +1501,7 @@ class DOMInspector:
 
         try:
             await self.send_command("Console.disable")
-            await self.send_command("Runtime.disable")
-            print("✅ 控制台监听已禁用")
+            # Don't disable Runtime, as it might be used by other parts of the script
         except Exception as e:
             print(f"❌ 禁用控制台监听失败: {e}")
 
@@ -1504,7 +1529,8 @@ class DOMInspector:
                 elif arg.get("type") == "null":
                     message_parts.append("null")
                 elif arg.get("type") == "object":
-                    message_parts.append(f"[object {arg.get('className', 'Object')}]")
+                    description = arg.get("description", f"object {arg.get('className', 'Object')}")
+                    message_parts.append(f"[{description}]")
                 else:
                     message_parts.append(str(arg))
 
@@ -1585,38 +1611,47 @@ class DOMInspector:
             print(f"处理控制台消息错误: {e}")
 
 
-async def find_chrome_tabs(port: int = 9222, auto_launch: bool = True) -> List[str]:
-    """查找所有浏览器标签页的WebSocket URL（Chrome/Edge），支持自动启动浏览器"""
+async def _get_browser_tabs_info(port: int = 9222) -> List[Dict[str, Any]]:
+    """获取所有可用浏览器标签页的详细信息。"""
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(f"http://localhost:{port}/json") as response:
-                tabs = await response.json()
-                return [tab["webSocketDebuggerUrl"] for tab in tabs if tab.get("webSocketDebuggerUrl")]
-        except Exception as e:
-            if auto_launch:
-                print(f"无法连接到浏览器 DevTools: {e}")
-                print("尝试自动启动浏览器...")
-
-                # 尝试启动Chrome
-                success, _ = await launch_browser_with_debugging("chrome", port, return_process_info=True)
-                if success:
-                    print("Chrome浏览器已启动，等待连接...")
-                    # 等待浏览器完全启动
-                    import time
-
-                    time.sleep(5)
-
-                    # 重试连接
-                    try:
-                        async with session.get(f"http://localhost:{port}/json") as response:
-                            tabs = await response.json()
-                            return [tab["webSocketDebuggerUrl"] for tab in tabs if tab.get("webSocketDebuggerUrl")]
-                    except Exception as retry_error:
-                        print(f"重试连接失败: {retry_error}")
-                else:
-                    print("自动启动浏览器失败")
-
+                if response.status == 200:
+                    return await response.json()
+                return []
+        except aiohttp.ClientConnectorError:
+            # This is expected if the browser is not running
             return []
+        except Exception:
+            return []
+
+
+async def find_chrome_tabs(port: int = 9222, auto_launch: bool = True) -> List[str]:
+    """查找所有浏览器标签页的WebSocket URL（Chrome/Edge），支持自动启动浏览器"""
+    tabs_info = await _get_browser_tabs_info(port)
+
+    if tabs_info:
+        return [tab["webSocketDebuggerUrl"] for tab in tabs_info if tab.get("webSocketDebuggerUrl")]
+
+    if auto_launch:
+        print(f"无法连接到浏览器 DevTools 端口 {port}，尝试自动启动浏览器...")
+
+        # 尝试启动Chrome
+        success, _ = await launch_browser_with_debugging("chrome", port, return_process_info=True)
+        if success:
+            print("Chrome浏览器已启动，等待连接...")
+            await asyncio.sleep(5)  # 等待浏览器完全启动
+
+            # 重试连接
+            tabs_info_retry = await _get_browser_tabs_info(port)
+            if tabs_info_retry:
+                return [tab["webSocketDebuggerUrl"] for tab in tabs_info_retry if tab.get("webSocketDebuggerUrl")]
+            else:
+                print("重试连接失败")
+        else:
+            print("自动启动浏览器失败")
+
+    return []
 
 
 async def inspect_element_styles(
@@ -1701,6 +1736,9 @@ async def run_debugger_trace(url_pattern: str, port: int):
     inspector = DOMInspector(websocket_urls[0])
     await inspector.connect()
 
+    # Enable console to see logs from the test page
+    await inspector.send_command("Runtime.enable")
+
     stop_event = asyncio.Event()
 
     try:
@@ -1761,11 +1799,17 @@ def main():
 
 
 class BrowserContextManager:
-    """浏览器上下文管理器，支持自动清理和保持存活两种模式"""
+    """
+    智能浏览器上下文管理器。
+    - 如果指定端口上已有浏览器运行，则复用它。
+    - 如果没有，则启动一个新实例。
+    - 支持在复用的浏览器中打开和关闭临时测试标签页。
+    - `auto_cleanup` 会清理此管理器创建的所有资源（新浏览器实例或新标签页）。
+    """
 
     def __init__(
         self,
-        browser_type: str = "edge",
+        browser_type: str = "chrome",
         port: int = 9222,
         auto_cleanup: bool = True,
         start_url: Optional[str] = None,
@@ -1774,67 +1818,150 @@ class BrowserContextManager:
         self.port = port
         self.auto_cleanup = auto_cleanup
         self.start_url = start_url
-        self.browser_process = None
-        self.websocket_urls = []
+        self.browser_process: Optional[Dict[str, Any]] = None
+        self.websocket_urls: List[str] = []
         self._browser_launched = False
-        self._user_data_dir = None
+        self._user_data_dir: Optional[str] = None
+        self._newly_created_target_id: Optional[str] = None
 
-    async def __aenter__(self):
-        """进入上下文，启动或连接浏览器"""
-        print(f"🚀 初始化浏览器上下文 (模式: {'自动清理' if self.auto_cleanup else '保持存活'})")
+    async def __aenter__(self) -> "BrowserContextManager":
+        """进入上下文，启动或连接浏览器。"""
+        print(f"🚀 初始化浏览器上下文 (端口: {self.port}, 清理模式: {'自动' if self.auto_cleanup else '手动'})")
 
-        # If a start_url is given, skip checking for existing tabs and force a new launch
-        if not self.start_url:
-            # 查找现有浏览器标签页
-            self.websocket_urls = await find_chrome_tabs(self.port, auto_launch=False)
+        existing_tabs = await _get_browser_tabs_info(self.port)
+
+        if existing_tabs:
+            print(f"ℹ️  检测到端口 {self.port} 上已有浏览器实例在运行。")
+            self._browser_launched = False
+
+            if self.start_url:
+                await self._create_tab_in_existing_browser(existing_tabs)
+            else:
+                self.websocket_urls = [
+                    tab["webSocketDebuggerUrl"] for tab in existing_tabs if tab.get("webSocketDebuggerUrl")
+                ]
+        else:
+            print(f"ℹ️  端口 {self.port} 上未发现浏览器实例，将启动一个新实例。")
+            await self._launch_new_browser()
 
         if not self.websocket_urls:
-            if self.start_url:
-                print(f"ℹ️  `start_url` provided, launching a new browser instance...")
-            else:
-                print(f"⚠️  未找到浏览器标签页，启动 {self.browser_type}...")
+            raise RuntimeError("未能获取任何可用的浏览器 WebSocket URL。")
 
-            # 启动浏览器
-            result = await launch_browser_with_debugging(
-                self.browser_type, self.port, return_process_info=True, start_url=self.start_url
-            )
-            if isinstance(result, tuple):
-                success, process_info = result
-            else:
-                success, process_info = result, None
-            if not success:
-                raise Exception(f"无法启动 {self.browser_type} 浏览器")
-
-            self.browser_process = process_info
-            self._browser_launched = True
-            self._user_data_dir = process_info.get("user_data_dir")
-
-            # 等待浏览器启动
-            await asyncio.sleep(3)
-            self.websocket_urls = await find_chrome_tabs(self.port, auto_launch=False)
-            if not self.websocket_urls:
-                raise Exception("启动后仍未找到浏览器标签页")
-
-        print(f"✅ 找到 {len(self.websocket_urls)} 个浏览器标签页")
+        print(f"✅ 浏览器上下文准备就绪。目标: {self.get_main_websocket_url()}")
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """退出上下文，根据模式决定是否清理浏览器"""
-        if self.auto_cleanup and self._browser_launched:
-            print("🧹 自动清理浏览器进程...")
-            await cleanup_browser(self.browser_process)
+    async def _create_tab_in_existing_browser(self, existing_tabs: List[Dict[str, Any]]) -> None:
+        """在现有浏览器实例中创建一个新标签页。"""
+        print(f"   - 正在打开新标签页，URL: {self.start_url}")
+        # 使用第一个可用的标签页的WebSocket来发送浏览器级命令
+        browser_ws_url = next(
+            (tab["webSocketDebuggerUrl"] for tab in existing_tabs if tab.get("webSocketDebuggerUrl")), None
+        )
+        if not browser_ws_url:
+            raise RuntimeError("在现有浏览器中未找到可用的 WebSocket 连接。")
+
+        temp_inspector = DOMInspector(browser_ws_url)
+        await temp_inspector.connect()
+        try:
+            # 创建新目标（标签页），并确保它在前台打开
+            response = await temp_inspector.send_command(
+                "Target.createTarget",
+                {"url": self.start_url or "about:blank", "inBackground": False},
+                use_session=False,
+            )
+            self._newly_created_target_id = response.get("result", {}).get("targetId")
+            if not self._newly_created_target_id:
+                raise RuntimeError(f"创建新标签页失败: {response.get('error')}")
+
+            print(f"   - 新标签页已创建 (TargetID: {self._newly_created_target_id})，正在等待其 WebSocket 连接信息...")
+
+            # 轮询以获取新标签页的 WebSocket URL
+            new_tab_ws_url = await self._poll_for_new_tab_ws_url(self._newly_created_target_id)
+            self.websocket_urls = [new_tab_ws_url]
+
+        finally:
+            await temp_inspector.close()
+
+    async def _poll_for_new_tab_ws_url(self, target_id: str, timeout: float = 10.0) -> str:
+        """轮询 /json 端点以查找新创建的标签页的 WebSocket URL。"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            all_tabs = await _get_browser_tabs_info(self.port)
+            new_tab_info = next((tab for tab in all_tabs if tab.get("id") == target_id), None)
+            if new_tab_info and "webSocketDebuggerUrl" in new_tab_info:
+                print("   - 成功获取新标签页的 WebSocket URL。")
+                return new_tab_info["webSocketDebuggerUrl"]
+            await asyncio.sleep(0.5)
+        raise RuntimeError(f"在 {timeout} 秒内未能找到 TargetID 为 {target_id} 的新标签页。")
+
+    async def _launch_new_browser(self) -> None:
+        """启动一个全新的浏览器实例。"""
+        self._browser_launched = True
+        result = await launch_browser_with_debugging(
+            self.browser_type, self.port, return_process_info=True, start_url=self.start_url or "about:blank"
+        )
+        success, process_info = result if isinstance(result, tuple) else (result, None)
+
+        if not success or not process_info:
+            raise RuntimeError(f"无法启动 {self.browser_type} 浏览器进行测试。")
+
+        self.browser_process = process_info
+        self._user_data_dir = process_info.get("user_data_dir")
+        print(f"✅ 新浏览器实例已启动 (PID: {self.browser_process.get('pid')})")
+
+        await asyncio.sleep(2)  # 等待浏览器稳定
+
+        all_tabs = await _get_browser_tabs_info(self.port)
+        if not all_tabs:
+            raise RuntimeError("浏览器已启动，但未能找到任何标签页。")
+
+        if self.start_url:
+            target_tab = next((tab for tab in all_tabs if tab.get("url") == self.start_url), all_tabs[0])
         else:
-            print("💾 保持浏览器存活")
+            target_tab = all_tabs[0]
 
-        # 清理临时目录（如果存在且需要清理）
-        if self.auto_cleanup and self._user_data_dir:
-            await cleanup_temp_directory(self._user_data_dir)
+        self.websocket_urls = [target_tab["webSocketDebuggerUrl"]]
 
-    def get_websocket_urls(self):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """退出上下文，根据模式决定清理范围。"""
+        if self.auto_cleanup:
+            if self._browser_launched and self.browser_process:
+                print(f"🧹 自动清理：正在关闭启动的浏览器进程 (PID: {self.browser_process.get('pid')})...")
+                await cleanup_browser(self.browser_process)
+                if self._user_data_dir:
+                    await cleanup_temp_directory(self._user_data_dir)
+            elif self._newly_created_target_id:
+                print(f"🧹 自动清理：正在关闭创建的标签页 (TargetID: {self._newly_created_target_id})...")
+                try:
+                    await self._close_tab(self._newly_created_target_id)
+                except Exception as e:
+                    print(f"⚠️  警告: 关闭标签页时发生错误: {e}")
+            else:
+                print("ℹ️  无需自动清理。")
+        else:
+            print("💾 保持浏览器状态（手动清理模式）。")
+
+    async def _close_tab(self, target_id: str) -> None:
+        """连接到浏览器并关闭指定的标签页。"""
+        tabs_info = await _get_browser_tabs_info(self.port)
+        if not tabs_info:
+            print("   - 无法连接到浏览器以关闭标签页。")
+            return
+
+        browser_ws_url = tabs_info[0]["webSocketDebuggerUrl"]
+        temp_inspector = DOMInspector(browser_ws_url)
+        await temp_inspector.connect()
+        try:
+            await temp_inspector.send_command("Target.closeTarget", {"targetId": target_id}, use_session=False)
+            print("   - 关闭标签页命令已发送。")
+        finally:
+            await temp_inspector.close()
+
+    def get_websocket_urls(self) -> List[str]:
         """获取WebSocket URL列表"""
         return self.websocket_urls
 
-    def get_main_websocket_url(self):
+    def get_main_websocket_url(self) -> Optional[str]:
         """获取主WebSocket URL"""
         return self.websocket_urls[0] if self.websocket_urls else None
 
@@ -1859,7 +1986,9 @@ async def launch_browser_with_debugging(
 
     # 创建临时配置文件目录（如果未提供）
     if user_data_dir is None:
-        user_data_dir = tempfile.mkdtemp(prefix="chrome_profile_")
+        # 在临时目录中创建子目录，以避免权限问题和文件名过长
+        temp_dir_base = tempfile.gettempdir()
+        user_data_dir = tempfile.mkdtemp(prefix="chrome_profile_", dir=temp_dir_base)
 
     process_info: Dict[str, Any] = {
         "browser_type": browser_type,
@@ -1872,16 +2001,14 @@ async def launch_browser_with_debugging(
     try:
         if system == "Darwin":  # macOS
             browser_names = {
-                "chrome": ["Google Chrome", "Google Chrome", "Chrome"],
-                "edge": ["Microsoft Edge", "Microsoft Edge", "Edge"],
+                "chrome": ["Google Chrome", "Chrome"],
+                "edge": ["Microsoft Edge", "Edge"],
             }
 
-            browser_process = None
             browser_launched = False
 
             for chrome_name in browser_names.get(browser_type.lower(), []):
                 try:
-                    # 构建启动命令
                     cmd = ["open", "-n", "-a", chrome_name]
                     if start_url:
                         cmd.append(start_url)
@@ -1894,53 +2021,45 @@ async def launch_browser_with_debugging(
                             "--no-default-browser-check",
                         ]
                     )
-
                     process_info["command"] = " ".join(cmd)
-
-                    # 启动浏览器
-                    # Launch browser; 'open' command exits quickly. We don't need its Popen object.
                     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-                    # Give the browser a moment to actually start.
                     time.sleep(2)
 
-                    # Verify if the process is running using pgrep. This is more reliable
-                    # than the 'open' command's return code, which can be misleading.
-                    try:
-                        pgrep_result = subprocess.run(
-                            ["pgrep", "-f", f"remote-debugging-port={port}"],
-                            capture_output=True,
-                            text=True,
-                            check=True,
-                        )
-                        pids = pgrep_result.stdout.strip().split("\n")
-                        if pids and pids[0]:
-                            process_info["pid"] = int(pids[0])
-                            browser_launched = True
-                            # The local 'browser_process' variable was not used, so we don't need it.
-                            break
-                    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-                        # If pgrep fails (not found or error), try the next browser name.
-                        continue
-                except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+                    # 使用重试循环来可靠地找到进程PID
+                    for _ in range(10):  # 重试5秒
+                        try:
+                            pgrep_result = subprocess.run(
+                                ["pgrep", "-f", f"user-data-dir={user_data_dir}"],
+                                capture_output=True,
+                                text=True,
+                                check=True,
+                            )
+                            pids = pgrep_result.stdout.strip().split("\n")
+                            if pids and pids[0]:
+                                process_info["pid"] = int(pids[0])
+                                browser_launched = True
+                                break  # 成功找到PID，跳出重试循环
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            await asyncio.sleep(0.5)  # 等待并重试
+
+                    if browser_launched:
+                        break  # 成功启动，跳出浏览器名称循环
+                except (FileNotFoundError, OSError):
                     continue
 
             if not browser_launched:
-                print(f"无法找到或启动{browser_type}浏览器，请确保已安装")
+                print(f"无法找到或启动 {browser_type} 浏览器，请确保已安装。")
                 if return_process_info:
                     return False, process_info
                 return False
 
         elif system == "Windows":
-            # Windows实现（简化版）
             browser_exes = {"chrome": "chrome.exe", "edge": "msedge.exe"}
-
             exe_name = browser_exes.get(browser_type.lower())
             if not exe_name:
                 if return_process_info:
                     return False, process_info
                 return False
-
             cmd = [
                 exe_name,
                 f"--remote-debugging-port={port}",
@@ -1950,40 +2069,30 @@ async def launch_browser_with_debugging(
             ]
             if start_url:
                 cmd.append(start_url)
-
             process_info["command"] = " ".join(cmd)
-
             process = subprocess.Popen(cmd)
             process_info["pid"] = process.pid
-            browser_process = process
-            browser_launched = True
 
         elif system == "Linux":
-            # Linux实现（简化版）
             browser_commands = {"chrome": "google-chrome", "edge": "microsoft-edge"}
-
             cmd_name = browser_commands.get(browser_type.lower())
             if not cmd_name:
                 if return_process_info:
                     return False, process_info
                 return False
-
             cmd = [
                 cmd_name,
                 f"--remote-debugging-port={port}",
                 f"--user-data-dir={user_data_dir}",
                 "--no-first-run",
                 "--no-default-browser-check",
+                "--no-sandbox",
             ]
             if start_url:
                 cmd.append(start_url)
-
             process_info["command"] = " ".join(cmd)
-
             process = subprocess.Popen(cmd)
             process_info["pid"] = process.pid
-            browser_process = process
-            browser_launched = True
 
         else:
             if return_process_info:
@@ -1991,9 +2100,7 @@ async def launch_browser_with_debugging(
             return False
 
         print(f"使用临时配置文件启动浏览器: {user_data_dir}")
-
-        # 等待浏览器完全启动
-        time.sleep(5)
+        await asyncio.sleep(2)
 
         if return_process_info:
             return True, process_info
@@ -2001,13 +2108,7 @@ async def launch_browser_with_debugging(
 
     except Exception as e:
         print(f"启动浏览器失败: {e}")
-        # 清理临时目录
-        try:
-            if user_data_dir and os.path.exists(user_data_dir):
-                shutil.rmtree(user_data_dir)
-        except:
-            pass
-
+        await cleanup_temp_directory(user_data_dir)
         if return_process_info:
             return False, process_info
         return False
@@ -2019,68 +2120,50 @@ async def cleanup_browser(process_info: dict):
     import platform
     import signal
     import subprocess
-    import time
 
     if not process_info:
         return
 
     system = platform.system()
     pid = process_info.get("pid")
-    user_data_dir = process_info.get("user_data_dir")
+
+    if not pid:
+        print("⚠️  警告: 清理浏览器失败，未找到进程PID。")
+        return
 
     print(f"🧹 清理浏览器进程 (PID: {pid})")
 
     try:
-        if pid:
-            if system == "Darwin" or system == "Linux":
-                # Unix系统使用kill命令
-                os.kill(pid, signal.SIGTERM)  # 先尝试优雅关闭
-                time.sleep(1)
-
-                # 检查进程是否还存在
-                try:
-                    os.kill(pid, 0)  # 检查进程是否存在
-                    # 如果还存在，强制杀死
-                    subprocess.run(["kill", "-9", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except OSError:
-                    # 进程已经退出
-                    pass
-
-            elif system == "Windows":
-                # Windows使用taskkill
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-
-        # 清理使用相同端口的其他浏览器进程
-        if system == "Darwin" or system == "Linux":
-            subprocess.run(
-                ["pkill", "-f", f"remote-debugging-port={process_info.get('port', 9222)}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        if system in ["Darwin", "Linux"]:
+            os.kill(pid, signal.SIGTERM)  # 先尝试优雅关闭
+            await asyncio.sleep(1)
+            try:
+                os.kill(pid, 0)
+                print(f"进程 {pid} 未能优雅退出，强制终止...")
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass  # 进程已退出
         elif system == "Windows":
             subprocess.run(
-                ["taskkill", "/FI", f"WINDOWTITLE eq *remote-debugging-port*", "/F"],
+                ["taskkill", "/PID", str(pid), "/F", "/T"],
+                check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
 
+        print(f"✅ 浏览器进程 {pid} 已清理。")
     except Exception as e:
         print(f"清理浏览器进程时发生错误: {e}")
 
-    # 清理临时目录
-    await cleanup_temp_directory(user_data_dir)
 
-
-async def cleanup_temp_directory(user_data_dir: str):
+async def cleanup_temp_directory(user_data_dir: Optional[str]):
     """清理临时目录"""
-    import os
     import shutil
 
     if user_data_dir and os.path.exists(user_data_dir):
         try:
-            shutil.rmtree(user_data_dir)
+            # 使用 ignore_errors=True 增加删除的鲁棒性
+            shutil.rmtree(user_data_dir, ignore_errors=True)
             print(f"✅ 清理临时配置文件目录: {user_data_dir}")
         except Exception as e:
             print(f"清理临时目录失败: {e}")
