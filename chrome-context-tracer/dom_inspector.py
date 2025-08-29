@@ -12,338 +12,32 @@ Element selection is handled via JavaScript injection for cross-platform compati
 import argparse
 import asyncio
 import json
+import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+import traceback
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import aiohttp
 
-# JavaScript代码：鼠标元素检测器
-MOUSE_ELEMENT_DETECTOR_JS = """
-/**
- * Chrome Context Tracer - Mouse Element Detector
- * 纯JavaScript实现的鼠标元素检测器
- * 通过控制台输出与Python端通信
- */
+# --- JavaScript Loader ---
+# Memoize the file content to avoid repeated disk reads
+_MOUSE_DETECTOR_JS_CODE: Optional[str] = None
 
-(function() {
-    'use strict';
-    
-    // 防止重复注入
-    if (window.chromeContextTracer) {
-        console.log('[CHROME_TRACER] Already initialized');
-        return;
-    }
-    
-    window.chromeContextTracer = {
-        version: '1.0.0',
-        isActive: false,
-        lastElement: null,
-        overlay: null
-    };
-    
-    const tracer = window.chromeContextTracer;
-    
-    /**
-     * 生成元素的唯一CSS选择器路径
-     */
-    function getElementPath(element) {
-        if (!element || element.nodeType !== Node.ELEMENT_NODE) {
-            return null;
-        }
-        
-        if (element.id) {
-            return '#' + element.id;
-        }
-        
-        if (element === document.body) {
-            return 'body';
-        }
-        
-        const path = [];
-        while (element && element.parentNode) {
-            if (element.id) {
-                path.unshift('#' + element.id);
-                break;
-            }
-            
-            let selector = element.tagName.toLowerCase();
-            const siblings = Array.from(element.parentNode.children);
-            const index = siblings.indexOf(element);
-            
-            if (index > 0) {
-                selector += ':nth-child(' + (index + 1) + ')';
-            }
-            
-            path.unshift(selector);
-            element = element.parentNode;
-        }
-        
-        return path.join(' > ');
-    }
-    
-    /**
-     * 获取元素的详细信息
-     */
-    function getElementInfo(element, mouseX, mouseY) {
-        if (!element) return null;
-        
-        const rect = element.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(element);
-        
-        return {
-            // 基本信息
-            tagName: element.tagName,
-            id: element.id || '',
-            className: element.className || '',
-            textContent: element.textContent ? element.textContent.substring(0, 100) : '',
-            
-            // 位置信息
-            mouse: {
-                x: mouseX,
-                y: mouseY
-            },
-            rect: {
-                left: Math.round(rect.left),
-                top: Math.round(rect.top),
-                width: Math.round(rect.width),
-                height: Math.round(rect.height)
-            },
-            
-            // 选择器信息
-            path: getElementPath(element),
-            
-            // 样式信息
-            style: {
-                display: computedStyle.display,
-                position: computedStyle.position,
-                zIndex: computedStyle.zIndex,
-                backgroundColor: computedStyle.backgroundColor,
-                cursor: computedStyle.cursor
-            },
-            
-            // 属性信息
-            attributes: Array.from(element.attributes).reduce((acc, attr) => {
-                acc[attr.name] = attr.value;
-                return acc;
-            }, {}),
-            
-            // 时间戳
-            timestamp: Date.now()
-        };
-    }
 
-    /**
-     * 获取指定坐标处的元素信息
-     */
-    function getElementAtCoordinates(x, y) {
-        const element = document.elementFromPoint(x, y);
-        if (!element) {
-            return {
-                found: false,
-                message: `No element found at coordinates (${x}, ${y})`
-            };
-        }
-        
-        const elementInfo = getElementInfo(element, x, y);
-        return {
-            found: true,
-            element: elementInfo,
-            coordinates: { x, y }
-        };
-    }
-    
-    /**
-     * 创建高亮覆盖层
-     */
-    function createOverlay() {
-        if (tracer.overlay) return tracer.overlay;
-        
-        const overlay = document.createElement('div');
-        overlay.id = 'chrome-tracer-overlay';
-        overlay.style.cssText = `
-            position: fixed;
-            pointer-events: none;
-            z-index: 10000;
-            border: 2px solid #ff4444;
-            background-color: rgba(255, 68, 68, 0.1);
-            transition: all 0.1s ease;
-            display: none;
-        `;
-        
-        document.body.appendChild(overlay);
-        tracer.overlay = overlay;
-        return overlay;
-    }
-    
-    /**
-     * 更新覆盖层位置
-     */
-    function updateOverlay(element) {
-        if (!tracer.overlay || !element) return;
-        
-        const rect = element.getBoundingClientRect();
-        const overlay = tracer.overlay;
-        
-        overlay.style.left = rect.left + 'px';
-        overlay.style.top = rect.top + 'px';
-        overlay.style.width = rect.width + 'px';
-        overlay.style.height = rect.height + 'px';
-        overlay.style.display = 'block';
-    }
-    
-    /**
-     * 隐藏覆盖层
-     */
-    function hideOverlay() {
-        if (tracer.overlay) {
-            tracer.overlay.style.display = 'none';
-        }
-    }
-    
-    /**
-     * 鼠标移动事件处理器
-     */
-    function handleMouseMove(event) {
-        if (!tracer.isActive) return;
-        
-        const element = event.target;
-        if (element === tracer.lastElement) return;
-        
-        tracer.lastElement = element;
-        updateOverlay(element);
-        
-        // 输出元素信息到控制台
-        const elementInfo = getElementInfo(element, event.clientX, event.clientY);
-        console.log('[CHROME_TRACER_HOVER]', JSON.stringify(elementInfo));
-    }
-    
-    /**
-     * 鼠标点击事件处理器
-     */
-    function handleMouseClick(event) {
-        if (!tracer.isActive) return;
-        
-        // 阻止默认行为
-        event.preventDefault();
-        event.stopPropagation();
-        
-        const element = event.target;
-        const elementInfo = getElementInfo(element, event.clientX, event.clientY);
-        
-        // 输出选中的元素信息
-        console.log('[CHROME_TRACER_SELECTED]', JSON.stringify(elementInfo));
-        
-        // 停止检测模式
-        tracer.stop();
-        
-        return false;
-    }
-    
-    /**
-     * 键盘事件处理器
-     */
-    function handleKeyDown(event) {
-        if (!tracer.isActive) return;
-        
-        // ESC键退出检测模式
-        if (event.key === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            
-            console.log('[CHROME_TRACER_CANCELLED]', JSON.stringify({
-                action: 'cancelled',
-                timestamp: Date.now()
-            }));
-            
-            tracer.stop();
-        }
-    }
-    
-    /**
-     * 启动元素检测模式
-     */
-    tracer.start = function() {
-        if (tracer.isActive) {
-            console.log('[CHROME_TRACER] Already active');
-            return;
-        }
-        
-        tracer.isActive = true;
-        tracer.lastElement = null;
-        
-        // 创建覆盖层
-        createOverlay();
-        
-        // 添加事件监听器
-        document.addEventListener('mousemove', handleMouseMove, true);
-        document.addEventListener('click', handleMouseClick, true);
-        document.addEventListener('keydown', handleKeyDown, true);
-        
-        // 改变鼠标样式
-        document.body.style.cursor = 'crosshair';
-        
-        console.log('[CHROME_TRACER_STARTED]', JSON.stringify({
-            action: 'started',
-            timestamp: Date.now(),
-            message: 'Element selection mode activated. Click to select, ESC to cancel.'
-        }));
-    };
-    
-    /**
-     * 停止元素检测模式
-     */
-    tracer.stop = function() {
-        if (!tracer.isActive) {
-            return;
-        }
-        
-        tracer.isActive = false;
-        tracer.lastElement = null;
-        
-        // 移除事件监听器
-        document.removeEventListener('mousemove', handleMouseMove, true);
-        document.removeEventListener('click', handleMouseClick, true);
-        document.removeEventListener('keydown', handleKeyDown, true);
-        
-        // 恢复鼠标样式
-        document.body.style.cursor = '';
-        
-        // 隐藏覆盖层
-        hideOverlay();
-        
-        console.log('[CHROME_TRACER_STOPPED]', JSON.stringify({
-            action: 'stopped',
-            timestamp: Date.now()
-        }));
-    };
-    
-    /**
-     * 获取当前状态
-     */
-    tracer.getStatus = function() {
-        return {
-            isActive: tracer.isActive,
-            version: tracer.version,
-            lastElement: tracer.lastElement ? getElementPath(tracer.lastElement) : null
-        };
-    };
-    
-    // 暴露全局控制方法
-    window.startElementSelection = tracer.start;
-    window.stopElementSelection = tracer.stop;
-    window.getTracerStatus = tracer.getStatus;
-    window.getElementAtCoordinates = getElementAtCoordinates;
-    
-    console.log('[CHROME_TRACER] Initialized successfully');
-    console.log('[CHROME_TRACER] Available commands:');
-    console.log('[CHROME_TRACER]   - startElementSelection(): Start element detection');
-    console.log('[CHROME_TRACER]   - stopElementSelection(): Stop element detection');
-    console.log('[CHROME_TRACER]   - getTracerStatus(): Get current status');
-    console.log('[CHROME_TRACER]   - getElementAtCoordinates(x, y): Get element at specific coordinates');
-    
-})();
-"""
+def get_mouse_detector_js() -> str:
+    """Reads and caches the mouse detector JavaScript code from its file."""
+    global _MOUSE_DETECTOR_JS_CODE
+    if _MOUSE_DETECTOR_JS_CODE is None:
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            js_path = os.path.join(script_dir, "mouse_element_detector.js")
+            with open(js_path, "r", encoding="utf-8") as f:
+                _MOUSE_DETECTOR_JS_CODE = f.read()
+        except FileNotFoundError:
+            print(f"FATAL: JavaScript file not found at {js_path}")
+            raise
+    return _MOUSE_DETECTOR_JS_CODE
 
 
 class DOMInspector:
@@ -351,6 +45,7 @@ class DOMInspector:
         self.websocket_url = websocket_url
         self.session: Optional[aiohttp.ClientSession] = None
         self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self.session_id: Optional[str] = None
         self.message_id = 1
         self.stylesheet_cache: Dict[str, str] = {}
         self.stylesheet_headers: Dict[str, Dict] = {}
@@ -358,16 +53,115 @@ class DOMInspector:
         self.connection_errors = 0  # 连接错误计数器
         self.max_connection_errors = 5  # 最大连接错误次数
         self.console_listening = False  # 控制台监听状态
-        self.console_message_handler = None  # 控制台消息处理回调
-        self.element_selection_result = None  # 元素选择结果
-        self.original_console_handler = None  # 保存原始的控制台处理器
+        self.console_message_handler: Optional[Callable] = None  # 控制台消息处理回调
+        self.element_selection_result: Optional[Any] = None  # 元素选择结果
+        self.original_console_handler: Optional[Callable] = None  # 保存原始的控制台处理器
 
-    async def connect(self):
-        """连接到Chrome DevTools Protocol WebSocket"""
+        self._message_handler_task: Optional[asyncio.Task] = None
+        self._pending_responses: Dict[int, asyncio.Future] = {}
+
+    async def connect(self) -> None:
+        """连接到Chrome DevTools Protocol WebSocket并启动后台消息监听器"""
         self.session = aiohttp.ClientSession()
         self.ws = await self.session.ws_connect(self.websocket_url)
+        self._message_handler_task = asyncio.create_task(self._message_listener())
+        print(f"Connected to Browser DevTools: {self.websocket_url}")
 
-        # 启用必要的域（处理可能不存在的命令）
+    async def _message_listener(self) -> None:
+        """后台任务，持续监听并分发所有WebSocket消息"""
+        if not self.ws:
+            return
+        try:
+            async for msg in self.ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    response = json.loads(msg.data)
+
+                    # 分发消息：检查是命令响应还是事件
+                    if "id" in response:  # 命令响应
+                        future = self._pending_responses.pop(response["id"], None)
+                        if future and not future.done():
+                            if "error" in response:
+                                error_info = response["error"]
+                                future.set_exception(
+                                    Exception(f"Command failed: {error_info.get('message', 'Unknown error')}")
+                                )
+                            else:
+                                future.set_result(response)
+                    elif "method" in response:  # 事件
+                        await self._handle_event(response)
+
+                elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
+                    break
+        except asyncio.CancelledError:
+            pass  # 任务被取消，正常关闭
+        except Exception as e:
+            print(f"WebSocket listener error: {e}")
+            traceback.print_exc()
+        finally:
+            # 清理所有待处理的响应，以防监听器异常退出
+            for future in self._pending_responses.values():
+                if not future.done():
+                    future.set_exception(Exception("WebSocket connection closed unexpectedly."))
+
+    async def _handle_event(self, event: Dict[str, Any]) -> None:
+        """处理从浏览器接收到的事件"""
+        method = event.get("method")
+        params = event.get("params", {})
+
+        if method == "Runtime.consoleAPICalled":
+            if self.console_listening and self.console_message_handler:
+                await self.console_message_handler({"type": params.get("type", ""), "message": params, "raw": event})
+            elif self.console_listening:
+                await self._handle_console_api_called(params)
+        elif method == "Console.messageAdded":
+            if self.console_listening and self.console_message_handler:
+                await self.console_message_handler(
+                    {"type": params.get("message", {}).get("level", ""), "message": params, "raw": event}
+                )
+            elif self.console_listening:
+                await self._handle_console_message_added(params)
+        elif method == "CSS.styleSheetAdded":
+            await self._handle_style_sheet_added(params)
+        elif method == "Debugger.scriptParsed":
+            await self._handle_script_parsed(params)
+
+    async def _handle_style_sheet_added(self, params: Dict[str, Any]) -> None:
+        """处理 CSS.styleSheetAdded 事件，缓存样式表头部信息"""
+        header = params.get("header")
+        if header and "styleSheetId" in header:
+            self.stylesheet_headers[header["styleSheetId"]] = header
+
+    async def _handle_script_parsed(self, params: Dict[str, Any]) -> None:
+        """处理 Debugger.scriptParsed 事件，缓存脚本元数据"""
+        script_id = params.get("scriptId")
+        if not script_id:
+            return
+
+        url = params.get("url", "")
+        # 从URL中提取文件名，如果URL为空则生成一个
+        filename = url.split("/")[-1].split("?")[0] if url else f"script_{script_id[-8:]}.js"
+        if not filename:
+            filename = f"script_{script_id[-8:]}.js"
+
+        # 确保缓存中有该script_id的条目
+        self.script_cache.setdefault(script_id, {})
+
+        # 更新元数据，但不覆盖已有的源码
+        self.script_cache[script_id].update(
+            {
+                "url": url,
+                "filename": filename,
+                "scriptInfo": params,
+            }
+        )
+
+    async def enable_domains(self) -> None:
+        """为当前会话启用所有必需的域"""
+        if not self.session_id:
+            print("警告: 无法在没有会话ID的情况下启用域")
+            return
+
+        # 启用必要的域
         await self.send_command("DOM.enable")
         await self.send_command("CSS.enable")
         await self.send_command("Runtime.enable")
@@ -376,107 +170,56 @@ class DOMInspector:
         # 启用控制台监听
         await self.start_console_listening()
 
-        # 启用Debugger域以支持脚本源信息获取
+        # 启用Debugger域，这是使用DOMDebugger（事件监听器）和获取脚本源的前提
         try:
             await self.send_command("Debugger.enable")
         except Exception:
-            print("警告: Debugger.enable 不可用，脚本源信息功能可能受限")
+            print("警告: Debugger.enable 不可用，脚本源和事件监听器功能可能受限")
 
-        # 监听样式表添加事件以收集头部信息
-        try:
-            await self.collect_stylesheet_headers()
-        except Exception:
-            print("警告: 无法收集样式表头部信息")
-
-        print(f"Connected to Browser DevTools: {self.websocket_url}")
-
-        # 添加连接后的等待时间，让浏览器稳定
+        print("✅ Domains enabled for the new session.")
         await asyncio.sleep(1)
 
-    async def send_command(self, method: str, params: Dict = None) -> Dict:
+    async def send_command(
+        self, method: str, params: Optional[Dict[str, Any]] = None, use_session: bool = True
+    ) -> Dict[str, Any]:
         """发送CDP命令并等待响应"""
         if params is None:
             params = {}
 
-        # 检查WebSocket连接状态
         if not self.ws or self.ws.closed:
             raise Exception("WebSocket connection is closed")
 
-        # 检查连接错误次数，如果太多则拒绝请求
         if self.connection_errors >= self.max_connection_errors:
             raise Exception(f"Too many WebSocket errors ({self.connection_errors}), refusing further requests")
 
         message_id = self.message_id
         self.message_id += 1
 
-        message = {"id": message_id, "method": method, "params": params}
+        message: Dict[str, Any] = {"id": message_id, "method": method, "params": params}
+        if self.session_id and use_session:
+            message["sessionId"] = self.session_id
+
+        future = asyncio.get_running_loop().create_future()
+        self._pending_responses[message_id] = future
 
         try:
             await self.ws.send_str(json.dumps(message))
         except Exception as e:
+            self._pending_responses.pop(message_id, None)
             raise Exception(f"Failed to send WebSocket message: {str(e)}")
 
-        # 等待响应，添加超时机制
         try:
-
-            async def wait_for_response():
-                async for msg in self.ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        response = json.loads(msg.data)
-
-                        # 处理控制台消息事件（无需response id）
-                        if response.get("method") == "Runtime.consoleAPICalled":
-                            if self.console_listening and self.console_message_handler:
-                                await self.console_message_handler(
-                                    {
-                                        "type": response.get("params", {}).get("type", ""),
-                                        "message": response.get("params", {}),
-                                        "raw": response,
-                                    }
-                                )
-                            elif self.console_listening:
-                                await self._handle_console_api_called(response.get("params", {}))
-                        elif response.get("method") == "Console.messageAdded":
-                            if self.console_listening and self.console_message_handler:
-                                await self.console_message_handler(
-                                    {
-                                        "type": response.get("params", {}).get("message", {}).get("level", ""),
-                                        "message": response.get("params", {}),
-                                        "raw": response,
-                                    }
-                                )
-                            elif self.console_listening:
-                                await self._handle_console_message_added(response.get("params", {}))
-
-                        # 处理命令响应（有response id）
-                        if response.get("id") == message_id:
-                            return response
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        raise Exception(f"WebSocket error: {msg.data}")
-                    elif msg.type == aiohttp.WSMsgType.CLOSE:
-                        raise Exception("WebSocket connection closed by remote")
-                raise Exception("WebSocket connection closed")
-
-            result = await asyncio.wait_for(wait_for_response(), timeout=30.0)
-            # 检查响应中是否有错误
-            if "error" in result:
-                error_info = result["error"]
-                raise Exception(f"Command {method} failed: {error_info.get('message', 'Unknown error')}")
-
-            # 成功时重置错误计数器
+            result = await asyncio.wait_for(future, timeout=30.0)
             self.connection_errors = 0
             return result
         except asyncio.TimeoutError:
-            raise Exception(f"Command {method} timed out after 30 seconds")
-        except asyncio.CancelledError:
             self.connection_errors += 1
-            raise Exception(f"Command {method} was cancelled")
+            self._pending_responses.pop(message_id, None)
+            raise Exception(f"Command {method} timed out after 30 seconds")
         except Exception as e:
             self.connection_errors += 1
-            if "WebSocket" in str(e):
-                raise e
-            else:
-                raise Exception(f"Command {method} failed: {str(e)}")
+            self._pending_responses.pop(message_id, None)
+            raise e
 
     def _is_valid_web_page(self, url: str) -> bool:
         """检查URL是否是有效的网页，过滤掉内部页面和DevTools页面"""
@@ -499,11 +242,25 @@ class DOMInspector:
         # 优先选择HTTP(S)页面
         return url_lower.startswith(("http://", "https://", "file://", "ftp://"))
 
+    def _find_default_tab(self, valid_targets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """通过启发式方法找到最可能的活动标签页作为默认选项。"""
+        if not valid_targets:
+            return None
+
+        # 启发式方法1：一个已经被开发者工具附加的标签页是强烈的候选者。
+        attached_targets = [t for t in valid_targets if t.get("attached")]
+        if len(attached_targets) == 1:
+            return attached_targets[0]
+
+        # 启发式方法2：列表中的最后一个标签页通常是最近打开或聚焦的。
+        # 这不是一个保证，但是一个合理的回退策略。
+        return valid_targets[-1]
+
     async def find_tab_by_url(self, url_pattern: Optional[str] = None) -> Optional[str]:
         """查找匹配URL模式的标签页，如果未指定URL则返回最上层/当前显示的标签页"""
         # 添加获取目标前的等待时间
         await asyncio.sleep(0.5)
-        response = await self.send_command("Target.getTargets")
+        response = await self.send_command("Target.getTargets", use_session=False)
         targets = response.get("result", {}).get("targetInfos", [])
 
         # 过滤出有效的网页标签页
@@ -527,21 +284,36 @@ class DOMInspector:
                 print(f"✅ 自动选择唯一标签页: {selected_target['url']}")
                 return selected_target["targetId"]
 
-            # 多个标签页，让用户选择
+            # 多个标签页，提供带默认值的选择
+            default_target = self._find_default_tab(valid_targets)
+            default_index = -1
+
+            print("\n请选择要检查的标签页:")
             for i, target in enumerate(valid_targets, 1):
-                print(f"  {i}. {target['url']}")
+                if default_target and target["targetId"] == default_target["targetId"]:
+                    default_index = i
+                    print(f"  * {i}. {target['url']} (默认)")
+                else:
+                    print(f"  {i}. {target['url']}")
 
             while True:
                 try:
-                    choice = input(f"\n请选择标签页 (1-{len(valid_targets)}): ").strip()
-                    choice_num = int(choice)
+                    prompt = f"\n请选择标签页 (1-{len(valid_targets)}) [回车使用默认值: {default_index}]: "
+                    choice_str = input(prompt).strip()
+                    if not choice_str:
+                        choice_num = default_index
+                    else:
+                        choice_num = int(choice_str)
+
                     if 1 <= choice_num <= len(valid_targets):
                         selected_target = valid_targets[choice_num - 1]
                         print(f"✅ 选择标签页: {selected_target['url']}")
                         return selected_target["targetId"]
                     else:
                         print(f"请输入 1 到 {len(valid_targets)} 之间的数字")
-                except (ValueError, KeyboardInterrupt):
+                except ValueError:
+                    print("无效输入，请输入一个数字。")
+                except (KeyboardInterrupt, EOFError):
                     print("\n已取消选择")
                     return None
 
@@ -559,10 +331,16 @@ class DOMInspector:
 
         return None
 
-    async def attach_to_tab(self, target_id: str):
+    async def attach_to_tab(self, target_id: str) -> Optional[str]:
         """附加到指定的标签页"""
-        response = await self.send_command("Target.attachToTarget", {"targetId": target_id, "flatten": True})
-        return response.get("result", {}).get("sessionId")
+        response = await self.send_command(
+            "Target.attachToTarget", {"targetId": target_id, "flatten": True}, use_session=False
+        )
+        session_id = response.get("result", {}).get("sessionId")
+        if session_id:
+            self.session_id = session_id
+            await self.enable_domains()
+        return session_id
 
     async def find_element(self, selector: str) -> Optional[int]:
         """通过CSS选择器查找元素，返回nodeId"""
@@ -586,25 +364,116 @@ class DOMInspector:
 
         return response.get("result", {})
 
-    async def get_element_event_listeners(self, node_id: int) -> List[Dict]:
-        """获取元素的事件监听器信息"""
-        # 首先将DOM节点转换为Runtime对象
-        response = await self.send_command("DOM.resolveNode", {"nodeId": node_id})
+    def _format_node_description(self, node_data: Dict[str, Any], is_target: bool = False) -> str:
+        """格式化DOM节点的可读描述"""
+        if is_target:
+            return "Selected Element"
+        if not node_data:
+            return "unknown ancestor"
 
-        remote_object = response["result"]["object"]
-        object_id = remote_object["objectId"]
+        node_name = node_data.get("localName", node_data.get("nodeName", "unknown")).lower()
+        if node_name.startswith("#"):  # #document, #text, etc.
+            return node_name
 
-        # 获取事件监听器
-        response = await self.send_command(
-            "DOMDebugger.getEventListeners",
-            {
-                "objectId": object_id,
-                "depth": -1,  # 包含所有祖先节点的监听器
-                "pierce": True,  # 穿透shadow DOM获取所有监听器
-            },
-        )
+        attributes = node_data.get("attributes", [])
+        attrs_dict = dict(zip(attributes[::2], attributes[1::2]))
 
-        return response["result"]["listeners"]
+        desc = node_name
+        if "id" in attrs_dict and attrs_dict["id"]:
+            desc += f"#{attrs_dict['id']}"
+        if "class" in attrs_dict and attrs_dict["class"]:
+            class_list = attrs_dict["class"].strip().split()
+            if class_list:
+                desc += "." + ".".join(class_list)
+
+        return desc
+
+    async def get_element_event_listeners(self, node_id: int) -> List[Dict[str, Any]]:
+        """获取元素的事件监听器信息, 包括其所有祖先节点以及window对象"""
+        all_listeners: List[Dict[str, Any]] = []
+        object_ids_to_release: List[str] = []
+
+        try:
+            # Phase 1: 使用JS向上遍历祖先节点并收集监听器
+            resolve_response = await self.send_command("DOM.resolveNode", {"nodeId": node_id})
+            current_object_id = resolve_response.get("result", {}).get("object", {}).get("objectId")
+            is_target_node = True
+
+            while current_object_id:
+                object_ids_to_release.append(current_object_id)
+
+                # 1.1: 获取当前节点的事件监听器
+                try:
+                    listeners_response = await self.send_command(
+                        "DOMDebugger.getEventListeners", {"objectId": current_object_id}
+                    )
+                    listeners = listeners_response.get("result", {}).get("listeners", [])
+
+                    if listeners:
+                        # 如果有监听器，才需要获取节点描述
+                        node_response = await self.send_command("DOM.requestNode", {"objectId": current_object_id})
+                        current_node_id = node_response.get("result", {}).get("nodeId")
+                        if current_node_id:
+                            describe_response = await self.send_command("DOM.describeNode", {"nodeId": current_node_id})
+                            node_data = describe_response.get("result", {}).get("node", {})
+                            source_description = self._format_node_description(node_data, is_target_node)
+
+                            for listener in listeners:
+                                listener["sourceNodeDescription"] = source_description
+                            all_listeners.extend(listeners)
+                except Exception:
+                    # 对于某些节点（如非元素节点），获取监听器可能会失败，这没关系
+                    pass
+
+                is_target_node = False
+
+                # 1.2: 使用JS获取父元素的objectId
+                get_parent_js = "function() { return this.parentElement; }"
+                parent_response = await self.send_command(
+                    "Runtime.callFunctionOn",
+                    {
+                        "objectId": current_object_id,
+                        "functionDeclaration": get_parent_js,
+                        "returnByValue": False,  # 确保返回objectId
+                    },
+                )
+                parent_object = parent_response.get("result", {}).get("result", {})
+
+                # 如果父元素为null或不是对象，则停止遍历
+                if not parent_object or parent_object.get("subtype") == "null":
+                    break
+
+                current_object_id = parent_object.get("objectId")
+                if not current_object_id:
+                    break
+
+        except Exception as e:
+            print(f"Warning: 遍历祖先节点时发生错误。事件监听器列表可能不完整。错误: {e}")
+        finally:
+            # Phase 2: 释放所有为遍历而创建的远程对象，防止内存泄漏
+            for obj_id in object_ids_to_release:
+                try:
+                    await self.send_command("Runtime.releaseObject", {"objectId": obj_id})
+                except Exception:
+                    pass  # 忽略清理过程中的错误
+
+        # Phase 3: 获取`window`对象的监听器
+        try:
+            eval_response = await self.send_command("Runtime.evaluate", {"expression": "window"})
+            window_object_id = eval_response.get("result", {}).get("result", {}).get("objectId")
+
+            if window_object_id:
+                listeners_response = await self.send_command(
+                    "DOMDebugger.getEventListeners", {"objectId": window_object_id}
+                )
+                listeners = listeners_response.get("result", {}).get("listeners", [])
+                for listener in listeners:
+                    listener["sourceNodeDescription"] = "window"
+                all_listeners.extend(listeners)
+        except Exception as e:
+            print(f"Warning: 无法获取window事件监听器: {e}")
+
+        return all_listeners
 
     async def get_element_html(self, node_id: int) -> str:
         """获取元素的HTML表示（标签和属性，不包括子元素）"""
@@ -685,16 +554,7 @@ class DOMInspector:
         """
         try:
             # 首先注入JavaScript代码
-            js_file_path = "/Users/richard/code/terminal-llm/chrome-context-tracer/mouse_element_detector.js"
-            try:
-                with open(js_file_path, "r", encoding="utf-8") as f:
-                    js_code = f.read()
-                print(f"✅ 从文件加载JavaScript代码: {js_file_path}")
-            except Exception as e:
-                print(f"❌ 无法读取JavaScript文件: {e}")
-                return None
-
-            if not await self.inject_javascript_file(js_code):
+            if not await self.inject_javascript(get_mouse_detector_js()):
                 print("❌ JavaScript注入失败")
                 return None
 
@@ -857,7 +717,7 @@ class DOMInspector:
         """Navigate to a specific page and optionally wait for it to load"""
         try:
             # First, find the current page target and attach to it
-            response = await self.send_command("Target.getTargets")
+            response = await self.send_command("Target.getTargets", use_session=False)
             targets = response.get("result", {}).get("targetInfos", [])
 
             # Find the first page target (should be the main browser tab)
@@ -876,9 +736,6 @@ class DOMInspector:
             if not session_id:
                 print("Failed to attach to page target")
                 return False
-
-            # Enable page domain for navigation
-            await self.send_command("Page.enable")
 
             # Navigate to the URL
             response = await self.send_command("Page.navigate", {"url": url})
@@ -995,123 +852,42 @@ class DOMInspector:
             return None
 
     async def get_script_source_info(self, script_id: str, line_number: int, column_number: int) -> Dict:
-        """获取脚本源信息"""
-        # 检查缓存
+        """获取脚本源信息，优先使用缓存"""
+        cached_data = self.script_cache.get(script_id, {})
 
-        # 检查缓存 - 只按 script_id 缓存源码，动态构建结果
-        if script_id in self.script_cache:
-            cached_data = self.script_cache[script_id]
-            # 动态构建包含具体行列信息的结果
-            return {
-                "scriptId": script_id,
-                "lineNumber": line_number,
-                "columnNumber": column_number,
-                "source": cached_data["source"],
-                "filename": cached_data.get("filename", f"script_{script_id[-8:]}.js"),
-                "url": cached_data.get("url", ""),
-                "scriptInfo": cached_data.get("scriptInfo", {}),
-            }
+        base_info = {
+            "scriptId": script_id,
+            "lineNumber": line_number,
+            "columnNumber": column_number,
+        }
 
+        # Step 1: Check if source is already cached. None is a valid cached value for a failed fetch.
+        if "source" in cached_data:
+            return {**base_info, **cached_data}
+
+        # Step 2: Source not in cache, fetch it
         try:
-            # 获取脚本源码
-            try:
-                response = await self.send_command("Debugger.getScriptSource", {"scriptId": script_id})
-            except Exception as ws_error:
-                # WebSocket错误时返回错误信息，不要让整个流程崩溃
-                return {
-                    "scriptId": script_id,
-                    "lineNumber": line_number,
-                    "columnNumber": column_number,
-                    "source": None,
-                    "error": f"WebSocket error: {str(ws_error)}",
-                }
-            # 检查响应是否包含错误
+            response = await self.send_command("Debugger.getScriptSource", {"scriptId": script_id})
             if "error" in response:
-                # 错误情况不缓存，直接返回
-                return {
-                    "scriptId": script_id,
-                    "lineNumber": line_number,
-                    "columnNumber": column_number,
-                    "source": None,
-                    "error": response["error"].get("message", "Unknown error"),
-                }
+                error_msg = response["error"].get("message", "Unknown error")
+                self.script_cache.setdefault(script_id, {}).update({"error": error_msg, "source": None})
+                return {**base_info, **cached_data, "source": None, "error": error_msg}
 
             script_source = response["result"]["scriptSource"]
 
-            # 尝试获取脚本元数据（文件名/URL信息）
-            # 使用单独的 Runtime.getProperties 或从源码中推断信息
-            try:
-                # 先尝试从源码注释中提取URL信息（如Raven.js的情况）
-                script_url = ""
-                filename = f"script_{script_id[-8:]}.js"
+            # Step 3: Update cache with new source
+            self.script_cache.setdefault(script_id, {}).update({"source": script_source})
 
-                # 检查源码开头是否包含URL信息
-                source_lines = script_source.split("\n")[:5]  # 检查前5行
-                for line in source_lines:
-                    line = line.strip()
-                    if "://" in line and ("http" in line or "github.com" in line):
-                        # 尝试提取URL
-                        import re
+            # Re-fetch from cache to get merged view
+            final_data = self.script_cache.get(script_id, {})
 
-                        url_match = re.search(r'(https?://[^\s\'"]+)', line)
-                        if url_match:
-                            script_url = url_match.group(1)
-                            break
+            # Step 4: Construct and return the result
+            return {**base_info, **final_data}
 
-                # 如果找到了URL，从中提取文件名
-                if script_url:
-                    from urllib.parse import urlparse
-
-                    parsed_url = urlparse(script_url)
-                    if parsed_url.path:
-                        filename = parsed_url.path.split("/")[-1]
-                        if not filename.endswith(".js"):
-                            filename = filename + ".js"
-
-                    # 缓存脚本源码和元数据
-                    self.script_cache[script_id] = {
-                        "source": script_source,
-                        "filename": filename,
-                        "url": script_url,
-                        "scriptInfo": {},
-                    }
-
-                    return {
-                        "scriptId": script_id,
-                        "lineNumber": line_number,
-                        "columnNumber": column_number,
-                        "source": script_source,
-                        "filename": filename,
-                        "url": script_url,
-                        "scriptInfo": {},
-                    }
-
-            except Exception as meta_error:
-                # 如果获取脚本元数据失败，继续使用基本信息
-                print(f"警告: 无法获取脚本元数据: {meta_error}")
-
-            # 回退方案：使用scriptId作为标识
-            filename = f"script_{script_id[-8:]}.js"  # 使用后8位作为简写
-
-            # 缓存脚本源码和基本信息
-            self.script_cache[script_id] = {"source": script_source, "filename": filename, "url": "", "scriptInfo": {}}
-
-            return {
-                "scriptId": script_id,
-                "lineNumber": line_number,
-                "columnNumber": column_number,
-                "source": script_source,
-                "filename": filename,
-            }
         except Exception as e:
-            # 异常情况不缓存，直接返回
-            return {
-                "scriptId": script_id,
-                "lineNumber": line_number,
-                "columnNumber": column_number,
-                "source": None,
-                "error": str(e),
-            }
+            error_str = str(e)
+            self.script_cache.setdefault(script_id, {}).update({"error": error_str, "source": None})
+            return {**base_info, **cached_data, "source": None, "error": error_str}
 
     async def get_stylesheet_text(self, style_sheet_id: str) -> str:
         """获取样式表的完整文本"""
@@ -1123,17 +899,6 @@ class DOMInspector:
         text = response["result"]["text"]
         self.stylesheet_cache[style_sheet_id] = text
         return text
-
-    async def collect_stylesheet_headers(self):
-        """收集所有样式表的头部信息"""
-        try:
-            response = await self.send_command("CSS.getAllStyleSheets")
-            headers = response.get("result", {}).get("headers", [])
-
-            for header in headers:
-                self.stylesheet_headers[header["styleSheetId"]] = header
-        except Exception as e:
-            print(f"Warning: Could not collect style sheet headers: {e}")
 
     async def format_styles(self, styles_data: Dict) -> str:
         """格式化样式输出，模仿DevTools显示格式"""
@@ -1237,7 +1002,7 @@ class DOMInspector:
         output = []
 
         # 按脚本位置分组 (scriptId, lineNumber, columnNumber)
-        script_groups = {}
+        script_groups: Dict[Tuple, Dict[str, Any]] = {}
         for listener in listeners_data:
             script_id = listener.get("scriptId")
             line_number = listener.get("lineNumber", 0)
@@ -1247,44 +1012,51 @@ class DOMInspector:
             if script_id:
                 group_key = (script_id, line_number, column_number)
             else:
-                # 对于没有脚本信息的监听器，单独处理
-                group_key = ("no_script", listener.get("backendNodeId", 0))
+                # 对于没有脚本信息的监听器，单独处理, 使用type区分不同的原生监听器
+                group_key = ("no_script", listener.get("backendNodeId", 0), listener.get("type"))
 
             if group_key not in script_groups:
                 script_groups[group_key] = {
                     "listeners": [],
                     "event_types": set(),
-                    "backend_node_ids": set(),
+                    "source_descriptions": set(),
                     "script_info": None,
                 }
 
-            script_groups[group_key]["listeners"].append(listener)
-            script_groups[group_key]["event_types"].add(listener["type"])
-            if listener.get("backendNodeId"):
-                script_groups[group_key]["backend_node_ids"].add(listener["backendNodeId"])
+            group = script_groups[group_key]
+            group["listeners"].append(listener)
+            group["event_types"].add(listener["type"])
+
+            if listener.get("sourceNodeDescription"):
+                group["source_descriptions"].add(listener["sourceNodeDescription"])
 
         # 输出分组结果
         group_count = 0
         for group_key, group_data in script_groups.items():
             group_count += 1
-            script_id, line_number, column_number = group_key if len(group_key) == 3 else (None, None, None)
+            script_id = group_key[0] if group_key[0] != "no_script" else None
+            line_number = group_key[1] if script_id else 0
+            column_number = group_key[2] if script_id else 0
 
             # 汇总信息
-            event_types = sorted(group_data["event_types"])
-            node_ids = sorted(group_data["backend_node_ids"])
+            event_types = sorted(list(group_data["event_types"]))
+            source_descs = sorted(list(group_data["source_descriptions"]))
             listeners = group_data["listeners"]
 
-            if script_id and script_id != "no_script":
+            if script_id:
                 # 有脚本信息的监听器组
                 output.append(f"📍 脚本位置组 #{group_count}")
                 output.append("=" * 50)
 
                 # 获取脚本信息（只获取一次）
-                script_info = await self.get_script_source_info(script_id, line_number, column_number)
+                script_info = await self.get_script_source_info(str(script_id), int(line_number), int(column_number))
 
                 # 显示脚本基本信息
                 output.append(f"🎯 事件类型: {', '.join(event_types)} ({len(event_types)}个)")
-                output.append(f"🔗 绑定节点: {', '.join(map(str, node_ids))} ({len(node_ids)}个节点)")
+
+                if source_descs:
+                    output.append(f"🔗 绑定对象: {', '.join(source_descs)}")
+
                 output.append(f"📄 脚本ID: {script_id}")
                 output.append(f"📍 位置: 行 {line_number + 1}, 列 {column_number + 1}")
 
@@ -1309,8 +1081,15 @@ class DOMInspector:
                 # 显示相关代码（只显示一次）
                 if script_info.get("source"):
                     source_lines = script_info["source"].split("\n")
-                    if 0 <= line_number < len(source_lines):
-                        output.append(f"📝 相关代码:")
+                    output.append(f"📝 相关代码:")
+
+                    if len(source_lines) == 1:
+                        line_content = source_lines[0]
+                        if len(line_content) > 200:
+                            line_content = line_content[:200] + "... [截断]"
+                        output.append(f"    {line_content}")
+
+                    elif 0 <= line_number < len(source_lines):
                         start_line = max(0, line_number - 2)
                         end_line = min(len(source_lines), line_number + 3)
                         for i in range(start_line, end_line):
@@ -1319,13 +1098,24 @@ class DOMInspector:
                             if len(line_content) > 200:
                                 line_content = line_content[:200] + "... [截断]"
                             output.append(f"    {line_prefix}{i + 1}: {line_content}")
+                    else:
+                        output.append(
+                            f"    [警告: 行号 {line_number + 1} 超出脚本范围 (共 {len(source_lines)} 行)，显示脚本开头]"
+                        )
+                        for i, line in enumerate(source_lines[:5]):
+                            line_content = line
+                            if len(line_content) > 200:
+                                line_content = line_content[:200] + "... [截断]"
+                            output.append(f"      {i + 1}: {line_content}")
 
             else:
                 # 没有脚本信息的监听器组
                 output.append(f"📍 无脚本信息监听器组 #{group_count}")
                 output.append("=" * 50)
                 output.append(f"🎯 事件类型: {', '.join(event_types)} ({len(event_types)}个)")
-                output.append(f"🔗 绑定节点: {', '.join(map(str, node_ids))} ({len(node_ids)}个节点)")
+
+                if source_descs:
+                    output.append(f"🔗 绑定对象: {', '.join(source_descs)}")
 
                 # 显示详细属性
                 first_listener = listeners[0]
@@ -1397,36 +1187,16 @@ class DOMInspector:
 
         return ""
 
-    async def inject_javascript_file(self, file_path_or_code: str) -> bool:
-        """注入JavaScript代码到当前页面
+    async def inject_javascript(self, js_code: str) -> bool:
+        """将JavaScript代码字符串注入到当前页面
 
         Args:
-            file_path_or_code: JavaScript文件路径或直接的JavaScript代码字符串
+            js_code: 要注入的JavaScript代码.
 
         Returns:
-            bool: 注入是否成功
+            bool: 注入是否成功.
         """
         try:
-            # 判断是文件路径还是代码字符串
-            if "\n" not in file_path_or_code and len(file_path_or_code) < 1000:
-                # 可能是文件路径，尝试读取
-                try:
-                    import os
-
-                    if os.path.isfile(file_path_or_code):
-                        with open(file_path_or_code, "r", encoding="utf-8") as f:
-                            js_code = f.read()
-                        print(f"✅ 从文件加载JavaScript代码: {file_path_or_code}")
-                    else:
-                        # 不是有效文件路径，当作代码字符串处理
-                        js_code = file_path_or_code
-                except Exception:
-                    # 读取文件失败，当作代码字符串处理
-                    js_code = file_path_or_code
-            else:
-                # 直接是代码字符串
-                js_code = file_path_or_code
-
             # 使用Runtime.evaluate执行JavaScript代码
             response = await self.send_command(
                 "Runtime.evaluate",
@@ -1458,17 +1228,13 @@ class DOMInspector:
         Returns:
             Optional[Dict]: 选择的元素信息，如果取消或超时则返回None
         """
-        # 首先注入JavaScript代码 - 读取外部文件内容
-        js_file_path = "/Users/richard/code/terminal-llm/chrome-context-tracer/mouse_element_detector.js"
+        # 从文件加载JS代码并注入
         try:
-            with open(js_file_path, "r", encoding="utf-8") as f:
-                js_code = f.read()
-            print(f"✅ 从文件加载JavaScript代码: {js_file_path}")
-        except Exception as e:
-            print(f"❌ 无法读取JavaScript文件: {e}")
+            js_code = get_mouse_detector_js()
+        except FileNotFoundError:
             return None
 
-        if not await self.inject_javascript_file(js_code):
+        if not await self.inject_javascript(js_code):
             print("❌ JavaScript注入失败，无法启动元素选择模式")
             return None
 
@@ -1519,49 +1285,64 @@ class DOMInspector:
             self.console_message_handler = self.original_console_handler
             self.element_selection_result = None
 
-    async def _handle_element_selection_console(self, console_data: Dict):
-        """处理元素选择过程中的控制台消息"""
+    async def _handle_element_selection_console(self, console_data: Dict[str, Any]) -> None:
+        """
+        处理元素选择过程中的控制台消息。
+        此处理器专门用于解析由注入的JS脚本通过 `console.log` 发送的信令。
+        """
         try:
-            message_text = console_data.get("message", "")
+            params = console_data.get("message", {})
+            message_text = ""
+
+            # 尝试从 Console.messageAdded 事件中提取文本
+            # 结构: {'message': {'source': ..., 'level': ..., 'text': '...'}}
+            if isinstance(params, dict) and "message" in params and "text" in params["message"]:
+                message_text = params["message"]["text"]
+            # 尝试从 Runtime.consoleAPICalled 事件中提取文本
+            # 结构: {'type': 'log', 'args': [{'type': 'string', 'value': '...'}]}
+            elif isinstance(params, dict) and "args" in params:
+                message_parts: List[str] = []
+                for arg in params.get("args", []):
+                    if arg.get("type") == "string":
+                        message_parts.append(arg.get("value", ""))
+                message_text = " ".join(message_parts)
+
+            if not message_text:
+                return  # 未找到有效的消息文本
 
             if "[CHROME_TRACER_SELECTED]" in message_text:
-                # 提取JSON数据部分
                 json_start = message_text.find("{")
                 if json_start != -1:
                     json_str = message_text[json_start:]
                     try:
                         element_data = json.loads(json_str)
                         self.element_selection_result = element_data
-                        print(
-                            f"✅ 已选择元素: {element_data.get('tagName', 'Unknown')} - {element_data.get('path', 'No path')}"
-                        )
                     except json.JSONDecodeError:
                         print("❌ 解析选择的元素数据失败")
+                        self.element_selection_result = "error"
 
             elif "[CHROME_TRACER_CANCELLED]" in message_text:
-                print("🚫 用户取消了元素选择")
                 self.element_selection_result = "cancelled"
-
-            elif "[CHROME_TRACER_STARTED]" in message_text:
-                print("🚀 元素选择模式已激活")
-
-            elif "[CHROME_TRACER_STOPPED]" in message_text:
-                print("🛑 元素选择模式已停止")
 
         except Exception as e:
             print(f"❌ 处理元素选择控制台消息时发生错误: {e}")
+            self.element_selection_result = "error"
 
     async def close(self):
         """关闭连接"""
         # 停止控制台监听
         await self.stop_console_listening()
 
+        if self._message_handler_task:
+            self._message_handler_task.cancel()
+            await asyncio.gather(self._message_handler_task, return_exceptions=True)
+
         if self.ws:
             await self.ws.close()
         if self.session:
             await self.session.close()
 
-    async def start_console_listening(self, message_handler=None):
+    async def start_console_listening(self, message_handler: Optional[Callable] = None):
         """开始监听控制台消息"""
         if self.console_listening:
             print("控制台监听已启动")
@@ -1570,16 +1351,12 @@ class DOMInspector:
         self.console_message_handler = message_handler
         self.console_listening = True
 
-        # 启用控制台域
         try:
             await self.send_command("Console.enable")
             print("✅ 控制台监听已启用")
         except Exception as e:
             print(f"❌ 启用控制台监听失败: {e}")
             self.console_listening = False
-            return
-
-        # 控制台监听已通过统一的消息处理机制实现
 
     async def stop_console_listening(self):
         """停止监听控制台消息"""
@@ -1588,36 +1365,11 @@ class DOMInspector:
 
         self.console_listening = False
 
-        # 禁用控制台域
         try:
             await self.send_command("Console.disable")
             print("✅ 控制台监听已禁用")
         except Exception as e:
             print(f"❌ 禁用控制台监听失败: {e}")
-
-    async def _console_message_loop(self):
-        """控制台消息监听循环"""
-        while self.console_listening and self.ws and not self.ws.closed:
-            try:
-                async for msg in self.ws:
-                    if not self.console_listening:
-                        break
-
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        message = json.loads(msg.data)
-
-                        # 处理控制台消息事件
-                        if message.get("method") == "Runtime.consoleAPICalled":
-                            await self._handle_console_api_called(message.get("params", {}))
-
-                        # 处理控制台消息事件（Console.messageAdded）
-                        elif message.get("method") == "Console.messageAdded":
-                            await self._handle_console_message_added(message.get("params", {}))
-
-            except Exception as e:
-                if self.console_listening:
-                    print(f"控制台消息监听错误: {e}")
-                    await asyncio.sleep(1)  # 错误后等待1秒再重试
 
     async def _handle_console_api_called(self, params: Dict):
         """处理Runtime.consoleAPICalled事件"""
@@ -1724,194 +1476,6 @@ class DOMInspector:
             print(f"处理控制台消息错误: {e}")
 
 
-async def launch_browser_with_debugging(
-    browser_type: str = "chrome", port: int = 9222, user_data_dir: str = None
-) -> bool:
-    """自动启动浏览器并启用远程调试模式，使用临时配置文件"""
-    import atexit
-    import os
-    import platform
-    import shutil
-    import subprocess
-    import tempfile
-    import time
-
-    system = platform.system()
-
-    # 创建临时配置文件目录（如果未提供）
-    if user_data_dir is None:
-        user_data_dir = tempfile.mkdtemp(prefix="chrome_profile_")
-
-        # 注册退出时清理临时目录
-        def cleanup_temp_dir():
-            try:
-                if os.path.exists(user_data_dir):
-                    shutil.rmtree(user_data_dir)
-                    print(f"清理临时配置文件目录: {user_data_dir}")
-            except Exception as e:
-                print(f"清理临时目录失败: {e}")
-
-        atexit.register(cleanup_temp_dir)
-
-    try:
-        if system == "Darwin":  # macOS
-            if browser_type.lower() == "chrome":
-                # 尝试不同的Chrome应用名称
-                chrome_names = ["Google Chrome", "Google Chrome", "Chrome"]
-                browser_launched = False
-                for chrome_name in chrome_names:
-                    try:
-                        # 使用check_output来验证浏览器是否存在
-                        subprocess.check_output(["which", "open"], stderr=subprocess.DEVNULL)
-                        # 尝试启动浏览器
-                        process = subprocess.Popen(
-                            [
-                                "open",
-                                "-n",
-                                "-a",
-                                chrome_name,
-                                "--args",
-                                f"--remote-debugging-port={port}",
-                                f"--user-data-dir={user_data_dir}",
-                                "--no-first-run",
-                                "--no-default-browser-check",
-                            ],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        # 等待open命令完成，然后检查浏览器是否启动
-                        process.wait()  # 等待open命令完成
-                        if process.returncode == 0:  # open命令成功执行
-                            # 等待一点时间让浏览器启动
-                            time.sleep(2)
-                            # 检查浏览器进程是否存在
-                            try:
-                                check_result = subprocess.run(
-                                    ["pgrep", "-f", f"remote-debugging-port={port}"], capture_output=True, text=True
-                                )
-                                if check_result.returncode == 0:
-                                    browser_launched = True
-                                    break
-                            except:
-                                pass
-                        continue
-                    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-                        continue
-
-                if not browser_launched:
-                    print("无法找到或启动Chrome浏览器，请确保已安装Google Chrome")
-                    return False
-
-            elif browser_type.lower() == "edge":
-                # 尝试不同的Edge应用名称
-                edge_names = ["Microsoft Edge", "Microsoft Edge", "Edge"]
-                browser_launched = False
-                for edge_name in edge_names:
-                    try:
-                        subprocess.check_output(["which", "open"], stderr=subprocess.DEVNULL)
-                        process = subprocess.Popen(
-                            [
-                                "open",
-                                "-n",
-                                "-a",
-                                edge_name,
-                                "--args",
-                                f"--remote-debugging-port={port}",
-                                f"--user-data-dir={user_data_dir}",
-                                "--no-first-run",
-                                "--no-default-browser-check",
-                            ],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        # 等待open命令完成，然后检查浏览器是否启动
-                        process.wait()  # 等待open命令完成
-                        if process.returncode == 0:  # open命令成功执行
-                            # 等待一点时间让浏览器启动
-                            time.sleep(2)
-                            # 检查浏览器进程是否存在
-                            try:
-                                check_result = subprocess.run(
-                                    ["pgrep", "-f", f"remote-debugging-port={port}"], capture_output=True, text=True
-                                )
-                                if check_result.returncode == 0:
-                                    browser_launched = True
-                                    break
-                            except:
-                                pass
-                        continue
-                    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-                        continue
-
-                if not browser_launched:
-                    print("无法找到或启动Edge浏览器，请确保已安装Microsoft Edge")
-                    return False
-            else:
-                return False
-        elif system == "Windows":
-            if browser_type.lower() == "chrome":
-                subprocess.Popen(
-                    [
-                        "chrome.exe",
-                        f"--remote-debugging-port={port}",
-                        f"--user-data-dir={user_data_dir}",
-                        "--no-first-run",
-                        "--no-default-browser-check",
-                    ]
-                )
-            elif browser_type.lower() == "edge":
-                subprocess.Popen(
-                    [
-                        "msedge.exe",
-                        f"--remote-debugging-port={port}",
-                        f"--user-data-dir={user_data_dir}",
-                        "--no-first-run",
-                        "--no-default-browser-check",
-                    ]
-                )
-            else:
-                return False
-        elif system == "Linux":
-            if browser_type.lower() == "chrome":
-                subprocess.Popen(
-                    [
-                        "google-chrome",
-                        f"--remote-debugging-port={port}",
-                        f"--user-data-dir={user_data_dir}",
-                        "--no-first-run",
-                        "--no-default-browser-check",
-                    ]
-                )
-            elif browser_type.lower() == "edge":
-                subprocess.Popen(
-                    [
-                        "microsoft-edge",
-                        f"--remote-debugging-port={port}",
-                        f"--user-data-dir={user_data_dir}",
-                        "--no-first-run",
-                        "--no-default-browser-check",
-                    ]
-                )
-            else:
-                return False
-        else:
-            return False
-
-        print(f"使用临时配置文件启动浏览器: {user_data_dir}")
-        # 等待浏览器启动
-        time.sleep(5)  # 增加等待时间确保浏览器完全启动
-        return True
-    except Exception as e:
-        print(f"启动浏览器失败: {e}")
-        # 清理临时目录
-        try:
-            if os.path.exists(user_data_dir):
-                shutil.rmtree(user_data_dir)
-        except:
-            pass
-        return False
-
-
 async def find_chrome_tabs(port: int = 9222, auto_launch: bool = True) -> List[str]:
     """查找所有浏览器标签页的WebSocket URL（Chrome/Edge），支持自动启动浏览器"""
     async with aiohttp.ClientSession() as session:
@@ -1925,7 +1489,8 @@ async def find_chrome_tabs(port: int = 9222, auto_launch: bool = True) -> List[s
                 print("尝试自动启动浏览器...")
 
                 # 尝试启动Chrome
-                if await launch_browser_with_debugging("chrome", port):
+                success, _ = await launch_browser_with_debugging("chrome", port, return_process_info=True)
+                if success:
                     print("Chrome浏览器已启动，等待连接...")
                     # 等待浏览器完全启动
                     import time
@@ -1980,7 +1545,7 @@ async def inspect_element_styles(
             target_id = await inspector.find_tab_by_url(url_pattern)
             if target_id:
                 # 获取所有目标信息以找到匹配的标签页详情
-                response = await inspector.send_command("Target.getTargets")
+                response = await inspector.send_command("Target.getTargets", use_session=False)
                 targets = response.get("result", {}).get("targetInfos", [])
 
                 for target in targets:
@@ -2010,7 +1575,7 @@ async def inspect_element_styles(
             try:
                 temp_inspector = DOMInspector(ws_url)
                 await temp_inspector.connect()
-                response = await temp_inspector.send_command("Target.getTargets")
+                response = await temp_inspector.send_command("Target.getTargets", use_session=False)
                 targets = response.get("result", {}).get("targetInfos", [])
                 for target in targets:
                     if target["type"] == "page":
@@ -2022,7 +1587,10 @@ async def inspect_element_styles(
 
     try:
         # 附加到目标标签页
-        await inspector.attach_to_tab(matched_tab["targetId"])
+        session_id = await inspector.attach_to_tab(matched_tab["targetId"])
+        if not session_id:
+            print(f"附加到标签页失败: {matched_tab['url']}")
+            return
 
         # 根据模式选择元素
         node_id = None
@@ -2171,8 +1739,11 @@ class BrowserContextManager:
 
 
 async def launch_browser_with_debugging(
-    browser_type: str = "chrome", port: int = 9222, user_data_dir: str = None, return_process_info: bool = False
-) -> bool:
+    browser_type: str = "chrome",
+    port: int = 9222,
+    user_data_dir: Optional[str] = None,
+    return_process_info: bool = False,
+) -> Union[bool, Tuple[bool, Dict[str, Any]]]:
     """自动启动浏览器并启用远程调试模式，使用临时配置文件"""
     import atexit
     import os
@@ -2188,7 +1759,7 @@ async def launch_browser_with_debugging(
     if user_data_dir is None:
         user_data_dir = tempfile.mkdtemp(prefix="chrome_profile_")
 
-    process_info = {
+    process_info: Dict[str, Any] = {
         "browser_type": browser_type,
         "port": port,
         "user_data_dir": user_data_dir,
@@ -2322,7 +1893,7 @@ async def launch_browser_with_debugging(
         print(f"启动浏览器失败: {e}")
         # 清理临时目录
         try:
-            if os.path.exists(user_data_dir):
+            if user_data_dir and os.path.exists(user_data_dir):
                 shutil.rmtree(user_data_dir)
         except:
             pass

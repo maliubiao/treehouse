@@ -1711,6 +1711,7 @@ class TraceLogic:
         log_data_payload.update(
             {
                 "indent": _INDENT * self._local.stack_depth,
+                "prefix": TraceTypes.PREFIX_LINE,
                 "filename": formatted_filename,
                 "lineno": start_line,
                 "line": indented_statement,

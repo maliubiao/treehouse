@@ -43,6 +43,7 @@ class TraceTypes:
     PREFIX_RETURN = "RETURN"
     PREFIX_MODULE = "MODULE"
     PREFIX_EXCEPTION = "EXCEPTION"
+    PREFIX_LINE = "LINE"
 
     # HTML classes
     HTML_CALL = "call"
