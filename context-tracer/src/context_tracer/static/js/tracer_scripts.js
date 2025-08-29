@@ -1,16 +1,3 @@
-// Constants for event data array indices
-const LINE_VARS_INDEX = 2;
-
-// Event type constants (should match container-reader.js)
-const EventType = {
-    CALL: 1,
-    RETURN: 2,
-    LINE: 3,
-    EXCEPTION: 4,
-    C_CALL: 5,
-    C_RETURN: 6,
-    C_RAISE: 7
-};
 
 // Search Database - Advanced search functionality for trace events
 class SearchDatabase {
