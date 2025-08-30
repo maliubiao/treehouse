@@ -16,6 +16,11 @@ if TYPE_CHECKING:
 class DebuggerHandler:
     """Handles logic related to the CDP Debugger domain."""
 
+    # Maximum length for a single variable's value in the debugger output
+    MAX_SINGLE_VAR_VALUE_LENGTH: int = 100
+    # Maximum total length for the concatenated string of all variables in a frame
+    MAX_TOTAL_VARS_LINE_LENGTH: int = 250
+
     def __init__(self, client: "DOMInspector"):
         """
         Initializes the DebuggerHandler.
@@ -147,10 +152,18 @@ class DebuggerHandler:
         await self.client.resume_debugger()
 
     async def _get_variables_from_scope_chain(self, scope_chain: List[Dict[str, Any]]) -> Dict[str, str]:
-        """Extract local and closure variables from a scope chain."""
+        """
+        Extract local and closure variables from a scope chain.
+        The scopeChain is ordered from innermost (closest) to outermost (global).
+        We process it in this order, and for each variable, only add it if it hasn't
+        been defined in an inner scope already. This ensures that variables from
+        the innermost scope take precedence (JavaScript's shadowing rules).
+        """
         variables: Dict[str, str] = {}
         for scope in scope_chain:
             scope_type = scope.get("type")
+            # We are interested in 'local' and 'closure' variables for display.
+            # Global variables are often too numerous and less relevant for a specific call frame.
             if scope_type in ["local", "closure"]:
                 scope_object = scope.get("object", {})
                 object_id = scope_object.get("objectId")
@@ -161,9 +174,17 @@ class DebuggerHandler:
                         )
                         for prop in props_response.get("result", {}).get("result", []):
                             name = prop.get("name")
-                            value_obj = prop.get("value", {})
-                            description = value_obj.get("description", str(value_obj.get("value", "N/A")))
-                            if name:
+                            # Only add if the variable hasn't been defined in a more inner scope
+                            if name and name not in variables:
+                                value_obj = prop.get("value", {})
+
+                                # Get description, preferring 'description' from CDP, fallback to 'value', then 'N/A'
+                                description_raw = value_obj.get("description", str(value_obj.get("value", "N/A")))
+                                description = description_raw
+                                # Truncate long variable values for readability
+                                if len(description_raw) > self.MAX_SINGLE_VAR_VALUE_LENGTH:
+                                    description = description_raw[: self.MAX_SINGLE_VAR_VALUE_LENGTH] + "..."
+
                                 variables[name] = description
                     except Exception as e:
                         print(
@@ -203,11 +224,15 @@ class DebuggerHandler:
 
         variables = await self._get_variables_from_scope_chain(frame.get("scopeChain", []))
 
-        # Truncate variables string for readability
-        MAX_VARS_LENGTH = 250
         variables_str = ", ".join(f"{name}: {value}" for name, value in variables.items())
-        if len(variables_str) > MAX_VARS_LENGTH:
-            variables_str = variables_str[:MAX_VARS_LENGTH] + "..."
+        # Truncate the entire variables line if it's too long
+        if len(variables_str) > self.MAX_TOTAL_VARS_LINE_LENGTH:
+            variables_str = variables_str[: self.MAX_TOTAL_VARS_LINE_LENGTH] + "..."
+
+        if variables_str:
+            print(_("Local/Closure Variables: {variables_str}", variables_str=variables_str))
+        else:
+            print(_("Local/Closure Variables: (None)"))
 
         print(_("Source Context:"))
 
@@ -243,8 +268,6 @@ class DebuggerHandler:
                         suffix_indicator = "..." if end_col < len(line_content) else ""
                         line_to_print = f"{prefix_indicator}{snippet}{suffix_indicator}"
 
-                        if variables_str:
-                            line_to_print += f"    // {variables_str}"
                         print(f" {prefix} {i + script_start_line + 1: >4} | {line_to_print}")
 
                         print(
@@ -256,11 +279,7 @@ class DebuggerHandler:
                     # Handle normal length lines
                     else:
                         line_to_print = line_content
-                        if variables_str:
-                            if len(line_to_print.strip()) > 0:
-                                line_to_print += f"    // {variables_str}"
-                            else:
-                                line_to_print = f"// {variables_str}"
+                        # Variables are now printed separately, not in code comments
                         print(f" {prefix} {i + script_start_line + 1: >4} | {line_to_print}")
 
                 # Context lines

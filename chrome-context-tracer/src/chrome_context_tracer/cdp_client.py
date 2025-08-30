@@ -60,7 +60,13 @@ class DOMInspector:
         self.session = aiohttp.ClientSession()
         self.ws = await self.session.ws_connect(self.websocket_url, max_msg_size=WEBSOCKET_MAX_MSG_SIZE)
         self._message_handler_task = asyncio.create_task(self._message_listener())
-        print(_("Connected to Browser DevTools: {websocket_url}", websocket_url=self.websocket_url))
+
+        # Detect if this is a Node.js target based on WebSocket URL pattern
+        if "node" in self.websocket_url.lower() or ":9229" in self.websocket_url:
+            self.is_node_target = True
+            print(_("Connected to Node.js DevTools: {websocket_url}", websocket_url=self.websocket_url))
+        else:
+            print(_("Connected to Browser DevTools: {websocket_url}", websocket_url=self.websocket_url))
 
         # If we are connecting directly to a page or a Node.js target, enable domains immediately.
         # Browser-level connections (e.g., for Target management) do not support these domains.
@@ -117,10 +123,18 @@ class DOMInspector:
             "Runtime.consoleAPICalled": self._handle_console_api_called,
             "Console.messageAdded": self._handle_console_message_added,
             "Runtime.exceptionThrown": self.debugger.handle_exception_thrown,
-            "CSS.styleSheetAdded": self.dom.handle_style_sheet_added,
             "Debugger.scriptParsed": self.debugger.handle_script_parsed,
             "Debugger.paused": self.debugger.handle_debugger_paused,
         }
+
+        # Only add DOM/CSS handlers for browser targets
+        if not self.is_node_target:
+            event_handlers.update(
+                {
+                    "CSS.styleSheetAdded": self.dom.handle_style_sheet_added,
+                }
+            )
+
         handler = event_handlers.get(method)
         if handler:
             await handler(params)
@@ -167,7 +181,13 @@ class DOMInspector:
 
     async def enable_domains(self) -> None:
         """Enable all necessary domains for the current session."""
-        domains_to_enable = ["DOM", "CSS", "Runtime", "Page", "Debugger", "Console"]
+        # Node.js targets don't support DOM/CSS/Page domains
+        if self.is_node_target:
+            domains_to_enable = ["Runtime", "Debugger", "Console"]
+            print(_("Enabling Node.js compatible domains: {domains}", domains=", ".join(domains_to_enable)))
+        else:
+            domains_to_enable = ["DOM", "CSS", "Runtime", "Page", "Debugger", "Console"]
+
         for domain in domains_to_enable:
             try:
                 await self.send_command(f"{domain}.enable")

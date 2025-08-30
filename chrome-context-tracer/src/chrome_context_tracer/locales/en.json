@@ -141,6 +141,8 @@
     "📍 Location: Line {line_num}, Col {col_num}": "📍 Location: Line {line_num}, Col {col_num}",
     "🎯 Event Types: {event_types}": "🎯 Event Types: {event_types}",
     "📋 Handler: {handler_desc}": "📋 Handler: {handler_desc}",
+    "Local/Closure Variables: (None)": "Local/Closure Variables: (None)",
+    "Local/Closure Variables: {variables_str}": "Local/Closure Variables: {variables_str}",
     "📊 Summary: {total_listeners} listeners found, grouped into {total_groups} locations.": "📊 Summary: {total_listeners} listeners found, grouped into {total_groups} locations.",
     "💡 Available tabs:": "💡 Available tabs:",
     "ℹ️  Detected running browser instance on port {port}.": "ℹ️  Detected running browser instance on port {port}.",

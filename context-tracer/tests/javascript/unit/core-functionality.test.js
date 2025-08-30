@@ -5,7 +5,7 @@ const originalTraceViewer = global.TraceViewer;
 
 beforeAll(() => {
   // Load the actual script
-  require('../../../src/context_tracer/tracer_scripts.js');
+  require('../../../src/context_tracer/static/js/tracer_scripts.js');
 });
 
 afterAll(() => {

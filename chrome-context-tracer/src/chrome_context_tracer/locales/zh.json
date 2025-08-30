@@ -141,6 +141,8 @@
     "📍 Location: Line {line_num}, Col {col_num}": "📍 位置: 行 {line_num}, 列 {col_num}",
     "🎯 Event Types: {event_types}": "🎯 事件类型: {event_types}",
     "📋 Handler: {handler_desc}": "📋 处理器: {handler_desc}",
+    "Local/Closure Variables: (None)": "局部/闭包变量: (无)",
+    "Local/Closure Variables: {variables_str}": "局部/闭包变量: {variables_str}",
     "📊 Summary: {total_listeners} listeners found, grouped into {total_groups} locations.": "📊 总结: 找到 {total_listeners} 个监听器, 分为 {total_groups} 组。",
     "💡 Available tabs:": "💡 可用标签页:",
     "ℹ️  Detected running browser instance on port {port}.": "ℹ️  检测到端口 {port} 上已有浏览器实例在运行。",
