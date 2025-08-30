@@ -5,9 +5,10 @@ CDP Debugger Handler - Manages script parsing, debugger events, and source code 
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .i18n import _
+from .line_trace_config import LineTraceConfig
 
 if TYPE_CHECKING:
     from .cdp_client import DOMInspector
@@ -31,6 +32,15 @@ class DebuggerHandler:
         self.client = client
         self._initial_pause_handled: bool = False
 
+        # State for line-by-line tracing
+        self.is_line_tracing: bool = False
+        self.trace_config: Optional[LineTraceConfig] = None
+        self.initial_trace_stack_depth: int = 0
+
+    def set_line_trace_config(self, config: Optional[LineTraceConfig]) -> None:
+        """Sets the configuration for line tracing."""
+        self.trace_config = config
+
     async def handle_script_parsed(self, params: Dict[str, Any]) -> None:
         """Process Debugger.scriptParsed events and cache script metadata."""
         script_id = params.get("scriptId")
@@ -38,6 +48,9 @@ class DebuggerHandler:
             return
 
         url = params.get("url", "")
+        # In Node.js, internal modules start with 'node:'. We prefer to show that.
+        if not url and params.get("embedderName"):
+            url = params["embedderName"]
 
         # Use the full URL for display if available, as it provides more context than just the basename.
         # If no URL is provided, it's likely an inline or dynamically evaluated script.
@@ -87,49 +100,62 @@ class DebuggerHandler:
             return {**base_info, **cached_data, "source": None, "error": error_str}
 
     async def handle_debugger_paused(self, params: Dict[str, Any]) -> None:
-        """Process Debugger.paused events, printing call stack and variable info."""
-        # Handle the initial pause when attaching to a Node.js process started with --inspect-brk
-        if self.client.is_node_target and not self._initial_pause_handled:
-            self.client.did_receive_initial_node_pause = True
-            print(_("\nDebugger attached. Node.js process is paused at the start."))
-            call_frames_list = params.get("callFrames", [])
-            if call_frames_list:
-                frame = call_frames_list[0]
-                location = frame.get("location", {})
-                script_id = location.get("scriptId")
-                line = location.get("lineNumber", 0) + 1
-                script_info = self.client.script_cache.get(script_id, {})
-                filename = script_info.get("filename", f"scriptId:{script_id}")
-                print(_("Paused at: {filename}:{line}", filename=filename, line=line))
-
-            # Automatically resume execution for a non-interactive experience
-            self._initial_pause_handled = True
-            await self.client.resume_debugger()
-            print(_("Execution resumed."))
+        """
+        Process Debugger.paused events. This acts as a dispatcher for different pause reasons,
+        including handling standard pauses and the line-by-line tracing feature.
+        """
+        reason = params.get("reason")
+        # --- Line Tracing Logic ---
+        # 1. Check if we should START line tracing
+        if not self.is_line_tracing and self.trace_config and reason == "debuggerStatement":
+            await self._start_line_tracing(params)
             return
 
+        # 2. Check if we are CURRENTLY in a line tracing session
+        if self.is_line_tracing:
+            await self._handle_line_trace_paused(params)
+            return
+
+        # --- Standard Pause Handling Logic ---
+        # Handle the initial pause for Node.js --inspect-brk
+        if self.client.is_node_target and not self._initial_pause_handled:
+            await self._handle_initial_node_pause(params)
+            return
+
+        # Handle all other standard pauses (exceptions, normal breakpoints, etc.)
+        await self._handle_standard_pause(params)
+
+    async def _handle_initial_node_pause(self, params: Dict[str, Any]) -> None:
+        """Handle the very first pause when attaching to a Node.js process."""
+        self.client.did_receive_initial_node_pause = True
+        print(_("\nDebugger attached. Node.js process is paused at the start."))
+        call_frames_list = params.get("callFrames", [])
+        if call_frames_list:
+            frame = call_frames_list[0]
+            location = frame.get("location", {})
+            script_id = location.get("scriptId")
+            line = location.get("lineNumber", 0) + 1
+            script_info = self.client.script_cache.get(script_id, {})
+            filename = script_info.get("filename", f"scriptId:{script_id}")
+            print(_("Paused at: {filename}:{line}", filename=filename, line=line))
+
+        self._initial_pause_handled = True
+        await self.client.resume_debugger()
+        print(_("Execution resumed."))
+
+    async def _handle_standard_pause(self, params: Dict[str, Any]) -> None:
+        """Process a standard debugger pause (breakpoint, exception), printing detailed info."""
         reason = params.get("reason")
         call_frames = params.get("callFrames", [])
 
-        # Custom header based on pause reason
-        header_text = ""
-        if reason == "exception":
-            header_text = _(" Paused on exception ")
-        elif reason == "debuggerStatement":
-            header_text = _(" Paused on 'debugger' statement ")
-        else:
-            header_text = _(" Debugger paused ")
-
+        header_text = f" Paused on {reason} "
         print(f"\n{'=' * 20}{header_text}{'=' * 20}")
 
         if reason == "exception":
             exception_data = params.get("data", {})
             if exception_data and "description" in exception_data:
-                # The description can be multi-line, just show the first line (the error message)
                 error_message = exception_data["description"].split("\n")[0]
                 print(_("Exception: {error_message}", error_message=error_message))
-
-        print(_("Reason: {reason}\n", reason=reason))
 
         print(_("--- Stack Trace ---"))
         for i, frame in enumerate(call_frames):
@@ -148,7 +174,66 @@ class DebuggerHandler:
 
         print("=" * (42 + len(header_text)))
         print(_("Resuming execution..."))
+        await self.client.resume_debugger()
 
+    async def _start_line_tracing(self, params: Dict[str, Any]) -> None:
+        """Initiates a line-by-line tracing session."""
+        self.is_line_tracing = True
+        call_frames = params.get("callFrames", [])
+        self.initial_trace_stack_depth = len(call_frames)
+
+        print(_("--- Line tracing started from 'debugger;' statement. ---"))
+
+        if self.trace_config and self.trace_config.blacklist_patterns:
+            await self.client.set_blackbox_patterns(self.trace_config.blacklist_patterns)
+
+        # We are already paused at the `debugger;` statement.
+        # Process this first pause event to show the user where tracing starts,
+        # then issue the first step command.
+        await self._handle_line_trace_paused(params)
+
+    async def _handle_line_trace_paused(self, params: Dict[str, Any]) -> None:
+        """Handles a single step in a line-tracing session."""
+        call_frames = params.get("callFrames", [])
+
+        # Check for termination condition
+        if not call_frames or len(call_frames) < self.initial_trace_stack_depth:
+            await self._stop_line_tracing()
+            return
+
+        # Print current location and source code line
+        top_frame = call_frames[0]
+        location = top_frame.get("location", {})
+        script_id = location.get("scriptId")
+        line_num = location.get("lineNumber", 0)
+
+        source_info = await self.get_script_source_info(script_id, line_num, 0)
+        source_code = source_info.get("source")
+        line_content = _("(Source not available)")
+        if source_code:
+            lines = source_code.split("\n")
+            # The script might start at a different line than 0 in the resource
+            script_start_line = source_info.get("scriptInfo", {}).get("startLine", 0)
+            relative_line_num = line_num - script_start_line
+            if 0 <= relative_line_num < len(lines):
+                line_content = lines[relative_line_num].strip()
+
+        filename = self.client.script_cache.get(script_id, {}).get("filename", script_id)
+        print(f"[LINE TRACE] {filename}:{line_num + 1} | {line_content}")
+
+        # Execute the next step. Default to stepping into functions.
+        # The blackbox patterns will prevent stepping into library code.
+        await self.client.step_into()
+
+    async def _stop_line_tracing(self) -> None:
+        """Resets the state of the line-tracing session and resumes execution."""
+        print(_("--- Line tracing finished: Initial function frame has returned. ---"))
+        if self.trace_config and self.trace_config.blacklist_patterns:
+            # Clear the blackbox patterns to not affect subsequent debugging
+            await self.client.set_blackbox_patterns([])
+
+        self.is_line_tracing = False
+        self.initial_trace_stack_depth = 0
         await self.client.resume_debugger()
 
     async def _get_variables_from_scope_chain(self, scope_chain: List[Dict[str, Any]]) -> Dict[str, str]:

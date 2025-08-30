@@ -1,0 +1,12 @@
+# Configuration for the line-by-line tracer.
+
+# A list of regex patterns. Scripts whose URL matches any of these patterns
+# will be "blackboxed" by the debugger. The tracer will not step into them.
+# This is useful for ignoring libraries, node internals, or utility files.
+blacklist_patterns:
+  # Ignore all node internal modules (e.g., 'path', 'fs')
+  - "^node:.*"
+  # Ignore files inside any node_modules directory
+  - "/node_modules/"
+  # Ignore our specific utility file for testing purposes
+  - "test_utils.js"

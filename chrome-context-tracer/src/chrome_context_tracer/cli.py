@@ -5,6 +5,7 @@ from typing import Optional
 from .browser_manager import find_chrome_tabs
 from .cdp_client import DOMInspector
 from .i18n import _
+from .line_trace_config import LineTraceConfig, load_config
 
 
 async def inspect_element_styles(
@@ -85,10 +86,31 @@ async def run_debugger_trace(
     ws_url: Optional[str] = None,
     pause_on_exceptions_state: str = "all",
     is_node: bool = False,
+    line_trace_config_path: Optional[str] = None,
 ) -> None:
     """Runs the debugger trace mode, connecting to a browser tab or a direct WebSocket URL."""
     inspector: Optional[DOMInspector] = None
     try:
+        line_trace_config: Optional[LineTraceConfig] = None
+        if line_trace_config_path:
+            try:
+                line_trace_config = load_config(line_trace_config_path)
+                print(
+                    _(
+                        "✅ Line tracing mode enabled with config: {path}",
+                        path=line_trace_config_path,
+                    )
+                )
+            except (FileNotFoundError, ValueError, IsADirectoryError):
+                # Error is printed inside load_config, or we handle filesystem errors here
+                print(
+                    _(
+                        "❌ Error: Could not read line trace config file at {path}",
+                        path=line_trace_config_path,
+                    )
+                )
+                return
+
         if is_node:
             if not ws_url:
                 print(_("Error: --node flag requires --ws-url to be specified."))
@@ -96,22 +118,21 @@ async def run_debugger_trace(
             print(_("Connecting to Node.js target: {ws_url}", ws_url=ws_url))
             inspector = DOMInspector(ws_url)
             inspector.is_node_target = True
-            await inspector.start_console_listening()
-            await inspector.connect()
-
         elif ws_url:
             print(_("Connecting directly to WebSocket: {ws_url}", ws_url=ws_url))
             inspector = DOMInspector(ws_url)
-            await inspector.start_console_listening()
-            await inspector.connect()
         else:
             websocket_urls = await find_chrome_tabs(port)
             if not websocket_urls:
                 print(_("No browser tabs found. Please ensure the browser is running with remote debugging enabled:"))
                 return
             inspector = DOMInspector(websocket_urls[0])
-            await inspector.start_console_listening()
-            await inspector.connect()
+
+        await inspector.start_console_listening()
+        await inspector.connect()
+
+        # For browser targets, we need to find and attach to a tab.
+        if not is_node and not ws_url:
             target_id = await inspector.find_tab_by_url(url_pattern)
             if not target_id:
                 print(
@@ -124,13 +145,19 @@ async def run_debugger_trace(
                 print(_("Failed to attach to tab."))
                 return
 
+        # Pass config to the debugger handler
+        if line_trace_config:
+            inspector.debugger.set_line_trace_config(line_trace_config)
+
         if pause_on_exceptions_state != "none":
             await inspector.set_pause_on_exceptions(pause_on_exceptions_state)
 
         stop_event = asyncio.Event()
 
         print(_("\n✅ Debugger trace mode activated."))
-        if pause_on_exceptions_state != "none":
+        if line_trace_config:
+            print(_("Waiting for 'debugger;' statement to start line-by-line tracing..."))
+        elif pause_on_exceptions_state != "none":
             print(
                 _(
                     "Waiting for 'debugger;' statements, console messages, and {state} exceptions.",
@@ -139,10 +166,12 @@ async def run_debugger_trace(
             )
         else:
             print(_("Waiting for 'debugger;' statements and console messages in the attached page."))
+
         if is_node:
             # For Node.js targets started with --inspect-brk, we must send this command
             # to tell the runtime to start execution and break at the first line.
             await inspector.run_if_waiting_for_debugger()
+
         print(_("Press Ctrl+C to exit."))
         await stop_event.wait()
 
@@ -192,6 +221,11 @@ def main():
     parser_trace.add_argument(
         "--node", action="store_true", help=_("Enable Node.js debugging mode (requires --ws-url)")
     )
+    parser_trace.add_argument(
+        "--line-trace-config",
+        metavar="CONFIG_PATH",
+        help=_("Path to a YAML config file to enable line-by-line tracing from 'debugger;' statements."),
+    )
 
     args = parser.parse_args()
     url_pattern = args.url if hasattr(args, "url") and args.url else ""
@@ -204,6 +238,15 @@ def main():
                 inspect_element_styles(url_pattern, args.selector, args.port, args.events, args.html, args.from_pointer)
             )
         elif args.command == "trace":
-            asyncio.run(run_debugger_trace(url_pattern, args.port, args.ws_url, args.pause_on_exceptions, args.node))
+            asyncio.run(
+                run_debugger_trace(
+                    url_pattern,
+                    args.port,
+                    args.ws_url,
+                    args.pause_on_exceptions,
+                    args.node,
+                    args.line_trace_config,
+                )
+            )
     except KeyboardInterrupt:
         print(_("\nInterrupted by user. Exiting."))

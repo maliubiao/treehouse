@@ -383,6 +383,36 @@ class DOMInspector:
         except Exception as e:
             print(_("⚠️  Warning: Could not pause debugger: {e}", e=e))
 
+    async def step_into(self) -> None:
+        """Sends the command to step into the next function call."""
+        try:
+            await self.send_command("Debugger.stepInto")
+        except Exception as e:
+            print(_("⚠️  Warning: Could not step into: {e}", e=e))
+
+    async def step_over(self) -> None:
+        """Sends the command to step over the next function call."""
+        try:
+            await self.send_command("Debugger.stepOver")
+        except Exception as e:
+            print(_("⚠️  Warning: Could not step over: {e}", e=e))
+
+    async def step_out(self) -> None:
+        """Sends the command to step out of the current function."""
+        try:
+            await self.send_command("Debugger.stepOut")
+        except Exception as e:
+            print(_("⚠️  Warning: Could not step out: {e}", e=e))
+
+    async def set_blackbox_patterns(self, patterns: List[str]) -> None:
+        """Sets patterns for scripts to be blackboxed by the debugger."""
+        try:
+            await self.send_command("Debugger.setBlackboxPatterns", {"patterns": patterns})
+            if patterns:
+                print(_("✅ Blackbox patterns set for line tracing."))
+        except Exception as e:
+            print(_("⚠️  Warning: Could not set blackbox patterns: {e}", e=e))
+
     def _get_source_info(self, rule: Dict[str, Any], style_sheet_id: str) -> str:
         """Helper to get the source file information for a CSS rule."""
         if style_sheet_id in self.stylesheet_headers:
