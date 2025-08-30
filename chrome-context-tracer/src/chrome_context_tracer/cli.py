@@ -87,6 +87,7 @@ async def run_debugger_trace(url_pattern: str, port: int):
 
     inspector = DOMInspector(websocket_urls[0])
     await inspector.connect()
+    await inspector.start_console_listening()
 
     stop_event = asyncio.Event()
 
@@ -100,8 +101,6 @@ async def run_debugger_trace(url_pattern: str, port: int):
         if not session_id:
             print(_("Failed to attach to tab."))
             return
-
-        await inspector.start_console_listening()
 
         print(_("\n✅ Debugger trace mode activated."))
         print(_("Waiting for 'debugger;' statements and console messages in the attached page."))
