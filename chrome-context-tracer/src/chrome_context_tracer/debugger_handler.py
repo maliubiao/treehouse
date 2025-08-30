@@ -179,7 +179,8 @@ class DebuggerHandler:
                 prefix = "->" if i == relative_line_number else "  "
                 line_content = lines[i]
 
-                if i == relative_line_number:
+                # Only add variable annotations if we have variables to show
+                if i == relative_line_number and variables_str:
                     if len(line_content.strip()) > 0:
                         line_content += f"    // {variables_str}"
                     else:
@@ -189,3 +190,44 @@ class DebuggerHandler:
         else:
             print(_("  [Source code not available]"))
         print("")
+
+    async def handle_exception_thrown(self, params: Dict[str, Any]) -> None:
+        """Process Runtime.exceptionThrown events, printing call stack and source."""
+        exception_details = params.get("exceptionDetails")
+        if not exception_details:
+            return
+
+        exception_obj = exception_details.get("exception", {})
+        # Get the first line of the description, which is usually the error message.
+        exception_desc = exception_obj.get("description", "No description").split("\n")[0]
+        header = _("💥 Unhandled Exception Caught 💥")
+
+        print(f"\n{'=' * 20}{header}{'=' * 20}")
+        print(f"  {exception_desc}\n")
+
+        stack_trace = exception_details.get("stackTrace")
+        if not stack_trace or not stack_trace.get("callFrames"):
+            print(_("  [No stack trace available]"))
+            print("=" * (40 + len(header)))
+            return
+
+        call_frames = stack_trace.get("callFrames", [])
+
+        print(_("--- Stack Trace ---"))
+        for i, frame in enumerate(call_frames):
+            func_name = frame.get("functionName") or "(anonymous)"
+            location = frame.get("location", {})
+            script_id = location.get("scriptId")
+            line = location.get("lineNumber", 0) + 1
+            col = location.get("columnNumber", 0) + 1
+            script_info = self.client.script_cache.get(script_id, {})
+            filename = script_info.get("filename", f"scriptId:{script_id}")
+            print(f"  [{i}] {func_name} at {filename}:{line}:{col}")
+        print("")
+
+        for i, frame in enumerate(call_frames):
+            # The `callFrames` from Runtime.exceptionThrown do NOT contain a `scopeChain`.
+            # Our `_process_and_print_call_frame` gracefully handles this by not showing variables.
+            await self._process_and_print_call_frame(frame, i)
+
+        print("=" * (40 + len(header)))

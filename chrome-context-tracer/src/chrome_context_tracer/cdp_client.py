@@ -114,6 +114,7 @@ class DOMInspector:
         event_handlers = {
             "Runtime.consoleAPICalled": self._handle_console_api_called,
             "Console.messageAdded": self._handle_console_message_added,
+            "Runtime.exceptionThrown": self.debugger.handle_exception_thrown,
             "CSS.styleSheetAdded": self.dom.handle_style_sheet_added,
             "Debugger.scriptParsed": self.debugger.handle_script_parsed,
             "Debugger.paused": self.debugger.handle_debugger_paused,
