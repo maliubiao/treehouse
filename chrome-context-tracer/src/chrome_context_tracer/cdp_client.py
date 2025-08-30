@@ -245,28 +245,69 @@ class DOMInspector:
         self.console_listening = False
         self.console_message_handler = None
 
+    def _print_console_message(
+        self, level: str, args: List[Dict[str, Any]], stack_trace: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Helper to format and print a console message with an optional stack trace."""
+        message_parts = [str(arg.get("value", arg.get("description", ""))) for arg in args]
+
+        # In Runtime.consoleAPICalled, a trace has level='trace'. In Console.messageAdded, it's level='log'
+        # with a stack trace. We treat any 'trace'-level message specially for formatting.
+        if level == "trace":
+            header = f"CONSOLE.TRACE: {' '.join(message_parts)}".strip()
+            print(header)
+        else:
+            header = f"CONSOLE.{level.upper()}: {' '.join(message_parts)}"
+            print(header)
+
+        if stack_trace and stack_trace.get("callFrames"):
+            # For console.trace, the stack is the primary output. For others, it's context.
+            if level != "trace":
+                print(_("--- Stack Trace ---"))
+
+            for frame in stack_trace["callFrames"]:
+                func_name = frame.get("functionName") or "(anonymous)"
+                url = frame.get("url", "unknown")
+                filename = url.split("/")[-1] if url else "unknown"
+                line = frame.get("lineNumber", 0) + 1
+                col = frame.get("columnNumber", 0) + 1
+                print(f"    at {func_name} ({filename}:{line}:{col})")
+
     async def _handle_console_api_called(self, params: Dict[str, Any]) -> None:
         """
         Handle Runtime.consoleAPICalled events.
-        Prioritizes the custom message handler (for features like element selection)
-        before falling back to the generic console listener.
+        Prioritizes the custom message handler before falling back to the generic console listener.
         """
         if self.console_message_handler:
             await self.console_message_handler({"type": params.get("type", ""), "message": params, "raw": params})
         elif self.console_listening:
-            message_parts = [str(arg.get("value", arg.get("description", ""))) for arg in params.get("args", [])]
-            print(f"CONSOLE.{params.get('type', 'log').upper()}: {' '.join(message_parts)}")
+            self._print_console_message(
+                level=params.get("type", "log"),
+                args=params.get("args", []),
+                stack_trace=params.get("stackTrace"),
+            )
 
     async def _handle_console_message_added(self, params: Dict[str, Any]) -> None:
         """
         Handle Console.messageAdded events.
-        Prioritizes the custom message handler before falling back to the generic console listener.
+        This is often the primary event source for console messages when the Debugger domain is active.
         """
         message = params.get("message", {})
         if self.console_message_handler:
             await self.console_message_handler({"type": message.get("level", ""), "message": params, "raw": params})
         elif self.console_listening:
-            print(f"CONSOLE.{message.get('level', 'log').upper()}: {message.get('text', '')}")
+            level = message.get("level", "log")
+
+            # Use detailed view for messages from JS console APIs ('console-api' source)
+            if message.get("source") == "console-api" and "parameters" in message:
+                self._print_console_message(
+                    level=level,
+                    args=message.get("parameters", []),
+                    stack_trace=message.get("stackTrace"),
+                )
+            else:
+                # Fallback for other messages (network, security, etc.) which only have 'text'
+                print(f"CONSOLE.{level.upper()}: {message.get('text', '')}")
 
     def _get_source_info(self, rule: Dict[str, Any], style_sheet_id: str) -> str:
         """Helper to get the source file information for a CSS rule."""

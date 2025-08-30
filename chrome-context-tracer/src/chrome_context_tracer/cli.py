@@ -88,9 +88,6 @@ async def run_debugger_trace(url_pattern: str, port: int):
     inspector = DOMInspector(websocket_urls[0])
     await inspector.connect()
 
-    # Enable console to see logs from the test page
-    await inspector.send_command("Runtime.enable")
-
     stop_event = asyncio.Event()
 
     try:
@@ -104,8 +101,10 @@ async def run_debugger_trace(url_pattern: str, port: int):
             print(_("Failed to attach to tab."))
             return
 
+        await inspector.start_console_listening()
+
         print(_("\n✅ Debugger trace mode activated."))
-        print(_("Waiting for 'debugger;' statements in the attached page."))
+        print(_("Waiting for 'debugger;' statements and console messages in the attached page."))
         print(_("Press Ctrl+C to exit."))
 
         await stop_event.wait()
@@ -135,7 +134,9 @@ def main():
     parser_inspect.add_argument("--from-pointer", action="store_true", help=_("Select element using the mouse pointer"))
 
     # --- Trace command ---
-    parser_trace = subparsers.add_parser("trace", help=_("Trace JS 'debugger;' statements and show call stack"))
+    parser_trace = subparsers.add_parser(
+        "trace", help=_("Trace JS 'debugger;' statements and show call stack and console messages")
+    )
     parser_trace.add_argument(
         "--url", help=_("URL pattern to match (optional, will prompt for selection if not specified)")
     )
