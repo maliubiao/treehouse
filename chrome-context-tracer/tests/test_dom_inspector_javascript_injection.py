@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from chrome_context_tracer import BrowserContextManager, DOMInspector
-from chrome_context_tracer.utils import get_mouse_detector_js
+from chrome_context_tracer.utils import find_free_safe_port, get_mouse_detector_js
 from test_server_utils import TestServerContext
 
 
@@ -110,7 +110,8 @@ async def test_javascript_injection():
     </html>
     """
 
-            async with TestServerContext(test_html) as test_url:
+            port = find_free_safe_port()
+            async with TestServerContext(test_html, port=port) as test_url:
                 # 4. 导航到测试页面
                 print(f"🌐 导航到测试页面: {test_url}")
                 nav_success = await inspector.navigate_to_page(test_url)
@@ -159,12 +160,15 @@ async def test_javascript_injection():
                     "Runtime.evaluate", {"expression": "document.title", "returnByValue": True}
                 )
 
-                if "result" in title_response and "value" in title_response["result"]:
-                    page_title = title_response["result"]["value"]
+                title_result_obj = title_response.get("result", {}).get("result", {})
+                if "value" in title_result_obj:
+                    page_title = title_result_obj["value"]
                     if "已修改" in page_title:
                         print("✅ 页面标题修改验证成功")
                     else:
                         print(f"⚠️  页面标题未按预期修改: {page_title}")
+                else:
+                    print(f"❌ 无法获取页面标题. Response: {title_response}")
 
                 # 6. 测试复杂的JavaScript注入（鼠标元素检测器）
                 print("🖱️  测试复杂JavaScript注入（鼠标元素检测器）...")
@@ -184,14 +188,11 @@ async def test_javascript_injection():
                     {"expression": "typeof window.chromeContextTracer !== 'undefined'", "returnByValue": True},
                 )
 
-                if (
-                    "result" in detector_check
-                    and "value" in detector_check["result"]
-                    and detector_check["result"]["value"] == True
-                ):
+                detector_result_obj = detector_check.get("result", {}).get("result", {})
+                if detector_result_obj.get("value") is True:
                     print("✅ 鼠标元素检测器验证成功")
                 else:
-                    print("❌ 鼠标元素检测器验证失败")
+                    print(f"❌ 鼠标元素检测器验证失败. Response: {detector_check}")
                     return False
 
                 # 7. 测试JavaScript函数调用
@@ -281,14 +282,11 @@ async def test_javascript_injection():
                     {"expression": "document.getElementById('injected-element') !== null", "returnByValue": True},
                 )
 
-                if (
-                    "result" in element_check
-                    and "value" in element_check["result"]
-                    and element_check["result"]["value"] == True
-                ):
+                element_result_obj = element_check.get("result", {}).get("result", {})
+                if element_result_obj.get("value") is True:
                     print("✅ 文件注入元素验证成功")
                 else:
-                    print("❌ 文件注入元素验证失败")
+                    print(f"❌ 文件注入元素验证失败. Response: {element_check}")
 
                 # 9. 测试错误处理
                 print("⚠️  测试错误处理...")

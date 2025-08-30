@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from chrome_context_tracer import DOMInspector, launch_browser_with_debugging
 from chrome_context_tracer.browser_manager import find_chrome_tabs
+from chrome_context_tracer.utils import find_free_safe_port
 from test_server_utils import TestServerContext
 
 
@@ -29,7 +30,8 @@ async def setup_test_page_and_inspector():
 
     # Create test server context
     test_html = get_test_html()
-    server_context = TestServerContext(test_html)
+    port = find_free_safe_port()
+    server_context = TestServerContext(test_html, port=port)
     test_url = await server_context.__aenter__()
 
     nav_success = await inspector.navigate_to_page(test_url)
@@ -128,7 +130,8 @@ async def test_browser_connection():
 
         # Test navigation to our test page using HTTP server
         test_html = get_test_html()
-        async with TestServerContext(test_html) as test_url:
+        port = find_free_safe_port()
+        async with TestServerContext(test_html, port=port) as test_url:
             print(f"🧪 Testing navigation to test page: {test_url}")
             inspector = DOMInspector(websocket_urls[0])
             await inspector.connect()

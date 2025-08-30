@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from chrome_context_tracer import BrowserContextManager, DOMInspector
+from chrome_context_tracer.utils import find_free_safe_port
 from test_server_utils import TestServerContext
 
 
@@ -108,7 +109,8 @@ async def test_performance():
 </html>
 """
 
-            async with TestServerContext(test_html) as test_url:
+            port = find_free_safe_port()
+            async with TestServerContext(test_html, port=port) as test_url:
                 # 性能测试1: 页面导航时间
                 print("\n⏱️  性能测试1: 页面导航时间")
                 print("-" * 30)

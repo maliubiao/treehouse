@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from chrome_context_tracer import BrowserContextManager, DOMInspector
-from chrome_context_tracer.utils import get_mouse_detector_js
+from chrome_context_tracer.utils import find_free_safe_port, get_mouse_detector_js
 from test_server_utils import TestServerContext
 
 
@@ -88,7 +88,8 @@ async def test_full_workflow():
 </html>
 """
 
-            async with TestServerContext(test_html) as test_url:
+            port = find_free_safe_port()
+            async with TestServerContext(test_html, port=port) as test_url:
                 # 4. 导航到测试页面
                 print(f"🌐 导航到测试页面: {test_url}")
                 nav_success = await inspector.navigate_to_page(test_url)

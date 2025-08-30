@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 from chrome_context_tracer import BrowserContextManager, DOMInspector
+from chrome_context_tracer.utils import find_free_safe_port
 from test_server_utils import TestServerContext
 
 
@@ -66,7 +67,8 @@ async def test_error_handling():
 </html>
 """
 
-            async with TestServerContext(test_html) as test_url:
+            port1 = find_free_safe_port()
+            async with TestServerContext(test_html, port=port1) as test_url:
                 # 导航到有效页面
                 nav_success = await inspector.navigate_to_page(test_url)
                 if not nav_success:
@@ -134,7 +136,8 @@ async def test_error_handling():
             # 测试长时间运行的操作（通过复杂查询）
             complex_html = "<div>" * 1000 + "Hello" + "</div>" * 1000
 
-            async with TestServerContext(complex_html) as complex_url:
+            port2 = find_free_safe_port()
+            async with TestServerContext(complex_html, port=port2) as complex_url:
                 nav_success = await inspector.navigate_to_page(complex_url)
                 if not nav_success:
                     print("❌ 复杂页面导航失败")

@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from chrome_context_tracer import BrowserContextManager, DOMInspector
+from chrome_context_tracer.utils import find_free_safe_port
 from test_server_utils import TestServerContext
 
 
@@ -114,7 +115,8 @@ async def test_active_tab_detection():
 </html>
 """
 
-            async with TestServerContext(test_html, port=0) as test_url:
+            port1 = find_free_safe_port()
+            async with TestServerContext(test_html, port=port1) as test_url:
                 # 导航到测试页面
                 print(f"🌐 导航到测试页面: {test_url}")
                 nav_success = await inspector.navigate_to_page(test_url)
@@ -157,7 +159,8 @@ async def test_active_tab_detection():
 </html>
 """
 
-                async with TestServerContext(test_html2, port=0) as test_url2:
+                port2 = find_free_safe_port()
+                async with TestServerContext(test_html2, port=port2) as test_url2:
                     # 在浏览器中打开新标签页
                     print(f"🌐 打开新标签页: {test_url2}")
 

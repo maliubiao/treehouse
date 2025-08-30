@@ -157,7 +157,8 @@ def truncate_repr_value(
     """
     if inspect.isframe(value):
         return "<frame object>"
-
+    if inspect.ismodule(value) and value.__name__ == "typing":
+        return "<module typing>"
     # If not in safe mode, or if it's a whitelisted type, proceed with the full logic.
     preview = "..."
     try:

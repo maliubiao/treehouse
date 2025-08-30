@@ -60,6 +60,11 @@ class DOMInspector:
         self._message_handler_task = asyncio.create_task(self._message_listener())
         print(_("Connected to Browser DevTools: {websocket_url}", websocket_url=self.websocket_url))
 
+        # If we are connecting directly to a page, enable domains immediately.
+        # Browser-level connections (e.g., for Target management) do not support these domains.
+        if "/page/" in self.websocket_url:
+            await self.enable_domains()
+
     async def close(self) -> None:
         """Close the connection and clean up resources."""
         await self.stop_console_listening()
@@ -83,7 +88,8 @@ class DOMInspector:
                         future = self._pending_responses.pop(response["id"], None)
                         if future and not future.done():
                             if "error" in response:
-                                future.set_exception(Exception(_("Command failed: {error}", error=response["error"])))
+                                # Use ValueError for application-level errors from CDP
+                                future.set_exception(ValueError(_("Command failed: {error}", error=response["error"])))
                             else:
                                 future.set_result(response)
                     elif "method" in response:
@@ -139,22 +145,25 @@ class DOMInspector:
         try:
             await self.ws.send_str(json.dumps(message))
             result = await asyncio.wait_for(future, timeout=30.0)
+            # A successful command resets the connection error count.
             self.connection_errors = 0
             return result
         except asyncio.TimeoutError:
             self.connection_errors += 1
             self._pending_responses.pop(message_id, None)
             raise TimeoutError(_("Command {method} timed out after 30 seconds", method=method))
+        except ValueError as e:
+            # CDP application-level errors are raised as ValueErrors. They are not connection errors.
+            self._pending_responses.pop(message_id, None)
+            raise e
         except Exception as e:
+            # Other exceptions (from aiohttp, etc.) are treated as connection errors.
             self.connection_errors += 1
             self._pending_responses.pop(message_id, None)
             raise e
 
     async def enable_domains(self) -> None:
         """Enable all necessary domains for the current session."""
-        if not self.session_id:
-            print(_("Warning: Cannot enable domains without a session ID."))
-            return
         domains_to_enable = ["DOM", "CSS", "Runtime", "Page", "Debugger", "Console"]
         for domain in domains_to_enable:
             try:
