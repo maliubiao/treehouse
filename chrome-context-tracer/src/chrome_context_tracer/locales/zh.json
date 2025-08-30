@@ -33,6 +33,7 @@
     "Failed to reconnect.": "重试连接失败。",
     "Found element, nodeId: {node_id}": "找到元素，nodeId: {node_id}",
     "Found nodeId {node_id} for selector '{selector}'": "为选择器 '{selector}' 找到 nodeId {node_id}",
+    "Inline Script (ID: {script_id})": "内联脚本 (ID: {script_id})",
     "Inspect element styles and event listeners": "检查元素的样式和事件监听器",
     "Invalid choice. Please enter a number between 1 and {num_targets}.": "无效选择。请输入一个 1 到 {num_targets} 之间的数字。",
     "Invalid input. Please enter a number.": "无效输入。请输入一个数字。",

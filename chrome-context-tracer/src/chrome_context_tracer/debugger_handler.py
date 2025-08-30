@@ -32,9 +32,10 @@ class DebuggerHandler:
             return
 
         url = params.get("url", "")
-        filename = url.split("/")[-1].split("?")[0] if url else f"script_{script_id[-8:]}.js"
-        if not filename:
-            filename = f"script_{script_id[-8:]}.js"
+
+        # Use the full URL for display if available, as it provides more context than just the basename.
+        # If no URL is provided, it's likely an inline or dynamically evaluated script.
+        filename = url if url else _("Inline Script (ID: {script_id})", script_id=script_id)
 
         self.client.script_cache.setdefault(script_id, {})
         self.client.script_cache[script_id].update(
