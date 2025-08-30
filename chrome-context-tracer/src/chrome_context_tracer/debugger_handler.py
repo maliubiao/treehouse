@@ -24,6 +24,7 @@ class DebuggerHandler:
             client: The main DOMInspector client instance.
         """
         self.client = client
+        self._initial_pause_handled: bool = False
 
     async def handle_script_parsed(self, params: Dict[str, Any]) -> None:
         """Process Debugger.scriptParsed events and cache script metadata."""
@@ -82,9 +83,47 @@ class DebuggerHandler:
 
     async def handle_debugger_paused(self, params: Dict[str, Any]) -> None:
         """Process Debugger.paused events, printing call stack and variable info."""
-        print("=" * 20 + _("\n Paused on debugger statement ") + "=" * 20)
+        # Handle the initial pause when attaching to a Node.js process started with --inspect-brk
+        if self.client.is_node_target and not self._initial_pause_handled:
+            self.client.did_receive_initial_node_pause = True
+            print(_("\nDebugger attached. Node.js process is paused at the start."))
+            call_frames_list = params.get("callFrames", [])
+            if call_frames_list:
+                frame = call_frames_list[0]
+                location = frame.get("location", {})
+                script_id = location.get("scriptId")
+                line = location.get("lineNumber", 0) + 1
+                script_info = self.client.script_cache.get(script_id, {})
+                filename = script_info.get("filename", f"scriptId:{script_id}")
+                print(_("Paused at: {filename}:{line}", filename=filename, line=line))
+
+            # Automatically resume execution for a non-interactive experience
+            self._initial_pause_handled = True
+            await self.client.resume_debugger()
+            print(_("Execution resumed."))
+            return
+
         reason = params.get("reason")
         call_frames = params.get("callFrames", [])
+
+        # Custom header based on pause reason
+        header_text = ""
+        if reason == "exception":
+            header_text = _(" Paused on exception ")
+        elif reason == "debuggerStatement":
+            header_text = _(" Paused on 'debugger' statement ")
+        else:
+            header_text = _(" Debugger paused ")
+
+        print(f"\n{'=' * 20}{header_text}{'=' * 20}")
+
+        if reason == "exception":
+            exception_data = params.get("data", {})
+            if exception_data and "description" in exception_data:
+                # The description can be multi-line, just show the first line (the error message)
+                error_message = exception_data["description"].split("\n")[0]
+                print(_("Exception: {error_message}", error_message=error_message))
+
         print(_("Reason: {reason}\n", reason=reason))
 
         print(_("--- Stack Trace ---"))
@@ -102,13 +141,10 @@ class DebuggerHandler:
         for i, frame in enumerate(call_frames):
             await self._process_and_print_call_frame(frame, i)
 
-        print("=" * 66)
+        print("=" * (42 + len(header_text)))
         print(_("Resuming execution..."))
 
-        try:
-            await self.client.send_command("Debugger.resume")
-        except Exception as e:
-            print(_("Error resuming debugger: {e}", e=e))
+        await self.client.resume_debugger()
 
     async def _get_variables_from_scope_chain(self, scope_chain: List[Dict[str, Any]]) -> Dict[str, str]:
         """Extract local and closure variables from a scope chain."""
@@ -142,7 +178,11 @@ class DebuggerHandler:
     async def _process_and_print_call_frame(self, frame: Dict[str, Any], frame_index: int) -> None:
         """Process a single call frame: get source, variables, and format output."""
         func_name = frame.get("functionName") or "(anonymous)"
-        location = frame.get("location", {})
+        # Handle different callFrame structures:
+        # - Debugger.paused: has a nested 'location' object.
+        # - Runtime.exceptionThrown: has location info at the top level of the frame.
+        # We use the frame itself as a fallback if 'location' is not found.
+        location = frame.get("location", frame)
         script_id = location.get("scriptId")
         line_number = location.get("lineNumber", 0)
         column_number = location.get("columnNumber", 0)
@@ -160,10 +200,16 @@ class DebuggerHandler:
                 column_number=column_number + 1,
             )
         )
-        print(_("Source Context:"))
 
         variables = await self._get_variables_from_scope_chain(frame.get("scopeChain", []))
+
+        # Truncate variables string for readability
+        MAX_VARS_LENGTH = 250
         variables_str = ", ".join(f"{name}: {value}" for name, value in variables.items())
+        if len(variables_str) > MAX_VARS_LENGTH:
+            variables_str = variables_str[:MAX_VARS_LENGTH] + "..."
+
+        print(_("Source Context:"))
 
         source_info = await self.get_script_source_info(script_id, line_number, column_number)
         source_code = source_info.get("source")
@@ -175,18 +221,55 @@ class DebuggerHandler:
             start = max(0, relative_line_number - 2)
             end = min(len(lines), relative_line_number + 3)
 
+            MAX_LINE_LENGTH = 400
+            CONTEXT_CHARS = 80
+
             for i in range(start, end):
                 prefix = "->" if i == relative_line_number else "  "
+
+                if i < 0 or i >= len(lines):
+                    continue
+
                 line_content = lines[i]
 
-                # Only add variable annotations if we have variables to show
-                if i == relative_line_number and variables_str:
-                    if len(line_content.strip()) > 0:
-                        line_content += f"    // {variables_str}"
-                    else:
-                        line_content += f"// {variables_str}"
+                # Current line of execution
+                if i == relative_line_number:
+                    # Handle very long lines (minified code)
+                    if len(line_content) > MAX_LINE_LENGTH:
+                        start_col = max(0, column_number - CONTEXT_CHARS)
+                        end_col = column_number + CONTEXT_CHARS
+                        snippet = line_content[start_col:end_col]
+                        prefix_indicator = "..." if start_col > 0 else ""
+                        suffix_indicator = "..." if end_col < len(line_content) else ""
+                        line_to_print = f"{prefix_indicator}{snippet}{suffix_indicator}"
 
-                print(f" {prefix} {i + script_start_line + 1: >4} | {line_content}")
+                        if variables_str:
+                            line_to_print += f"    // {variables_str}"
+                        print(f" {prefix} {i + script_start_line + 1: >4} | {line_to_print}")
+
+                        print(
+                            _(
+                                "         | ... (line truncated, showing snippet around column {col_num}) ...",
+                                col_num=column_number + 1,
+                            )
+                        )
+                    # Handle normal length lines
+                    else:
+                        line_to_print = line_content
+                        if variables_str:
+                            if len(line_to_print.strip()) > 0:
+                                line_to_print += f"    // {variables_str}"
+                            else:
+                                line_to_print = f"// {variables_str}"
+                        print(f" {prefix} {i + script_start_line + 1: >4} | {line_to_print}")
+
+                # Context lines
+                else:
+                    if len(line_content) > MAX_LINE_LENGTH:
+                        line_to_print = line_content[:MAX_LINE_LENGTH] + "..."
+                    else:
+                        line_to_print = line_content
+                    print(f" {prefix} {i + script_start_line + 1: >4} | {line_to_print}")
         else:
             print(_("  [Source code not available]"))
         print("")
@@ -216,7 +299,9 @@ class DebuggerHandler:
         print(_("--- Stack Trace ---"))
         for i, frame in enumerate(call_frames):
             func_name = frame.get("functionName") or "(anonymous)"
-            location = frame.get("location", {})
+            # `exceptionThrown` frames have location info at the top level.
+            # Use `frame` as the source for location data.
+            location = frame
             script_id = location.get("scriptId")
             line = location.get("lineNumber", 0) + 1
             col = location.get("columnNumber", 0) + 1

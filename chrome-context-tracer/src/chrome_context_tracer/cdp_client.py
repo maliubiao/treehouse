@@ -43,6 +43,8 @@ class DOMInspector:
         self.max_connection_errors = 5
         self.console_listening = False
         self.console_message_handler: Optional[Callable[[Dict[str, Any]], Any]] = None
+        self.is_node_target: bool = False
+        self.did_receive_initial_node_pause: bool = False
 
         # Handlers for different domains
         self.targets = TargetManager(self)
@@ -60,9 +62,9 @@ class DOMInspector:
         self._message_handler_task = asyncio.create_task(self._message_listener())
         print(_("Connected to Browser DevTools: {websocket_url}", websocket_url=self.websocket_url))
 
-        # If we are connecting directly to a page, enable domains immediately.
+        # If we are connecting directly to a page or a Node.js target, enable domains immediately.
         # Browser-level connections (e.g., for Target management) do not support these domains.
-        if "/page/" in self.websocket_url:
+        if "/browser" not in self.websocket_url:
             await self.enable_domains()
 
     async def close(self) -> None:
@@ -309,6 +311,57 @@ class DOMInspector:
             else:
                 # Fallback for other messages (network, security, etc.) which only have 'text'
                 print(f"CONSOLE.{level.upper()}: {message.get('text', '')}")
+
+    # --- Debugger Controls ---
+
+    async def set_pause_on_exceptions(self, state: str) -> None:
+        """
+        Sets the pause on exceptions state.
+
+        Args:
+            state: 'none', 'uncaught', or 'all'.
+        """
+        valid_states = ["none", "uncaught", "all"]
+        if state not in valid_states:
+            print(
+                _(
+                    "Warning: Invalid state '{state}' for set_pause_on_exceptions. Must be one of {valid_states}.",
+                    state=state,
+                    valid_states=valid_states,
+                )
+            )
+            return
+
+        try:
+            await self.send_command("Debugger.setPauseOnExceptions", {"state": state})
+            print(_("✅ Pause on exceptions mode set to '{state}'.", state=state))
+        except Exception as e:
+            print(_("⚠️  Warning: Could not set pause on exceptions mode: {e}", e=e))
+
+    async def resume_debugger(self) -> None:
+        """Sends the command to resume debugger execution."""
+        try:
+            await self.send_command("Debugger.resume")
+        except Exception as e:
+            print(_("⚠️  Warning: Could not resume debugger: {e}", e=e))
+
+    async def run_if_waiting_for_debugger(self) -> None:
+        """
+        Sends the command to start execution if the target is waiting for a debugger.
+        This is crucial for Node.js processes started with --inspect-brk.
+        """
+        try:
+            print(_("Telling Node.js to start execution..."))
+            await self.send_command("Runtime.runIfWaitingForDebugger")
+        except Exception as e:
+            print(_("⚠️  Warning: Could not send runIfWaitingForDebugger command: {e}", e=e))
+
+    async def pause_debugger(self) -> None:
+        """Sends the command to pause debugger execution."""
+        try:
+            await self.send_command("Debugger.pause")
+        except Exception as e:
+            print(_("⚠️  Warning: Could not pause debugger: {e}", e=e))
 
     def _get_source_info(self, rule: Dict[str, Any], style_sheet_id: str) -> str:
         """Helper to get the source file information for a CSS rule."""

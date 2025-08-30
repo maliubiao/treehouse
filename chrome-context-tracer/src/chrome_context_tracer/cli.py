@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+from typing import Optional
 
 from .browser_manager import find_chrome_tabs
 from .cdp_client import DOMInspector
@@ -78,40 +79,82 @@ async def inspect_element_styles(
         await inspector.close()
 
 
-async def run_debugger_trace(url_pattern: str, port: int):
-    """主函数：运行调试追踪器模式"""
-    websocket_urls = await find_chrome_tabs(port)
-    if not websocket_urls:
-        print(_("No browser tabs found. Please ensure the browser is running with remote debugging enabled:"))
-        return
-
-    inspector = DOMInspector(websocket_urls[0])
-    await inspector.connect()
-    await inspector.start_console_listening()
-
-    stop_event = asyncio.Event()
-
+async def run_debugger_trace(
+    url_pattern: str,
+    port: int,
+    ws_url: Optional[str] = None,
+    pause_on_exceptions_state: str = "all",
+    is_node: bool = False,
+) -> None:
+    """Runs the debugger trace mode, connecting to a browser tab or a direct WebSocket URL."""
+    inspector: Optional[DOMInspector] = None
     try:
-        target_id = await inspector.find_tab_by_url(url_pattern)
-        if not target_id:
-            print(_("No tab found matching URL '{url_pattern}' or selection was cancelled.", url_pattern=url_pattern))
-            return
+        if is_node:
+            if not ws_url:
+                print(_("Error: --node flag requires --ws-url to be specified."))
+                return
+            print(_("Connecting to Node.js target: {ws_url}", ws_url=ws_url))
+            inspector = DOMInspector(ws_url)
+            inspector.is_node_target = True
+            await inspector.start_console_listening()
+            await inspector.connect()
 
-        session_id = await inspector.attach_to_tab(target_id)
-        if not session_id:
-            print(_("Failed to attach to tab."))
-            return
+        elif ws_url:
+            print(_("Connecting directly to WebSocket: {ws_url}", ws_url=ws_url))
+            inspector = DOMInspector(ws_url)
+            await inspector.start_console_listening()
+            await inspector.connect()
+        else:
+            websocket_urls = await find_chrome_tabs(port)
+            if not websocket_urls:
+                print(_("No browser tabs found. Please ensure the browser is running with remote debugging enabled:"))
+                return
+            inspector = DOMInspector(websocket_urls[0])
+            await inspector.start_console_listening()
+            await inspector.connect()
+            target_id = await inspector.find_tab_by_url(url_pattern)
+            if not target_id:
+                print(
+                    _("No tab found matching URL '{url_pattern}' or selection was cancelled.", url_pattern=url_pattern)
+                )
+                return
+
+            session_id = await inspector.attach_to_tab(target_id)
+            if not session_id:
+                print(_("Failed to attach to tab."))
+                return
+
+        if pause_on_exceptions_state != "none":
+            await inspector.set_pause_on_exceptions(pause_on_exceptions_state)
+
+        stop_event = asyncio.Event()
 
         print(_("\n✅ Debugger trace mode activated."))
-        print(_("Waiting for 'debugger;' statements and console messages in the attached page."))
+        if pause_on_exceptions_state != "none":
+            print(
+                _(
+                    "Waiting for 'debugger;' statements, console messages, and {state} exceptions.",
+                    state=pause_on_exceptions_state,
+                )
+            )
+        else:
+            print(_("Waiting for 'debugger;' statements and console messages in the attached page."))
+        if is_node:
+            # For Node.js targets started with --inspect-brk, we must send this command
+            # to tell the runtime to start execution and break at the first line.
+            await inspector.run_if_waiting_for_debugger()
         print(_("Press Ctrl+C to exit."))
-
         await stop_event.wait()
 
     except asyncio.CancelledError:
         print(_("\nExiting debugger trace mode."))
+    except ConnectionRefusedError:
+        print(
+            _("Connection refused. Is the target running and the WebSocket URL correct? URL: {ws_url}", ws_url=ws_url)
+        )
     finally:
-        await inspector.close()
+        if inspector:
+            await inspector.close()
 
 
 def main():
@@ -119,6 +162,7 @@ def main():
         description=_("Browser DOM Inspection and Debugging Trace Tool (Supports Chrome/Edge)")
     )
     parser.add_argument("--port", type=int, default=9222, help=_("Browser debugging port"))
+    parser.add_argument("--ws-url", help=_("Direct WebSocket URL for CDP connection (e.g., for Node.js)"))
 
     subparsers = parser.add_subparsers(dest="command", required=True, help=_("Available commands"))
 
@@ -139,9 +183,18 @@ def main():
     parser_trace.add_argument(
         "--url", help=_("URL pattern to match (optional, will prompt for selection if not specified)")
     )
+    parser_trace.add_argument(
+        "--pause-on-exceptions",
+        choices=["none", "uncaught", "all"],
+        default="uncaught",
+        help=_("Set pause on exceptions mode. Default is 'uncaught'."),
+    )
+    parser_trace.add_argument(
+        "--node", action="store_true", help=_("Enable Node.js debugging mode (requires --ws-url)")
+    )
 
     args = parser.parse_args()
-    url_pattern = args.url if args.url else ""
+    url_pattern = args.url if hasattr(args, "url") and args.url else ""
 
     try:
         if args.command == "inspect":
@@ -151,6 +204,6 @@ def main():
                 inspect_element_styles(url_pattern, args.selector, args.port, args.events, args.html, args.from_pointer)
             )
         elif args.command == "trace":
-            asyncio.run(run_debugger_trace(url_pattern, args.port))
+            asyncio.run(run_debugger_trace(url_pattern, args.port, args.ws_url, args.pause_on_exceptions, args.node))
     except KeyboardInterrupt:
         print(_("\nInterrupted by user. Exiting."))
