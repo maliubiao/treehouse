@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import builtins
 import importlib.util
 import logging
 import os
@@ -24,6 +25,7 @@ def execute_target(target_script: Optional[Path], target_module: Optional[str], 
         target_module: 要执行的模块的名称。
         args: 传递给目标脚本或模块的参数列表。
     """
+
     try:
         if target_script:
             # 对于run_path，我们必须手动设置sys.argv

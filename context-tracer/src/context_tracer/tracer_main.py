@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import builtins
 import importlib.util
 import logging
 import os
@@ -23,11 +24,15 @@ def execute_target(target_script: Optional[Path], target_module: Optional[str], 
         target_module: 要执行的模块的名称。
         args: 传递给目标脚本或模块的参数列表。
     """
+    safe_globals = {
+        "__builtins__": builtins,
+        "__name__": "__main__",
+    }
     try:
         if target_script:
             # 对于run_path，我们必须手动设置sys.argv
             sys.argv = [str(target_script)] + args
-            runpy.run_path(str(target_script), run_name="__main__")
+            runpy.run_path(str(target_script), run_name="__main__", init_globals=safe_globals)
         elif target_module:
             # run_module如果alter_sys为True，则会处理sys.argv，
             # 但为了一致性，我们提前设置它。程序的'name' (argv[0])是模块文件的路径。
@@ -36,7 +41,7 @@ def execute_target(target_script: Optional[Path], target_module: Optional[str], 
                 raise ImportError(f"无法找到模块: {target_module}")
             sys.argv = [spec.origin] + args
             # alter_sys=True 还会处理 sys.modules['__main__']
-            runpy.run_module(target_module, run_name="__main__", alter_sys=True)
+            runpy.run_module(target_module, run_name="__main__", alter_sys=True, init_globals=safe_globals)
         else:
             # 从debug_main的逻辑来看，不应到达此分支
             raise ValueError("未提供执行目标（脚本或模块）")

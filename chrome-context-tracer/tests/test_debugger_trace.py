@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Integration test for the 'trace' command in dom_inspector.py.
+Integration test for the 'trace' command in the chrome_context_tracer.
 
 This test script automates the following process:
 1.  Creates a temporary HTML file with specific JavaScript code.
@@ -29,14 +29,16 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-# Add the parent directory to the path to allow importing dom_inspector
-sys.path.append(str(Path(__file__).parent.absolute()))
+# Add the 'src' directory to the path to allow importing the package
+# The test file is in tests/, src/ is in the parent directory
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from dom_inspector import BrowserContextManager, DOMInspector, find_chrome_tabs
+from chrome_context_tracer import BrowserContextManager, DOMInspector
+from chrome_context_tracer.i18n import _
 
 # --- Test Configuration ---
 TEST_TIMEOUT: float = 20.0  # Increased timeout to be more robust
-STOP_SIGNAL = "Resuming execution..."
+STOP_SIGNAL = _("Resuming execution...")
 
 TEST_HTML_CONTENT: str = """
 <!DOCTYPE html>
@@ -93,10 +95,9 @@ async def run_test() -> None:
         file_url = Path(temp_html_file).as_uri()
         print(f"✅ Temporary test page created at: {file_url}")
 
-        # Step 2: Launch browser using the context manager for auto-cleanup
+        # Step 2: Launch browser using the context manager for auto-cleanup and start_url
         async with BrowserContextManager(browser_type="chrome", auto_cleanup=True, start_url=file_url) as browser:
             url_pattern = Path(temp_html_file).name  # Match by filename
-            port = browser.port
 
             output_buffer = io.StringIO()
             inspector: Optional[DOMInspector] = None
@@ -105,13 +106,15 @@ async def run_test() -> None:
             with contextlib.redirect_stdout(output_buffer), contextlib.redirect_stderr(output_buffer):
                 try:
                     # Step 3: Run inspector logic in-process
-                    websocket_urls = await find_chrome_tabs(port, auto_launch=False)
-                    if not websocket_urls:
-                        raise RuntimeError("Test setup failed: No websocket URLs found.")
+                    websocket_url = browser.get_main_websocket_url()
+                    if not websocket_url:
+                        raise RuntimeError("Test setup failed: No websocket URL from BrowserContextManager.")
 
-                    inspector = DOMInspector(websocket_urls[0])
+                    inspector = DOMInspector(websocket_url)
                     await inspector.connect()
 
+                    # Find the specific tab using the filename pattern, even though the context manager opened it for us.
+                    # This ensures the inspector's own discovery logic is tested.
                     target_id = await inspector.find_tab_by_url(url_pattern)
                     if not target_id:
                         raise RuntimeError(f"Test setup failed: Could not find tab with pattern '{url_pattern}'.")
@@ -119,6 +122,9 @@ async def run_test() -> None:
                     session_id = await inspector.attach_to_tab(target_id)
                     if not session_id:
                         raise RuntimeError("Test setup failed: Could not attach to tab.")
+
+                    # Enable console listening to capture log messages for assertions
+                    await inspector.start_console_listening()
 
                     print("\n✅ Inspector attached. Waiting for debugger event...")
 
@@ -178,7 +184,8 @@ def _verify_output(output: str) -> None:
     """Run a series of assertions against the captured output."""
 
     # 1. Verify console message is captured
-    assert "Console message from test page: Script starting." in output
+    # The output format is `CONSOLE.LOG: <message>`
+    assert "CONSOLE.LOG: Console message from test page: Script starting." in output
     print("✅ Assertion Passed: Initial console message was captured.")
 
     # 2. Verify debugger pause header
@@ -193,7 +200,7 @@ def _verify_output(output: str) -> None:
 
     # 4. Verify variables are displayed as comments
     # The order of variables might change, so check for each part.
-    # The exact formatting depends on dom_inspector's output logic.
+    # The exact formatting depends on the application's output logic.
     # Looking at the code: it's `// {name}: {description}, ...`
     var_string_found = False
     for line in output.splitlines():

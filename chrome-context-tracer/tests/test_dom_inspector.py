@@ -6,19 +6,14 @@ This script tests the key functions with a new browser profile
 
 import asyncio
 import os
-
-# Import the functions from the local dom_inspector file
 import sys
-import tempfile
-import time
-from urllib.parse import urlparse
+from pathlib import Path
 
-import aiohttp
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from dom_inspector import DOMInspector, find_chrome_tabs, inspect_element_styles, launch_browser_with_debugging
-from test_server_utils import TestServerContext, cleanup_temp_dir
+from chrome_context_tracer import DOMInspector, launch_browser_with_debugging
+from chrome_context_tracer.browser_manager import find_chrome_tabs
+from test_server_utils import TestServerContext
 
 
 async def setup_test_page_and_inspector():
@@ -115,7 +110,7 @@ async def test_browser_connection():
 
     try:
         # Launch browser with new profile (use Edge since Chrome is not installed)
-        success = await launch_browser_with_debugging("edge", 9222)
+        success, _ = await launch_browser_with_debugging("edge", 9222, return_process_info=True)
         if not success:
             print("❌ Failed to launch browser")
             return False
@@ -168,7 +163,7 @@ async def test_dom_inspector_connection():
         await inspector.connect()
 
         # Test basic CDP commands
-        response = await inspector.send_command("Target.getTargets")
+        response = await inspector.send_command("Target.getTargets", use_session=False)
         targets = response.get("result", {}).get("targetInfos", [])
 
         print(f"✅ Connected successfully, found {len(targets)} targets")
@@ -308,7 +303,11 @@ async def test_event_listener_extraction():
         # Format and check listeners
         formatted_listeners = await inspector.format_event_listeners(listeners_data)
 
-        if formatted_listeners and formatted_listeners != "无事件监听器":
+        if (
+            formatted_listeners
+            and "无事件监听器" not in formatted_listeners
+            and "No event listeners" not in formatted_listeners
+        ):
             print("✅ Event listener extraction successful")
             print("Sample event listeners:")
             lines = formatted_listeners.split("\n")[:8]  # Show first 8 lines

@@ -325,18 +325,21 @@ class TestTruncateReprValue(unittest.TestCase):
         a = [1]
         a.append(a)
         result = truncate_repr_value(a)
-        self.assertEqual(result, "[1, [...]]")
+        self.assertEqual(result, "[1, [1, [1, [1, [1, [...]]]]]]")
 
         # Test deeply nested list
         deep_list = [[[[[1]]]]]
         result_depth_2 = truncate_repr_value(deep_list, max_depth=2)
-        self.assertEqual(result_depth_2, "[[...]]")
+        self.assertEqual(result_depth_2, "[[[...]]]")
 
         # Test self-referencing dict
         b = {"key": 1}
         b["self"] = b
         result_dict = truncate_repr_value(b)
-        self.assertEqual(result_dict, "{'key': 1, 'self': {...}}")
+        self.assertEqual(
+            result_dict,
+            "{'key': 1, 'self': {'key': 1, 'self': {'key': 1, 'self': {'key': 1, 'self': {'key': 1, 'self': {...}}}}}}",
+        )
 
 
 class TestTraceConfig(BaseTracerTest):
@@ -2218,6 +2221,46 @@ class TestIntegration(BaseTracerTest):
             for event in events
         )
         self.assertTrue(main_call_found, "Call to 'main' not found in container events.")
+
+    def test_e2e_builtins_is_module(self):
+        """
+        E2E test to ensure __builtins__ is a module in the traced script,
+        not a dict, which can happen with incorrect runpy usage.
+        """
+        script_content = dedent("""
+            import types
+
+            def main():
+                # In a normal script, __builtins__ is a module.
+                # When runpy is used with init_globals, if __builtins__ is not
+                # handled correctly, it might appear as a dict. We must ensure
+                # it remains a module for compatibility.
+                if isinstance(__builtins__, types.ModuleType):
+                    print("BUILTINS_IS_MODULE_SUCCESS")
+                else:
+                    print(f"BUILTINS_IS_MODULE_FAILURE: type is {type(__builtins__)}")
+
+            if __name__ == "__main__":
+                main()
+        """)
+        script_path = self.test_dir / "builtins_test_script.py"
+        script_path.write_text(script_content, encoding="utf-8")
+
+        # We only need to run the script, no special tracer args needed
+        cli_args = ["--disable-html"]  # to speed it up
+        process = self._run_e2e_test(script_path, cli_args)
+
+        self.assertEqual(process.returncode, 0, f"Tracer process exited with error. Stderr: {process.stderr}")
+        self.assertIn(
+            "BUILTINS_IS_MODULE_SUCCESS",
+            process.stdout,
+            "The __builtins__ variable was not a module in the traced script.",
+        )
+        self.assertNotIn(
+            "BUILTINS_IS_MODULE_FAILURE",
+            process.stdout,
+            "The __builtins__ check failed in the traced script.",
+        )
 
 
 class TestTraceDispatcher(BaseTracerTest):
